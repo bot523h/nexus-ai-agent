@@ -45,8 +45,9 @@ from nexus_ai_agent.creative.hyper_compiler.bounded_memory_pipe_runner import (
     FramePipelineSpec,
     MuxMode,
     StreamOutcome,
+    _fsync_directory,
 )
-from nexus_ai_agent.creative.hyper_compiler.errors import HyperCompilerError
+from nexus_ai_agent.creative.hyper_compiler.errors import HyperCompilerError, SegmentTamperError
 from nexus_ai_agent.creative.hyper_compiler.ffmpeg_filter_graph_compiler import (
     FFmpegFilterGraphCompiler,
 )
@@ -141,12 +142,15 @@ class HyperTimelineOrchestrator:
         max_buffer_bytes: int = DEFAULT_MAX_BUFFER_BYTES,
         hmac_key: bytes | None = None,
         ffmpeg_bin: str = "ffmpeg",
+        timeout_seconds: float = 30.0,
     ) -> None:
         self.cache_dir = Path(cache_dir)
         self.planner = SegmentCASPlanner(self.cache_dir, hmac_key=hmac_key)
         self.compiler = FFmpegFilterGraphCompiler()
         self.runner = BoundedMemoryPipeRunner(
-            max_buffer_bytes=max_buffer_bytes, ffmpeg_bin=ffmpeg_bin
+            max_buffer_bytes=max_buffer_bytes,
+            ffmpeg_bin=ffmpeg_bin,
+            timeout_seconds=timeout_seconds,
         )
 
     # -- planning -----------------------------------------------------------
@@ -204,8 +208,39 @@ class HyperTimelineOrchestrator:
         pipe_spec: FramePipelineSpec | None = None,
         mode: MuxMode = MuxMode.DETERMINISTIC_CPU_MUX,
     ) -> StreamOutcome:
-        """Render one segment under the memory ceiling and cache it atomically."""
+        """Render one segment under the memory ceiling and cache it atomically.
+
+        The render must be bound to the segment it was *planned* for: the engine
+        mode, the pipeline fingerprint and the content-addressed key are all
+        re-derived here and checked against ``planned`` before a single frame is
+        rendered or a single byte is written to the cache.  A caller that renders
+        under a different mode, a different pipeline spec (whose fingerprint
+        differs — geometry is folded into the fingerprint, so a mismatched size
+        is caught here too), or whose re-derived key does not equal the planned
+        key, fails closed with :class:`SegmentTamperError` instead of silently
+        poisoning the content-addressed store.
+        """
         spec = pipe_spec or default_pipe_spec(planned.spec)
+        effect_mode = mode.value
+        effect_pipeline_digest = spec.fingerprint()
+        if planned.mode != effect_mode:
+            raise SegmentTamperError(
+                f"render_segment mode {effect_mode!r} != planned mode {planned.mode!r}"
+            )
+        if planned.pipeline_digest != effect_pipeline_digest:
+            raise SegmentTamperError(
+                f"render_segment pipeline {effect_pipeline_digest!r} != planned "
+                f"{planned.pipeline_digest!r}"
+            )
+        derived_key = self.planner.cas_key(
+            planned.spec,
+            pipeline_digest=effect_pipeline_digest,
+            mux_mode=effect_mode,
+        )
+        if derived_key != planned.cas_key:
+            raise SegmentTamperError(
+                f"render_segment key {derived_key} != planned key {planned.cas_key}"
+            )
         tmp_path, outcome = self._render_to_temp(frames, spec, mode)
         try:
             with tmp_path.open("rb") as source:
@@ -320,10 +355,20 @@ class HyperTimelineOrchestrator:
                             mode=outcome.mode.value,
                         )
                     )
+                # Durability: the timeline bytes must reach the disk before the
+                # rename, so a crash can never leave a renamed-but-empty file.
+                raw_out.flush()
+                os.fsync(raw_out.fileno())
             if output_path is not None:
                 target = Path(output_path)
                 target.parent.mkdir(parents=True, exist_ok=True)
                 os.replace(tmp_out, target)
+                # The rename must be durable too: fsync the parent directory so
+                # the new directory entry survives a crash (matches the segment
+                # store and ``stream_to_path``).  A real disk error here is not
+                # swallowed — it propagates so the caller never believes a
+                # non-durable write succeeded.
+                _fsync_directory(target.parent)
             else:
                 tmp_out.unlink(missing_ok=True)
         except BaseException:

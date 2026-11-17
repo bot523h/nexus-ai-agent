@@ -29,6 +29,7 @@ Two execution modes, both ending in an immutable
 from __future__ import annotations
 
 import contextlib
+import errno
 import hashlib
 import math
 import os
@@ -70,7 +71,7 @@ _CHUNK_BYTES = 64 * 1024
 _KILL_TIMEOUT_SECONDS = 5.0
 #: Per-pixel widths of the intermediate buffers the CPU path allocates.
 _UINT8_BYTES_PER_PIXEL = 3
-_FLOAT32_BYTES_PER_PIXEL = 4
+_FLOAT64_BYTES_PER_PIXEL = 8
 
 Frame = NDArray[np.uint8]
 
@@ -247,18 +248,24 @@ class RingBufferFrameStore:
 def apply_tone(frame: Frame, *, brightness: float, contrast: float) -> Frame:
     """Deterministic brightness/contrast mapping (``brightness`` in [-1, 1]).
 
-    The float32 work is done *in place* on a single buffer so at most one
-    ``float32`` temporary and one ``uint8`` output coexist with the input frame
-    (instead of the several simultaneous temporaries a chained-expression form
-    would allocate).  This keeps the peak in step with the working-set budget in
-    :func:`cpu_working_set_bytes`.  The arithmetic is byte-identical to
-    ``clip((f - 128) * contrast + 128 + brightness*255, 0, 255)``.
+    The work is done *in place* on a single buffer so at most one floating-point
+    temporary and one ``uint8`` output coexist with the input frame (instead of
+    the several simultaneous temporaries a chained-expression form would
+    allocate).  This keeps the peak in step with the working-set budget in
+    :func:`cpu_working_set_bytes`.
+
+    The arithmetic is byte-identical to
+    ``clip((f - 128) * contrast + 128 + brightness*255, 0, 255)`` evaluated in
+    double precision — the same precision FFmpeg uses for the ``lutrgb``
+    expression — and truncates to ``uint8`` exactly as FFmpeg does.  Using
+    ``float32`` here instead would disagree with FFmpeg on the handful of pixels
+    that straddle an integer boundary (the differential test pins this).
     """
-    buf = frame.astype(np.float32, copy=True)
-    np.subtract(buf, np.float32(128.0), out=buf)
-    np.multiply(buf, np.float32(contrast), out=buf)
-    np.add(buf, np.float32(128.0), out=buf)
-    np.add(buf, np.float32(brightness * 255.0), out=buf)
+    buf = frame.astype(np.float64, copy=True)
+    np.subtract(buf, 128.0, out=buf)
+    np.multiply(buf, float(contrast), out=buf)
+    np.add(buf, 128.0, out=buf)
+    np.add(buf, float(brightness) * 255.0, out=buf)
     np.clip(buf, 0.0, 255.0, out=buf)
     return buf.astype(np.uint8)
 
@@ -267,7 +274,7 @@ def dissolve(first: Frame, second: Frame, alpha: float) -> Frame:
     """Linear temporal crossfade: ``(1-a)*first + a*second`` (``a`` in [0, 1])."""
     if first.shape != second.shape:
         raise PipeExecutionError(f"dissolve shape mismatch: {first.shape} vs {second.shape}")
-    blended = first.astype(np.float32) * (1.0 - alpha) + second.astype(np.float32) * alpha
+    blended = first.astype(np.float64) * (1.0 - alpha) + second.astype(np.float64) * alpha
     return np.clip(blended, 0.0, 255.0).astype(np.uint8)
 
 
@@ -276,33 +283,60 @@ def frame_bytes(spec: FramePipelineSpec) -> int:
     return spec.width * spec.height * 3
 
 
-def _fsync_directory(path: Path) -> None:
-    """Best-effort ``fsync`` of a directory so a rename is durable.
+#: Errnos that only mean "this filesystem cannot fsync a directory"; they are
+#: benign and ignored.  Any *other* errno (e.g. ``EIO``, ``ENOSPC``) is a real
+#: durability failure and must propagate — a rename we cannot prove durable must
+#: never be reported as a successful write.
+_FSYNC_UNSUPPORTED_ERRNOS = frozenset(
+    {
+        errno.EINVAL,
+        errno.EBADF,
+        errno.ENOTSUP,
+        errno.EACCES,
+        errno.EPERM,
+        errno.ENOSYS,
+    }
+)
 
-    Ignored on platforms that refuse to open a directory for reading.
+
+def _fsync_directory(path: Path) -> None:
+    """``fsync`` a directory so a rename is durable (fail-closed on real errors).
+
+    Filesystems that cannot fsync a directory (or a platform that refuses to open
+    one for reading) raise a benign errno listed in
+    :data:`_FSYNC_UNSUPPORTED_ERRNOS`, which is ignored.  A genuine durability
+    failure — ``EIO``, ``ENOSPC`` — is re-raised so the caller never believes a
+    non-durable rename succeeded.
     """
-    with contextlib.suppress(OSError):
+    try:
         dir_fd = os.open(str(path), os.O_RDONLY)
-        try:
-            os.fsync(dir_fd)
-        finally:
-            os.close(dir_fd)
+    except OSError as exc:
+        if exc.errno in _FSYNC_UNSUPPORTED_ERRNOS:
+            return
+        raise
+    try:
+        os.fsync(dir_fd)
+    except OSError as exc:
+        if exc.errno not in _FSYNC_UNSUPPORTED_ERRNOS:
+            raise
+    finally:
+        os.close(dir_fd)
 
 
 def cpu_working_set_bytes(spec: FramePipelineSpec) -> int:
     """Transient bytes the CPU path holds *outside* the ring buffer, per frame.
 
     While one frame is being consumed the CPU path holds, simultaneously: the
-    input ``uint8`` frame, a ``float32`` tone-map temporary, the ``uint8`` tone
+    input ``uint8`` frame, a ``float64`` tone-map temporary, the ``uint8`` tone
     output and the packed ``uint8`` body bytes.  ``dissolve`` additionally
-    retains the previous ``uint8`` frame and two ``float32`` blend temporaries.
+    retains the previous ``uint8`` frame and two ``float64`` blend temporaries.
     Counting these is what keeps ``max_buffer_bytes`` an honest *total* ceiling
     rather than a ceiling on the ring buffer alone.
     """
     pixels = spec.width * spec.height
-    per_pixel = 3 * _UINT8_BYTES_PER_PIXEL + _FLOAT32_BYTES_PER_PIXEL
+    per_pixel = 3 * _UINT8_BYTES_PER_PIXEL + _FLOAT64_BYTES_PER_PIXEL
     if spec.dissolve > 0.0:
-        per_pixel += _UINT8_BYTES_PER_PIXEL + 2 * _FLOAT32_BYTES_PER_PIXEL
+        per_pixel += _UINT8_BYTES_PER_PIXEL + 2 * _FLOAT64_BYTES_PER_PIXEL
     return pixels * per_pixel
 
 
@@ -639,9 +673,13 @@ class BoundedMemoryPipeRunner:
         writer_error: list[BaseException] = []
         # F3b: track the *measured* live in-flight bytes (the frame the writer
         # holds plus the chunk the reader holds), starting from zero, instead of
-        # seeding the peak with a static working-set floor.
+        # seeding the peak with a static working-set floor.  ``live_frame`` and
+        # ``peak_inflight`` are written by the writer thread and read by the
+        # reader thread, so *every* access is guarded by ``state_lock`` — without
+        # it the two threads could race and the measured peak would be a lie.
         peak_inflight = [0]
         live_frame = [0]
+        state_lock = threading.Lock()
         # F2: a wedged child that never makes progress must not block forever.
         timed_out = [False]
         last_activity = [time.monotonic()]
@@ -679,15 +717,18 @@ class BoundedMemoryPipeRunner:
                                 f"{_CHUNK_BYTES} B exceeds max_buffer_bytes "
                                 f"{self.max_buffer_bytes}"
                             )
-                        live_frame[0] = len(raw)
-                        peak_inflight[0] = max(peak_inflight[0], len(raw))
+                        with state_lock:
+                            live_frame[0] = len(raw)
+                            peak_inflight[0] = max(peak_inflight[0], len(raw))
                         stdin.write(raw)
-                        live_frame[0] = 0
+                        with state_lock:
+                            live_frame[0] = 0
                         mark_activity()
             except BaseException as exc:  # noqa: BLE001 - relayed to the main thread
                 writer_error.append(exc)
             finally:
-                live_frame[0] = 0
+                with state_lock:
+                    live_frame[0] = 0
                 try:
                     stdin.close()
                 except OSError:
@@ -711,13 +752,24 @@ class BoundedMemoryPipeRunner:
                 if not chunk:
                     break
                 # The writer's live frame and this chunk are resident together.
-                peak_inflight[0] = max(peak_inflight[0], live_frame[0] + len(chunk))
+                with state_lock:
+                    peak_inflight[0] = max(peak_inflight[0], live_frame[0] + len(chunk))
                 if sink is not None:
                     sink.write(chunk)
                 container_hasher.update(chunk)
                 total += len(chunk)
                 mark_activity()
-            writer.join()
+            # F2: the writer must never block the caller forever.  Closing stdin
+            # first unblocks a writer parked on ``stdin.write`` (it raises
+            # ``BrokenPipeError``/``ValueError`` and the thread exits), then the
+            # join is bounded; a writer that is *still* alive after that (e.g. a
+            # stalled frame generator that ignores the closed pipe) is a hard
+            # failure rather than an indefinite hang.
+            with contextlib.suppress(OSError, ValueError):
+                stdin.close()
+            writer.join(timeout=max(min(self.timeout_seconds, 5.0), 0.01))
+            if writer.is_alive():
+                raise PipeExecutionError("writer thread timed out")
             stderr_thread.join()
             returncode = proc.wait()
         finally:
@@ -727,6 +779,8 @@ class BoundedMemoryPipeRunner:
                 proc.kill()
                 with contextlib.suppress(subprocess.TimeoutExpired):
                     proc.wait(timeout=_KILL_TIMEOUT_SECONDS)
+            with contextlib.suppress(OSError, ValueError):
+                stdin.close()
             writer.join(timeout=_KILL_TIMEOUT_SECONDS)
             stderr_thread.join(timeout=_KILL_TIMEOUT_SECONDS)
             watchdog_thread.join(timeout=_KILL_TIMEOUT_SECONDS)

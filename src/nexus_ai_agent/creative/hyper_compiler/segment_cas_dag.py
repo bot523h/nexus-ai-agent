@@ -515,7 +515,7 @@ class SegmentCASPlanner:
         size: int,
         mode: str,
         pipeline_digest: str,
-        spec: TimelineSegmentSpec | None,
+        spec: TimelineSegmentSpec,
     ) -> None:
         manifest: dict[str, object] = {
             "cas_key": cas_key,
@@ -527,8 +527,10 @@ class SegmentCASPlanner:
             "pipeline_digest": pipeline_digest,
             # The spec binding lets verification re-derive the content-addressed
             # key from the manifest alone, so a forged mode / renderer / spec in
-            # an unsigned manifest is detected instead of trusted.
-            "spec": _spec_to_dict(spec) if spec is not None else None,
+            # an unsigned manifest is detected instead of trusted.  It is never
+            # ``None``: a manifest without a spec binding could not be verified,
+            # so writers refuse to create one (see ``write_segment_artifact``).
+            "spec": _spec_to_dict(spec),
         }
         if self._hmac_key is not None:
             sealed = json.dumps(manifest, sort_keys=True).encode("utf-8")
@@ -581,7 +583,18 @@ class SegmentCASPlanner:
         pipeline_digest: str = "",
         spec: TimelineSegmentSpec | None = None,
     ) -> Path:
-        """Atomically persist ``payload`` under ``cas_key`` plus its manifest."""
+        """Atomically persist ``payload`` under ``cas_key`` plus its manifest.
+
+        ``spec`` is required and fail-closed: the manifest must carry the spec
+        binding so verification can re-derive the key from it.  Writing a
+        manifest without one would create an artifact that can never be verified,
+        so a missing spec is refused *before* any bytes reach the cache.
+        """
+        if spec is None:
+            raise SegmentTamperError(
+                "write_segment_artifact requires the spec binding; a manifest "
+                "without a spec can never be verified"
+            )
         path = self.artifact_path(cas_key)
         raw = _encode_artifact(cas_key, payload)
         atomic_write_bytes(path, raw)
@@ -629,9 +642,15 @@ class SegmentCASPlanner:
 
         ``size``/``digest`` describe the body (its length and SHA-256); the body
         is copied in fixed-size chunks, so the artifact never has to exist in
-        memory as a whole.
+        memory as a whole.  ``spec`` is required and fail-closed for the same
+        reason as :meth:`write_segment_artifact`.
         """
         validate_cas_key(cas_key)
+        if spec is None:
+            raise SegmentTamperError(
+                "commit_stream requires the spec binding; a manifest without a "
+                "spec can never be verified"
+            )
         if size < 0:
             raise SegmentIntegrityError(f"payload size must be >= 0, got {size}")
         try:

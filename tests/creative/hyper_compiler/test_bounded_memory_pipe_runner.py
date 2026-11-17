@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import dataclasses
+import errno
 import hashlib
 import io
+import os
 import subprocess
 import threading
+import time
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -320,7 +323,7 @@ def test_stream_many_across_segments() -> None:
 
 
 def test_stream_many_empty_is_allowed() -> None:
-    runner = BoundedMemoryPipeRunner(max_buffer_bytes=1024)
+    runner = BoundedMemoryPipeRunner(max_buffer_bytes=4096)
     outcome = runner.stream_many([], spec())
     assert outcome.frames_processed == 0
     outcome.container_path.unlink()  # type: ignore[union-attr]
@@ -565,15 +568,33 @@ FFMPEG = _ffmpeg_exe()
 
 
 @pytest.mark.skipif(FFMPEG is None, reason="no FFmpeg available")
-def test_cpu_and_ffmpeg_engines_are_byte_identical() -> None:
+@pytest.mark.parametrize(
+    ("brightness", "contrast", "trim_start", "trim_end"),
+    [
+        (0.0, 1.0, 0, None),  # identity, open-ended (no trim filter)
+        (0.1, 1.3, 1, 5),  # the combo the old .6f rounding drifted on
+        (-0.125, 0.85, 1, 5),  # negative brightness
+        (0.2, 1.2, 0, 4),  # another rounding-sensitive combo
+        (1.0, 4.0, 1, 5),  # both upper bounds
+        (-1.0, 0.0, 2, 6),  # both lower bounds
+        (0.1234567891, 1.987654321, 1, 5),  # many decimal places
+    ],
+)
+def test_cpu_and_ffmpeg_engines_are_byte_identical(
+    brightness: float, contrast: float, trim_start: int, trim_end: int | None
+) -> None:
     # F5: the two engines must agree byte-for-byte for the shared knob set
-    # (trim + tone).  This is the differential guard that pins ``lutrgb`` (RGB
-    # domain) rather than ``eq`` (which round-trips through YUV and drifts by a
-    # few levels on nearly every pixel).
+    # (trim + tone) across a matrix of settings — including negatives, zero,
+    # the range boundaries and values with more than six decimal places.  This
+    # pins ``lutrgb`` (RGB domain) rather than ``eq`` (YUV round-trip) *and* the
+    # full-precision ``_num`` rendering plus the float64 CPU arithmetic: rounding
+    # the coefficient to six places, or computing the tone map in float32,
+    # re-introduces a handful of off-by-one pixels that this test catches.
     assert FFMPEG is not None
-    spec_ = spec(brightness=0.1, contrast=1.3, trim_start=1, trim_end=5)
+    spec_ = spec(brightness=brightness, contrast=contrast, trim_start=trim_start, trim_end=trim_end)
     rng = np.random.default_rng(1234)
     source = [rng.integers(0, 256, (8, 8, 3), dtype=np.uint8) for _ in range(6)]
+    expected = 6 if trim_end is None else trim_end - trim_start
 
     cpu_out = io.BytesIO()
     cpu_result = BoundedMemoryPipeRunner().stream_many([source], spec_, sink=cpu_out)
@@ -583,7 +604,7 @@ def test_cpu_and_ffmpeg_engines_are_byte_identical() -> None:
     ff_result = BoundedMemoryPipeRunner(ffmpeg_bin=FFMPEG).run_ffmpeg_stream(
         [source], spec_, sink=ff_out
     )
-    assert ff_result.frames_processed == cpu_result.frames_processed == 4
+    assert ff_result.frames_processed == cpu_result.frames_processed == expected
     assert ff_out.getvalue() == cpu_body
 
 
@@ -788,3 +809,103 @@ def test_container_header_embeds_frame_digest() -> None:
     assert outcome.output_digest == hashlib.sha256(raw).hexdigest()
     assert outcome.body_digest == hashlib.sha256(raw[bmpr._MUX_HEADER_LEN :]).hexdigest()
     outcome.container_path.unlink()
+
+
+# ── F2: the writer thread can never hang the caller ─────────────────────────
+def test_run_ffmpeg_stream_writer_join_is_bounded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # F2: a producer that ignores the closed pipe and keeps yielding must not
+    # hang the call forever — the writer join is bounded and a still-alive writer
+    # is reported as a hard failure instead of an indefinite block.
+    class FakeProc:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            self.stdin = io.BytesIO()
+            self.stdout = io.BytesIO(b"")
+            self.stderr = io.BytesIO(b"")
+
+        def poll(self) -> int:
+            return 0
+
+        def kill(self) -> None:
+            return None
+
+        def wait(self, timeout: float | None = None) -> int:
+            return 0
+
+    def stalled() -> Iterator[Frame]:
+        # The first frame is fed, then the generator parks past the join window
+        # while still claiming to have more work.
+        yield np.zeros((8, 8, 3), dtype=np.uint8)
+        time.sleep(0.5)
+        yield np.zeros((8, 8, 3), dtype=np.uint8)
+
+    monkeypatch.setattr(subprocess, "Popen", FakeProc)
+    runner = BoundedMemoryPipeRunner(timeout_seconds=0.1)
+    start = time.monotonic()
+    with pytest.raises(PipeExecutionError, match="writer thread timed out"):
+        runner.run_ffmpeg_stream([stalled()], spec())
+    # Bounded: the call returns well before the (infinite) generator would finish
+    # and far under any unbounded block.
+    assert time.monotonic() - start < 3.0
+
+
+# ── F3b: the measured peak reflects real multi-frame in-flight bytes ─────────
+def test_run_ffmpeg_stream_peak_reflects_multi_frame_pipeline() -> None:
+    # F3b: with a *real* child and several 8x8x3 frames the reported peak is a
+    # genuine measurement: at least one whole frame (or the frame plus a drain
+    # chunk) must have been in flight, and it never crosses the ceiling.
+    if FFMPEG is None:
+        pytest.skip("no FFmpeg available")
+    runner = BoundedMemoryPipeRunner(ffmpeg_bin=FFMPEG, max_buffer_bytes=1024 * 1024)
+    outcome = runner.run_ffmpeg_stream([frames(4)], spec())
+    assert outcome.frames_processed == 4
+    assert outcome.peak_buffer_bytes >= 192  # at least one 8x8x3 frame measured
+    assert outcome.peak_buffer_bytes <= runner.max_buffer_bytes
+
+
+# ── F4: directory fsync is fail-closed on real disk errors ──────────────────
+def test_fsync_directory_ignores_unsupported_errnos(monkeypatch: pytest.MonkeyPatch) -> None:
+    def boom(path: str, flags: int) -> int:
+        raise OSError(errno.EINVAL, "cannot fsync a directory here")
+
+    monkeypatch.setattr(os, "open", boom)
+    bmpr._fsync_directory(Path("/tmp"))  # benign: must not raise
+
+
+def test_fsync_directory_ignores_unsupported_fsync_errno(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The directory opens, but fsync itself reports the operation is unsupported
+    # (e.g. some overlay/network filesystems): benign, must not raise.
+    def boom(fd: int) -> None:
+        raise OSError(errno.EINVAL, "fsync unsupported here")
+
+    monkeypatch.setattr(os, "fsync", boom)
+    bmpr._fsync_directory(Path("/tmp"))
+
+
+def test_fsync_directory_raises_real_disk_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+    def boom(path: str, flags: int) -> int:
+        raise OSError(errno.EIO, "disk error")
+
+    monkeypatch.setattr(os, "open", boom)
+    with pytest.raises(OSError):
+        bmpr._fsync_directory(Path("/tmp"))
+
+
+def test_fsync_directory_raises_on_fsync_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Opening the directory succeeds but the fsync itself fails with a real
+    # durability error — that must propagate, not be swallowed.
+    real_open = os.open
+
+    def open_dir(path: str, flags: int) -> int:
+        return real_open(path, flags)
+
+    def boom(fd: int) -> None:
+        raise OSError(errno.ENOSPC, "no space left on device")
+
+    monkeypatch.setattr(os, "open", open_dir)
+    monkeypatch.setattr(os, "fsync", boom)
+    with pytest.raises(OSError):
+        bmpr._fsync_directory(Path("/tmp"))

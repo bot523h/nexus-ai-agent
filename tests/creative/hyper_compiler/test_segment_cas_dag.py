@@ -275,7 +275,9 @@ def test_safe_cache_path_rejects_escape(tmp_path: Path) -> None:
 def test_commit_stream_rejects_negative_size(tmp_path: Path) -> None:
     planner = SegmentCASPlanner(tmp_path)
     with pytest.raises(SegmentIntegrityError):
-        planner.commit_stream("a" * 64, io.BytesIO(b"x"), size=-1, digest="00" * 32)
+        planner.commit_stream(
+            "a" * 64, io.BytesIO(b"x"), size=-1, digest="00" * 32, spec=make_spec(0)
+        )
 
 
 def test_verify_and_open_rejects_content_hash_mismatch(tmp_path: Path) -> None:
@@ -335,7 +337,11 @@ def test_commit_stream_rejects_traversal(tmp_path: Path) -> None:
     planner = SegmentCASPlanner(tmp_path)
     with pytest.raises(SegmentIntegrityError):
         planner.commit_stream(
-            "../" + "a" * 61, io.BytesIO(b"x"), size=1, digest=hashlib.sha256(b"x").hexdigest()
+            "../" + "a" * 61,
+            io.BytesIO(b"x"),
+            size=1,
+            digest=hashlib.sha256(b"x").hexdigest(),
+            spec=make_spec(0),
         )
 
 
@@ -504,7 +510,7 @@ def test_manifest_records_mode_and_renderer_version(tmp_path: Path) -> None:
     planner = SegmentCASPlanner(tmp_path)
     spec = make_spec(0)
     key = planner.cas_key(spec, mux_mode="ffmpeg_subprocess_pipe")
-    planner.write_segment_artifact(key, b"body", mode="ffmpeg_subprocess_pipe")
+    planner.write_segment_artifact(key, b"body", mode="ffmpeg_subprocess_pipe", spec=spec)
     manifest = json.loads(planner.manifest_path(key).read_text(encoding="utf-8"))
     assert manifest["mode"] == "ffmpeg_subprocess_pipe"
     assert manifest["renderer_version"] == dag.RENDERER_VERSION
@@ -852,9 +858,9 @@ def test_commit_stream_rejects_bad_digest(tmp_path: Path) -> None:
     planner = SegmentCASPlanner(tmp_path)
     key = "a" * 64
     with pytest.raises(SegmentIntegrityError):
-        planner.commit_stream(key, io.BytesIO(b"x"), size=1, digest="not-hex")
+        planner.commit_stream(key, io.BytesIO(b"x"), size=1, digest="not-hex", spec=make_spec(0))
     with pytest.raises(SegmentIntegrityError):
-        planner.commit_stream(key, io.BytesIO(b"x"), size=1, digest="00" * 16)
+        planner.commit_stream(key, io.BytesIO(b"x"), size=1, digest="00" * 16, spec=make_spec(0))
 
 
 def test_commit_stream_rejects_size_mismatch(tmp_path: Path) -> None:
@@ -862,7 +868,11 @@ def test_commit_stream_rejects_size_mismatch(tmp_path: Path) -> None:
     key = "a" * 64
     with pytest.raises(SegmentIntegrityError):
         planner.commit_stream(
-            key, io.BytesIO(b"x"), size=5, digest=hashlib.sha256(b"x").hexdigest()
+            key,
+            io.BytesIO(b"x"),
+            size=5,
+            digest=hashlib.sha256(b"x").hexdigest(),
+            spec=make_spec(0),
         )
     assert list(tmp_path.rglob("*.tmp")) == []
 
@@ -872,7 +882,11 @@ def test_commit_stream_rejects_hash_mismatch(tmp_path: Path) -> None:
     key = "a" * 64
     with pytest.raises(SegmentIntegrityError):
         planner.commit_stream(
-            key, io.BytesIO(b"x"), size=1, digest=hashlib.sha256(b"y").hexdigest()
+            key,
+            io.BytesIO(b"x"),
+            size=1,
+            digest=hashlib.sha256(b"y").hexdigest(),
+            spec=make_spec(0),
         )
 
 
@@ -960,3 +974,37 @@ def test_planned_segment_is_frozen_value() -> None:
 def test_verified_segment_is_frozen_value() -> None:
     verified = VerifiedSegment(cas_key="k" * 64, content_sha="s", body_size=3)
     assert verified.body_size == 3
+
+
+# ── F1: the spec binding is mandatory (fail-closed) ─────────────────────────
+def test_write_segment_artifact_requires_spec(tmp_path: Path) -> None:
+    # A manifest without a spec binding could never be verified, so the writer
+    # refuses *before* any bytes reach the cache.
+    planner = SegmentCASPlanner(tmp_path)
+    key = planner.cas_key(make_spec(0))
+    with pytest.raises(SegmentTamperError):
+        planner.write_segment_artifact(key, b"body")
+    assert not planner.artifact_path(key).exists()
+    assert not planner.manifest_path(key).exists()
+
+
+def test_commit_stream_requires_spec(tmp_path: Path) -> None:
+    planner = SegmentCASPlanner(tmp_path)
+    key = planner.cas_key(make_spec(0))
+    with pytest.raises(SegmentTamperError):
+        planner.commit_stream(
+            key, io.BytesIO(b"body"), size=4, digest=hashlib.sha256(b"body").hexdigest()
+        )
+    assert not planner.artifact_path(key).exists()
+    assert list(tmp_path.rglob("*.tmp")) == []
+
+
+def test_manifest_spec_binding_is_never_null(tmp_path: Path) -> None:
+    # With a spec supplied the manifest always records the full spec object, so
+    # verification can re-derive the key; it is never ``None``.
+    planner = SegmentCASPlanner(tmp_path)
+    spec = make_spec(0)
+    key = planner.cas_key(spec)
+    planner.write_segment_artifact(key, b"body", spec=spec)
+    manifest = json.loads(planner.manifest_path(key).read_text(encoding="utf-8"))
+    assert manifest["spec"] == dag._spec_to_dict(spec)

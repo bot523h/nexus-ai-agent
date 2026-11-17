@@ -13,13 +13,18 @@ import numpy as np
 import pytest
 from numpy.typing import NDArray
 
+from nexus_ai_agent.creative.hyper_compiler import shot_orchestrator as so
 from nexus_ai_agent.creative.hyper_compiler.bounded_memory_pipe_runner import (
     FramePipelineSpec,
     MuxMode,
 )
-from nexus_ai_agent.creative.hyper_compiler.errors import HyperCompilerError
+from nexus_ai_agent.creative.hyper_compiler.errors import (
+    HyperCompilerError,
+    SegmentTamperError,
+)
 from nexus_ai_agent.creative.hyper_compiler.segment_cas_dag import (
     SEGMENT_HEADER_LEN,
+    PlannedSegment,
     SegmentStatus,
     TimelineSegmentSpec,
 )
@@ -408,3 +413,92 @@ def test_orchestrator_empty_timeline_receipt_mode(tmp_path: Path) -> None:
     execution = orch.execute([], frame_factory=frame_factory())
     assert execution.receipt.mode == "deterministic_cpu_mux"
     assert execution.receipt.total_segments == 0
+
+
+# ── F1: render_segment is bound to the planned segment ──────────────────────
+def test_orchestrator_render_segment_rejects_mode_mismatch(tmp_path: Path) -> None:
+    orch = HyperTimelineOrchestrator(tmp_path, max_buffer_bytes=1024 * 1024)
+    planned = orch.plan([make_spec(0)]).segments[0]
+    with pytest.raises(SegmentTamperError, match="mode"):
+        orch.render_segment(
+            planned,
+            frame_factory()(make_spec(0)),
+            mode=MuxMode.FFMPEG_SUBPROCESS_PIPE,
+        )
+    # Nothing was written under the planned key.
+    assert not orch.planner.artifact_path(planned.cas_key).exists()
+
+
+def test_orchestrator_render_segment_rejects_pipeline_mismatch(tmp_path: Path) -> None:
+    orch = HyperTimelineOrchestrator(tmp_path, max_buffer_bytes=1024 * 1024)
+    planned = orch.plan([make_spec(0)]).segments[0]
+    brighter = FramePipelineSpec(width=8, height=8, fps=24.0, brightness=0.5)
+    with pytest.raises(SegmentTamperError, match="pipeline"):
+        orch.render_segment(planned, frame_factory()(make_spec(0)), pipe_spec=brighter)
+    assert not orch.planner.artifact_path(planned.cas_key).exists()
+
+
+def test_orchestrator_render_segment_rejects_key_mismatch(tmp_path: Path) -> None:
+    orch = HyperTimelineOrchestrator(tmp_path, max_buffer_bytes=1024 * 1024)
+    planned = orch.plan([make_spec(0)]).segments[0]
+    forged = PlannedSegment(
+        planned.spec,
+        "f" * 64,
+        planned.status,
+        planned.artifact_path,
+        planned.pipeline_digest,
+        mode=planned.mode,
+    )
+    with pytest.raises(SegmentTamperError, match="key"):
+        orch.render_segment(forged, frame_factory()(make_spec(0)))
+    assert not orch.planner.artifact_path(forged.cas_key).exists()
+
+
+# ── F2: the orchestrator forwards the watchdog timeout to the runner ────────
+def test_orchestrator_forwards_timeout_to_runner(tmp_path: Path) -> None:
+    orch = HyperTimelineOrchestrator(tmp_path, timeout_seconds=1.25)
+    assert orch.runner.timeout_seconds == 1.25
+
+
+def test_orchestrator_rejects_invalid_timeout(tmp_path: Path) -> None:
+    from nexus_ai_agent.creative.hyper_compiler.errors import PipeExecutionError
+
+    with pytest.raises(PipeExecutionError):
+        HyperTimelineOrchestrator(tmp_path, timeout_seconds=0.0)
+
+
+# ── F4: execute() makes the output rename durable ───────────────────────────
+def test_orchestrator_execute_fsyncs_output_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from nexus_ai_agent.creative.hyper_compiler.bounded_memory_pipe_runner import (
+        _fsync_directory,
+    )
+
+    synced: list[Path] = []
+
+    def spy(path: Path) -> None:
+        synced.append(Path(path))
+        _fsync_directory(path)
+
+    monkeypatch.setattr(so, "_fsync_directory", spy)
+    orch = HyperTimelineOrchestrator(tmp_path / "cache", max_buffer_bytes=1024 * 1024)
+    out = tmp_path / "nested" / "final.nagartl"
+    orch.execute([make_spec(0)], frame_factory=frame_factory(), output_path=out)
+    assert out.parent in synced
+
+
+def test_orchestrator_execute_propagates_fsync_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A real disk error while making the rename durable must not be swallowed:
+    # the caller must never believe a non-durable write succeeded.
+    def boom(path: Path) -> None:
+        raise OSError("disk error")
+
+    monkeypatch.setattr(so, "_fsync_directory", boom)
+    orch = HyperTimelineOrchestrator(tmp_path / "cache", max_buffer_bytes=1024 * 1024)
+    out = tmp_path / "final.nagartl"
+    with pytest.raises(OSError):
+        orch.execute([make_spec(0)], frame_factory=frame_factory(), output_path=out)
+    assert list(tmp_path.glob("*.tmp")) == []

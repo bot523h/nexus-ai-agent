@@ -41,10 +41,21 @@ class StreamKind(str, Enum):
 
 
 def _num(value: float) -> str:
-    """Canonical, deterministic decimal rendering of a finite float."""
+    """Canonical, *full-precision* decimal rendering of a finite float.
+
+    The value is rendered at full double precision (shortest round-trip
+    ``repr``) rather than rounded to a fixed number of places.  Rounding here
+    quantises the coefficient the FFmpeg filter receives while the CPU engine
+    keeps the exact value, so the two engines would disagree on a handful of
+    pixels; the differential test ``test_cpu_and_ffmpeg_engines_are_byte_identical``
+    pins them together across a matrix of settings (including negatives, zero,
+    the range boundaries and values with more than six decimal places).
+    """
     if not math.isfinite(value):
         raise InvalidFilterGraphError(f"non-finite numeric operand: {value!r}")
-    text = format(value, ".6f").rstrip("0").rstrip(".")
+    text = repr(float(value))
+    if text.endswith(".0"):
+        text = text[:-2]
     return text if text not in ("", "-0") else "0"
 
 
