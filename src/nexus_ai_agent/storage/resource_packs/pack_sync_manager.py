@@ -269,6 +269,8 @@ _LEASE_KEYS = frozenset({"schema", "pid", "pack_id", "install_dir", "expires_at"
 _MANIFEST_SUFFIX = ".manifest.json"
 
 LockBackend = Literal["auto", "flock", "exclusive_file"]
+#: Staleness predicate used by the quarantine sweep (storage lock / break guard).
+_QuarantineStaleCheck = Callable[[dict[str, object] | None, float], bool]
 
 
 def parse_semantic_version(version: str) -> tuple[int, int, int] | None:
@@ -329,6 +331,13 @@ def _read_lock_state(path: Path) -> tuple[int, float, dict[str, object] | None] 
     except (OSError, ValueError):
         parsed = None
     return lstat.st_ino, lstat.st_mtime, parsed if isinstance(parsed, dict) else None
+
+
+def _lock_token(data: dict[str, object] | None) -> object:
+    """The ownership token of a lock record (``None`` for unreadable records)."""
+    if data is None:
+        return None
+    return data.get("owner_token")
 
 
 def _parse_lock_record(data: dict[str, object] | None) -> tuple[int, float, str] | None:
@@ -429,24 +438,98 @@ class _StorageLock:
         cur_token = cur_data.get("owner_token") if cur_data is not None else None
         return cur_ino == guard_ino and cur_token == guard_token
 
-    def _live_quarantined_break_guard(self) -> Path | None:
-        """Return a ``*.stale`` break guard that is still a live ownership claim.
+    # -- quarantine protocol ----------------------------------------------------
+    #
+    # A ``*.stale`` file is NOT passive forensic litter: while it holds a live
+    # ownership record it is the *only* proof that somebody still owns the
+    # target.  Every creation path therefore (1) sweeps the quarantine, (2)
+    # creates exclusively with O_EXCL, and (3) re-checks the quarantine AFTER
+    # creation.  Because os.replace(target, trash) is atomic, a rival claim
+    # created in the check-then-act window is guaranteed to be visible in step
+    # (3); that re-check is the linearization point of the protocol.
 
-        When the recovery hardlink in :meth:`_reclaim_stale_break_guard` fails
-        (``EACCES``, ``ENOSPC``, ...), the only copy of a *live* rival's guard
-        stays quarantined under ``.stale`` while ``.break`` is empty.  Until
-        that evidence is restored or expires, an ``O_CREAT | O_EXCL`` create at
-        ``.break`` would hand a second process a break guard and break the
-        exclusivity of the first owner.
+    @staticmethod
+    def _unlink_if_inode(path: Path, ino: int) -> None:
+        """Unlink *path* only while it is still the exact inode inspected."""
+        try:
+            if os.lstat(path).st_ino == ino:
+                path.unlink(missing_ok=True)
+        except FileNotFoundError:
+            return  # already gone; never touch a concurrent replacement
+
+    def _quarantine_paths(self, target: Path) -> list[Path]:
+        """Every ``*.stale`` quarantine record belonging to *target*."""
+        return sorted(target.parent.glob(f".{target.name}.*.stale"))
+
+    def _sweep_quarantine(
+        self,
+        target: Path,
+        is_stale: _QuarantineStaleCheck,
+    ) -> list[Path]:
+        """Return live claims; safely retire dead/expired ones.
+
+        A dead record is unlinked only when its inode is unchanged, so a racing
+        replacement can never be deleted by an unrelated contender.
         """
-        for candidate in sorted(self._break_path.parent.glob(f".{self._break_path.name}.*.stale")):
+        live: list[Path] = []
+        for candidate in self._quarantine_paths(target):
             state = _read_lock_state(candidate)
             if state is None:
-                continue  # vanished between glob and lstat: nothing left to protect
-            _, mtime, data = state
-            if not self._is_stale_break_guard(data, mtime):
-                return candidate
-        return None
+                continue  # vanished between glob and lstat: nothing to protect
+            ino, mtime, data = state
+            if not is_stale(data, mtime):
+                live.append(candidate)
+                continue
+            self._unlink_if_inode(candidate, ino)
+        return live
+
+    def _restore_quarantine(self, candidate: Path, target: Path) -> None:
+        """Best-effort, no-clobber restore of a live quarantined claim."""
+        try:
+            os.link(candidate, target)
+            candidate.unlink(missing_ok=True)
+        except OSError:
+            return  # keep the only surviving ownership evidence
+
+    def _quarantine_blocks_creation(
+        self,
+        target: Path,
+        is_stale: _QuarantineStaleCheck,
+    ) -> bool:
+        """Pre-creation gate: restore live claims and always fail closed."""
+        live = self._sweep_quarantine(target, is_stale)
+        for candidate in live:
+            self._restore_quarantine(candidate, target)
+        return bool(live)
+
+    def _post_creation_fence(
+        self,
+        target: Path,
+        is_stale: _QuarantineStaleCheck,
+        *,
+        created_ino: int,
+        token: str,
+    ) -> bool:
+        """Linearization point: roll back if a rival claim appeared meanwhile."""
+        state = _read_lock_state(target)
+        owned = False
+        if state is not None:
+            owned = state[0] == created_ino and _lock_token(state[2]) == token
+        rivals: list[Path] = []
+        for candidate in self._sweep_quarantine(target, is_stale):
+            q_state = _read_lock_state(candidate)
+            q_token: object = None
+            if q_state is not None:
+                q_token = _lock_token(q_state[2])
+            if q_token != token:
+                rivals.append(candidate)
+        if owned and not rivals:
+            return False
+        if owned:
+            self._unlink_if_inode(target, created_ino)
+        for candidate in rivals:
+            self._restore_quarantine(candidate, target)
+        return True
 
     def _reclaim_stale_break_guard(self) -> bool:
         state = _read_lock_state(self._break_path)
@@ -507,20 +590,11 @@ class _StorageLock:
     def _try_enter_break_guard(
         self, *, target_lock_ino: int | None = None
     ) -> tuple[int, str] | None:
-        quarantined = self._live_quarantined_break_guard()
-        if quarantined is not None:
-            # Put the surviving evidence back at the live path when that is
-            # still possible.  The restore is best-effort: in every case this
-            # caller must NOT become a new owner while a live guard is
-            # quarantined.  Fail closed by returning None.
-            try:
-                os.link(quarantined, self._break_path)
-            except OSError:
-                pass  # keep the only surviving copy of the rival's guard
-            else:
-                quarantined.unlink(missing_ok=True)
+        # 1. Pre-creation gate: a live quarantined guard is an active owner.
+        if self._quarantine_blocks_creation(self._break_path, self._is_stale_break_guard):
             return None
         token = f"{os.getpid()}:{uuid.uuid4().hex}"
+        # 2. Exclusive creation + durable ownership record.
         try:
             fd = os.open(self._break_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
         except FileExistsError:
@@ -537,6 +611,15 @@ class _StorageLock:
             ino = os.fstat(fd).st_ino
         finally:
             os.close(fd)
+        # 3. Linearization fence: a rival claim quarantined in the window above
+        #    is now atomically visible; roll back our creation and fail closed.
+        if self._post_creation_fence(
+            self._break_path,
+            self._is_stale_break_guard,
+            created_ino=ino,
+            token=token,
+        ):
+            return None
         return ino, token
 
     def _exit_break_guard(self, guard: tuple[int, str]) -> None:
@@ -545,6 +628,10 @@ class _StorageLock:
 
     def _try_acquire(self) -> bool:
         token = f"{os.getpid()}:{uuid.uuid4().hex}"
+        # 1. Pre-creation gate: a live quarantined storage lock is an owner.
+        #    This applies to both backends; a quarantine record is never junk.
+        if self._quarantine_blocks_creation(self.path, self._is_stale_record):
+            return False
         if self._fcntl is not None:
             fd = os.open(self.path, os.O_RDWR | os.O_CREAT, 0o644)
             try:
@@ -554,21 +641,43 @@ class _StorageLock:
                 return False
             os.ftruncate(fd, 0)
             os.write(fd, self._owner_record(token))
+            os.fsync(fd)
+            ino = os.fstat(fd).st_ino
+            # The same linearization fence applies to flock: a rival claim
+            # quarantined after the pre-sweep must not leave this caller as a
+            # second owner even though the kernel lock itself succeeded.
+            if self._post_creation_fence(
+                self.path, self._is_stale_record, created_ino=ino, token=token
+            ):
+                self._fcntl.flock(fd, self._fcntl.LOCK_UN)
+                os.close(fd)
+                return False
             self._fd = fd
             self._owner_token = token
             return True
+        # 2. Exclusive creation + durable ownership record.
         try:
             fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
         except FileExistsError:
-            self._break_if_stale()
+            try:
+                self._break_if_stale()
+            except OSError:
+                pass  # recovery fault: evidence is preserved, acquisition fails closed
             return False
         try:
             os.write(fd, self._owner_record(token))
             os.fsync(fd)
-            self._st_ino = os.fstat(fd).st_ino
-            self._owner_token = token
+            ino = os.fstat(fd).st_ino
         finally:
             os.close(fd)
+        # 3. Linearization fence: roll back if a rival claim appeared in the
+        #    check-then-act window between the sweep and O_EXCL creation.
+        if self._post_creation_fence(
+            self.path, self._is_stale_record, created_ino=ino, token=token
+        ):
+            return False
+        self._st_ino = ino
+        self._owner_token = token
         return True
 
     def _break_if_stale(self) -> None:
@@ -624,6 +733,29 @@ class _StorageLock:
         finally:
             self._exit_break_guard(guard)
 
+    def _release_owned_lock(self) -> None:
+        """Delete only our own inode + token, at the live path or in quarantine.
+
+        A stale owner whose record was moved to ``*.stale`` may retire that
+        record, but must never unlink a rival's lock: both the inode and the
+        ``owner_token`` have to match.
+        """
+        if self._st_ino is None or self._owner_token is None:
+            return
+        ino, token = self._st_ino, self._owner_token
+        state = _read_lock_state(self.path)
+        if state is not None and state[0] == ino and _lock_token(state[2]) == token:
+            # Use the quarantine namespace, not a transient `.release` name:
+            # if unlink fails, the surviving evidence is still discovered by
+            # every future pre-sweep instead of becoming invisible litter.
+            trash = self.path.with_name(f".{self.path.name}.{os.getpid()}.{uuid.uuid4().hex}.stale")
+            os.replace(self.path, trash)
+            trash.unlink(missing_ok=True)
+        for candidate in self._quarantine_paths(self.path):
+            q_state = _read_lock_state(candidate)
+            if q_state is not None and q_state[0] == ino and _lock_token(q_state[2]) == token:
+                self._unlink_if_inode(candidate, ino)
+
     def __enter__(self) -> _StorageLock:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         deadline = time.monotonic() + self.timeout
@@ -654,16 +786,7 @@ class _StorageLock:
                 guard = self._try_enter_break_guard()
             try:
                 if guard is not None:
-                    current = _read_lock_state(self.path)
-                    if current is not None:
-                        cur_ino, _, cur_data = current
-                        cur_token = cur_data.get("owner_token") if cur_data is not None else None
-                        if cur_ino == self._st_ino and cur_token == self._owner_token:
-                            trash = self.path.with_name(
-                                f".{self.path.name}.{os.getpid()}.{uuid.uuid4().hex}.release"
-                            )
-                            os.replace(self.path, trash)
-                            trash.unlink(missing_ok=True)
+                    self._release_owned_lock()
             finally:
                 if guard is not None:
                     self._exit_break_guard(guard)

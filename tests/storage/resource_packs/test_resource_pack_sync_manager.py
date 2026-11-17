@@ -9,10 +9,13 @@ import json
 import os
 import subprocess
 import sys
+import threading
 import time
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 
 import pytest
 from resource_pack_testkit import (
@@ -1207,7 +1210,8 @@ def test_break_guard_reclaim_fencing_and_multiprocess_dead_vs_live_pid(
     assert lock.path.exists()
     lock._break_path.unlink(missing_ok=True)
 
-    # _reclaim_stale_break_guard edge cases: vanished, symlink/non-regular, swapped inode/token
+    # _reclaim_stale_break_guard edge cases: vanished, symlink/non-regular, a
+    # genuine inode swap, and a TOKEN REWRITE that keeps the inode unchanged.
     lock._reclaim_stale_break_guard()  # vanished
     target = tmp_path / "symlink_target"
     target.write_text("x")
@@ -1425,10 +1429,10 @@ def test_break_guard_reclaim_fencing_and_multiprocess_dead_vs_live_pid(
             pass
 
 
-def test_break_if_stale_fences_a_live_lock_created_before_os_replace(
+def test_break_if_stale_fences_a_token_rewrite_without_changing_the_inode(
     mirror: PackMirror, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A lock installed between the final check and os.replace is never broken."""
+    """A live owner that rewrites its token on the SAME inode is never broken."""
     now = [1000.0]
     mgr, _ = _manager(
         tmp_path / "toctou",
@@ -1624,7 +1628,8 @@ def test_quarantined_live_break_guard_is_fail_closed_for_the_next_contender(
     assert not quarantined[0].exists()
     lock._break_path.unlink()
 
-    # A dead/expired quarantine is not a live owner: entry stays available.
+    # A dead/expired quarantine is not a live owner: the sweep retires it
+    # (deterministic lifecycle cleanup) and entry stays available.
     dead = root / f".{lock._break_path.name}.dead.stale"
     dead.write_text(
         json.dumps({"pid": 999_999_999, "expires_at": now[0] - 10, "owner_token": "dead:guard"})
@@ -1632,7 +1637,7 @@ def test_quarantined_live_break_guard_is_fail_closed_for_the_next_contender(
     guard = rival._try_enter_break_guard()
     assert guard is not None
     rival._exit_break_guard(guard)
-    dead.unlink()
+    assert not dead.exists()
 
     # A candidate that vanishes between glob and lstat protects nobody.
     vanishing = root / f".{lock._break_path.name}.vanished.stale"
@@ -1649,3 +1654,649 @@ def test_quarantined_live_break_guard_is_fail_closed_for_the_next_contender(
     assert guard is not None
     rival._exit_break_guard(guard)
     vanishing.unlink()
+
+
+# ---------------------------------------------------------------------------
+# P0 lock-closure adversarial matrix.  Every scenario uses the REAL filesystem;
+# the only injected faults are precise monkeypatch failpoints.  Threads are
+# synchronised with Barrier/Event, never with ad-hoc sleeps.
+# ---------------------------------------------------------------------------
+
+
+def _closure_manager(root: Path, mirror: PackMirror) -> tuple[ResourcePackSyncManager, list[float]]:
+    now = [1000.0]
+    manager, _ = _manager(
+        root,
+        [],
+        mirror,
+        lock_backend="exclusive_file",
+        lock_timeout_seconds=0.2,
+        lock_stale_after_seconds=5.0,
+        wall_clock=lambda: now[0],
+    )
+    root.mkdir(parents=True, exist_ok=True)
+    return manager, now
+
+
+def _closure_lock(root: Path, mirror: PackMirror) -> tuple[psm._StorageLock, list[float]]:
+    manager, now = _closure_manager(root, mirror)
+    return manager._storage_lock(), now
+
+
+def _closure_flock_lock(root: Path, mirror: PackMirror) -> tuple[psm._StorageLock, list[float]]:
+    """Same deterministic wall clock, but the POSIX flock backend (not O_EXCL)."""
+    now = [1000.0]
+    manager, _ = _manager(
+        root,
+        [],
+        mirror,
+        lock_backend="flock",
+        lock_timeout_seconds=0.2,
+        lock_stale_after_seconds=5.0,
+        wall_clock=lambda: now[0],
+    )
+    root.mkdir(parents=True, exist_ok=True)
+    return manager._storage_lock(), now
+
+
+def _quarantine_record(
+    target: Path,
+    label: str,
+    *,
+    now: float,
+    token: str,
+    live: bool = True,
+    raw: str | None = None,
+    mtime: float | None = None,
+) -> Path:
+    """A REAL ``.stale`` file for *target*, live or dead/expired by the lock rules."""
+    path = target.parent / f".{target.name}.{label}.stale"
+    if raw is None:
+        payload = {
+            "pid": os.getpid() if live else 999_999_999,
+            "owner_token": token,
+            "created_at": now,
+            "expires_at": now + 60.0 if live else now - 10.0,
+        }
+        raw = json.dumps(payload)
+    path.write_text(raw)
+    stamp = now if mtime is None else mtime
+    os.utime(path, (stamp, stamp))
+    return path
+
+
+def _live_claim(target: Path, now: float, token: str) -> None:
+    target.write_text(
+        json.dumps(
+            {
+                "pid": os.getpid(),
+                "owner_token": token,
+                "created_at": now,
+                "expires_at": now + 60.0,
+            }
+        )
+    )
+    os.utime(target, (now, now))
+
+
+def _parallel_contenders(count: int, action: Callable[[int], bool]) -> list[bool]:
+    barrier = threading.Barrier(count)
+
+    def worker(index: int) -> bool:
+        barrier.wait(timeout=5)
+        return action(index)
+
+    with ThreadPoolExecutor(max_workers=count) as pool:
+        futures = [pool.submit(worker, index) for index in range(count)]
+        return [future.result(timeout=10) for future in futures]
+
+
+def _inject_quarantine_after_creation(
+    monkeypatch: pytest.MonkeyPatch,
+    target: Path,
+    write_quarantines: Callable[[], None],
+    action: Callable[[], object],
+) -> tuple[object, list[str]]:
+    """Create a rival claim AFTER the real O_EXCL create but BEFORE its caller sees it.
+
+    Step (1) of the protocol has already swept the directory when os.open is
+    reached.  This failpoint is inside the os.open boundary: the real descriptor
+    is created first, then the rival writes a live ``*.stale`` claim, then the
+    descriptor is returned.  The post-creation fence must observe that claim.
+    """
+    barrier = threading.Barrier(2)
+    created = threading.Event()
+    sequence: list[str] = []
+    real_open = os.open
+
+    def racing_open(path: object, flags: int, *args: object, **kwargs: object) -> int:
+        fd = real_open(path, flags, *args, **kwargs)  # type: ignore[arg-type]
+        if str(path) == str(target) and flags & os.O_CREAT:
+            sequence.append("created")
+            barrier.wait(timeout=5)
+            assert created.wait(timeout=5)
+        return fd
+
+    def writer() -> None:
+        barrier.wait(timeout=5)
+        write_quarantines()
+        sequence.append("rival-quarantined")
+        created.set()
+
+    with monkeypatch.context() as patch:
+        patch.setattr(os, "open", racing_open)
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(writer)
+            result = action()
+            assert future.result(timeout=5) is None
+    return result, sequence
+
+
+def test_lock_closure_matrix_01_live_main_quarantine_rejects_two_contenders(
+    mirror: PackMirror, tmp_path: Path
+) -> None:
+    """01: a live main-lock quarantine is an owner; two rivals fail closed."""
+    lock, now = _closure_lock(tmp_path / "matrix01", mirror)
+    stale = _quarantine_record(lock.path, "owner", now=now[0], token="owner:1")
+    stale_ino = os.lstat(stale).st_ino
+    rivals = [
+        lock.__class__(
+            lock.path.parent,
+            backend="exclusive_file",
+            timeout=lock.timeout,
+            stale_after=lock.stale_after,
+            wall_clock=lock.wall_clock,
+        )
+        for _ in range(2)
+    ]
+    entered = tmp_path / "matrix01" / "entered"
+
+    def contend(index: int) -> bool:
+        acquired = rivals[index]._try_acquire()
+        if acquired:
+            entered.write_text(f"contender:{index}")
+        return acquired
+
+    assert _parallel_contenders(2, contend) == [False, False]
+    assert not entered.exists()
+    assert lock.path.exists()
+    assert json.loads(lock.path.read_text())["owner_token"] == "owner:1"
+    assert os.lstat(lock.path).st_ino == stale_ino
+    assert not stale.exists()
+
+
+def test_lock_closure_matrix_02_successful_restore_removes_stale(
+    mirror: PackMirror, tmp_path: Path
+) -> None:
+    """02: no-clobber os.link restores the live claim and retires its .stale."""
+    lock, now = _closure_lock(tmp_path / "matrix02", mirror)
+    stale = _quarantine_record(lock.path, "owner", now=now[0], token="owner:2")
+    stale_ino = os.lstat(stale).st_ino
+    contender = lock.__class__(
+        lock.path.parent,
+        backend="exclusive_file",
+        timeout=lock.timeout,
+        stale_after=lock.stale_after,
+        wall_clock=lock.wall_clock,
+    )
+    assert contender._try_acquire() is False
+    assert lock.path.exists()
+    assert json.loads(lock.path.read_text())["owner_token"] == "owner:2"
+    assert os.lstat(lock.path).st_ino == stale_ino
+    assert not stale.exists()
+
+
+def _assert_recovery_fault_preserves_evidence(
+    root: Path, mirror: PackMirror, monkeypatch: pytest.MonkeyPatch, error: OSError
+) -> None:
+    lock, now = _closure_lock(root, mirror)
+    stale = _quarantine_record(lock.path, "owner", now=now[0], token="owner:fault")
+    stale_ino = os.lstat(stale).st_ino
+    real_link = os.link
+
+    def failing_link(src: object, dst: object, *args: object, **kwargs: object) -> None:
+        if str(dst) == str(lock.path):
+            raise error
+        real_link(src, dst, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(os, "link", failing_link)
+    rivals = [
+        lock.__class__(
+            lock.path.parent,
+            backend="exclusive_file",
+            timeout=lock.timeout,
+            stale_after=lock.stale_after,
+            wall_clock=lock.wall_clock,
+        )
+        for _ in range(2)
+    ]
+    assert _parallel_contenders(2, lambda index: rivals[index]._try_acquire()) == [False, False]
+    assert not lock.path.exists()
+    assert stale.exists()
+    assert os.lstat(stale).st_ino == stale_ino
+    assert json.loads(stale.read_text())["owner_token"] == "owner:fault"
+
+
+def test_lock_closure_matrix_03_permission_error_preserves_evidence_and_exclusivity(
+    mirror: PackMirror, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """03: PermissionError during restore keeps the evidence and grants no lock."""
+    _assert_recovery_fault_preserves_evidence(
+        tmp_path / "matrix03",
+        mirror,
+        monkeypatch,
+        PermissionError("permission denied during quarantine restore"),
+    )
+
+
+def test_lock_closure_matrix_04_enospc_preserves_evidence_and_exclusivity(
+    mirror: PackMirror, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """04: ENOSPC during restore keeps the evidence and grants no lock."""
+    _assert_recovery_fault_preserves_evidence(
+        tmp_path / "matrix04",
+        mirror,
+        monkeypatch,
+        OSError(errno.ENOSPC, "no space left during quarantine restore"),
+    )
+
+
+def test_lock_closure_matrix_05_third_owner_and_file_exists_error_never_overwrite(
+    mirror: PackMirror, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """05: a live third owner makes restore EEXIST; neither claim is overwritten."""
+    lock, now = _closure_lock(tmp_path / "matrix05", mirror)
+    _live_claim(lock.path, now[0], "owner:live")
+    live_ino = os.lstat(lock.path).st_ino
+    stale = _quarantine_record(lock.path, "quarantined", now=now[0], token="owner:quarantine")
+    stale_ino = os.lstat(stale).st_ino
+    real_link = os.link
+    seen: list[str] = []
+
+    def watched_link(src: object, dst: object, *args: object, **kwargs: object) -> None:
+        try:
+            real_link(src, dst, *args, **kwargs)  # type: ignore[arg-type]
+        except FileExistsError:
+            seen.append(str(dst))
+            raise
+
+    monkeypatch.setattr(os, "link", watched_link)
+    rivals = [
+        lock.__class__(
+            lock.path.parent,
+            backend="exclusive_file",
+            timeout=lock.timeout,
+            stale_after=lock.stale_after,
+            wall_clock=lock.wall_clock,
+        )
+        for _ in range(2)
+    ]
+    assert _parallel_contenders(2, lambda index: rivals[index]._try_acquire()) == [False, False]
+    assert len(seen) >= 2
+    assert json.loads(lock.path.read_text())["owner_token"] == "owner:live"
+    assert os.lstat(lock.path).st_ino == live_ino
+    assert json.loads(stale.read_text())["owner_token"] == "owner:quarantine"
+    assert os.lstat(stale).st_ino == stale_ino
+
+    # A recovery fault while a live target exists must also fail closed without
+    # deleting that target: the catch around _break_if_stale is a P0 guarantee.
+    monkeypatch.undo()
+    stale.unlink()
+
+    def recovery_fault(*_args: object, **_kwargs: object) -> None:
+        raise OSError(errno.EIO, "recovery fault with live owner")
+
+    contender = lock.__class__(
+        lock.path.parent,
+        backend="exclusive_file",
+        timeout=lock.timeout,
+        stale_after=lock.stale_after,
+        wall_clock=lock.wall_clock,
+    )
+    monkeypatch.setattr(contender, "_quarantine_blocks_creation", lambda *_a, **_k: False)
+    monkeypatch.setattr(contender, "_break_if_stale", recovery_fault)
+    assert contender._try_acquire() is False
+    assert json.loads(lock.path.read_text())["owner_token"] == "owner:live"
+    assert os.lstat(lock.path).st_ino == live_ino
+
+
+def test_lock_closure_matrix_06_break_guard_quarantine_after_creation_rolls_back(
+    mirror: PackMirror, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """06: rival Break Guard claim appears after O_EXCL: A rolls back, fails closed."""
+    lock, now = _closure_lock(tmp_path / "matrix06", mirror)
+    rival_stale: list[Path] = []
+
+    def write_rival() -> None:
+        rival_stale.append(
+            _quarantine_record(lock._break_path, "a-rival", now=now[0], token="rival:break")
+        )
+
+    result, sequence = _inject_quarantine_after_creation(
+        monkeypatch, lock._break_path, write_rival, lock._try_enter_break_guard
+    )
+    assert sequence == ["created", "rival-quarantined"]
+    assert result is None
+    assert json.loads(lock._break_path.read_text())["owner_token"] == "rival:break"
+    assert not rival_stale[0].exists()
+    lock._break_path.unlink()
+
+    # A quarantined claim carrying OUR token is not a rival: the fence accepts
+    # ownership, covering the other side of the owner-token comparison.
+    fixed = "matrix06"
+    own_token = f"{os.getpid()}:{fixed}"
+    own_stale: list[Path] = []
+    monkeypatch.setattr(psm.uuid, "uuid4", lambda: SimpleNamespace(hex=fixed))
+
+    def write_own_evidence() -> None:
+        own_stale.append(_quarantine_record(lock._break_path, "own", now=now[0], token=own_token))
+
+    own_result, own_sequence = _inject_quarantine_after_creation(
+        monkeypatch, lock._break_path, write_own_evidence, lock._try_enter_break_guard
+    )
+    monkeypatch.undo()
+    assert own_sequence == ["created", "rival-quarantined"]
+    assert isinstance(own_result, tuple)
+    assert own_result[1] == own_token
+    assert json.loads(lock._break_path.read_text())["owner_token"] == own_token
+    assert own_stale[0].exists()
+    lock._exit_break_guard(own_result)
+    own_stale[0].unlink()
+
+
+def test_lock_closure_matrix_07_storage_lock_quarantine_after_creation_rolls_back(
+    mirror: PackMirror, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """07: rival Storage Lock claim appears after O_EXCL: A rolls back, fails closed."""
+    lock, now = _closure_lock(tmp_path / "matrix07", mirror)
+    a = lock.path.parent / f".{lock.path.name}.a-rival.stale"
+    b = lock.path.parent / f".{lock.path.name}.b-vanishing.stale"
+    z = lock.path.parent / f".{lock.path.name}.z-unreadable.stale"
+    real_read = psm._read_lock_state
+    b_reads = [0]
+
+    def read_with_vanishing_evidence(path: object, *args: object, **kwargs: object) -> object:
+        if str(path) == str(b):
+            b_reads[0] += 1
+            if b_reads[0] >= 2:
+                return None
+        return real_read(path, *args, **kwargs)  # type: ignore[arg-type]
+
+    def write_rivals() -> None:
+        _quarantine_record(lock.path, "a-rival", now=now[0], token="rival:storage")
+        _quarantine_record(lock.path, "b-vanishing", now=now[0], token="rival:vanishing")
+        _quarantine_record(
+            lock.path,
+            "z-unreadable",
+            now=now[0],
+            token="unread",
+            raw="{corrupt",
+            mtime=now[0],
+        )
+
+    monkeypatch.setattr(psm, "_read_lock_state", read_with_vanishing_evidence)
+    result, sequence = _inject_quarantine_after_creation(
+        monkeypatch, lock.path, write_rivals, lock._try_acquire
+    )
+    monkeypatch.undo()
+    assert sequence == ["created", "rival-quarantined"]
+    assert result is False
+    assert b_reads[0] >= 2
+    assert json.loads(lock.path.read_text())["owner_token"] == "rival:storage"
+    assert not a.exists()  # restored with a no-clobber hardlink
+    assert b.exists() and z.exists()  # EEXIST keeps both surviving claims
+    lock.path.unlink()
+    b.unlink()
+    z.unlink()
+
+    # The same linearization fence also protects the flock backend: the kernel
+    # lock alone must not mint a second owner when a live claim was quarantined
+    # after the pre-sweep.
+    pytest.importorskip("fcntl")
+    flock_lock, flock_now = _closure_flock_lock(tmp_path / "matrix07_flock", mirror)
+    flock_rival: list[Path] = []
+
+    def write_flock_rival() -> None:
+        flock_rival.append(
+            _quarantine_record(flock_lock.path, "rival", now=flock_now[0], token="rival:flock")
+        )
+
+    flock_result, flock_sequence = _inject_quarantine_after_creation(
+        monkeypatch, flock_lock.path, write_flock_rival, flock_lock._try_acquire
+    )
+    assert flock_sequence == ["created", "rival-quarantined"]
+    assert flock_result is False
+    assert flock_lock._fd is None and flock_lock._owner_token is None
+    assert json.loads(flock_lock.path.read_text())["owner_token"] == "rival:flock"
+    assert not flock_rival[0].exists()
+    flock_lock.path.unlink()
+
+
+def test_lock_closure_matrix_08_dead_and_expired_quarantine_cleanup_is_inode_safe(
+    mirror: PackMirror, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """08: dead/expired records are retired only by inode; races delete nothing."""
+    lock, now = _closure_lock(tmp_path / "matrix08", mirror)
+    dead_pid = _quarantine_record(
+        lock.path, "dead-pid", now=now[0], token="dead:pid", live=False, mtime=now[0] - 10
+    )
+    expired = _quarantine_record(
+        lock.path,
+        "expired",
+        now=now[0],
+        token="dead:expiry",
+        raw=json.dumps(
+            {
+                "pid": os.getpid(),
+                "owner_token": "dead:expiry",
+                "created_at": now[0] - 100,
+                "expires_at": now[0] - 10,
+            }
+        ),
+        mtime=now[0] - 10,
+    )
+    unreadable = _quarantine_record(
+        lock.path,
+        "unreadable-dead",
+        now=now[0],
+        token="unused",
+        raw="{corrupt",
+        mtime=now[0] - 100,
+    )
+    inode_raced = _quarantine_record(
+        lock.path, "inode-raced", now=now[0], token="dead:inode", live=False, mtime=now[0] - 10
+    )
+    vanishing = _quarantine_record(
+        lock.path, "vanishing", now=now[0], token="dead:vanish", live=False, mtime=now[0] - 10
+    )
+    moved = vanishing.with_suffix(".gone")
+    real_lstat = os.lstat
+    real_unlink = Path.unlink
+    lstat_calls = [0]
+    vanished_once: list[bool] = []
+
+    def shifted_lstat(path: object, *args: object, **kwargs: object) -> os.stat_result:
+        state = real_lstat(path, *args, **kwargs)  # type: ignore[arg-type]
+        if str(path) == str(inode_raced):
+            lstat_calls[0] += 1
+            if lstat_calls[0] % 2 == 0:  # the re-check in _unlink_if_inode
+                return os.stat_result(
+                    (
+                        state.st_mode,
+                        state.st_ino + 1,
+                        state.st_dev,
+                        state.st_nlink,
+                        state.st_uid,
+                        state.st_gid,
+                        state.st_size,
+                        state.st_atime,
+                        state.st_mtime,
+                        state.st_ctime,
+                    )
+                )
+        return state
+
+    def unlink_with_vanish(self: Path, *args: object, **kwargs: object) -> None:
+        if self == vanishing and not vanished_once:
+            vanished_once.append(True)
+            self.rename(moved)
+            real_unlink(self)  # FileNotFoundError: the exact inode has gone
+            return
+        real_unlink(self, *args, **kwargs)  # type: ignore[arg-type]
+
+    with monkeypatch.context() as sweep_patch:
+        sweep_patch.setattr(os, "lstat", shifted_lstat)
+        sweep_patch.setattr(Path, "unlink", unlink_with_vanish)
+        assert lock._try_acquire() is True
+    assert not dead_pid.exists()
+    assert not expired.exists()
+    assert not unreadable.exists()
+    assert inode_raced.exists() and lstat_calls[0] >= 2
+    assert not vanishing.exists() and moved.exists() and vanished_once
+    lock.__exit__(None, None, None)
+    inode_raced.unlink()
+    moved.unlink()
+
+    # A target that vanishes before the post-creation fence is never treated as
+    # owned: no rival claim, no rollback, still fail closed.
+    real_close = os.close
+    real_read = psm._read_lock_state
+    closed: list[bool] = []
+
+    def close_and_flag(fd: int) -> None:
+        real_close(fd)
+        closed.append(True)
+
+    def vanished_target(path: object, *args: object, **kwargs: object) -> object:
+        if closed and str(path) == str(lock._break_path):
+            return None
+        return real_read(path, *args, **kwargs)  # type: ignore[arg-type]
+
+    with monkeypatch.context() as fence_patch:
+        fence_patch.setattr(os, "close", close_and_flag)
+        fence_patch.setattr(psm, "_read_lock_state", vanished_target)
+        assert lock._try_enter_break_guard() is None
+    assert json.loads(lock._break_path.read_text())["owner_token"]
+    lock._break_path.unlink()
+
+
+def test_lock_closure_matrix_09_release_preserves_owner_token_and_inode(
+    mirror: PackMirror, tmp_path: Path
+) -> None:
+    """09: release deletes only our inode/token, including its own .stale record."""
+    manager, now = _closure_manager(tmp_path / "matrix09", mirror)
+    fresh = manager._storage_lock()
+    fresh._release_owned_lock()  # no inode/token yet: a harmless no-op
+    lock_file = fresh.path
+    stale = lock_file.parent / f".{lock_file.name}.owner.stale"
+    with manager._storage_lock() as held:
+        owned_ino = os.lstat(lock_file).st_ino
+        owned_token = held._owner_token
+        assert owned_token is not None
+        assert json.loads(lock_file.read_text())["owner_token"] == owned_token
+        os.replace(lock_file, stale)
+        assert os.lstat(stale).st_ino == owned_ino
+        assert json.loads(stale.read_text())["owner_token"] == owned_token
+        _live_claim(lock_file, now[0], "rival:live")
+        rival_ino = os.lstat(lock_file).st_ino
+    # __exit__ must retire our quarantined inode but never the rival's live lock.
+    assert not stale.exists()
+    assert lock_file.exists()
+    assert os.lstat(lock_file).st_ino == rival_ino
+    assert json.loads(lock_file.read_text())["owner_token"] == "rival:live"
+    assert not fresh._break_path.exists()
+    lock_file.unlink()
+
+
+_LOCK_CLOSURE_MP_CHILD = """
+import json, os, sys
+from pathlib import Path
+from nexus_ai_agent.storage.resource_packs import (
+    LocalDirectoryPackSource,
+    PackLockTimeoutError,
+    PackSyncManager,
+)
+
+root, mirror, active_flag, report = (Path(a) for a in sys.argv[1:5])
+wall_now = float(sys.argv[5])
+mgr = PackSyncManager(
+    root, [], LocalDirectoryPackSource(mirror),
+    lock_backend="exclusive_file",
+    lock_timeout_seconds=0.05,
+    lock_stale_after_seconds=60.0,
+    wall_clock=lambda: wall_now,
+)
+try:
+    with mgr._storage_lock():
+        try:
+            fd = os.open(active_flag, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+        except FileExistsError:
+            report.write_text("ENTERED:OVERLAP", encoding="utf-8")
+        else:
+            os.close(fd)
+            report.write_text("ENTERED:NO_OVERLAP", encoding="utf-8")
+except PackLockTimeoutError:
+    token = json.loads((root / ".sync_gc.lock.excl").read_text())["owner_token"]
+    report.write_text(f"BLOCKED:{token}", encoding="utf-8")
+"""
+
+
+def test_lock_closure_matrix_10_multiprocess_never_enters_a_second_critical_section(
+    mirror: PackMirror, tmp_path: Path
+) -> None:
+    """10: real child processes cannot enter while the parent holds the lock."""
+    root = tmp_path / "matrix10"
+    root.mkdir(parents=True, exist_ok=True)
+    manager, now = _closure_manager(root, mirror)
+    active_flag = tmp_path / "matrix10_active"
+    reports = [tmp_path / f"matrix10_report_{index}.txt" for index in range(4)]
+    src_dir = Path(importlib.import_module("nexus_ai_agent").__file__ or "").parents[1]
+    start = threading.Event()
+
+    def collect(proc: subprocess.Popen[str]) -> tuple[str, str, int]:
+        assert start.wait(timeout=5)
+        out, err = proc.communicate(timeout=30)
+        return out, err, proc.returncode
+
+    with manager._storage_lock() as held:
+        assert held._owner_token is not None
+        fd = os.open(active_flag, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+        os.write(fd, held._owner_token.encode())
+        os.close(fd)
+        procs = [
+            subprocess.Popen(
+                [
+                    sys.executable,
+                    "-c",
+                    _LOCK_CLOSURE_MP_CHILD,
+                    str(root),
+                    str(mirror.root),
+                    str(active_flag),
+                    str(report),
+                    str(now[0]),
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                env={
+                    **os.environ,
+                    "PYTHONPATH": str(src_dir),
+                    "COVERAGE_FILE": "/tmp/.coverage_lock_closure",
+                },
+            )
+            for report in reports
+        ]
+        with ThreadPoolExecutor(max_workers=len(procs)) as pool:
+            futures = [pool.submit(collect, proc) for proc in procs]
+            start.set()
+            results = [future.result(timeout=35) for future in futures]
+        for out, err, code in results:
+            assert code == 0, f"worker failed: stdout={out!r} stderr={err!r}"
+        for report in reports:
+            assert report.read_text() == f"BLOCKED:{held._owner_token}"
+        assert active_flag.read_text() == held._owner_token
+        assert json.loads((root / ".sync_gc.lock.excl").read_text())["owner_token"] == (
+            held._owner_token
+        )
+        assert not list(root.glob(".*.stale"))
+        active_flag.unlink()
