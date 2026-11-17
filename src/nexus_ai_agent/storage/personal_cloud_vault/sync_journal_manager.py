@@ -23,16 +23,35 @@ A push of ``N`` chunks of ``S_chunk`` plaintext bytes costs, at peak::
   the same payload RAM as pushing a 64 KiB one.
 * ``M_metadata(N)`` — **O(N), compact.** Per chunk: a 64-hex ``chunk_id`` string, a
   :class:`_ChunkSourceLocator`, a :class:`VaultChunkRef`, and a handful of set/dict
-  slots. Measured slope is ~1.3-2.6 KB per chunk (see the wave-3 scalability
-  benchmark test); it grows with the *count* of chunks, never with their size.
-* ``M_backend(N)`` — whatever the chosen driver retains; ``LocalDeviceVaultDriver``
-  and ``S3CompatibleSigV4Driver`` keep only ids/mtimes (O(N) small), while
-  ``PortableBundleVaultDriver`` necessarily holds one serialized archive image.
+  slots. Measured tracemalloc slope is ~1.3 KB per chunk (~2.2 KB/chunk counting the
+  backend maps; see ``test_wave4_memory_scaling_benchmark``); it grows with the *count*
+  of chunks, never with their size.
+* ``M_backend(N)`` — whatever the chosen driver retains or temporarily duplicates,
+  which is *per backend*, so it is spelled out precisely:
 
-Consequently only ``M_payload`` is bounded by the chunk size, which is what the
-``peak_bytes < 4 * S_chunk`` / ``< 200_000`` ceilings in the N1 regression test pin
-down; ``M_metadata`` and ``M_backend`` are linear in the chunk count and are
-exercised by the ``test_wave3_memory_scaling_benchmark`` scalability check.
+  - ``LocalDeviceVaultDriver`` — **1 x S_chunk**. The wire buffer is handed straight to
+    ``_atomic_write_file`` → ``handle.write()``; no copy is made at any point.
+  - ``S3CompatibleSigV4Driver`` — **at most 2 x S_chunk**. The HTTP body must be
+    ``bytes`` for SigV4 payload signing, so ``put_chunk`` materialises ``bytes(data)``
+    alongside the caller's buffer. This is still ``O(S_chunk)`` and independent of total
+    project size; it never scales with the vault or the chunk count.
+  - ``PortableBundleVaultDriver`` — **O(sum(S_chunk)) retained, ~2x constant**. Writing
+    and verifying are streamed (no archive-sized buffer ever exists), but the archive is
+    self-contained, so the driver keeps every stored chunk in memory by design, and it
+    is copy-on-write per mutation (retained vault + in-progress copy) — hence the ~2x
+    factor, which is a constant, not a different growth class.
+
+  In other words ``M_backend`` is ``O(S_chunk)`` for the two streaming backends (by a
+  factor of 1 for local and at most 2 for S3), while the intentionally self-contained
+  bundle backend retains the vault itself as ``O(sum(S_chunk))``.
+
+So only ``M_payload`` is bounded by the chunk size; ``M_metadata`` and ``M_backend``
+grow with the chunk *count* (metadata compactly, bundle by design). The absolute
+``peak_bytes < 4 * S_chunk`` / ``< 200_000`` ceilings in the N1 regression test
+therefore pin the 20-chunk fixture, and the general claim is asserted as the linear
+model ``peak < 200_000 + 2048 * N`` by ``test_wave4_memory_scaling_benchmark``, which
+also measures the per-chunk slopes (tracemalloc, kernel HWM RSS, elapsed) over
+``N in {20, 100, 250}`` with 3 trials each.
 """
 
 from __future__ import annotations

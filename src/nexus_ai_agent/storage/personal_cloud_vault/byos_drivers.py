@@ -416,11 +416,18 @@ class _ArchiveLayout:
         return _generate()
 
     def to_bytes(self) -> bytes:
-        """Materialise the archive with exactly ONE payload-sized allocation.
+        """Materialise the whole archive as ``bytes`` (compatibility helper only).
 
-        The archive SHA is computed incrementally (never ``header + payload + index``),
-        and the buffer is pre-sized so the payload parts are copied in place instead
-        of building a chain of intermediate concatenations.
+        Peak memory is ``2 x total_size`` for the duration of this call: one
+        ``bytearray`` is filled in place (the archive SHA is still computed
+        incrementally, never as ``header + payload + index``), and ``bytes(buffer)``
+        then produces the immutable return value. That is unavoidable for any API that
+        returns ``bytes``.
+
+        **The disk path does not pay this cost**: :meth:`iter_segments` is what
+        ``_atomic_write_stream`` consumes, so persisting a bundle streams the archive
+        to the temp file with no archive-sized buffer at all. Use ``iter_segments``
+        whenever you do not strictly need a single ``bytes`` object.
         """
         buffer = bytearray(self.total_size)
         cursor = 0
@@ -432,6 +439,30 @@ class _ArchiveLayout:
             finally:
                 segment_view.release()
         return bytes(buffer)
+
+
+#: Fixed read block used by the streaming bundle verifier (never grows with the file).
+_BUNDLE_VERIFY_BLOCK_BYTES = 64 * 1024
+
+
+class _StreamingBinaryReader(Protocol):
+    """Seekable binary reader with ``readinto`` (what the streaming verifier needs)."""
+
+    def read(self, size: int = -1, /) -> bytes: ...
+
+    def readinto(self, buffer: Any, /) -> int: ...
+
+    def seek(self, offset: int, whence: int = 0, /) -> int: ...
+
+    def fileno(self) -> int: ...
+
+
+def _read_exact(handle: _StreamingBinaryReader, length: int, *, what: str) -> bytes:
+    """Read exactly ``length`` bytes from ``handle`` or fail closed."""
+    data = handle.read(length)
+    if len(data) != length:
+        raise VaultTamperDetectedError(f"Truncated .nagarvault {what}")
+    return data
 
 
 def _compute_archive_sha(
@@ -1654,7 +1685,29 @@ _STAGING_ENTRY_KEY_RE = re.compile(r"^staging/stage-[0-9a-f]{32}\.json$")
 
 
 class PortableBundleVaultDriver:
-    """Single-file ``.nagarvault`` binary archive driver with integrity verification."""
+    """Single-file ``.nagarvault`` binary archive driver with integrity verification.
+
+    Memory characteristics (this backend is *storage*, not a pass-through):
+
+    * **Write** — the archive is serialized region by region and handed to
+      ``_atomic_write_stream`` (:meth:`_ArchiveLayout.iter_segments`), so persisting a
+      bundle never holds the archive in RAM. Only the index (one record per entry) is
+      materialised.
+    * **Load/verify** — :meth:`_load_and_verify` opens the file, checks the header, and
+      streams the remainder through a fixed 64 KiB scratch buffer to recompute the
+      archive-level SHA-256. It then reads the index and ``seek``-es to each blob
+      individually, so it never holds the whole file (plus a slice copy of every chunk)
+      at once.
+    * **Retained** — because the archive is self-contained, the driver necessarily
+      keeps every stored chunk in ``self._chunks``::
+
+          M_backend(N) = O(sum(S_chunk))
+
+      i.e. the *backend* cost equals the vault size. That is inherent to a portable
+      single-file vault and is exactly why the push path's payload bound
+      (``O(S_chunk)``, see :mod:`sync_journal_manager`) is described separately from
+      this backend term.
+    """
 
     def __init__(
         self,
@@ -1738,18 +1791,34 @@ class PortableBundleVaultDriver:
         self._load_and_verify()
 
     def _load_and_verify(self) -> None:
+        """Verify and load the archive with O(chunk) peak RAM, not O(archive).
+
+        The file is never slurped into one ``bytes``: the header is read first, the
+        archive-level SHA-256 is computed by streaming the remainder through a fixed
+        64 KiB scratch buffer, the (metadata-sized) index is read and parsed, and each
+        blob is then ``seek``-ed to and read individually. Peak load memory is therefore
+        one chunk plus the index, instead of ``raw`` (the whole archive) *plus* a second
+        full copy of every chunk via ``raw[offset:offset + len]`` slicing.
+        """
         if self._bundle_path.is_symlink() or not self._bundle_path.is_file():
             raise VaultTransportError(f"Bundle file does not exist: {self._bundle_path}")
         try:
-            raw = self._bundle_path.read_bytes()
+            handle = self._bundle_path.open("rb")
         except OSError as exc:
             raise VaultTransportError(f"Cannot read bundle {self._bundle_path}: {exc}") from exc
+        try:
+            self._verify_and_load_from_handle(handle)
+        except OSError as exc:
+            raise VaultTransportError(f"Cannot read bundle {self._bundle_path}: {exc}") from exc
+        finally:
+            handle.close()
 
-        if len(raw) < _BUNDLE_HEADER_TOTAL:
-            raise VaultTamperDetectedError("Truncated .nagarvault bundle header")
-
-        header_prefix = raw[: _BUNDLE_HEADER_PREFIX.size]
-        stored_archive_sha = raw[_BUNDLE_HEADER_PREFIX.size : _BUNDLE_HEADER_TOTAL]
+    def _verify_and_load_from_handle(self, handle: _StreamingBinaryReader) -> None:
+        """Streaming body of :meth:`_load_and_verify` over an already-open ``rb`` handle."""
+        file_size = os.fstat(handle.fileno()).st_size
+        header = _read_exact(handle, _BUNDLE_HEADER_TOTAL, what="bundle header")
+        header_prefix = header[: _BUNDLE_HEADER_PREFIX.size]
+        stored_archive_sha = header[_BUNDLE_HEADER_PREFIX.size : _BUNDLE_HEADER_TOTAL]
         magic, version, entry_count, index_offset, index_len = _BUNDLE_HEADER_PREFIX.unpack(
             header_prefix
         )
@@ -1758,44 +1827,59 @@ class PortableBundleVaultDriver:
 
         if (
             index_offset < _BUNDLE_HEADER_TOTAL
-            or index_offset > len(raw)
-            or index_offset + index_len != len(raw)
+            or index_offset > file_size
+            or index_offset + index_len != file_size
         ):
             raise VaultTamperDetectedError("Corrupted .nagarvault binary index bounds")
 
-        payload_and_index = raw[_BUNDLE_HEADER_TOTAL:]
+        # Archive-level SHA-256: header prefix + everything after the digest, streamed
+        # through one reusable 64 KiB buffer so the file is never fully resident.
         archive_hasher = hashlib.sha256()
         archive_hasher.update(header_prefix)
-        archive_hasher.update(payload_and_index)
+        handle.seek(_BUNDLE_HEADER_TOTAL)
+        scratch = bytearray(_BUNDLE_VERIFY_BLOCK_BYTES)
+        scratch_view = memoryview(scratch)
+        try:
+            while True:
+                read_len = handle.readinto(scratch)
+                if not read_len:
+                    break
+                archive_hasher.update(scratch_view[:read_len])
+        finally:
+            scratch_view.release()
+            del scratch
         if not hmac.compare_digest(archive_hasher.digest(), stored_archive_sha):
             raise VaultTamperDetectedError(
                 "Archive-level SHA-256 mismatch in .nagarvault bundle: file is corrupted"
             )
+
+        # The index is metadata-only (one record per entry), so it is read in one piece.
+        handle.seek(index_offset)
+        index_bytes = _read_exact(handle, index_len, what="bundle index")
 
         loaded_chunks: dict[str, bytes] = {}
         loaded_manifests: dict[str, bytes] = {}
         loaded_leases: dict[str, bytes] = {}
         loaded_staging: dict[str, bytes] = {}
         archive_mtime = self._bundle_path.stat().st_mtime
-        cursor = index_offset
-        index_end = index_offset + index_len
+        cursor = 0
 
         for _ in range(entry_count):
-            if cursor + _BUNDLE_INDEX_HEAD.size > index_end:
+            if cursor + _BUNDLE_INDEX_HEAD.size > index_len:
                 raise VaultTamperDetectedError("Truncated entry header in .nagarvault binary index")
-            entry_kind, key_len = _BUNDLE_INDEX_HEAD.unpack_from(raw, cursor)
+            entry_kind, key_len = _BUNDLE_INDEX_HEAD.unpack_from(index_bytes, cursor)
             cursor += _BUNDLE_INDEX_HEAD.size
 
-            if cursor + key_len + _BUNDLE_INDEX_TAIL.size > index_end:
+            if cursor + key_len + _BUNDLE_INDEX_TAIL.size > index_len:
                 raise VaultTamperDetectedError("Truncated entry metadata in .nagarvault index")
             try:
-                key = raw[cursor : cursor + key_len].decode("utf-8")
+                key = index_bytes[cursor : cursor + key_len].decode("utf-8")
             except UnicodeDecodeError as exc:
                 raise VaultTamperDetectedError("Invalid UTF-8 key in .nagarvault index") from exc
             cursor += key_len
 
             blob_offset, blob_len, expected_crc32, expected_sha256 = _BUNDLE_INDEX_TAIL.unpack_from(
-                raw, cursor
+                index_bytes, cursor
             )
             cursor += _BUNDLE_INDEX_TAIL.size
 
@@ -1806,7 +1890,9 @@ class PortableBundleVaultDriver:
             ):
                 raise VaultTamperDetectedError("Out-of-bounds payload slice in .nagarvault index")
 
-            blob = raw[blob_offset : blob_offset + blob_len]
+            # Only this one blob is resident at a time (``blob_len`` is one chunk).
+            handle.seek(blob_offset)
+            blob = _read_exact(handle, blob_len, what="bundle payload entry")
             actual_crc32 = zlib.crc32(blob) & 0xFFFFFFFF
             actual_sha256 = hashlib.sha256(blob).digest()
             if actual_crc32 != expected_crc32 or not hmac.compare_digest(
@@ -1835,7 +1921,7 @@ class PortableBundleVaultDriver:
             else:
                 raise VaultTamperDetectedError(f"Unknown .nagarvault entry kind: {entry_kind}")
 
-        if cursor != index_end:
+        if cursor != index_len:
             raise VaultTamperDetectedError("Trailing unparsed bytes in .nagarvault binary index")
 
         self._chunks = loaded_chunks

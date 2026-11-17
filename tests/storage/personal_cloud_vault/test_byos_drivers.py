@@ -571,17 +571,25 @@ def test_portable_bundle_vault_driver_roundtrip_quota_and_corruption(tmp_path: P
 def test_portable_bundle_binary_format_tamper_edges(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # 1) Missing file when verify_bundle called directly, and OSError on read_bytes
+    # 1) Missing file when verify_bundle called directly, and OSError while opening the
+    #    archive (the loader streams the file; it never calls ``read_bytes()``).
     empty_drv = PortableBundleVaultDriver(tmp_path / "not_yet_written.nagarvault")
     with pytest.raises(VaultTransportError):
         empty_drv.verify_bundle()
 
     io_drv = PortableBundleVaultDriver(tmp_path / "io_err.nagarvault")
     io_drv.put_chunk("a" * 64, b"ok")
-    monkeypatch.setattr(
-        Path, "read_bytes", lambda _self: (_ for _ in ()).throw(OSError("bundle read failed"))
-    )
-    with pytest.raises(VaultTransportError):
+    real_open = Path.open
+
+    # ``Path.open`` is heavily overloaded; a thin wrapper that only ever receives the
+    # single ``"rb"`` call the verifier makes keeps the types honest without ignoring any.
+    def _failing_open(self: Path, mode: str = "r", *args: object, **kwargs: object) -> object:
+        if self.suffix == ".nagarvault":
+            raise OSError("bundle read failed")
+        return real_open(self, mode)
+
+    monkeypatch.setattr(Path, "open", _failing_open)
+    with pytest.raises(VaultTransportError, match="Cannot read bundle"):
         io_drv.verify_bundle()
     monkeypatch.undo()
 
@@ -2187,11 +2195,14 @@ def test_f4_put_chunk_snapshots_mutable_input_across_all_three_drivers(tmp_path:
         local.delete_chunk(chunk_id)
 
     # --- 2) S3CompatibleSigV4Driver ------------------------------------------------
-    sent_bodies: list[bytes] = []
+    sent_bodies: list[bytes] = []  # exactly what the driver handed the transport
 
     def _transport(request: S3HttpRequest) -> S3HttpResponse:
         if request.method == "PUT":
-            sent_bodies.append(bytes(request.body))
+            # Do NOT copy here: appending ``bytes(request.body)`` would mask exactly the
+            # aliasing bug this test exists to catch. Append the object the driver
+            # actually handed to the transport so the identity/type is observable.
+            sent_bodies.append(request.body)
         return S3HttpResponse(status_code=200)
 
     s3 = S3CompatibleSigV4Driver(
@@ -2208,7 +2219,15 @@ def test_f4_put_chunk_snapshots_mutable_input_across_all_three_drivers(tmp_path:
         payload = view if label == "memoryview" else buf
         del sent_bodies[:]
         s3.put_chunk(chunk_id, payload)
-        assert sent_bodies == [plaintext], f"S3 signed/sent an aliased {label} body"
+        assert len(sent_bodies) == 1
+        # The driver must have converted the mutable input to immutable ``bytes``
+        # *before* handing it to the transport — otherwise a later in-place write (or
+        # the push loop's wire-buffer reuse) would silently corrupt the sent body.
+        assert isinstance(sent_bodies[0], bytes), (
+            f"S3 transport received {type(sent_bodies[0]).__name__} for a {label} input; "
+            f"put_chunk must snapshot mutable payloads to bytes"
+        )
+        assert sent_bodies[0] == plaintext, f"S3 signed/sent an aliased {label} body"
         # Nothing in the driver may still reference the caller's buffer either.
         buf[:] = b"\xff" * len(buf)
         assert all(body == plaintext for body in sent_bodies)
@@ -2301,3 +2320,119 @@ def test_f1_flush_streams_archive_to_disk_without_materialising_it(
     assert driver.get_chunk("ef" * 32) == b"second-payload"
     # The on-disk archive still verifies end to end.
     PortableBundleVaultDriver(bundle_path).verify_bundle()
+
+
+def test_wave4_bundle_load_peak_is_one_chunk_plus_index(tmp_path: Path) -> None:
+    """Wave-4 F1: loading/verifying a bundle must not hold the archive twice.
+
+    ``_load_and_verify`` used to call ``read_bytes()`` (the whole archive) and then slice
+    every blob out of it, so peak load RAM was over 2x the archive. It now streams the
+    archive digest through a fixed 64 KiB buffer and seeks to each blob individually, so
+    the transient cost of verification is one chunk plus the (small) index.
+    """
+    import gc
+    import tracemalloc
+
+    chunk_size = 65_536
+    chunk_count = 12
+    bundle_path = tmp_path / "load_peak.nagarvault"
+
+    writer = PortableBundleVaultDriver(bundle_path)
+    for index in range(chunk_count):
+        cid = f"{index:064x}"
+        writer.put_chunk(cid, bytes([index]) * chunk_size)
+    archive_size = bundle_path.stat().st_size
+    assert archive_size > chunk_count * chunk_size
+
+    # The writer still holds the chunks; drop it so the measurement starts clean.
+    del writer
+    gc.collect()
+
+    tracemalloc.start()
+    try:
+        reloaded = PortableBundleVaultDriver(bundle_path)
+        retained, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+
+    print(
+        f"[wave-4] bundle first load: archive={archive_size} B retained={retained} B "
+        f"peak={peak} B (peak/archive={peak / archive_size:.2f})"
+    )
+    # Peak must be ~1x the archive (the chunks it inherently retains). The old
+    # ``read_bytes()`` + per-blob-slice loader needed ~2x: one full copy of the file plus
+    # the slices that become the retained dict.
+    assert peak < 1.35 * archive_size, (
+        f"loading a {archive_size} B archive peaked at {peak} B "
+        f"({peak / archive_size:.2f}x): the loader still materialises the file in addition "
+        f"to the chunks it retains"
+    )
+    assert retained >= archive_size * 0.9, "the bundle backend retains its archive by design"
+    assert peak - retained < 4 * chunk_size, (
+        f"transient load cost was {peak - retained} B, more than one chunk plus index"
+    )
+    for index in range(chunk_count):
+        assert reloaded.get_chunk(f"{index:064x}") == bytes([index]) * chunk_size
+
+
+def test_wave4_bundle_load_wraps_midstream_read_errors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A read that fails *after* the archive opened still surfaces as a transport error."""
+    import io
+
+    bundle_path = tmp_path / "midstream_io.nagarvault"
+    writer = PortableBundleVaultDriver(bundle_path)
+    writer.put_chunk("ab" * 32, b"payload-data")
+
+    class _FailingRead(io.RawIOBase):
+        """Wraps the real file and raises once the header has been consumed."""
+
+        def __init__(self, inner: io.BufferedIOBase) -> None:
+            self._inner = inner
+            self._reads = 0
+
+        def read(self, size: int = -1) -> bytes:
+            self._reads += 1
+            if self._reads > 1:
+                raise OSError("mid-stream read failed")
+            return self._inner.read(size)
+
+        def readinto(self, buffer: Any) -> int:
+            self._reads += 1
+            if self._reads > 1:
+                raise OSError("mid-stream read failed")
+            return self._inner.readinto(buffer)
+
+        def seek(self, offset: int, whence: int = 0) -> int:
+            return self._inner.seek(offset, whence)
+
+        def fileno(self) -> int:
+            return self._inner.fileno()
+
+        def close(self) -> None:
+            self._inner.close()
+            super().close()
+
+    real_open = Path.open
+    holder: dict[str, object] = {}
+
+    def _open_rb(target: Path) -> io.BufferedReader:
+        """Open ``target`` as ``rb`` (the only mode the bundle verifier ever uses)."""
+        opened = real_open(target, "rb")
+        assert isinstance(opened, io.BufferedReader)
+        return opened
+
+    def _patched_open(self: Path, mode: str = "r", *args: object, **kwargs: object) -> object:
+        # The verifier only ever opens ``"rb"``; that keeps the overload analysis exact.
+        handle = _open_rb(self)
+        if self.suffix == ".nagarvault":
+            wrapped = _FailingRead(handle)
+            holder["handle"] = wrapped
+            return wrapped
+        return handle
+
+    monkeypatch.setattr(Path, "open", _patched_open)
+    with pytest.raises(VaultTransportError, match="Cannot read bundle"):
+        PortableBundleVaultDriver(bundle_path)
+    assert "handle" in holder

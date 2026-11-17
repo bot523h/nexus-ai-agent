@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TypedDict
 
 import pytest
 
@@ -904,7 +905,13 @@ def test_n1_streaming_push_o1_tracemalloc_ceiling_and_disk_locator_healing(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Prove O(1) peak memory (< 4 * chunk_size) on 20-chunk multi-file push + disk heal."""
+    """Prove O(1) peak memory (< 4 * chunk_size) on a 20-chunk multi-file push + disk heal.
+
+    Scope note: the ``< 4 * chunk_size`` ceiling is an absolute bound for *this* fixture
+    (20 chunks), because total peak is ``payload + metadata(N)`` and metadata is linear
+    in the chunk count. The general, N-independent claim is asserted in
+    ``test_wave4_memory_scaling_benchmark`` as ``peak < 200_000 + 2048 * N``.
+    """
     import gc
     import tracemalloc
 
@@ -2046,22 +2053,53 @@ def test_streaming_push_fails_closed_on_identity_mismatch_and_locator_errors(
 
 
 _BENCHMARK_CHILD = r'''
-"""Wave-3 scalability probe: one push of ``N`` chunks in an isolated process."""
+# Wave-4 scalability probe: one push of ``N`` chunks in an isolated process.
 import gc
 import json
 import os
 import sys
 import tempfile
+import time
 import tracemalloc
 from pathlib import Path
 
 chunk_count = int(sys.argv[1])
 chunk_size = int(sys.argv[2])
+driver_kind = sys.argv[3] if len(sys.argv) > 3 else "local"
 
-from nexus_ai_agent.storage.personal_cloud_vault.byos_drivers import LocalDeviceVaultDriver
+import psutil
+
+from nexus_ai_agent.storage.personal_cloud_vault.byos_drivers import (
+    LocalDeviceVaultDriver,
+    PortableBundleVaultDriver,
+    S3CompatibleSigV4Driver,
+    S3HttpResponse,
+    S3SigV4Config,
+)
 from nexus_ai_agent.storage.personal_cloud_vault.sync_journal_manager import (
     PersonalCloudVaultManager,
 )
+
+
+def _hwm_rss_bytes() -> int:
+    """Kernel high-water-mark RSS (true peak, not the value at sampling time).
+
+    ``VmHWM`` from ``/proc/self/status`` is the authoritative Linux figure; fall back to
+    ``resource.getrusage().ru_maxrss`` (KiB on Linux, bytes on macOS) elsewhere.
+    """
+    try:
+        with open("/proc/self/status", encoding="ascii") as status:
+            for line in status:
+                if line.startswith("VmHWM:"):
+                    return int(line.split()[1]) * 1024
+    except OSError:
+        pass
+    import resource
+    import sys as _sys
+
+    maxrss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    return maxrss if _sys.platform == "darwin" else maxrss * 1024
+
 
 with tempfile.TemporaryDirectory() as td:
     tmp = Path(td)
@@ -2076,20 +2114,64 @@ with tempfile.TemporaryDirectory() as td:
                 f"CHUNK-{index:06d}-".encode() + bytes([index & 0xFF]) * (chunk_size - 13)
             )
 
+    if driver_kind == "bundle":
+        driver = PortableBundleVaultDriver(tmp / "vault.nagarvault")
+    elif driver_kind == "s3":
+        objects: dict[str, bytes] = {}
+
+        def _transport(request):
+            # Minimal stateful S3: HEAD/GET must reflect earlier PUTs or the push's
+            # own lease/etag protocol would fail.
+            if "list-type=2" in request.url:
+                return S3HttpResponse(
+                    status_code=200,
+                    body=(
+                        b'<?xml version="1.0" encoding="UTF-8"?>'
+                        b'<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">'
+                        b"<IsTruncated>false</IsTruncated></ListBucketResult>"
+                    ),
+                )
+            key = request.url.split("?")[0]
+            if request.method == "PUT":
+                # Chunk bodies are recorded as a marker only: keeping them would make the
+                # harness — not the driver — the memory bottleneck being measured.
+                objects[key] = b"" if key.endswith(".chk") else request.body
+                return S3HttpResponse(status_code=200, headers={"etag": '"bench-etag"'})
+            if request.method == "HEAD":
+                if key not in objects:
+                    return S3HttpResponse(status_code=404)
+                return S3HttpResponse(status_code=200, headers={"etag": '"bench-etag"'})
+            if request.method == "GET":
+                if key not in objects:
+                    return S3HttpResponse(status_code=404)
+                return S3HttpResponse(status_code=200, body=objects[key])
+            return S3HttpResponse(status_code=200)
+
+        driver = S3CompatibleSigV4Driver(
+            S3SigV4Config(
+                endpoint_url="https://account.r2.cloudflarestorage.com",
+                bucket="bench-bucket",
+                region="auto",
+                access_key_id="AKID",
+                secret_access_key="SECRET",
+            ),
+            http_transport=_transport,
+        )
+    else:
+        driver = LocalDeviceVaultDriver(tmp / "vault")
+
     manager = PersonalCloudVaultManager(
-        LocalDeviceVaultDriver(tmp / "vault"),
+        driver,
         chunk_size=chunk_size,
         kdf_iterations=100_000,
     )
     gc.collect()
-    baseline_rss = _rss = None
-    try:
-        import psutil
+    process = psutil.Process(os.getpid())
+    rss_before = process.memory_info().rss
+    hwm_before = _hwm_rss_bytes()
 
-        baseline_rss = psutil.Process(os.getpid()).memory_info().rss
-    except Exception:  # pragma: no cover - psutil is a declared dependency
-        baseline_rss = 0
     tracemalloc.start()
+    started = time.perf_counter()
     try:
         report = manager.push_project_snapshot(
             project_id="scaling",
@@ -2097,130 +2179,307 @@ with tempfile.TemporaryDirectory() as td:
             master_secret="scaling-benchmark-passphrase",
             snapshot_id="snap-scaling",
         )
+        elapsed_ms = (time.perf_counter() - started) * 1000.0
         _, peak = tracemalloc.get_traced_memory()
     finally:
         tracemalloc.stop()
-    try:
-        import psutil
 
-        peak_rss = psutil.Process(os.getpid()).memory_info().rss
-    except Exception:  # pragma: no cover - psutil is a declared dependency
-        peak_rss = baseline_rss
     print(
         json.dumps(
             {
                 "chunks": chunk_count,
                 "chunk_size": chunk_size,
+                "driver": driver_kind,
                 "uploaded": report.uploaded_chunks,
                 "tracemalloc_peak": peak,
-                "rss_baseline": baseline_rss,
-                "rss_peak": peak_rss,
+                "elapsed_ms": elapsed_ms,
+                "rss_before": rss_before,
+                "rss_after": process.memory_info().rss,
+                "hwm_before": hwm_before,
+                "hwm_after": _hwm_rss_bytes(),
             }
         )
     )
 '''
 
 
-def test_wave3_memory_scaling_benchmark(tmp_path: Path) -> None:
-    """F2/F3: peak RAM stays payload-bounded as the chunk count grows to 250.
+class _BenchRecord(TypedDict):
+    """One subprocess measurement (typed so no ``float(object)`` casts are needed)."""
 
-    Each ``N`` runs in its own subprocess (so allocator state from a previous size can
-    never leak into the next measurement) and reports both ``tracemalloc`` peak and
-    process RSS. The printed table is the wave-3 scalability evidence:
+    chunks: int
+    chunk_size: int
+    driver: str
+    uploaded: int
+    tracemalloc_peak: int
+    elapsed_ms: float
+    rss_before: int
+    rss_after: int
+    hwm_before: int
+    hwm_after: int
 
-    * ``M_payload`` must stay at ~1 chunk regardless of ``N`` — the tracemalloc peak is
-      asserted to stay far below ``4 * chunk_size`` even for 250 chunks (16 MiB).
-    * ``M_metadata`` grows only *linearly and compactly* with ``N`` — the per-chunk
-      slope is asserted to stay under a few KB, and RSS growth is measured, not assumed.
-    """
+
+class _SizeRecord(TypedDict):
+    """Aggregated median/MAD record for one ``(driver, N)`` pair."""
+
+    chunks: int
+    data_mib: float
+    peak_med: float
+    peak_mad: float
+    elapsed_med: float
+    elapsed_mad: float
+    hwm_med: float
+    hwm_mad: float
+    rss_before: float
+    rss_after: float
+    hwm_before: float
+    trial_pairs: list[tuple[float, float, float, float]]
+
+
+def _median_and_mad(samples: list[float]) -> tuple[float, float]:
+    """Return ``(median, MAD)``: robust centre and spread for a small sample."""
+    import statistics
+
+    centre = statistics.median(samples)
+    return centre, statistics.median([abs(value - centre) for value in samples])
+
+
+def _run_benchmark_child(chunk_count: int, chunk_size: int, driver_kind: str) -> _BenchRecord:
+    """Run one isolated push and return its measurement record."""
     import json
     import subprocess
     import sys
     from pathlib import Path as _Path
 
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            _BENCHMARK_CHILD,
+            str(chunk_count),
+            str(chunk_size),
+            driver_kind,
+        ],
+        capture_output=True,
+        text=True,
+        timeout=600,
+        check=False,
+        cwd=str(_Path(__file__).resolve().parents[3]),
+    )
+    assert completed.returncode == 0, (
+        f"benchmark subprocess failed for N={chunk_count} driver={driver_kind}:\n"
+        f"stdout:\n{completed.stdout}\nstderr:\n{completed.stderr}"
+    )
+    entry: _BenchRecord = json.loads(completed.stdout.strip().splitlines()[-1])
+    assert entry["chunks"] == chunk_count
+    assert entry["uploaded"] == chunk_count
+    assert entry["driver"] == driver_kind
+    return entry
+
+
+def test_wave4_memory_scaling_benchmark(tmp_path: Path) -> None:
+    """F2/F3: peak RAM stays payload-bounded as the chunk count grows to 250.
+
+    Every measurement runs in its own subprocess (so allocator state from a previous
+    size can never leak into the next one) and each configuration is repeated
+    ``TRIALS`` times so a median and a median-absolute-deviation can be reported
+    instead of a single noisy sample.
+
+    What is measured and asserted, precisely:
+
+    * ``M_payload`` is ``O(S_chunk)`` and does **not** grow with ``N``. Total peak is
+      therefore ``peak ≈ payload + metadata(N)``, and the code asserts the documented
+      linear model ``peak < 200_000 + 2048 * N``. It deliberately does *not* claim
+      ``peak < 4 * chunk_size`` for large ``N``; that absolute ceiling only holds for
+      the N1 fixture (20 chunks) and is asserted there.
+    * ``M_metadata`` is ``O(N)`` but compact: the measured tracemalloc slope must stay
+      under 4 KiB per chunk (a retained payload buffer would be >= 64 KiB per chunk).
+    * RSS is measured as the kernel high-water mark (``VmHWM``/``ru_maxrss``), i.e. the
+      real peak during the push, not the sampled value after it finished.
+    * ``S3CompatibleSigV4Driver`` and ``PortableBundleVaultDriver`` are each measured at
+      ``N=20`` (3 trials) *and* ``N=100`` (1 trial). The assertion there is the slope
+      across those two sizes, never a fixed absolute number: S3's payload term must stay
+      flat within its documented ``at most 2 x S_chunk`` (wire buffer + the ``bytes()``
+      copy SigV4 signing needs), and the bundle backend's slope must stay within its
+      documented ``~2 x`` copy-on-write retention factor
+      (``M_backend = O(sum(S_chunk))``).
+    """
     chunk_size = 65_536
     counts = (20, 100, 250)
-    results: list[dict[str, int]] = []
-    for chunk_count in counts:
-        completed = subprocess.run(
-            [sys.executable, "-c", _BENCHMARK_CHILD, str(chunk_count), str(chunk_size)],
-            capture_output=True,
-            text=True,
-            timeout=600,
-            check=False,
-            cwd=str(_Path(__file__).resolve().parents[3]),
-        )
-        assert completed.returncode == 0, (
-            f"benchmark subprocess failed for N={chunk_count}:\n"
-            f"stdout:\n{completed.stdout}\nstderr:\n{completed.stderr}"
-        )
-        payload_line = completed.stdout.strip().splitlines()[-1]
-        entry = json.loads(payload_line)
-        assert entry["chunks"] == chunk_count
-        assert entry["uploaded"] == chunk_count
-        results.append(entry)
+    trials = 3
 
-    print("\n[wave-3] push memory scaling (chunk_size=65536, LocalDeviceVaultDriver)")
+    results: list[_SizeRecord] = []
+    for chunk_count in counts:
+        samples = [_run_benchmark_child(chunk_count, chunk_size, "local") for _ in range(trials)]
+        peaks = [float(sample["tracemalloc_peak"]) for sample in samples]
+        elapsed = [sample["elapsed_ms"] for sample in samples]
+        hwm = [float(sample["hwm_after"]) for sample in samples]
+        peak_med, peak_mad = _median_and_mad(peaks)
+        elapsed_med, elapsed_mad = _median_and_mad(elapsed)
+        hwm_med, hwm_mad = _median_and_mad(hwm)
+        # Keep every per-trial figure together: an HWM from trial A can never be compared
+        # against a sampled RSS from trial B (they are different processes).
+        trial_pairs = [
+            (
+                float(sample["rss_before"]),
+                float(sample["rss_after"]),
+                float(sample["hwm_before"]),
+                float(sample["hwm_after"]),
+            )
+            for sample in samples
+        ]
+        record: _SizeRecord = {
+            "chunks": chunk_count,
+            "data_mib": chunk_count * chunk_size / (1024 * 1024),
+            "peak_med": peak_med,
+            "peak_mad": peak_mad,
+            "elapsed_med": elapsed_med,
+            "elapsed_mad": elapsed_mad,
+            "hwm_med": hwm_med,
+            "hwm_mad": hwm_mad,
+            "rss_before": float(samples[0]["rss_before"]),
+            "rss_after": float(samples[0]["rss_after"]),
+            "hwm_before": float(samples[0]["hwm_before"]),
+            "trial_pairs": trial_pairs,
+        }
+        results.append(record)
+
     print(
-        f"{'chunks':>7} {'data MiB':>9} {'tracemalloc peak':>18} "
-        f"{'RSS base MiB':>13} {'RSS peak MiB':>13} {'B/chunk':>9}"
+        f"\n[wave-4] LocalDeviceVaultDriver, chunk_size={chunk_size}, "
+        f"trials={trials} (median ± MAD)"
+    )
+    print(
+        f"{'chunks':>7} {'data MiB':>9} {'peak B (med±MAD)':>24} {'elapsed ms (med±MAD)':>24} "
+        f"{'HWM MiB (med±MAD)':>22} {'peak B/chunk':>13}"
     )
     for entry in results:
-        data_mib = entry["chunks"] * chunk_size / (1024 * 1024)
-        rss_base = entry["rss_baseline"] / (1024 * 1024)
-        rss_peak = entry["rss_peak"] / (1024 * 1024)
-        per_chunk = entry["tracemalloc_peak"] / entry["chunks"]
         print(
-            f"{entry['chunks']:>7} {data_mib:>9.2f} {entry['tracemalloc_peak']:>18} "
-            f"{rss_base:>13.2f} {rss_peak:>13.2f} {per_chunk:>9.1f}"
+            f"{int(entry['chunks']):>7} {entry['data_mib']:>9.2f} "
+            f"{entry['peak_med']:>14.0f}±{entry['peak_mad']:<8.0f} "
+            f"{entry['elapsed_med']:>14.1f}±{entry['elapsed_mad']:<8.1f} "
+            f"{entry['hwm_med'] / 1048576:>13.2f}±{entry['hwm_mad'] / 1048576:<7.2f} "
+            f"{entry['peak_med'] / entry['chunks']:>13.1f}"
         )
 
-    # --- M_payload is O(S_chunk): a project 12.5x larger costs the SAME payload RAM.
-    # The N1 test pins the absolute ceiling; here we prove it does not drift with N.
-    peaks = [entry["tracemalloc_peak"] for entry in results]
+    peaks = [entry["peak_med"] for entry in results]
+    first, last = results[0], results[-1]
     peak_growth_per_chunk = (peaks[-1] - peaks[0]) / (counts[-1] - counts[0])
     print(
-        f"[wave-3] tracemalloc peak slope: {peak_growth_per_chunk:.1f} B/chunk "
-        f"(payload floor is {chunk_size} B and is shared by every N)"
+        f"[wave-4] tracemalloc peak slope: {peak_growth_per_chunk:.1f} B/chunk "
+        f"(payload floor is {chunk_size} B, shared by every N)"
     )
-    # A payload-sized (or worse) per-chunk retention would show up as >= chunk_size/chunk.
+    hwm_growth = (last["hwm_med"] - first["hwm_med"]) / (counts[-1] - counts[0])
+    print(f"[wave-4] HWM RSS slope: {hwm_growth:.1f} B/chunk (payload is {chunk_size} B/chunk)")
+    print(
+        f"[wave-4] RSS (sampled after push): before={first['rss_before'] / 1048576:.2f} MiB "
+        f"after={first['rss_after'] / 1048576:.2f} MiB"
+    )
+
+    # --- M_payload does not scale with N: only compact metadata may grow.
     assert peak_growth_per_chunk < 4 * 1024, (
         f"peak grew {peak_growth_per_chunk:.1f} B/chunk: metadata is not compact, or a "
         f"payload-sized buffer is being retained per chunk"
     )
-    # ``peak = payload + metadata``: the payload is pinned to the N1 budget and the only
-    # thing allowed to grow with N is compact per-chunk metadata. A retained payload
-    # buffer (or a second copy) would blow straight through this linear model bound.
-    metadata_allowance_per_chunk = 2048
     for entry in results:
-        model_bound = 200_000 + metadata_allowance_per_chunk * entry["chunks"]
-        assert entry["tracemalloc_peak"] < model_bound, (
-            f"peak at N={entry['chunks']} was {entry['tracemalloc_peak']}, above the "
+        model_bound = 200_000 + 2048 * entry["chunks"]
+        assert entry["peak_med"] < model_bound, (
+            f"peak at N={entry['chunks']} was {entry['peak_med']:.0f}, above the "
             f"documented model bound {model_bound} (payload 200000 + metadata)"
         )
-
-    # --- M_metadata is O(N) but genuinely per-chunk-tiny: no payload buffers retained.
-    first, last = results[0], results[-1]
-    per_chunk_footprint = (peaks[-1] - peaks[0]) / (counts[-1] - counts[0])
-    assert per_chunk_footprint < chunk_size // 8, (
-        f"per-chunk metadata footprint {per_chunk_footprint:.0f} B is not compact"
+    assert (peaks[-1] - peaks[0]) / (counts[-1] - counts[0]) < chunk_size // 8, (
+        "per-chunk metadata footprint must stay tiny compared with one chunk"
     )
 
-    # --- RSS: metadata retention must be far below the payload it describes.
-    rss_growth = (last["rss_peak"] - first["rss_peak"]) / (counts[-1] - counts[0])
-    print(f"[wave-3] RSS slope: {rss_growth:.1f} B/chunk (payload is {chunk_size} B/chunk)")
-    assert rss_growth < 8 * 1024, (
-        f"RSS grew {rss_growth:.0f} B/chunk, indicating payload-sized per-chunk retention"
+    # --- Real peak (kernel high-water mark) also must not scale like payload would.
+    assert hwm_growth < 8 * 1024, (
+        f"HWM RSS grew {hwm_growth:.0f} B/chunk, indicating payload-sized retention"
     )
-    assert rss_growth < chunk_size, (
-        "RSS growth must stay well below one chunk of payload per chunk of metadata"
+    assert hwm_growth < chunk_size
+    for entry in results:
+        assert entry["hwm_mad"] >= 0.0
+        assert len(entry["trial_pairs"]) == trials
+        for rss_before, rss_after, hwm_before, hwm_after in entry["trial_pairs"]:
+            # All four figures come from the SAME process, so these invariants hold:
+            # HWM is monotonic within a run, it can never sit below that run's RSS, and
+            # RSS measured after the push can never exceed the run's own high-water mark.
+            assert hwm_after >= hwm_before
+            assert hwm_after >= rss_before
+            assert rss_after <= hwm_after
+
+    # --- Cross-backend: the *payload* term must stay O(S_chunk) — i.e. independent of
+    # the project size — on every backend. That is proven in the only way that cannot be
+    # gamed by a constant: measure each backend at two project sizes and bound the slope.
+    backend_results: dict[str, dict[str, dict[str, float]]] = {}
+    for driver_kind in ("s3", "bundle"):
+        per_size: dict[str, dict[str, float]] = {}
+        for size, size_trials in ((20, trials), (100, 1)):
+            samples = [
+                _run_benchmark_child(size, chunk_size, driver_kind) for _ in range(size_trials)
+            ]
+            size_peaks = [float(sample["tracemalloc_peak"]) for sample in samples]
+            size_peak_med, size_peak_mad = _median_and_mad(size_peaks)
+            per_size[str(size)] = {"peak_med": size_peak_med, "peak_mad": size_peak_mad}
+        backend_results[driver_kind] = per_size
+
+    print(f"\n[wave-4] cross-backend payload peaks (median ± MAD, chunk_size={chunk_size})")
+    print(f"{'driver':>10} {'N':>5} {'tracemalloc peak B':>24} {'B/chunk':>10}")
+    for driver_kind, per_size in backend_results.items():
+        for size_label, size_record in per_size.items():
+            size_int = int(size_label)
+            print(
+                f"{driver_kind:>10} {size_int:>5} "
+                f"{size_record['peak_med']:>14.0f}±{size_record['peak_mad']:<8.0f} "
+                f"{size_record['peak_med'] / size_int:>10.1f}"
+            )
+
+    local_peak_at_20 = float(results[0]["peak_med"])
+
+    # S3: documented as "at most 2 x S_chunk" (wire buffer + the ``bytes(data)`` copy
+    # SigV4 payload signing needs). Two independent assertions:
+    #   (a) it adds only chunk-constant overhead over the local backend, and
+    #   (b) that overhead does NOT grow with N — the payload term is O(S_chunk).
+    s3_peak_20 = backend_results["s3"]["20"]["peak_med"]
+    s3_peak_100 = backend_results["s3"]["100"]["peak_med"]
+    s3_extra_copy = s3_peak_20 - local_peak_at_20
+    s3_slope = (s3_peak_100 - s3_peak_20) / 80
+    print(
+        f"[wave-4] S3 extra over local at N=20: {s3_extra_copy:.0f} B "
+        f"(one chunk of SigV4 copy = {chunk_size} B); S3 slope {s3_slope:.1f} B/chunk"
+    )
+    assert s3_slope < 4 * 1024, (
+        f"S3 peak grew {s3_slope:.1f} B/chunk between N=20 and N=100: its payload term is "
+        f"not independent of project size"
+    )
+    assert s3_extra_copy < 2 * chunk_size, (
+        f"S3 added {s3_extra_copy:.0f} B over the local backend, more than the documented "
+        f"chunk-constant overhead of mutable->bytes conversion for SigV4 signing"
+    )
+    assert s3_peak_100 < 200_000 + 2048 * 100 + 2 * chunk_size, (
+        f"S3 peak at N=100 ({s3_peak_100:.0f} B) exceeds payload + metadata model bound"
     )
 
-    # --- The payload ceiling itself must be independent of N: compare the *excess* over
-    # the flat payload floor at the smallest and largest sizes.
-    excess_first = peaks[0] - chunk_size
-    excess_last = peaks[-1] - chunk_size
-    assert excess_last - excess_first < counts[-1] * 2048, (
-        "payload excess over one chunk must grow only with compact per-chunk metadata"
+    # Bundle: writes/verifies are streamed, but the archive is self-contained, so its
+    # retained cost is O(sum(S_chunk)) by design — the slope is ~1 chunk per chunk.
+    bundle_peak_20 = backend_results["bundle"]["20"]["peak_med"]
+    bundle_peak_100 = backend_results["bundle"]["100"]["peak_med"]
+    bundle_slope = (bundle_peak_100 - bundle_peak_20) / 80
+    print(
+        f"[wave-4] bundle retained-archive slope: {bundle_slope:.1f} B/chunk "
+        f"(documented M_backend = O(sum(S_chunk)))"
     )
-    assert all(entry["rss_peak"] >= entry["rss_baseline"] for entry in results)
+    # The bundle driver is copy-on-write per mutation (reload, mutate the dict, then
+    # re-serialize), so its peak is ~2 x the archive size: the retained vault plus the
+    # in-progress copy. Still O(sum(S_chunk)) — a *constant* factor, not a new growth
+    # class — but the bound must be stated as such rather than pretending it is 1x.
+    assert bundle_slope < 2.5 * chunk_size, (
+        f"bundle peak grew {bundle_slope:.1f} B/chunk, more than the ~2x copy-on-write "
+        f"factor the self-contained archive design documents"
+    )
+    # Every backend's *metadata* slope stays compact even though the bundle's retained
+    # archive (backend term) legitimately grows: no backend may grow by >= 1 chunk per
+    # chunk of pure bookkeeping beyond the documented factors above.
+    for driver_kind, per_size in backend_results.items():
+        per_chunk_metadata = (per_size["100"]["peak_med"] - per_size["20"]["peak_med"]) / 80
+        assert per_chunk_metadata < 2.5 * chunk_size, (
+            f"{driver_kind} grew {per_chunk_metadata:.1f} B/chunk across N, beyond the "
+            f"documented constant factors"
+        )
