@@ -57,6 +57,7 @@ __all__ = [
     "ENTRY_DOMAIN",
     "ANCHOR_HMAC_KEY_ENV",
     "LedgerError",
+    "LedgerCorruptionError",
     "LedgerEntry",
     "LedgerIntegrityReport",
     "HealingReport",
@@ -75,6 +76,10 @@ ANCHOR_HMAC_KEY_ENV: Final[str] = "NEXUS_LEDGER_ANCHOR_HMAC_KEY"
 
 class LedgerError(ValueError):
     """Raised for a malformed ledger operation or an unhealable record."""
+
+
+class LedgerCorruptionError(LedgerError):
+    """Raised when fail-closed ledger or anchor integrity verification fails."""
 
 
 def _sha256(raw: bytes) -> str:
@@ -585,49 +590,66 @@ class LinearEvidenceLedger:
         log_path: str | Path,
         anchor_path: str | Path | None = None,
         *,
-        require_anchor: bool = False,
+        require_anchor: bool = True,
         allow_missing_anchor: bool = False,
         hmac_key: bytes | str | None = None,
+        allow_unsigned: bool = False,
     ) -> LinearEvidenceLedger:
         """Reload a ledger from its JSONL log and verify its external witness anchor."""
         log = Path(log_path)
         if not log.is_file():
-            raise LedgerError(f"no ledger log at {log}")
+            raise LedgerCorruptionError(f"no ledger log at {log}")
         try:
             document = json.loads(log.read_text(encoding="utf-8"))
         except json.JSONDecodeError as exc:
-            raise LedgerError(f"ledger log is not valid JSON: {exc}") from exc
+            raise LedgerCorruptionError(f"ledger log is not valid JSON: {exc}") from exc
         ledger = cls.from_dict(document)
         if anchor_path is None:
             if require_anchor and not allow_missing_anchor:
-                raise LedgerError("anchor_path is required when require_anchor=True")
+                raise LedgerCorruptionError("anchor_path is required when require_anchor=True")
             return ledger
         path = Path(anchor_path)
         if not path.is_file():
             if allow_missing_anchor and not require_anchor:
                 return ledger
-            raise LedgerError(f"no ledger anchor at {path}")
-        anchor = cls.load_anchor(path, hmac_key=hmac_key)
+            raise LedgerCorruptionError(f"no ledger anchor at {path}")
+        anchor = cls.load_anchor(path, hmac_key=hmac_key, allow_unsigned=allow_unsigned)
         conflict = ledger._anchor_conflict(anchor)
         if conflict is not None:
-            raise LedgerError(conflict)
+            raise LedgerCorruptionError(conflict)
         return ledger
 
-    @staticmethod
+    @classmethod
     def load_anchor(
-        anchor_path: str | Path, *, hmac_key: bytes | str | None = None
+        cls,
+        anchor_path: str | Path,
+        *,
+        hmac_key: bytes | str | None = None,
+        allow_unsigned: bool = False,
     ) -> LedgerAnchor:
         path = Path(anchor_path)
         if not path.is_file():
-            raise LedgerError(f"no ledger anchor at {path}")
+            raise LedgerCorruptionError(f"no ledger anchor at {path}")
         try:
             document = json.loads(path.read_text(encoding="utf-8"))
         except json.JSONDecodeError as exc:
-            raise LedgerError(f"ledger anchor is not valid JSON: {exc}") from exc
+            raise LedgerCorruptionError(f"ledger anchor is not valid JSON: {exc}") from exc
         anchor = LedgerAnchor.from_dict(document)
-        key = _resolve_hmac_key(hmac_key)
-        if key is not None and not anchor.verify_hmac(key):
-            raise LedgerError("ledger anchor HMAC signature is missing or invalid")
+        effective_key = _resolve_hmac_key(hmac_key)
+        if not allow_unsigned:
+            if effective_key is None:
+                raise LedgerCorruptionError(
+                    f"ledger anchor verification requires hmac_key or {ANCHOR_HMAC_KEY_ENV}"
+                )
+            if not anchor.verify_hmac(effective_key):
+                raise LedgerCorruptionError("ledger anchor HMAC signature is missing or invalid")
+        elif effective_key is not None:
+            if not anchor.verify_hmac(effective_key):
+                raise LedgerCorruptionError("ledger anchor HMAC signature is missing or invalid")
+        elif anchor.hmac_signature:
+            raise LedgerCorruptionError(
+                f"ledger anchor carries hmac_signature without hmac_key or {ANCHOR_HMAC_KEY_ENV}"
+            )
         return anchor
 
 

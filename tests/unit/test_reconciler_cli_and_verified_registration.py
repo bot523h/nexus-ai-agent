@@ -46,11 +46,16 @@ class _Ctx:
 
     def __init__(self, factory: Any) -> None:
         self._factory = factory
+        self._session: Any = None
 
     async def __aenter__(self) -> Any:
-        return self._factory()
+        self._session = self._factory()
+        return self._session
 
     async def __aexit__(self, *exc: object) -> bool:
+        if self._session is not None:
+            await self._session.close()
+            self._session = None
         return False
 
 

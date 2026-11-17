@@ -12,7 +12,6 @@ stale ``truth:`` marker) fails here as well as in the architecture gate.
 
 from __future__ import annotations
 
-import gc
 import json
 import subprocess
 import sys
@@ -430,7 +429,6 @@ def test_cli_exit_code_is_one_on_error(tmp_path: Path) -> None:
 # --------------------------------------------------------------------------- #
 def test_real_repository_is_truthful() -> None:
     """This repository itself must pass the doctor (no drift, no stale claim)."""
-    gc.collect()
     report = truth.run_doctor(REPO_ROOT)
     assert report.findings == (), report.format_text()
 

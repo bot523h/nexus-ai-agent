@@ -341,7 +341,7 @@ def test_save_and_load_from_disk_round_trips(tmp_path: Path) -> None:
     anchor_path = tmp_path / "ledger.anchor.json"
     anchor = ledger.save_to_disk(log, anchor_path)
     assert log.is_file() and anchor_path.is_file()
-    restored = shl.LinearEvidenceLedger.load_from_disk(log, anchor_path)
+    restored = shl.LinearEvidenceLedger.load_from_disk(log, anchor_path, allow_unsigned=True)
     assert restored.head_digest == ledger.head_digest
     assert anchor.head_digest == ledger.head_digest
     assert restored.payload(2) == b"evidence-record-2"
@@ -357,40 +357,52 @@ def test_load_from_disk_refuses_a_ledger_that_disagrees_with_the_anchor(tmp_path
     for i in range(3):
         forged.append(f"evidence-record-{i}")
     log.write_text(json.dumps(forged.to_dict()), encoding="utf-8")
-    with pytest.raises(shl.LedgerError):
-        shl.LinearEvidenceLedger.load_from_disk(log, anchor_path)
+    with pytest.raises(shl.LedgerCorruptionError):
+        shl.LinearEvidenceLedger.load_from_disk(log, anchor_path, allow_unsigned=True)
 
 
 def test_load_from_disk_refuses_missing_files(tmp_path: Path) -> None:
-    with pytest.raises(shl.LedgerError):
+    with pytest.raises(shl.LedgerCorruptionError):
         shl.LinearEvidenceLedger.load_from_disk(tmp_path / "missing.jsonl")
     ledger = _ledger(count=2)
     log = tmp_path / "ledger.jsonl"
     ledger.save_to_disk(log, tmp_path / "a.json")
-    with pytest.raises(shl.LedgerError):
+    with pytest.raises(shl.LedgerCorruptionError):
         shl.LinearEvidenceLedger.load_anchor(tmp_path / "missing.anchor.json")
 
 
 def test_load_from_disk_refuses_a_non_json_log(tmp_path: Path) -> None:
     log = tmp_path / "ledger.jsonl"
     log.write_text("{not json", encoding="utf-8")
-    with pytest.raises(shl.LedgerError):
+    with pytest.raises(shl.LedgerCorruptionError):
         shl.LinearEvidenceLedger.load_from_disk(log)
 
 
 def test_load_anchor_refuses_a_non_json_anchor(tmp_path: Path) -> None:
     anchor_path = tmp_path / "ledger.anchor.json"
     anchor_path.write_text("{not json", encoding="utf-8")
-    with pytest.raises(shl.LedgerError):
+    with pytest.raises(shl.LedgerCorruptionError):
         shl.LinearEvidenceLedger.load_anchor(anchor_path)
 
 
-def test_load_from_disk_without_anchor_returns_the_ledger(tmp_path: Path) -> None:
+def test_load_from_disk_without_anchor_requires_explicit_opt_out(tmp_path: Path) -> None:
     ledger = _ledger(count=3)
     log = tmp_path / "ledger.jsonl"
-    ledger.save_to_disk(log, tmp_path / "a.json")
-    restored = shl.LinearEvidenceLedger.load_from_disk(log)
+    anchor_path = tmp_path / "a.json"
+    ledger.save_to_disk(log, anchor_path)
+    # Fail-closed defaults: anchor_path=None and unsigned anchors are both rejected
+    with pytest.raises(shl.LedgerCorruptionError, match="anchor_path is required"):
+        shl.LinearEvidenceLedger.load_from_disk(log)
+    with pytest.raises(shl.LedgerCorruptionError, match="requires hmac_key"):
+        shl.LinearEvidenceLedger.load_anchor(anchor_path)
+    with pytest.raises(shl.LedgerCorruptionError, match="requires hmac_key"):
+        shl.LinearEvidenceLedger.load_from_disk(log, anchor_path)
+
+    # Explicit opt-out loads without anchor
+    restored = shl.LinearEvidenceLedger.load_from_disk(log, require_anchor=False)
     assert restored.head_digest == ledger.head_digest
+    restored2 = shl.LinearEvidenceLedger.load_from_disk(log, allow_missing_anchor=True)
+    assert restored2.head_digest == ledger.head_digest
 
 
 def test_atomic_write_cleans_up_when_the_replace_fails(tmp_path: Path, monkeypatch: object) -> None:
@@ -436,11 +448,28 @@ def test_anchor_hmac_signing_and_fail_closed_verification(
     with pytest.raises(shl.LedgerError, match="HMAC"):
         shl.LinearEvidenceLedger.load_from_disk(log, anchor_path, hmac_key="env-secret-key")
 
-    # Missing HMAC signature fails closed when key is supplied
+    # Missing HMAC signature fails closed when key is supplied (even with allow_unsigned=True)
     del doc["hmac_signature"]
     anchor_path.write_text(json.dumps(doc), encoding="utf-8")
-    with pytest.raises(shl.LedgerError, match="HMAC"):
+    with pytest.raises(shl.LedgerCorruptionError, match="HMAC"):
         shl.LinearEvidenceLedger.load_anchor(anchor_path, hmac_key="env-secret-key")
+    with pytest.raises(shl.LedgerCorruptionError, match="HMAC"):
+        shl.LinearEvidenceLedger.load_anchor(
+            anchor_path, hmac_key="env-secret-key", allow_unsigned=True
+        )
+    # Signed anchor without key fails closed even when allow_unsigned=True
+    signed_path = tmp_path / "signed.anchor.json"
+    ledger.save_to_disk(log, signed_path, hmac_key=key)
+    with pytest.raises(shl.LedgerCorruptionError, match="hmac_signature without"):
+        shl.LinearEvidenceLedger.load_anchor(signed_path, allow_unsigned=True)
+    # Signed anchor with valid key succeeds when allow_unsigned=True
+    signed_with_key = shl.LinearEvidenceLedger.load_anchor(
+        signed_path, hmac_key=key, allow_unsigned=True
+    )
+    assert signed_with_key.verify_hmac(key) is True
+    # Unsigned anchor without key is accepted ONLY when allow_unsigned=True
+    unsigned_loaded = shl.LinearEvidenceLedger.load_anchor(anchor_path, allow_unsigned=True)
+    assert unsigned_loaded.hmac_signature is None
 
     # Malformed hmac_signature or key rejected
     with pytest.raises(shl.LedgerError, match="hmac_signature"):
@@ -459,12 +488,12 @@ def test_load_from_disk_anchor_presence_policy(tmp_path: Path) -> None:
     missing_anchor = tmp_path / "missing.anchor.json"
     ledger.save_to_disk(log, tmp_path / "real.anchor.json")
 
-    with pytest.raises(shl.LedgerError, match="require_anchor"):
-        shl.LinearEvidenceLedger.load_from_disk(log, require_anchor=True)
-    with pytest.raises(shl.LedgerError, match="no ledger anchor"):
+    with pytest.raises(shl.LedgerCorruptionError, match="require_anchor"):
+        shl.LinearEvidenceLedger.load_from_disk(log)
+    with pytest.raises(shl.LedgerCorruptionError, match="no ledger anchor"):
         shl.LinearEvidenceLedger.load_from_disk(log, missing_anchor)
     # Explicit opt-out allows missing anchor only when require_anchor is False
     restored = shl.LinearEvidenceLedger.load_from_disk(
-        log, missing_anchor, allow_missing_anchor=True
+        log, missing_anchor, require_anchor=False, allow_missing_anchor=True
     )
     assert restored.head_digest == ledger.head_digest
