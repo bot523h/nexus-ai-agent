@@ -1283,11 +1283,44 @@ def _positions_match(
     canonical: Mapping[str, Vec3Tuple],
     *,
     tol: float,
+    ordered: bool,
+    expected_names: Sequence[str],
 ) -> bool:
-    """True iff ``pairs`` names exactly the canonical characters, in order, within ``tol``."""
-    return [name for name, _ in pairs] == list(canonical) and all(
+    """True iff ``pairs`` names exactly the scene's cast and matches ``canonical`` within ``tol``.
+
+    ``expected_names`` is the parsed scene's cast, so the ledger is bound to the screenplay itself
+    and not merely to the plan's own staging. With ``ordered`` (a sequence-of-pairs ledger) the name
+    *sequence* must match that cast exactly; without it (a :class:`~collections.abc.Mapping` ledger)
+    only the key *set* is bound, so dict insertion order is irrelevant while every coordinate is
+    still checked by name.
+    """
+    names = [name for name, _ in pairs]
+    if ordered:
+        if names != list(expected_names) or set(names) != set(canonical):
+            return False
+    elif set(names) != set(expected_names) or set(names) != set(canonical):
+        return False
+    return all(
         all(abs(pos[i] - canonical[name][i]) <= tol for i in range(3)) for name, pos in pairs
     )
+
+
+def _axis_side_pin_valid(axis: AxisOfAction, expected_initial_axis_side: object) -> bool:
+    """True iff an optional opening-side policy pin is legal *and* satisfied.
+
+    Only ``-1``/``+1`` are meaningful. Non-integers and ``bool`` are rejected explicitly (``True``
+    would otherwise slip through because ``True == 1``), and any other value is treated as a
+    configuration error and refused fail-closed rather than silently ignored.
+    """
+    if expected_initial_axis_side is None:
+        return True
+    if (
+        not isinstance(expected_initial_axis_side, int)
+        or isinstance(expected_initial_axis_side, bool)
+        or expected_initial_axis_side not in (-1, 1)
+    ):
+        return False
+    return axis.initial_side == expected_initial_axis_side
 
 
 def _scene_blocking_valid(
@@ -1297,6 +1330,7 @@ def _scene_blocking_valid(
     pairs: Sequence[tuple[str, Vec3Tuple]] | None,
     *,
     bind_axis: bool,
+    ordered: bool,
     tol: float,
 ) -> bool:
     """Verify declared blocking and every shot subject against deterministic scene blocking.
@@ -1322,7 +1356,11 @@ def _scene_blocking_valid(
                 )
             ):
                 return False
-        if pairs is not None and not _positions_match(pairs, canonical, tol=tol):
+        # The ledger must cover exactly this scene's parsed cast -- order-bound for a
+        # sequence-of-pairs ledger, key-set-bound for a Mapping.
+        if pairs is not None and not _positions_match(
+            pairs, canonical, tol=tol, ordered=ordered, expected_names=scene.characters
+        ):
             return False
         if len(shots) != len(scene.elements):
             return False
@@ -1358,16 +1396,32 @@ def verify_scene_character_blocking(
     scene: ParsedScene | None,
     character_positions: Sequence[tuple[str, Vec3Tuple]] | Mapping[str, Vec3Tuple] | None,
     bind_axis: bool = False,
-    tol: float = 1e-6,
+    expected_initial_axis_side: int | None = None,
+    position_tolerance: float = 1e-6,
 ) -> bool:
     """Verify ``character_positions`` and every shot subject against deterministic scene blocking.
 
-    With ``scene`` supplied the canonical ``(subject_label, subject_position)`` of every
-    scene element -- and, when ``bind_axis`` is set, the canonical ``AxisOfAction`` itself -- is
-    recomputed from the parsed script alone and the plan must match it within ``tol``. The same
-    routine backs ``verify_180_degree_rule`` (solver and cached report) and manifest verification,
-    so the solver and the auditor can never drift apart.
+    With ``scene`` supplied, the canonical ``(subject_label, subject_position)`` of every scene
+    element -- and, when ``bind_axis`` is set, the canonical :class:`AxisOfAction` itself -- is
+    recomputed from the parsed script alone, and the plan must match it within
+    ``position_tolerance``. ``expected_initial_axis_side`` optionally pins the opening camera side
+    (only ``-1``/``+1``; anything else, including ``bool``, fails closed). A :class:`Mapping`
+    ledger is bound by key *set*, so dict insertion order never matters; a sequence-of-pairs ledger
+    is additionally bound by canonical order. The same routine backs ``verify_180_degree_rule``
+    (solver and cached report) and manifest verification, so solver and auditor cannot drift apart.
     """
+    if (
+        isinstance(position_tolerance, bool)
+        or not math.isfinite(position_tolerance)
+        or position_tolerance < 0.0
+    ):
+        raise ValueError(
+            f"position_tolerance must be a finite, non-negative float, got {position_tolerance!r}"
+        )
+    tol = position_tolerance
+    if not _axis_side_pin_valid(axis, expected_initial_axis_side):
+        return False
+    ordered_ledger = not isinstance(character_positions, Mapping)
     pairs = (
         list(character_positions.items())
         if isinstance(character_positions, Mapping)
@@ -1393,7 +1447,15 @@ def verify_scene_character_blocking(
     return (
         pairs_ok
         and shots_match_chars
-        and _scene_blocking_valid(shots, axis, scene, pairs, bind_axis=bind_axis, tol=tol)
+        and _scene_blocking_valid(
+            shots,
+            axis,
+            scene,
+            pairs,
+            bind_axis=bind_axis,
+            ordered=ordered_ledger,
+            tol=tol,
+        )
     )
 
 
@@ -1403,11 +1465,19 @@ def verify_180_degree_rule(
     *,
     scene: ParsedScene | None = None,
     character_positions: Sequence[tuple[str, Vec3Tuple]] | Mapping[str, Vec3Tuple] | None = None,
+    bind_axis: bool = False,
+    expected_initial_axis_side: int | None = None,
     se3_tol: float = 1e-9,
     camera_overrides: Mapping[int, Sequence[float] | FloatArray] | None = None,
     end_camera_overrides: Mapping[int, Sequence[float] | FloatArray] | None = None,
 ) -> AxisVerificationReport:
-    """Verify 180-degree axis compliance and ``SE(3)`` membership for all shots & samples."""
+    """Verify 180-degree axis compliance and ``SE(3)`` membership for all shots & samples.
+
+    With ``scene`` supplied the plan's blocking ledger and every shot subject are re-derived from
+    the parsed script; ``bind_axis=True`` additionally requires the axis itself to be the canonical
+    scene-derived one, and ``expected_initial_axis_side`` pins the opening side. Builder and
+    auditor pass the same flags, so ``axis_180_compliant`` means exactly what verification checks.
+    """
     expected_side = axis.initial_side
     crosses: list[float] = []
     violations: list[str] = []
@@ -1418,6 +1488,8 @@ def verify_180_degree_rule(
         axis,
         scene=scene,
         character_positions=character_positions,
+        bind_axis=bind_axis,
+        expected_initial_axis_side=expected_initial_axis_side,
     ):
         violations.append("scene character_positions or shot subject blocking inconsistent")
 

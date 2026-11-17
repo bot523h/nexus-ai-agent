@@ -5,6 +5,7 @@ from __future__ import annotations
 import dataclasses
 import math
 from collections.abc import Sequence
+from typing import cast
 
 import numpy as np
 import pytest
@@ -1197,3 +1198,305 @@ def test_wave5_blocking_verifier_rejects_forged_positions_labels_and_geometry() 
         is False
     )
     assert verify_180_degree_rule(plan.shots, plan.axis, scene=orphaned).compliant is False
+
+
+# --------------------------------------------------------------------------- #
+# Wave-6: Mapping key-order independence, tolerance hygiene, axis-side pin
+# --------------------------------------------------------------------------- #
+
+
+def test_wave6_mapping_ledger_is_bound_by_key_set_not_insertion_order() -> None:
+    parsed = parse_bilingual_script(TEN_SHOT_PERSIAN_DIALOGUE)
+    scene = parsed.scenes[0]
+    plan = solve_scene_cinematography(scene)
+    canonical = compute_canonical_character_positions(
+        scene, axis=plan.axis, initial_axis_side=plan.axis.initial_side
+    )
+
+    # A Mapping is order-insensitive by contract: any permutation of the same cast/coordinates
+    # verifies identically, because every coordinate is looked up by name.
+    permutations = [
+        dict(canonical),
+        dict(reversed(list(canonical.items()))),
+        dict(sorted(canonical.items(), key=lambda item: tuple(-ord(c) for c in item[0]))),
+    ]
+    for reordered in permutations:
+        assert (
+            verify_scene_character_blocking(
+                plan.shots, plan.axis, scene=scene, character_positions=reordered
+            )
+            is True
+        )
+
+    # The sequence-of-pairs ledger additionally commits to canonical ordering: reversing it must
+    # fail even though the underlying name -> coordinate mapping is identical.
+    as_pairs = tuple(canonical.items())
+    reversed_pairs = tuple(reversed(as_pairs))
+    assert (
+        verify_scene_character_blocking(
+            plan.shots, plan.axis, scene=scene, character_positions=as_pairs
+        )
+        is True
+    )
+    assert (
+        verify_scene_character_blocking(
+            plan.shots, plan.axis, scene=scene, character_positions=reversed_pairs
+        )
+        is False
+    )
+    assert (
+        verify_180_degree_rule(
+            plan.shots, plan.axis, scene=scene, character_positions=reversed_pairs
+        ).compliant
+        is False
+    )
+
+    # Set mismatches (extra/missing cast) and per-name coordinate drift are still refused for a
+    # Mapping: only the *order* is relaxed, never the content.
+    ghost = dict(canonical)
+    ghost["GHOST_EXTRA"] = (0.0, 0.0, 1.6)
+    assert (
+        verify_scene_character_blocking(
+            plan.shots, plan.axis, scene=scene, character_positions=ghost
+        )
+        is False
+    )
+    missing = dict(canonical)
+    missing.pop(next(iter(missing)))
+    assert (
+        verify_scene_character_blocking(
+            plan.shots, plan.axis, scene=scene, character_positions=missing
+        )
+        is False
+    )
+    drifted = dict(canonical)
+    first = next(iter(drifted))
+    drifted[first] = (drifted[first][0] + 0.02, drifted[first][1], drifted[first][2])
+    assert (
+        verify_scene_character_blocking(
+            plan.shots, plan.axis, scene=scene, character_positions=drifted
+        )
+        is False
+    )
+
+
+@pytest.mark.parametrize(
+    "bad_tol", [float("nan"), float("inf"), -float("inf"), -1e-6, -1.0, True, 1e-6 + 1e-9]
+)
+def test_wave6_position_tolerance_validation_is_fail_closed(bad_tol: float) -> None:
+    parsed = parse_bilingual_script(TEN_SHOT_PERSIAN_DIALOGUE)
+    scene = parsed.scenes[0]
+    plan = solve_scene_cinematography(scene)
+    ledger = plan.character_positions
+    if bad_tol <= 0.0 or not math.isfinite(bad_tol) or isinstance(bad_tol, bool):
+        with pytest.raises(ValueError, match="position_tolerance"):
+            verify_scene_character_blocking(
+                plan.shots,
+                plan.axis,
+                scene=scene,
+                character_positions=ledger,
+                position_tolerance=bad_tol,
+            )
+    else:
+        # A legitimate (if absurdly tight) tolerance never raises; it just fails to match.
+        assert (
+            verify_scene_character_blocking(
+                plan.shots,
+                plan.axis,
+                scene=scene,
+                character_positions=ledger,
+                position_tolerance=bad_tol,
+            )
+            is True
+        )
+
+
+def test_wave6_axis_side_pin_is_required_to_be_exactly_pm_one() -> None:
+    parsed = parse_bilingual_script(TEN_SHOT_PERSIAN_DIALOGUE)
+    scene = parsed.scenes[0]
+    plan = solve_scene_cinematography(scene)
+    ledger = plan.character_positions
+    assert plan.axis.initial_side == 1
+
+    assert (
+        verify_scene_character_blocking(
+            plan.shots,
+            plan.axis,
+            scene=scene,
+            character_positions=ledger,
+            expected_initial_axis_side=1,
+        )
+        is True
+    )
+    assert (
+        verify_scene_character_blocking(
+            plan.shots,
+            plan.axis,
+            scene=scene,
+            character_positions=ledger,
+            expected_initial_axis_side=-1,
+        )
+        is False
+    )
+    for illegal in (0, 2, -3, True, cast(int, 1.0), cast(int, "1")):
+        assert (
+            verify_scene_character_blocking(
+                plan.shots,
+                plan.axis,
+                scene=scene,
+                character_positions=ledger,
+                expected_initial_axis_side=illegal,
+            )
+            is False
+        )
+    # The pin is enforced before any scene replay, so it also binds the scene-less geometry path.
+    assert (
+        verify_scene_character_blocking(
+            plan.shots,
+            plan.axis,
+            scene=None,
+            character_positions=None,
+            expected_initial_axis_side=-1,
+        )
+        is False
+    )
+    report = verify_180_degree_rule(
+        plan.shots,
+        plan.axis,
+        scene=scene,
+        character_positions=plan.character_positions,
+        expected_initial_axis_side=-1,
+    )
+    assert report.compliant is False
+    assert any("blocking inconsistent" in v for v in report.violations)
+    assert (
+        verify_180_degree_rule(
+            plan.shots,
+            plan.axis,
+            scene=scene,
+            character_positions=plan.character_positions,
+            expected_initial_axis_side=1,
+        ).compliant
+        is True
+    )
+
+    # A scene solved on the opposite opening side satisfies the -1 pin symmetrically.
+    flipped = solve_scene_cinematography(scene, initial_axis_side=-1)
+    assert (
+        verify_scene_character_blocking(
+            flipped.shots,
+            flipped.axis,
+            scene=scene,
+            character_positions=flipped.character_positions,
+            expected_initial_axis_side=-1,
+        )
+        is True
+    )
+    assert (
+        verify_scene_character_blocking(
+            flipped.shots,
+            flipped.axis,
+            scene=scene,
+            character_positions=flipped.character_positions,
+            expected_initial_axis_side=1,
+        )
+        is False
+    )
+
+
+def test_wave6_bind_axis_canonicalizes_axis_independent_of_blocking() -> None:
+    parsed = parse_bilingual_script(TEN_SHOT_PERSIAN_DIALOGUE)
+    scene = parsed.scenes[0]
+    plan = solve_scene_cinematography(scene)
+    canonical = compute_canonical_character_positions(
+        scene, axis=plan.axis, initial_axis_side=plan.axis.initial_side
+    )
+    # A caller-supplied (non-canonical but perfectly legal) axis stays acceptable for *solving*:
+    # blocking and shot subjects are still exactly what deterministic staging on that axis gives.
+    custom_axis = AxisOfAction(
+        p1=(-1.0, 0.0, 1.6),
+        p2=(1.0, 0.0, 1.6),
+        initial_side=1,
+        character_a=scene.characters[0],
+        character_b=scene.characters[1],
+    )
+    custom = solve_scene_cinematography(scene, axis=custom_axis)
+    custom_positions = compute_canonical_character_positions(
+        scene, axis=custom_axis, initial_axis_side=custom_axis.initial_side
+    )
+    assert custom_positions != canonical
+    assert (
+        verify_scene_character_blocking(
+            custom.shots,
+            custom_axis,
+            scene=scene,
+            character_positions=custom.character_positions,
+            bind_axis=False,
+        )
+        is True
+    )
+    assert (
+        verify_180_degree_rule(
+            custom.shots, custom_axis, scene=scene, character_positions=custom.character_positions
+        ).compliant
+        is True
+    )
+    # Sealing/policy consumers demand the canonical axis, which the custom axis is not.
+    assert (
+        verify_scene_character_blocking(
+            custom.shots,
+            custom_axis,
+            scene=scene,
+            character_positions=custom.character_positions,
+            bind_axis=True,
+        )
+        is False
+    )
+    assert (
+        verify_180_degree_rule(
+            custom.shots,
+            custom_axis,
+            scene=scene,
+            character_positions=custom.character_positions,
+            bind_axis=True,
+        ).compliant
+        is False
+    )
+
+
+def test_wave6_ledger_is_bound_to_the_declared_cast_not_only_the_collapsed_staging_dict() -> None:
+    """A repeated cast entry still binds the ledger: canonical staging alone would not notice."""
+    parsed = parse_bilingual_script(TEN_SHOT_PERSIAN_DIALOGUE)
+    scene = parsed.scenes[0]
+    plan = solve_scene_cinematography(scene)
+    first = scene.characters[0]
+
+    # Forged/degenerate scene whose cast repeats one name: the staging dict collapses to a single
+    # key (chars[1] wins at p2), so comparing only against that dict would accept a one-entry
+    # ledger. Binding to the *declared* cast instead refuses it.
+    duplicated = dataclasses.replace(scene, elements=(), characters=(first, first))
+    collapsed = compute_canonical_character_positions(
+        duplicated, axis=plan.axis, initial_axis_side=plan.axis.initial_side
+    )
+    assert list(collapsed) == [first]
+    assert collapsed[first] == plan.axis.p2
+    ledger = ((first, collapsed[first]),)
+    assert (
+        verify_scene_character_blocking((), plan.axis, scene=duplicated, character_positions=ledger)
+        is False
+    )
+    # Same geometry against an honestly declared single-name cast: accepted.
+    honest = dataclasses.replace(scene, elements=(), characters=(first,))
+    honest_positions = compute_canonical_character_positions(
+        honest, axis=plan.axis, initial_axis_side=plan.axis.initial_side
+    )
+    assert honest_positions[first] == plan.axis.p1
+    assert (
+        verify_scene_character_blocking(
+            (),
+            plan.axis,
+            scene=honest,
+            character_positions=((first, honest_positions[first]),),
+        )
+        is True
+    )

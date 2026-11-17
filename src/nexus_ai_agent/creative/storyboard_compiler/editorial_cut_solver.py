@@ -37,6 +37,7 @@ from .bilingual_script_parser import (
     EmotionTag,
     ParsedScript,
     parse_bilingual_script,
+    verify_script_provenance,
 )
 from .cinematography_solver import (
     AxisEnforcementTrace,
@@ -104,15 +105,19 @@ DEFAULT_MAX_EYE_TRACE_SACCADE: Final[float] = 0.38
 
 #: Inclusive policy bounds for any declared eye-trace saccade limit (normalized UV space).
 #:
-#: The upper bound is intentionally far below the full-screen diagonal ``sqrt(2) ~= 1.4142``:
-#: inside the unit square, a threshold at or above ``1.0`` exceeds every reachable saccade, so
-#: ``_radial_eye_trace_projection`` never fires, ``reframe_applied`` is always ``False``, and the
+#: Exact geometry: focus points live in the unit square ``[0, 1]^2``, whose maximum achievable
+#: Euclidean distance is the corner-to-corner diagonal ``sqrt(2) ~= 1.4142``. A limit at or above
+#: that diagonal is unreachable, so ``_radial_eye_trace_projection`` never fires, every
+#: ``reframe_applied`` stays ``False``, ``adjusted_entry_focus_uv == raw_entry_focus_uv``, and the
 #: eye-trace invariant silently degenerates into a no-op. Verifying only a lower bound let an
-#: attacker inflate ``max_eye_trace_saccade_limit`` (e.g. to ``2.0``), keep
-#: ``adjusted_entry_focus_uv == raw_entry_focus_uv``, re-seal all four SHA-256 digests, and pass
-#: verification with unbounded eye jumps. Both solver and verifier therefore pin the limit into
-#: ``[0.05, 0.50]``, which still admits every legal Rule-of-Thirds reverse (|2/3 - 1/3| = 0.3333)
-#: and the diagonal case (sqrt(2)/3 = 0.4714) while making threshold-neutralization impossible.
+#: attacker inflate ``max_eye_trace_saccade_limit`` (e.g. to ``2.0``), re-seal all four SHA-256
+#: digests, and pass verification with unbounded eye jumps.
+#:
+#: ``0.50`` is therefore a deliberately conservative *cinematic* ceiling -- about ``35%`` of the
+#: frame diagonal (``0.50 / sqrt(2) ~= 0.3536``) -- not a geometric one. It still admits every
+#: legal Rule-of-Thirds reverse (``|2/3 - 1/3| = 0.3333``) and the third-diagonal case
+#: (``sqrt(2)/3 ~= 0.4714``), while guaranteeing that some viewer eye path always remains
+#: bounded and reframing stays a live, testable mechanism.
 MIN_EYE_TRACE_SACCADE_LOWER_BOUND: Final[float] = 0.05
 MAX_EYE_TRACE_SACCADE_UPPER_BOUND: Final[float] = 0.50
 
@@ -231,6 +236,10 @@ class EditorialTimelinePlan:
     l_cut_count: int
     straight_cut_count: int
     mean_eye_trace_score: float
+    #: Declared eye-trace policy (normalized UV). Must lie within
+    #: [MIN_EYE_TRACE_SACCADE_LOWER_BOUND, MAX_EYE_TRACE_SACCADE_UPPER_BOUND] = [0.05, 0.50];
+    #: 0.50 is a cinematic ceiling (~35% of the unit-square diagonal sqrt(2) ~= 1.4142), and a
+    #: limit at or above that diagonal would disable reframing entirely, so it is never accepted.
     max_eye_trace_saccade_limit: float
     breath_gap_sec: float
     verification: EditorialVerificationReport
@@ -489,14 +498,18 @@ def verify_editorial_timeline(
 
     events = plan.events
     if not events:
+        # Fidelity: report the policy findings already established above instead of hard-coding
+        # eye_trace_valid/jl_bounds_valid, so an empty timeline cannot launder an illegal
+        # saccade policy (or any other pre-loop violation) into a "valid" sub-flag.
+        violations.append("timeline has zero shot events")
         return EditorialVerificationReport(
             compliant=False,
             video_contiguous=False,
-            audio_overlap_free=True,
-            jl_bounds_valid=True,
-            eye_trace_valid=True,
+            audio_overlap_free=audio_ok,
+            jl_bounds_valid=jl_ok,
+            eye_trace_valid=eye_ok,
             max_audio_overlap_sec=0.0,
-            violations=("timeline has zero shot events",),
+            violations=tuple(violations),
         )
 
     if abs(events[0].video_in_sec) > tol:
@@ -1079,6 +1092,9 @@ def _serialize_script(script: ParsedScript) -> dict[str, Any]:
         )
     return {
         "source_sha256": script.source_sha256,
+        # Provenance payload: script_sha256 now commits to the exact normalized screenplay text
+        # that the AST claims to be the parse of, so the source cannot be swapped out silently.
+        "normalized_source": script.normalized_source,
         "language": script.language.value,
         "characters": list(script.characters),
         "total_duration_sec": _qfloat(script.total_duration_sec),
@@ -1403,12 +1419,16 @@ def build_compiled_manifest(
 
     all_shots = [sh for plan in cinema_tuple for sh in plan.shots]
     total_scenes = len(script.scenes)
+    # bind_axis=True keeps ``axis_180_compliant`` semantically identical to what
+    # ``verify_manifest_integrity`` recomputes (canonical, scene-derived axis included), so a plan
+    # can never be sealed as compliant and then refused for the very same reason.
     axis_ok = all(
         verify_180_degree_rule(
             plan.shots,
             plan.axis,
             scene=script.scenes[i],
             character_positions=plan.character_positions,
+            bind_axis=True,
         ).compliant
         and plan.axis_report.compliant
         for i, plan in enumerate(cinema_tuple)
@@ -1762,11 +1782,19 @@ def verify_manifest_integrity(
     manifest: CompiledStoryboardManifest,
     *,
     expected_max_saccade_limit: float | None = None,
+    expected_source_sha256: str | None = None,
+    expected_initial_axis_side: int | None = None,
 ) -> bool:
     """Recompute scene graph, reports, trajectories, and SHA-256 digests; True iff untampered.
 
-    ``expected_max_saccade_limit`` optionally pins the sealed editorial eye-trace policy to an
-    exact value; the canonical ``[0.05, 0.50]`` bounds are enforced either way.
+    Optional deployment policy pins, all fail-closed: ``expected_max_saccade_limit`` requires the
+    sealed eye-trace policy to equal that value (the canonical ``[0.05, 0.50]`` bounds hold
+    either way); ``expected_source_sha256`` must match the hashed screenplay; and
+    ``expected_initial_axis_side`` (only ``-1``/``+1``) must equal every scene's opening side.
+
+    The AST is never trusted on its own word: the deterministic parser is replayed on the
+    manifest's retained ``normalized_source``, so a hand-forged scene graph is rejected even
+    after all four SHA-256 digests have been recomputed to match it.
     """
     for digest in (
         manifest.script_sha256,
@@ -1776,6 +1804,9 @@ def verify_manifest_integrity(
     ):
         if not _SHA256_HEX_RE.match(digest):
             return False
+
+    if not verify_script_provenance(manifest.script, expected_source_sha256=expected_source_sha256):
+        return False
 
     expected_total_scenes = len(manifest.script.scenes)
     expected_total_shots = sum(len(plan.shots) for plan in manifest.cinematography)
@@ -1792,6 +1823,8 @@ def verify_manifest_integrity(
                 plan.axis,
                 scene=scene,
                 character_positions=plan.character_positions,
+                bind_axis=True,
+                expected_initial_axis_side=expected_initial_axis_side,
             ),
             plan.axis_report,
         )

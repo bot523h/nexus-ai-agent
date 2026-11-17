@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import dataclasses
+import hashlib
 from pathlib import Path
 
 import pytest
@@ -25,6 +27,7 @@ from nexus_ai_agent.creative.storyboard_compiler.bilingual_script_parser import 
     normalize_script_text,
     parse_bilingual_script,
     parse_scene_heading,
+    verify_script_provenance,
 )
 
 FULL_PERSIAN_SCRIPT = """\
@@ -740,3 +743,79 @@ def test_parser_refusals_on_empty_or_headingless_scripts() -> None:
         parse_bilingual_script("SARA\nHello without a scene heading.")
     with pytest.raises(ScriptParseError, match="no valid scene headings"):
         parse_bilingual_script("FADE IN:\n\nCUT TO:\n\nFADE OUT.")
+
+
+# --------------------------------------------------------------------------- #
+# Wave-6 F1: source-text provenance and deterministic parse replay
+# --------------------------------------------------------------------------- #
+
+
+RAW_PROVENANCE_SCRIPT = "\ufeffEXT. ROOM   -   NIGHT\r\n\r\n\r\nSARA\nhello there.\n"
+
+
+def test_wave6_parsed_script_retains_the_exact_hashed_source_text() -> None:
+    parsed = parse_bilingual_script(RAW_PROVENANCE_SCRIPT)
+    normalized = normalize_script_text(RAW_PROVENANCE_SCRIPT)
+
+    # The retained text is *exactly* what source_sha256 digests -- and exactly the fixed point of
+    # normalization, so replaying the parser on it reproduces the AST byte-for-byte.
+    assert parsed.normalized_source == normalized
+    assert parsed.normalized_source != RAW_PROVENANCE_SCRIPT
+    assert hashlib.sha256(parsed.normalized_source.encode("utf-8")).hexdigest() == (
+        parsed.source_sha256
+    )
+    assert normalize_script_text(parsed.normalized_source) == parsed.normalized_source
+    assert parse_bilingual_script(parsed.normalized_source) == parsed
+    assert verify_script_provenance(parsed) is True
+    assert verify_script_provenance(parsed, expected_source_sha256=parsed.source_sha256) is True
+
+    # Every scene/element payload survives the round trip untouched.
+    replayed = parse_bilingual_script(parsed.normalized_source)
+    assert replayed.scenes == parsed.scenes
+    assert replayed.characters == parsed.characters
+    assert replayed.language is parsed.language
+    assert replayed.total_duration_sec == parsed.total_duration_sec
+
+
+def test_wave6_provenance_gate_fails_closed_on_forged_or_detached_ast() -> None:
+    parsed = parse_bilingual_script(RAW_PROVENANCE_SCRIPT)
+
+    # (1) AST-only edit (what a re-sealing attacker used to get away with): the numbers below are
+    #     self-consistent with the forged scene graph, so only the parser replay can see it.
+    forged_ast = dataclasses.replace(
+        parsed,
+        scenes=tuple(
+            dataclasses.replace(
+                sc,
+                peak_tension=0.05,
+                heading=dataclasses.replace(sc.heading, weather=WeatherCondition.SNOW),
+            )
+            for sc in parsed.scenes
+        ),
+        total_duration_sec=round(parsed.total_duration_sec + 3.0, 6),
+    )
+    assert forged_ast.source_sha256 == parsed.source_sha256
+    assert verify_script_provenance(forged_ast) is False
+
+    # (2) Missing / detached provenance text.
+    assert verify_script_provenance(dataclasses.replace(parsed, normalized_source="")) is False
+    assert (
+        verify_script_provenance(
+            dataclasses.replace(parsed, normalized_source=normalize_script_text("SARA\nhi\n"))
+        )
+        is False
+    )
+
+    # (3) Explicit source pin mismatch is refused even for an otherwise perfect script.
+    assert verify_script_provenance(parsed, expected_source_sha256="0" * 64) is False
+
+    # (4) Hash-consistent but unparsable text: refuse, never raise.
+    garbage = "no scene heading at all, just prose"
+    detached = dataclasses.replace(
+        parsed,
+        normalized_source=garbage,
+        source_sha256=hashlib.sha256(garbage.encode("utf-8")).hexdigest(),
+    )
+    with pytest.raises(ScriptParseError, match="first scene heading"):
+        parse_bilingual_script(garbage)
+    assert verify_script_provenance(detached) is False

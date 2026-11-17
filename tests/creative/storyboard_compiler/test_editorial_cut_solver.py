@@ -6,8 +6,11 @@ import ast
 import dataclasses
 import json
 import math
+import re
 import sys
+from collections.abc import Callable
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -1480,6 +1483,16 @@ def test_wave5_saccade_policy_window_is_canonical_and_exported() -> None:
     # 0.50 comfortably covers the widest legal Rule-of-Thirds reverse (sqrt(2)/3 = 0.4714)
     # while staying far below the unit-square diagonal that would neutralize reframing.
     assert sb.MAX_EYE_TRACE_SACCADE_UPPER_BOUND < math.sqrt(2.0) / 2.0
+    # F5 geometry, stated exactly: the maximum reachable distance in the UV unit square is the
+    # corner-to-corner diagonal, and 0.50 is a conservative cinematic ceiling of ~35% of it --
+    # not a geometric threshold (only limit >= sqrt(2) would make reframing unreachable).
+    diagonal = math.hypot(1.0 - 0.0, 1.0 - 0.0)
+    assert diagonal == pytest.approx(math.sqrt(2.0))
+    assert sb.MAX_EYE_TRACE_SACCADE_UPPER_BOUND < diagonal
+    assert sb.MAX_EYE_TRACE_SACCADE_UPPER_BOUND / diagonal == pytest.approx(0.353553, abs=1e-6)
+    # Widest legal framing moves stay admissible under the ceiling.
+    assert abs(2.0 / 3.0 - 1.0 / 3.0) < sb.MAX_EYE_TRACE_SACCADE_UPPER_BOUND
+    assert math.sqrt(2.0) / 3.0 < sb.MAX_EYE_TRACE_SACCADE_UPPER_BOUND
     assert StoryboardCompilerConfig().max_eye_trace_saccade == DEFAULT_MAX_EYE_TRACE_SACCADE
     manifest = compile_storyboard(DIALOGUE_AND_REACTION_SCRIPT)
     assert manifest.editorial.max_eye_trace_saccade_limit == DEFAULT_MAX_EYE_TRACE_SACCADE
@@ -1543,6 +1556,284 @@ def test_f7_wave5_bijection_rejects_consistently_restaged_axis_slide() -> None:
     assert verify_manifest_integrity(_reseal_with_recomputed_reports(tampered)) is False
 
 
+# --------------------------------------------------------------------------- #
+# Wave-6: script provenance replay, builder/verifier axis symmetry, policy fidelity
+# --------------------------------------------------------------------------- #
+
+
+def test_f1_wave6_manifest_rejects_fully_forged_script_ast_even_when_resealed() -> None:
+    """F1 closure: the AST must be the deterministic parse of its own hashed source text.
+
+    Wave-5 verified everything *derived from* ``manifest.script`` but never that the scene graph
+    was produced by parsing a real screenplay, so an attacker could rewrite headings, tensions,
+    and scene aggregates, recompute all four SHA-256 digests, and pass. Replay of the parser on the
+    retained ``normalized_source`` now refutes any such forgery.
+    """
+    from nexus_ai_agent.creative.storyboard_compiler.bilingual_script_parser import (
+        TimeOfDay,
+        WeatherCondition,
+    )
+    from nexus_ai_agent.creative.storyboard_compiler.editorial_cut_solver import _serialize_script
+
+    manifest = compile_storyboard(DIALOGUE_AND_REACTION_SCRIPT)
+    assert sb.verify_script_provenance(manifest.script) is True
+    assert "normalized_source" in _serialize_script(manifest.script)
+
+    mutators: tuple[Callable[[sb.ParsedScene], sb.ParsedScene], ...] = (
+        lambda sc: dataclasses.replace(
+            sc, heading=dataclasses.replace(sc.heading, weather=WeatherCondition.SNOW)
+        ),
+        lambda sc: dataclasses.replace(
+            sc, heading=dataclasses.replace(sc.heading, time_of_day=TimeOfDay.DAWN)
+        ),
+        lambda sc: dataclasses.replace(sc, peak_tension=0.03125, mean_tension=0.0625),
+        lambda sc: dataclasses.replace(
+            sc, total_duration_sec=round(sc.total_duration_sec + 1.5, 6)
+        ),
+    )
+    for mutate in mutators:
+        forged_scenes = tuple(mutate(sc) for sc in manifest.script.scenes)
+        forged_script = dataclasses.replace(
+            manifest.script,
+            scenes=forged_scenes,
+            total_duration_sec=round(sum(sc.total_duration_sec for sc in forged_scenes), 6),
+        )
+        # Same source digest, same cast -- only the derived scene graph was rewritten.
+        assert forged_script.source_sha256 == manifest.script.source_sha256
+        assert forged_script.characters == manifest.script.characters
+        tampered = dataclasses.replace(
+            manifest,
+            script=forged_script,
+            axis_180_compliant=True,
+            editorial_compliant=True,
+            eye_trace_compliant=True,
+        )
+        assert sb.verify_script_provenance(forged_script) is False
+        # Weak re-seal (digests only) and the strongest one (reports + digests) both refuse it.
+        assert verify_manifest_integrity(_reseal_tampered_manifest(tampered)) is False
+        assert verify_manifest_integrity(_reseal_with_recomputed_reports(tampered)) is False
+
+    # The sealed digest commits to the retained text itself: swapping only the text (with a
+    # matching source digest) changes script_sha256, so it cannot be edited for free either.
+    from nexus_ai_agent.creative.storyboard_compiler.editorial_cut_solver import _compute_digests
+
+    def script_digest(script: sb.ParsedScript) -> str:
+        return _compute_digests(
+            MANIFEST_SCHEMA_VERSION,
+            script,
+            manifest.cinematography,
+            manifest.editorial,
+            total_scenes=manifest.total_scenes,
+            total_shots=manifest.total_shots,
+            total_duration_sec=manifest.total_duration_sec,
+            axis_180_compliant=True,
+            editorial_compliant=True,
+            eye_trace_compliant=True,
+        )[0]
+
+    import hashlib
+
+    alt_text = manifest.script.normalized_source + "\n\nSARA\nappended line\n"
+    alt = dataclasses.replace(
+        manifest.script,
+        normalized_source=alt_text,
+        source_sha256=hashlib.sha256(alt_text.encode("utf-8")).hexdigest(),
+    )
+    assert script_digest(alt) != script_digest(manifest.script)
+
+
+def test_f2_wave6_builder_refuses_a_non_canonical_axis_that_still_solves_cleanly() -> None:
+    """A custom axis is geometrically legal yet not scene-canonical: the sealed flag must say so.
+
+    This is the only observable difference between ``bind_axis=False`` (what the solver caches) and
+    ``bind_axis=True`` (what the auditor re-checks); without passing the flag in
+    ``build_compiled_manifest`` such a plan was sealed ``axis_180_compliant=True`` and only refused
+    afterwards by ``_scene_shot_bijection_valid``.
+    """
+    parsed = parse_bilingual_script(DIALOGUE_AND_REACTION_SCRIPT)
+    scene0 = parsed.scenes[0]
+    custom_axis = sb.AxisOfAction(
+        p1=(-1.0, 0.0, 1.6),
+        p2=(1.0, 0.0, 1.6),
+        initial_side=1,
+        character_a=scene0.characters[0],
+        character_b=scene0.characters[1],
+    )
+    plan = sb.solve_scene_cinematography(parsed.scenes[0], axis=custom_axis)
+    single_scene_script = dataclasses.replace(parsed, scenes=(parsed.scenes[0],))
+    editorial = solve_editorial_timeline((plan,))
+    sealed = build_compiled_manifest(single_scene_script, (plan,), editorial)
+
+    # Blocking, poses, and the cached solver report are all internally perfect for this axis.
+    assert plan.axis_report.compliant is True
+    assert (
+        sb.verify_180_degree_rule(
+            plan.shots,
+            custom_axis,
+            scene=parsed.scenes[0],
+            character_positions=plan.character_positions,
+        ).compliant
+        is True
+    )
+    assert (
+        sb.verify_180_degree_rule(
+            plan.shots,
+            custom_axis,
+            scene=parsed.scenes[0],
+            character_positions=plan.character_positions,
+            bind_axis=True,
+        ).compliant
+        is False
+    )
+    # Sealing and auditing now agree the manifest is not canonically blocked.
+    assert sealed.axis_180_compliant is False
+    assert sealed.editorial_compliant is True
+    assert verify_manifest_integrity(sealed) is False
+    assert (
+        verify_manifest_integrity(
+            sealed, expected_source_sha256=parsed.source_sha256, expected_initial_axis_side=1
+        )
+        is False
+    )
+    # And the fully canonical compilation of the same scene still seals clean.
+    canonical_plans = solve_script_cinematography(parsed)
+    canonical = build_compiled_manifest(
+        parsed, canonical_plans, solve_editorial_timeline(canonical_plans)
+    )
+    assert canonical.axis_180_compliant is True
+    assert verify_manifest_integrity(canonical) is True
+
+
+def test_f1_wave6_source_sha256_pin_is_fail_closed() -> None:
+    """A deployment can pin the exact screenplay a manifest was compiled from."""
+    manifest = compile_storyboard(DIALOGUE_AND_REACTION_SCRIPT)
+    digest = manifest.script.source_sha256
+    assert re.fullmatch(r"[0-9a-f]{64}", digest) is not None
+    assert verify_manifest_integrity(manifest, expected_source_sha256=digest) is True
+    assert verify_manifest_integrity(manifest, expected_source_sha256="0" * 64) is False
+    # A syntactically perfect digest that simply is not this script's source: refused.
+    assert verify_manifest_integrity(manifest, expected_source_sha256="f" * 64) is False
+    # An AST whose provenance text was dropped cannot be pinned at all.
+    stripped = dataclasses.replace(manifest.script, normalized_source="")
+    assert (
+        verify_manifest_integrity(
+            _reseal_tampered_manifest(dataclasses.replace(manifest, script=stripped))
+        )
+        is False
+    )
+
+
+def test_f2_wave6_builder_and_verifier_agree_on_canonical_axis_and_side_pin() -> None:
+    """``axis_180_compliant`` must mean exactly what ``verify_manifest_integrity`` re-checks."""
+    parsed = parse_bilingual_script(DIALOGUE_AND_REACTION_SCRIPT)
+    plans = solve_script_cinematography(parsed)
+    editorial = solve_editorial_timeline(plans)
+
+    legit = build_compiled_manifest(parsed, plans, editorial)
+    assert legit.axis_180_compliant is True
+    assert verify_manifest_integrity(legit) is True
+    assert verify_manifest_integrity(legit, expected_initial_axis_side=1) is True
+
+    # Slide scene 0's axis but re-derive every dependent quantity, so only canonicality is left.
+    p0, rest = legit.cinematography[0], legit.cinematography[1:]
+    slid_axis = dataclasses.replace(p0.axis, p1=(-1.5, 0.0, 1.6), p2=(1.5, 0.0, 1.6))
+    ledger = dict(p0.character_positions)
+    restaged = {
+        name: ((-1.5, 0.0, 1.6) if pos[0] < 0.0 else (1.5, 0.0, 1.6))
+        for name, pos in ledger.items()
+    }
+    slid_shots = tuple(
+        dataclasses.replace(
+            sh, subject_position=restaged.get(sh.subject_label, sh.subject_position)
+        )
+        for sh in p0.shots
+    )
+    slid_plan = dataclasses.replace(
+        p0,
+        axis=slid_axis,
+        character_positions=tuple((name, restaged[name]) for name in ledger),
+        shots=slid_shots,
+    )
+    slid_plans = (slid_plan, *rest)
+    slid_editorial = solve_editorial_timeline(slid_plans)
+    sealed = build_compiled_manifest(parsed, slid_plans, slid_editorial)
+    # Builder and auditor now agree *at seal time*: the flag is already False, so the manifest can
+    # never be stamped axis_180_compliant=True and refused later for the same reason.
+    assert sealed.axis_180_compliant is False
+    assert verify_manifest_integrity(sealed) is False
+    assert (
+        sb.verify_180_degree_rule(
+            slid_plan.shots,
+            slid_axis,
+            scene=parsed.scenes[0],
+            character_positions=slid_plan.character_positions,
+            bind_axis=True,
+        ).compliant
+        is False
+    )
+
+    # Opening-side policy pin across the whole manifest.
+    flipped_parsed = parse_bilingual_script(DIALOGUE_AND_REACTION_SCRIPT)
+    flipped_plans = solve_script_cinematography(flipped_parsed, initial_axis_side=-1)
+    flipped = build_compiled_manifest(
+        flipped_parsed, flipped_plans, solve_editorial_timeline(flipped_plans)
+    )
+    assert verify_manifest_integrity(flipped, expected_initial_axis_side=-1) is True
+    assert verify_manifest_integrity(flipped, expected_initial_axis_side=1) is False
+    assert verify_manifest_integrity(flipped, expected_initial_axis_side=0) is False
+    assert verify_manifest_integrity(flipped, expected_initial_axis_side=True) is False
+    assert verify_manifest_integrity(legit, expected_initial_axis_side=cast(int, 2.0)) is False
+    # Pinning does not rewrite the sealed flag: it only refuses to vouch for it.
+    assert flipped.axis_180_compliant is True
+
+
+def test_f3_f4_wave6_empty_timeline_and_mapping_ledger_fidelity() -> None:
+    """An empty timeline reports collected findings, and ledgers bind content not ordering."""
+    manifest = compile_storyboard(DIALOGUE_AND_REACTION_SCRIPT)
+    ed = manifest.editorial
+
+    # F4: previously this path hard-coded eye_trace_valid=True, so a timeline with zero events could
+    # carry an out-of-policy saccade limit and still report a "valid" eye-trace sub-flag.
+    empty_illegal = dataclasses.replace(
+        ed, events=(), transitions=(), max_eye_trace_saccade_limit=2.0
+    )
+    report = verify_editorial_timeline(empty_illegal)
+    assert report.compliant is False
+    assert report.eye_trace_valid is False
+    assert report.video_contiguous is False
+    assert any("saccade policy violation" in v for v in report.violations)
+    assert any("zero shot events" in v for v in report.violations)
+    assert len(report.violations) == 2
+
+    # With an in-policy limit the empty timeline still fails on cardinality only.
+    empty_legal = dataclasses.replace(ed, events=(), transitions=())
+    legal_report = verify_editorial_timeline(empty_legal)
+    assert legal_report.compliant is False
+    assert legal_report.eye_trace_valid is True
+    assert legal_report.violations == ("timeline has zero shot events",)
+
+    # A manifest built on an empty timeline is refused regardless of re-sealing.
+    tampered = dataclasses.replace(manifest, editorial=empty_illegal)
+    assert verify_manifest_integrity(_reseal_tampered_manifest(tampered)) is False
+    assert verify_manifest_integrity(_reseal_with_recomputed_reports(tampered)) is False
+
+    # F3: canonical blocking accepts the same cast in any Mapping order, but a plan's own tuple
+    # ledger stays order-bound (see test_cinematography_solver for the helper-level proof).
+    scene0 = manifest.script.scenes[0]
+    p0 = manifest.cinematography[0]
+    mapping_ledger = dict(reversed(list(p0.character_positions)))
+    assert (
+        sb.verify_scene_character_blocking(
+            p0.shots,
+            p0.axis,
+            scene=scene0,
+            character_positions=mapping_ledger,
+            bind_axis=True,
+        )
+        is True
+    )
+
+
 def test_wave5_editorial_summary_bounds_reject_forged_policy_fields() -> None:
     """Editorial-level policy/breath-gap bounds are enforced even when hashes are re-sealed."""
     manifest = compile_storyboard(DIALOGUE_AND_REACTION_SCRIPT)
@@ -1565,6 +1856,19 @@ def test_package_exports_and_stdlib_plus_numpy_only_import_boundary() -> None:
     # Verify __all__ exports resolve cleanly.
     for symbol in sb.__all__:
         assert hasattr(sb, symbol), f"missing exported symbol {symbol}"
+    assert len(sb.__all__) == len(set(sb.__all__)), "duplicate package export"
+    assert sb.__all__ == sorted(sb.__all__), "package __all__ must stay alphabetically sorted"
+    # Wave-6 additions must be reachable from the public namespace, not just the submodule.
+    for wave6_symbol in (
+        "verify_script_provenance",
+        "canonical_axis_of_action",
+        "compute_canonical_character_positions",
+        "expected_shot_subject",
+        "verify_scene_character_blocking",
+        "MIN_EYE_TRACE_SACCADE_LOWER_BOUND",
+        "MAX_EYE_TRACE_SACCADE_UPPER_BOUND",
+    ):
+        assert wave6_symbol in sb.__all__, f"{wave6_symbol} must be re-exported"
 
     pkg_dir = Path(sb.__file__).resolve().parent
     py_files = sorted(pkg_dir.glob("*.py"))

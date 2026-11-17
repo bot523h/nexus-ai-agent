@@ -38,6 +38,7 @@ from .bilingual_script_parser import (
     normalize_script_text,
     parse_bilingual_script,
     parse_scene_heading,
+    verify_script_provenance,
 )
 from .cinematography_solver import (
     CANONICAL_F_STOPS,
@@ -217,4 +218,5 @@ __all__ = [
     "verify_editorial_timeline",
     "verify_manifest_integrity",
     "verify_scene_character_blocking",
+    "verify_script_provenance",
 ]

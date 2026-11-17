@@ -54,6 +54,7 @@ __all__ = [
     "normalize_script_text",
     "parse_bilingual_script",
     "parse_scene_heading",
+    "verify_script_provenance",
 ]
 
 
@@ -268,13 +269,19 @@ class ParsedScene:
 
 @dataclass(frozen=True)
 class ParsedScript:
-    """Root AST of a compiled bilingual screenplay."""
+    """Root AST of a compiled bilingual screenplay.
+
+    ``normalized_source`` retains the exact normalization fixed point that ``source_sha256``
+    digests, so an auditor can replay the deterministic parser on the sealed text and prove the
+    AST below really is the parse of that screenplay (and not a hand-forged scene graph).
+    """
 
     scenes: tuple[ParsedScene, ...]
     language: ScriptLanguage
     characters: tuple[str, ...]
     total_duration_sec: float
     source_sha256: str
+    normalized_source: str = ""
 
 
 # --------------------------------------------------------------------------- #
@@ -2179,4 +2186,35 @@ def parse_bilingual_script(script_text: str) -> ParsedScript:
         characters=tuple(all_characters),
         total_duration_sec=total_duration,
         source_sha256=source_sha256,
+        normalized_source=normalized,
     )
+
+
+def verify_script_provenance(
+    script: ParsedScript,
+    *,
+    expected_source_sha256: str | None = None,
+) -> bool:
+    """Prove a sealed AST really is the deterministic parse of its own hashed source text.
+
+    Three independent checks, all fail-closed:
+
+    1. ``script.normalized_source`` must be non-empty and re-hash to ``script.source_sha256``,
+       so the claimed provenance digest cannot be detached from the retained text.
+    2. When ``expected_source_sha256`` is supplied it must match ``script.source_sha256``
+       exactly, letting a deployment pin the screenplay it agreed to compile.
+    3. Re-running :func:`parse_bilingual_script` on that text must reproduce the AST *verbatim*
+       (scenes, headings, every element, language, cast, and both durations). A forged or
+       partially edited scene graph is caught even after all four manifest SHA-256 digests have
+       been recomputed, because the replay never looks at the attacker's AST.
+    """
+    source = script.normalized_source
+    if not source or hashlib.sha256(source.encode("utf-8")).hexdigest() != script.source_sha256:
+        return False
+    if expected_source_sha256 is not None and script.source_sha256 != expected_source_sha256:
+        return False
+    try:
+        replayed = parse_bilingual_script(source)
+    except (ScriptParseError, UnicodeError, ValueError, TypeError, AttributeError):
+        return False
+    return replayed == script
