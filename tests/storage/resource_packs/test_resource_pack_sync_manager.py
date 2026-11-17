@@ -1257,6 +1257,32 @@ def test_break_guard_reclaim_fencing_and_multiprocess_dead_vs_live_pid(
     assert lock._break_path.exists()
     lock._break_path.unlink()
 
+    # Deterministic failpoint: after the final inode/token fencing checks, a
+    # rival replaces .break immediately before os.replace.  The replacement
+    # reports the race as a vanished source; reclaim must fail closed and leave
+    # the rival's live guard untouched.
+    lock._break_path.write_text(
+        json.dumps({"pid": 999_999_999, "expires_at": now[0] - 10, "owner_token": "dead:3"})
+    )
+    real_replace = os.replace
+
+    def replace_after_competitor(src: object, dst: object) -> None:
+        if str(src) == str(lock._break_path):
+            lock._break_path.unlink()
+            lock._break_path.write_text(
+                json.dumps(
+                    {"pid": os.getpid(), "expires_at": now[0] + 60, "owner_token": "rival:1"}
+                )
+            )
+            raise FileNotFoundError("competitor replaced stale guard")
+        real_replace(src, dst)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(os, "replace", replace_after_competitor)
+    lock._reclaim_stale_break_guard()
+    monkeypatch.undo()
+    assert json.loads(lock._break_path.read_text())["owner_token"] == "rival:1"
+    lock._break_path.unlink()
+
     # Multi-process race: dead-PID .break + dead-PID lock are reclaimed cleanly,
     # whereas an expired live-PID .break is NOT reclaimed while the live owner runs.
     src_dir = Path(importlib.import_module("nexus_ai_agent").__file__ or "").parents[1]

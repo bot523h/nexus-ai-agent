@@ -200,7 +200,20 @@ def test_cleanup_lock_is_unrelated_to_per_instance_lock(tmp_path) -> None:
 class _NoopLock:
     """A lock whose acquire/release/__exit__/context-manager protocol all no-op."""
 
+    def __init__(
+        self, rendezvous: threading.Barrier | None = None, rendezvous_count: int = 0
+    ) -> None:
+        self._rendezvous = rendezvous
+        self._rendezvous_count = rendezvous_count
+        self._acquires = 0
+        self._count_lock = threading.Lock()
+
     def acquire(self, *args, **kwargs):
+        with self._count_lock:
+            self._acquires += 1
+            synchronize = self._acquires <= self._rendezvous_count
+        if self._rendezvous is not None and synchronize:
+            self._rendezvous.wait(timeout=5)
         return True
 
     def release(self) -> None:
@@ -215,11 +228,16 @@ class _NoopLock:
 
 @pytest.mark.asyncio
 async def test_concurrency_suite_catches_lock_removal(tmp_path) -> None:
-    """Replace the per-instance lock with a no-op and confirm 500 concurrent
-    writes reproduce the interleaved-failure defect (RED reproduction)."""
+    """Replace the per-instance lock and force paired entries into the race.
+
+    The barrier removes scheduler/CPU-load luck from this mutation probe: every
+    pair of worker threads reaches the no-op acquire together before either can
+    proceed to SQLite.  This keeps the RED oracle stable even when SQLite would
+    otherwise serialize short writes by accident.
+    """
     path = tmp_path / "no-lock.sqlite"
     store = SQLiteCheckpointLifecycleStore(str(path))
-    store._lock = _NoopLock()  # type: ignore[assignment]
+    store._lock = _NoopLock(threading.Barrier(2), rendezvous_count=500)  # type: ignore[assignment]
     adapter = SQLiteCheckpointLifecycleAdapter(store)
     created_at = datetime.now(timezone.utc)
     operations = [

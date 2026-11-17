@@ -564,9 +564,10 @@ class LinearEvidenceLedger:
     def save_to_disk(
         self,
         log_path: str | Path,
-        anchor_path: str | Path,
+        anchor_path: str | Path | None = None,
         *,
         hmac_key: bytes | str | None = None,
+        allow_unsigned: bool = False,
     ) -> LedgerAnchor:
         """Persist the ledger as an append-only JSONL log plus a witness anchor.
 
@@ -575,13 +576,19 @@ class LinearEvidenceLedger:
         the head. Returns the :class:`LedgerAnchor` written.
         """
         log = Path(log_path)
+        key = _resolve_hmac_key(hmac_key) if anchor_path is not None else None
+        if anchor_path is not None and key is None and not allow_unsigned:
+            raise LedgerCorruptionError(
+                f"ledger anchor signing requires hmac_key or {ANCHOR_HMAC_KEY_ENV}"
+            )
         lines = [json.dumps(self.to_dict(), ensure_ascii=False, sort_keys=True)]
         _atomic_write(log, ("\n".join(lines) + "\n").encode("utf-8"))
         anchor = LedgerAnchor(seq_count=len(self._entries), head_digest=self.head_digest)
         key = _resolve_hmac_key(hmac_key)
         if key is not None:
             anchor = anchor.sign(key)
-        _atomic_write(Path(anchor_path), anchor.canonical_bytes())
+        if anchor_path is not None:
+            _atomic_write(Path(anchor_path), anchor.canonical_bytes())
         return anchor
 
     @classmethod
