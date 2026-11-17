@@ -51,7 +51,7 @@ def test_compile_video_chain_emits_topological_graph() -> None:
     )
     assert graph.output_pads == ("vout",)
     assert graph.input_pads == ("v0",)
-    assert graph.filter_complex.startswith("[v0]trim=")
+    assert graph.filter_complex.startswith("[0:v]trim=")
     assert graph.filter_complex.endswith("[vout]")
     assert ";[v1]scale=" in graph.filter_complex
 
@@ -65,7 +65,7 @@ def test_compile_audio_chain() -> None:
         ],
         ["aout"],
     )
-    assert "[a0][a1]acrossfade=" in graph.filter_complex
+    assert "[0:a][1:a]acrossfade=" in graph.filter_complex
     assert "[amix]loudnorm=" in graph.filter_complex
 
 
@@ -75,7 +75,60 @@ def test_compile_video_crossfade_two_inputs() -> None:
         [CrossfadeVideoOp("v0", "v1", "vout", 1.0, 2.0, "fade")],
         ["vout"],
     )
-    assert graph.filter_complex == "[v0][v1]xfade=transition=fade:duration=1:offset=2[vout]"
+    assert graph.filter_complex == "[0:v][1:v]xfade=transition=fade:duration=1:offset=2[vout]"
+
+
+def test_raw_input_reference_is_consumed_so_a_reused_label_is_a_plain_pad() -> None:
+    # After the raw input ``v0`` is consumed, an op may legitimately produce a pad named
+    # ``v0`` again; a later op that reads it must reference that pad, not ``0:v``.
+    graph = FFmpegFilterGraphCompiler().compile(
+        [video_input("v0")],
+        [
+            TrimOp("v0", "v0", 0, 48, 24.0),
+            ScalePadOp("v0", "vout", 16, 16),
+        ],
+        ["vout"],
+    )
+    assert graph.filter_complex.startswith("[0:v]trim=")
+    assert ";[v0]scale=" in graph.filter_complex
+
+
+def test_raw_input_mapped_straight_to_an_output_is_refused() -> None:
+    # ``-map [v0]`` has no meaning for a raw ``-i`` stream; it must be refused at compile time.
+    with pytest.raises(InvalidFilterGraphError, match="raw input"):
+        FFmpegFilterGraphCompiler().compile([video_input("v0")], [], ["v0"])
+
+
+def test_compiled_graph_runs_on_real_ffmpeg_and_emits_the_expected_frames() -> None:
+    # Behavioural proof, not a string check: a real ffmpeg must accept the graph and
+    # produce exactly the trimmed frame count from a raw rgb24 stdin pipe.
+    import shutil
+    import subprocess
+
+    ffmpeg = shutil.which("ffmpeg")
+    if ffmpeg is None:
+        pytest.skip("no FFmpeg available")
+    width, height, total_frames, kept = 8, 8, 4, 2
+    graph = FFmpegFilterGraphCompiler().compile(
+        [video_input("v0")],
+        [TrimOp("v0", "vout", 0, kept, 24.0)],
+        ["vout"],
+    )
+    argv = graph.ffmpeg_argv(
+        ["-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{width}x{height}", "-r", "24", "-i", "-"],
+        ["-f", "rawvideo", "-pix_fmt", "rgb24", "-"],
+        ffmpeg_bin=ffmpeg,
+    )
+    frame = bytes(width * height * 3)
+    completed = subprocess.run(
+        argv,
+        input=frame * total_frames,
+        capture_output=True,
+        check=False,
+        timeout=60,
+    )
+    assert completed.returncode == 0, completed.stderr.decode("utf-8", "replace")[-400:]
+    assert len(completed.stdout) == kept * width * height * 3
 
 
 def test_ffmpeg_argv_is_a_list_and_maps_outputs() -> None:

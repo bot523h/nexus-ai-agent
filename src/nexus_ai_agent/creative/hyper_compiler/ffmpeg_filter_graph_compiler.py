@@ -574,10 +574,17 @@ class FFmpegFilterGraphCompiler:
             raise InvalidFilterGraphError("duplicate output pad")
 
         available: dict[str, StreamKind] = {}
-        for graph_input in inputs:
+        # A raw input is referenced by FFmpeg as ``N:v`` / ``N:a`` (N = its position in
+        # ``inputs``, which is the order the caller must pass its ``-i`` arguments in).
+        # The reference is consumed on first use, so an op output may later reuse the
+        # same label without being mistaken for the raw input.
+        input_refs: dict[str, str] = {}
+        for index, graph_input in enumerate(inputs):
             if graph_input.label in available:
                 raise InvalidFilterGraphError(f"duplicate input pad: {graph_input.label!r}")
             available[graph_input.label] = graph_input.kind
+            kind_tag = "v" if graph_input.kind is StreamKind.VIDEO else "a"
+            input_refs[graph_input.label] = f"{index}:{kind_tag}"
 
         chains: list[str] = []
         for op in ops:
@@ -602,7 +609,7 @@ class FFmpegFilterGraphCompiler:
                 if pad in available:
                     raise InvalidFilterGraphError(f"op produces duplicate pad [{pad}]")
                 available[pad] = op.kind
-            head = "".join(f"[{pad}]" for pad in in_pads)
+            head = "".join(f"[{input_refs.pop(pad, pad)}]" for pad in in_pads)
             tail = "".join(f"[{pad}]" for pad in op.output_pads())
             chains.append(f"{head}{op.render()}{tail}")
 
@@ -612,6 +619,12 @@ class FFmpegFilterGraphCompiler:
         missing = set(outputs) - set(available)
         if missing:
             raise InvalidFilterGraphError(f"unbound output pad(s): {sorted(missing)}")
+        # A raw input routed straight to an output has no FFmpeg pad name to ``-map``.
+        passthrough = sorted(set(outputs) & set(input_refs))
+        if passthrough:
+            raise InvalidFilterGraphError(
+                f"raw input(s) mapped directly to output: {passthrough}; pass them through an op"
+            )
 
         return CompiledFilterGraph(
             filter_complex=";".join(chains),
