@@ -277,6 +277,12 @@ async def test_normal_recovery_strict_heartbeat_boundary(
         row = _row(db, job_id)
         assert row["attempt"] == 2
         assert row["heartbeat_at"] == clock.iso()
+
+        async def _wait_calls() -> None:
+            while gate.calls < 1:
+                await asyncio.sleep(0.01)
+
+        await asyncio.wait_for(_wait_calls(), timeout=2.0)
         assert gate.calls == 1
         gate.event(1).set()
     await queue.shutdown()

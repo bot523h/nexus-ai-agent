@@ -34,6 +34,7 @@ from __future__ import annotations
 import ast
 import importlib.util
 import json
+import os
 import socket
 import subprocess
 import sys
@@ -845,13 +846,18 @@ def test_the_cli_reports_an_invalid_fixture_set_with_exit_code_2(
 
 @pytest.mark.parametrize("seed", ["0", "1", "12345"])
 def test_the_fingerprint_is_stable_across_hash_seeds(seed: str) -> None:
+    child_env = {
+        "PYTHONHASHSEED": seed,
+        "PATH": "/usr/bin:/bin",
+        "PYTHONPATH": os.environ.get("PYTHONPATH", str(ROOT / "src")),
+    }
     completed = subprocess.run(
         [sys.executable, str(SCRIPT), "--json", "--repeats", "2"],
         capture_output=True,
         text=True,
         cwd=ROOT,
         check=False,
-        env={"PYTHONHASHSEED": seed, "PATH": "/usr/bin:/bin"},
+        env=child_env,
     )
     assert completed.returncode == 0, completed.stderr
     payload = json.loads(completed.stdout)

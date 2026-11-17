@@ -160,6 +160,16 @@ SUB_CHUNKS: dict[str, tuple[tuple[str, tuple[str, ...]], ...]] = {
                 f"{ATLAS}/test_wave30_olympus_master.py",
             ),
         ),
+        (
+            "waves-30-33-evidence",
+            (
+                f"{ATLAS}/test_atlas_ffmpeg.py",
+                f"{ATLAS}/test_holographic_equation_vault.py",
+                f"{ATLAS}/test_pack_coverage_seal.py",
+                f"{ATLAS}/test_self_healing_linear_ledger.py",
+                f"{ATLAS}/test_twin_taxonomy_provisioner.py",
+            ),
+        ),
     ),
 }
 
@@ -184,6 +194,7 @@ SPACE_BUDGETS: dict[str, int] = {
     f"{ATLAS}#prometheus-governance": 2 * 1024**3,
     f"{ATLAS}#waves-13-22": 2 * 1024**3,
     f"{ATLAS}#waves-23-30-and-solvers": 2 * 1024**3,
+    f"{ATLAS}#waves-30-33-evidence": 2 * 1024**3,
 }
 
 #: Prefix of the per-chunk temporary directory.  The runner deletes only

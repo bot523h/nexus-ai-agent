@@ -1082,3 +1082,51 @@ def test_lock_backend_selection_without_fcntl(
     assert auto.collect_garbage() == ()
     with pytest.raises(ValueError, match="fcntl"):
         _manager(tmp_path / "c", [], mirror, lock_backend="flock")[0]._storage_lock()
+
+
+def test_break_guard_ttl_and_finally_lifetime(
+    mirror: PackMirror, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    mgr, _ = _manager(tmp_path / "guard", [], mirror, lock_backend="exclusive_file")
+    lock = mgr._storage_lock()
+    assert lock._BREAK_GUARD_TTL >= 30.0
+
+    lock.path.parent.mkdir(parents=True, exist_ok=True)
+    lock.path.write_text(
+        json.dumps(
+            {
+                "pid": 999_999_999,
+                "expires_at": time.time() - 10.0,
+                "owner_token": "999:stale",
+            }
+        )
+    )
+
+    observed_during_replace: list[bool] = []
+    observed_during_unlink: list[bool] = []
+    real_replace = os.replace
+    real_unlink = Path.unlink
+
+    def spy_replace(src: object, dst: object) -> None:
+        if str(src) == str(lock.path):
+            observed_during_replace.append(lock._break_path.exists())
+        real_replace(src, dst)  # type: ignore[arg-type]
+
+    def spy_unlink(self_path: Path, missing_ok: bool = False) -> None:
+        if self_path.name.startswith(f".{lock.path.name}.") and self_path.name.endswith(".stale"):
+            observed_during_unlink.append(lock._break_path.exists())
+            raise OSError("simulated unlink failure")
+        real_unlink(self_path, missing_ok=missing_ok)
+
+    monkeypatch.setattr(os, "replace", spy_replace)
+    monkeypatch.setattr(Path, "unlink", spy_unlink)
+    with pytest.raises(OSError, match="simulated unlink failure"):
+        lock._break_if_stale()
+    monkeypatch.undo()
+
+    for leftover in lock.path.parent.glob(f".{lock.path.name}.*.stale"):
+        leftover.unlink(missing_ok=True)
+
+    assert observed_during_replace == [True]
+    assert observed_during_unlink == [True]
+    assert not lock._break_path.exists()

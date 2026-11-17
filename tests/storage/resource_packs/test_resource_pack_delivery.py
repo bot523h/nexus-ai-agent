@@ -258,3 +258,62 @@ def test_a_pack_with_no_pointer_directory_is_not_invented(
     (tmp_path / "device" / "packs" / "ghost").mkdir()
     assert [row.pack_id for row in delivery_statuses(tmp_path / "device")] == ["core"]
     assert json.dumps(delivery_report(tmp_path / "device"))
+
+
+def test_missing_cryptography_fails_closed_across_delivery_and_manifest(
+    mirror: PackMirror, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import importlib
+
+    from nexus_ai_agent.storage.resource_packs import (
+        SignatureBackendUnavailableError,
+        manifest_from_json,
+        sign_manifest,
+        verify_installed_pack,
+        verify_manifest_signature,
+    )
+
+    device = tmp_path / "device"
+    public = _installed_packs(mirror, device)
+    pack_dir = device / "packs" / "core"
+    pointer = json.loads((pack_dir / "active.json").read_text(encoding="utf-8"))
+    install_name = pointer["install_dir"]
+    manifest = manifest_from_json(
+        (pack_dir / "versions" / f"{install_name}.manifest.json").read_bytes()
+    )
+    install_dir = pack_dir / "versions" / install_name
+
+    real_import = importlib.import_module
+
+    def without_cryptography(name: str, package: str | None = None) -> object:
+        if name.startswith("cryptography"):
+            raise ImportError(name)
+        return real_import(name, package)
+
+    monkeypatch.setattr(importlib, "import_module", without_cryptography)
+
+    # pack_manifest.py: signing and signature verification fail closed
+    with pytest.raises(SignatureBackendUnavailableError, match="cryptography"):
+        sign_manifest(manifest, b"\x01" * 32)
+    with pytest.raises(SignatureBackendUnavailableError, match="cryptography"):
+        verify_manifest_signature(manifest, public)
+    with pytest.raises(SignatureBackendUnavailableError, match="cryptography"):
+        verify_installed_pack(manifest, install_dir, trusted_public_key=public)
+
+    # delivery.py: delivery_statuses and delivery_report withhold the pack as signature_required
+    statuses = delivery_statuses(device, trusted_public_key=public)
+    assert len(statuses) == 1
+    assert statuses[0].state == "signature_required"
+    assert statuses[0].signature == "not_checked"
+    assert statuses[0].verified_files == 0
+    assert "cryptography" in statuses[0].detail
+
+    report = delivery_report(device, trusted_public_key=public)
+    assert report["configured"] is True
+    assert report["fail_closed"] is True
+    assert report["packs"][0]["state"] == "signature_required"
+    assert "cryptography" in report["packs"][0]["detail"]
+
+    # Explicit opt-out policy still respects allow_unsigned=True without silent key verification
+    unsigned_statuses = delivery_statuses(device, allow_unsigned=True)
+    assert unsigned_statuses[0].state == "unsigned_allowed"

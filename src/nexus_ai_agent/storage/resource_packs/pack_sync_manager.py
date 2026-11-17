@@ -341,7 +341,7 @@ class _StorageLock:
     verification under a short-lived break guard.
     """
 
-    _BREAK_GUARD_TTL = 5.0
+    _BREAK_GUARD_TTL = 30.0
 
     def __init__(
         self,
