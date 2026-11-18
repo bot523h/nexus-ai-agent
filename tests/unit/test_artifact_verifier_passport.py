@@ -245,3 +245,121 @@ def test_passport_rejects_non_finite_duration(real_mp4: Path) -> None:
             created_at_unix_s=1,
             signing_key=KEY,
         )
+
+
+@pytest.mark.parametrize(
+    "content", [b"x", b"\x00\x00\x00\x01ftyp", b"\x00\x00\x00\x10ftyp" + b"\x00" * 7]
+)
+def test_box_walk_rejects_truncated_headers(tmp_path: Path, content: bytes) -> None:
+    path = tmp_path / "truncated.mp4"
+    path.write_bytes(content)
+    assert av.read_top_level_boxes(path)[1]
+
+
+def test_box_walk_largesize_and_zero_size(tmp_path: Path) -> None:
+    import struct
+
+    path = tmp_path / "boxes.mp4"
+    path.write_bytes(struct.pack(">I4sQ", 1, b"ftyp", 16) + struct.pack(">I4s", 0, b"moov"))
+    types, problems = av.read_top_level_boxes(path)
+    assert types == ("ftyp", "moov")
+    assert any("mdat" in p for p in problems)
+    path.write_bytes(struct.pack(">I4s", 8, b"moov"))
+    assert "first box is not ftyp" in av.read_top_level_boxes(path)[1]
+
+
+def test_verifier_rejects_invalid_tolerance_and_directory(tmp_path: Path) -> None:
+    assert av.verify_mp4(tmp_path, expected_duration_s=1, tolerance_s=0).status == av.VIOLATED
+    assert av.verify_mp4(tmp_path, expected_duration_s=1, tolerance_s=1).reasons == (
+        "not_regular_file",
+    )
+
+
+@pytest.mark.parametrize("response", [b"invalid json", b"\xff", b"[]"])
+def test_probe_refuses_invalid_mock_responses(monkeypatch, tmp_path: Path, response: bytes) -> None:
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(
+        av.subprocess, "run", lambda *a, **kw: SimpleNamespace(returncode=0, stdout=response)
+    )
+    assert av._probe(tmp_path / "x.mp4", "ffprobe", 1) is None
+
+
+def test_verifier_rejects_invalid_mock_probe(monkeypatch, real_mp4: Path) -> None:
+    monkeypatch.setattr(
+        av, "_probe", lambda *a, **kw: {"streams": [], "format": {"duration": "bad"}}
+    )
+    verdict = av.verify_mp4(real_mp4, expected_duration_s=1, tolerance_s=1)
+    assert verdict.status == av.VIOLATED
+    assert set(verdict.reasons) == {"no_video_stream", "probed_duration_not_positive_finite"}
+
+
+def test_passport_invalid_fields_and_key_types(real_mp4: Path) -> None:
+    assert ap._signing_key(b"k" * 32) == b"k" * 32
+    with pytest.raises(ap.PassportError, match="invalid_key"):
+        ap._signing_key(None)
+    good = _passport(real_mp4)
+    fields = {
+        k: good[k]
+        for k in (
+            "job_id",
+            "project_id",
+            "source_sha256",
+            "manifest_sha256",
+            "render_profile_hash",
+            "asset_merkle_root",
+            "total_asset_leaves",
+            "output_rel_path",
+            "output_size_bytes",
+            "output_sha256",
+            "verifier_status",
+            "created_at_unix_s",
+        )
+    }
+    fields.update(probed_duration_s=1.0, signing_key=KEY)
+    for changes in (
+        {"source_sha256": "no"},
+        {"probed_duration_s": True},
+        {"probed_duration_s": 0},
+        {"output_size_bytes": 0},
+    ):
+        with pytest.raises(ap.PassportError):
+            ap.build_passport(**{**fields, **changes})
+
+
+@pytest.mark.parametrize(
+    "raw,reason",
+    [(b"", "passport_size"), (b"{", "passport_unreadable"), (b"[]", "passport_malformed")],
+)
+def test_passport_rejects_bad_json_and_size(tmp_path: Path, raw: bytes, reason: str) -> None:
+    path = tmp_path / "passport.json"
+    path.write_bytes(raw)
+    with pytest.raises(ap.PassportError, match=reason):
+        ap.verify_artifact_passport(path, tmp_path / "x.mp4", KEY)
+
+
+def test_passport_refuses_wrong_version_verdict_size_and_nonregular(
+    tmp_path: Path, real_mp4: Path
+) -> None:
+    mp4 = tmp_path / "video.mp4"
+    mp4.write_bytes(real_mp4.read_bytes())
+    pp = tmp_path / "passport.json"
+    good = _passport(mp4)
+    for changes, reason in [
+        ({"passport_version": "bad"}, "passport_version"),
+        ({"verifier_status": "VIOLATED"}, "verifier_not_pass"),
+        ({"output_size_bytes": 1}, "artifact_mismatch"),
+    ]:
+        data = {**good, **changes}
+        data["hmac_sha256"] = ap._seal(data, KEY.encode())
+        pp.write_text(json.dumps(data))
+        with pytest.raises(ap.PassportError, match=reason):
+            ap.verify_artifact_passport(pp, mp4, KEY)
+    with pytest.raises(ap.PassportError, match="passport_missing"):
+        ap.verify_artifact_passport(tmp_path / "missing", mp4, KEY)
+    with pytest.raises(ap.PassportError, match="passport_not_regular"):
+        ap.verify_artifact_passport(tmp_path, mp4, KEY)
+    link = tmp_path / "link"
+    link.symlink_to(pp)
+    with pytest.raises(ap.PassportError, match="passport_symlink_refused"):
+        ap.verify_artifact_passport(link, mp4, KEY)
