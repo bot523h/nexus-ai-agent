@@ -70,6 +70,7 @@ import sqlite3
 import threading
 from collections.abc import Awaitable, Callable, Iterator, Mapping
 from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -121,6 +122,18 @@ from nexus_ai_agent.provenance.observer import CausalObserver
 
 JobHandler = Callable[[dict[str, object]], Awaitable[dict[str, object]]]
 JobCompletionHook = Callable[["JobCompletion"], Awaitable[None]]
+
+# Context is installed only for the handler invocation. It propagates through
+# asyncio.to_thread, but is evidence of the minted token, not proof of current
+# ownership: side effects still require the queue's durable ownership check.
+_current_claim: ContextVar[ExecutionClaim | None] = ContextVar(
+    "queue_execution_claim", default=None
+)
+
+
+def current_execution_claim() -> ExecutionClaim | None:
+    """Return the queue-minted claim in a running handler, or None outside it."""
+    return _current_claim.get()
 
 
 try:  # pragma: no cover - import success, not a test, selects the backend
@@ -1789,7 +1802,11 @@ class InProcessJobQueue:
                         None,
                     )
                     return
-            result = await handler(payload)
+            context_token = _current_claim.set(claim)
+            try:
+                result = await handler(payload)
+            finally:
+                _current_claim.reset(context_token)
             if not isinstance(result, dict):
                 raise TypeError("job handler must return a dictionary")
         except asyncio.CancelledError:
