@@ -92,10 +92,10 @@ Truth levels:
 | Materializer writes atomically, refuses symlinks, rejects traversal | REAL-DISK | `tests/unit/test_creative_materializer.py` (43 tests) |
 | Verifier and passport: PASS/VIOLATED/UNOBSERVED, seal and artifact tamper detection | REAL-COMPUTE | `tests/unit/test_artifact_verifier_passport.py` (22 tests) and mutation checks |
 | Approval replay, TOCTOU swap and symlink swap are refused | REAL-COMPUTE | e2e and unit tests; mutation checks confirmed the tests fail when each guard is disabled |
-| Download authorization gate (library function) | REAL-COMPUTE | e2e download tests; **no HTTP route** |
-| Authorized artifact download over HTTP | DEFERRED | `api/studio_web.py` matrix row `artifact_download` |
-| `storyboard.render` registered in the production worker | NOT WIRED | The handler exists; it is not in `default_job_handlers` |
+| Download authorization gate (library function) | REAL-COMPUTE | e2e download tests; also used by the HTTP route |
+| Authorized artifact download over HTTP | REAL-DISK | Authenticated operator, configured projects and verified snapshot; no download UI |
+| `storyboard_render` registered in the default worker | REAL-COMPUTE | Handler and verifier registered; host workspace, ledger and signing key must be configured |
 | `nexus studio init / doctor / serve` at runtime | UNVERIFIED here | Wiring exists in `cli.py` and `creative/studio_typer.py`; `typer` and `fastapi` were not installed in the verification environment |
-| Merkle root construction | REAL-COMPUTE | Domain-separated SHA-256 (0x00 leaf, 0x01 node), unpaired node promoted. This is **not** RFC 6962's largest-power-of-two split. |
+| Merkle root and inclusion proofs | REAL-COMPUTE | RFC 6962 §2.1 recursive split with domain-separated SHA-256; inclusion proofs bind the tree size |
 
-Known limits: the IBPC approval ledger is process-local, so approvals do not survive a restart or cross processes. The Studio web app shows the passport, not the MP4 bytes.
+Known limits: the default IBPC ledger remains process-local; the storyboard worker uses the optional durable SQLite ledger when configured. Downloads are restricted to the shared operator credential and configured projects; the web UI does not yet expose a download button.

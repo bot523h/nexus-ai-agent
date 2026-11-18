@@ -29,16 +29,16 @@ If this table and the code disagree, the code wins and this table is corrected i
 
 | Capability | Status | Reason (from the matrix) |
 | --- | --- | --- |
-| Session | VERIFIED | Cookie session derived from the deployment token. |
-| Job state | VERIFIED | Read-only state of one job by id. |
-| Project scope | VERIFIED_WITH_LIMITATIONS | Projects are a deployment policy (`NEXUS_STUDIO_PROJECT_IDS`), not per-user membership. |
-| Per-user identity | BLOCKED | No HTTP login binds to `AppPrincipal`; every browser session is the single operator credential. |
-| Job listing | DEFERRED | `JobRegistry` only exposes `get_job(job_id)`. |
-| Intent submit | VERIFIED_WITH_LIMITATIONS | `POST /api/studio/projects/{id}/renders` admits one HMAC-signed intent into the queue and answers 202. No preview or approval session; IBPC approval stays in-process. |
-| Approvals | DEFERRED | Approval persistence and cross-process single use are not durable yet. |
-| Asset library | DEFERRED | No HTTP surface. |
-| Resource packs | VERIFIED_WITH_LIMITATIONS | `GET /api/studio/resource-packs` re-verifies installed packs read-only; it cannot install, repair or activate one. |
-| Artifact download | DEFERRED | No authorized download route. The library gate `authorize_artifact_download` (`creative/artifact_download.py`) is tested but not wired to HTTP, so the app shows the passport, not the bytes. |
+| session | VERIFIED | HttpOnly session derived from the existing dashboard gate. |
+| job_state | VERIFIED | Durable job state, plan, artifact passport, evidence and lineage gaps read through StudioReadService. |
+| project_scope | VERIFIED_WITH_LIMITATIONS | Projects are a deployment policy (NEXUS_STUDIO_PROJECT_IDS), not per-user membership. |
+| user_identity | BLOCKED | AppPrincipal/AppChannelBinding exist in storage but no HTTP login binds to them. Every browser session is the single operator credential. |
+| job_listing | DEFERRED | No list/query contract exists: JobRegistry only exposes get_job(job_id). |
+| intent_submit | VERIFIED_WITH_LIMITATIONS | POST /api/studio/projects/{id}/renders admits one render intent into the canonical queue and answers 202. Limitations: the body must be HMAC-signed with the deployment key, only the configured projects are accepted (NEXUS_STUDIO_PROJECT_IDS), and there is no preview/approval session — IBPC approval stays in-process (Stage 3 of NAGAR-ONE). |
+| approvals | DEFERRED | Approval persistence and cross-process single-use are not durable yet. |
+| asset_library | DEFERRED | The Asset Library has no HTTP surface; the app cannot browse or ingest assets. |
+| resource_packs | VERIFIED_WITH_LIMITATIONS | GET /api/studio/resource-packs re-verifies every installed resource pack on disk against its signed manifest and reports one row per pack (ready, unsigned_allowed or signature_required). Limitations: it is read-only and only reports packs under NEXUS_RESOURCE_PACK_ROOT — the app can neither install, repair nor activate a pack. |
+| artifact_download | VERIFIED_WITH_LIMITATIONS | The authenticated operator can download a passport-verified MP4 for a configured project. Per-user membership and a download button are not implemented. |
 
 ## Security properties (each has a test)
 
@@ -122,8 +122,8 @@ have no backend contract.
   binding. Until then the app is an operator console, not a multi-user product.
 - Throttle on failed logins is process-local and global (proxy-safe, DoS-able only
   for *new* logins). A multi-process deployment needs a shared limiter.
-- Job listing, intent submission, approvals, asset browsing and artifact download
-  have no backend contract and are **DEFERRED**, never faked.
+- Job listing, approval UI and asset browsing remain **DEFERRED**; artifact download
+  is an authenticated operator-only endpoint, not yet connected to a UI control.
 - The Vazirmatn font is served from the caption pack path (one binary in the repo).
 - `artifact_path` is part of the existing read contract but host-internal; the UI
   never renders it. Consider removing it from the public view in a follow-up.

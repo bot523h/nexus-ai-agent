@@ -485,3 +485,60 @@ async def test_storyboard_queue_verifies_real_render_and_refuses_tampering(
         assert not storyboard_render_verifier(payload, result).ok
     finally:
         await queue.shutdown()
+
+
+def test_studio_http_download_verified_snapshot_and_refusals(env: Env, monkeypatch) -> None:
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from nexus_ai_agent.api.studio_web import api_router
+    from nexus_ai_agent.config import settings as settings_module
+
+    monkeypatch.setenv("NEXUS_DASHBOARD_TOKEN", "dashboard-secret-0123456789")
+    monkeypatch.setenv("NEXUS_STUDIO_PROJECT_IDS", "proj-1")
+    monkeypatch.setenv("NEXUS_STUDIO_WORKSPACE", str(env.ws))
+    monkeypatch.setenv("NEXUS_STUDIO_SIGNING_KEY", SIGNING_KEY)
+    settings_module.get_settings.cache_clear()
+    result = render_storyboard_sync(env.payload(env.approve()), env.ctx)
+    app = FastAPI()
+    app.include_router(api_router)
+    client = TestClient(app)
+    route = "/api/studio/artifact-download"
+    rel = result["output_rel_path"]
+    auth = {"Authorization": "Bearer dashboard-secret-0123456789"}
+    try:
+        assert client.get(route, params={"path": rel}).status_code == 401
+        response = client.get(route, params={"path": rel}, headers=auth)
+        assert response.status_code == 200
+        assert response.content == env.artifact().read_bytes()
+        assert response.headers["x-artifact-sha256"] == result["output_sha256"]
+        assert response.headers["content-type"] == "video/mp4"
+        assert client.get(route, params={"path": "projects/../x"}, headers=auth).status_code == 403
+        assert (
+            client.get(
+                route, params={"path": "projects/other/renders/j/storyboard.mp4"}, headers=auth
+            ).status_code
+            == 404
+        )
+        artifact = env.artifact()
+        original = artifact.read_bytes()
+        tampered = bytearray(original)
+        tampered[len(tampered) // 2] ^= 1
+        artifact.write_bytes(tampered)
+        assert client.get(route, params={"path": rel}, headers=auth).status_code == 409
+        artifact.write_bytes(original)
+        passport = artifact.parent / f"storyboard{PASSPORT_SUFFIX}"
+        saved = passport.read_bytes()
+        data = json.loads(saved)
+        data["hmac_sha256"] = "0" * 64
+        passport.write_text(json.dumps(data))
+        assert client.get(route, params={"path": rel}, headers=auth).status_code == 409
+        passport.write_bytes(saved)
+        artifact.unlink()
+        assert client.get(route, params={"path": rel}, headers=auth).status_code == 404
+        other = env.root / "other.mp4"
+        other.write_bytes(original)
+        artifact.symlink_to(other)
+        assert client.get(route, params={"path": rel}, headers=auth).status_code == 403
+    finally:
+        settings_module.get_settings.cache_clear()

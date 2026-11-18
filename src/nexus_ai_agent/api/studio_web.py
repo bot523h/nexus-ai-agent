@@ -25,11 +25,12 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, FastAPI, Request, Response
-from fastapi.responses import RedirectResponse
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, Response
+from fastapi.responses import RedirectResponse, StreamingResponse
 
 from nexus_ai_agent import web as web_package
 from nexus_ai_agent.api import studio_session
+from nexus_ai_agent.api.studio_artifacts import verified_download_snapshot
 from nexus_ai_agent.api.studio_packs import resource_pack_report
 from nexus_ai_agent.api.studio_session import require_studio_caller
 
@@ -202,10 +203,10 @@ CAPABILITIES: tuple[dict[str, str], ...] = (
     },
     {
         "id": "artifact_download",
-        "status": "DEFERRED",
-        "reason": "No authorized artifact download route; the app shows the passport "
-        "(hash, size, verification), not the bytes.",
-        "evidence": "src/nexus_ai_agent/product/studio_experience.py",
+        "status": "VERIFIED_WITH_LIMITATIONS",
+        "reason": "The authenticated operator can download a passport-verified MP4 for a "
+        "configured project. Per-user membership and a download button are not implemented.",
+        "evidence": "tests/e2e/test_nagar_one_vertical_slice.py",
     },
 )
 
@@ -250,6 +251,57 @@ async def resource_packs() -> dict[str, object]:
         **resource_pack_report(),
         "server_time": datetime.now(timezone.utc).isoformat(),
     }
+
+
+@api_router.get("/artifact-download", dependencies=[Depends(require_studio_caller)])
+def download_artifact(path: str) -> StreamingResponse:
+    """Serve only a verified snapshot in a configured project, to the operator."""
+    # Importing the read-only bridge here would violate the delivery boundary;
+    # it is composed above, and exposes no execution authority.
+    from nexus_ai_agent.api.studio_artifacts import DownloadRefused
+
+    parts = path.split("/")
+    if ".." in parts:
+        raise HTTPException(status_code=403, detail="path_traversal")
+    if (
+        len(parts) != 5
+        or parts[0] != "projects"
+        or parts[2] != "renders"
+        or parts[4] != "storyboard.mp4"
+    ):
+        raise HTTPException(status_code=422, detail="malformed_path")
+    if parts[1] not in configured_projects():
+        raise HTTPException(status_code=404, detail="not_found")
+    root = os.getenv("NEXUS_STUDIO_WORKSPACE", "")
+    key = os.getenv("NEXUS_STUDIO_SIGNING_KEY", "")
+    if not root or not Path(root).is_absolute() or len(key.encode()) < 32:
+        raise HTTPException(status_code=503, detail="studio_not_configured")
+    try:
+        snapshot, digest, size = verified_download_snapshot(Path(root), path, key)
+    except DownloadRefused as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.reason) from exc
+    except OSError as exc:
+        raise HTTPException(status_code=409, detail="artifact_unavailable") from exc
+
+    def chunks():
+        try:
+            while chunk := snapshot.read(65_536):
+                yield chunk
+        finally:
+            snapshot.close()
+
+    return StreamingResponse(
+        chunks(),
+        media_type="video/mp4",
+        headers={
+            "X-Artifact-SHA256": digest,
+            "X-Passport-Verified": "PASS",
+            "Content-Disposition": 'attachment; filename="storyboard.mp4"',
+            "Content-Length": str(size),
+            "X-Content-Type-Options": "nosniff",
+            "Cache-Control": "no-store",
+        },
+    )
 
 
 web_router = APIRouter(tags=["studio-app"])
