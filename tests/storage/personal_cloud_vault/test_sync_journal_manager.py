@@ -2560,14 +2560,18 @@ def test_req4_streaming_pull_bounded_memory_and_disk_restore(tmp_path: Path) -> 
     import tracemalloc
 
     vault = LocalDeviceVaultDriver(tmp_path / "pull_stream_vault")
-    chunk_size = 4096
+    chunk_size = 65_536
     mgr = PersonalCloudVaultManager(vault, chunk_size=chunk_size)
     secret = "pull-stream-secret"
 
-    # 16 files of 32 chunks each: a 2 MiB payload restored at a per-chunk RAM cost.
+    # 16 files of 32 chunks each: a 32 MiB payload restored at a per-chunk RAM cost.
+    # The chunk size is deliberately large enough that the O(N) metadata term is a
+    # negligible fraction of the payload, so ``peak < payload // 4`` measures the
+    # claim under test (payload is streamed, never retained) rather than the
+    # interpreter's per-object overhead.  Content is generated in C (``bytes * n``)
+    # and differs per file, so it is both cheap to build and non-deduplicable.
     source: dict[str, bytes] = {
-        f"dir/file_{f:02d}.bin": bytes((f * 7 + i) % 251 for i in range(chunk_size * 32))
-        for f in range(16)
+        f"dir/file_{f:02d}.bin": bytes([f]) * (chunk_size * 32) for f in range(16)
     }
     total_payload = sum(len(v) for v in source.values())
     mgr.push_project_snapshot(
