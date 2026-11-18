@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import replace
-from typing import Any
 
 import pytest
 
 from nexus_ai_agent.storage.personal_cloud_vault import (
+    AEAD_TAG_BYTES,
+    CIPHER_AES_256_GCM,
+    CIPHER_CHACHA20_POLY1305,
     DEFAULT_CHUNK_SIZE,
+    DEFAULT_CIPHER_SUITE,
     MAX_CHUNK_SIZE,
     MAX_DEFAULT_CHUNK_SIZE,
     MIN_PBKDF2_ITERATIONS,
@@ -18,6 +21,7 @@ from nexus_ai_agent.storage.personal_cloud_vault import (
     PersonalVaultError,
     VaultAuthenticationError,
     VaultChunkRef,
+    VaultCryptoError,
     VaultFileEntry,
     VaultKeyMaterial,
     VaultSnapshotManifest,
@@ -37,7 +41,6 @@ from nexus_ai_agent.storage.personal_cloud_vault import (
     hkdf_expand_sha256,
     hkdf_extract_sha256,
     normalize_relative_vault_path,
-    sha256_ctr_crypt,
     split_into_chunks,
     validate_chunk_size,
     validate_pad_block_size,
@@ -83,15 +86,15 @@ def test_key_derivation_pbkdf2_hkdf_domain_separation_and_secret_redaction() -> 
     assert "mac_key=" not in rendered
 
 
-def test_known_answer_vector_kat_sha256_ctr_and_etm_hmac() -> None:
-    """Immutable Known-Answer Test (KAT) locking byte-for-byte CTR + EtM HMAC outputs."""
+def test_known_answer_vector_kat_aead_seal_and_open() -> None:
+    """Immutable Known-Answer Test (KAT) locking byte-for-byte AEAD seal outputs."""
     enc_key = bytes.fromhex("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f")
     mac_key = bytes.fromhex("202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f")
     cid_key = bytes.fromhex("404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f")
     key_id = bytes.fromhex("606162636465666768696a6b6c6d6e6f")
     salt = bytes.fromhex("707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f")
-    nonce = bytes.fromhex("a0a1a2a3a4a5a6a7a8a9aaabacadaeaf")
-    plaintext = b"NAGAR-PCV-KAT-v1: deterministic stream & EtM vector"
+    nonce = bytes.fromhex("a0a1a2a3a4a5a6a7a8a9aaab")
+    plaintext = b"NAGAR-PCV-KAT-v2: AEAD seal & open vector"
 
     km = VaultKeyMaterial(
         enc_key=enc_key,
@@ -101,29 +104,41 @@ def test_known_answer_vector_kat_sha256_ctr_and_etm_hmac() -> None:
         salt=salt,
         iterations=600_000,
     )
-    env = encrypt_chunk(plaintext, km, chunk_index=7, nonce=nonce)
-
-    expected_cid = "f0049d9c4018daaadc9022e05f15decf7f1de6702c8127f42af28c8e8ce3ec51"
-    expected_hdr = "4e5043560100f0049d9c4018daaadc9022e05f15decf7f1de6702c8127f42af28c8e8ce3ec51"
-    expected_ct = (
-        "52f23a68d23ea92330ac6c61cb38b65e7589e7d26efe19e3a12360d7c053e046"
-        "bdfa76273185d0a45bc60209fe4c17a91eac11"
+    expected_cid = "f99a8dc418e3907cf1f4409ffbfaea0a8c27000b5eb9ea309554f07990c9d856"
+    expected_hdr = "4e5043560200f99a8dc418e3907cf1f4409ffbfaea0a8c27000b5eb9ea309554f07990c9d856"
+    expected_aes_ct = (
+        "9b2c7f5d921004e56198b89f7f885fd7772a70bffbd00c8b0de503e5c10a66da20464be39dfa1e22c5"
     )
-    expected_mac = "8ff987a85decb64cb4705165086932110194b45e3d1d096bda9768630699a186"
+    expected_aes_tag = "f80e5ebe88853b5a5a4f6438f7e3bdbe"
+    expected_chacha_ct = (
+        "98ddec032aecc1adabdefbba0ac84fac149615d590531bc229efa9eb28d421c24116810cc9b220e5f7"
+    )
+    expected_chacha_tag = "db8f5709e58f8dc3bc162a85f79b5177"
 
-    assert env.chunk_id == expected_cid
-    assert env.header.hex() == expected_hdr
-    assert env.ciphertext.hex() == expected_ct
-    assert env.mac_tag.hex() == expected_mac
-    assert sha256_ctr_crypt(enc_key, nonce, plaintext).hex() == expected_ct
-    assert (
-        decrypt_chunk(
-            EncryptedChunkEnvelope.from_bytes(env.to_bytes()),
-            km,
-            expected_chunk_index=7,
+    env_aes = encrypt_chunk(plaintext, km, chunk_index=7, nonce=nonce)
+    assert env_aes.chunk_id == expected_cid
+    assert env_aes.header.hex() == expected_hdr
+    assert env_aes.ciphertext.hex() == expected_aes_ct
+    assert env_aes.aead_tag.hex() == expected_aes_tag
+    assert env_aes.cipher_suite == CIPHER_AES_256_GCM == DEFAULT_CIPHER_SUITE
+
+    env_chacha = encrypt_chunk(
+        plaintext, km, chunk_index=7, nonce=nonce, cipher_suite=CIPHER_CHACHA20_POLY1305
+    )
+    assert env_chacha.chunk_id == expected_cid
+    assert env_chacha.header.hex() == expected_hdr
+    assert env_chacha.ciphertext.hex() == expected_chacha_ct
+    assert env_chacha.aead_tag.hex() == expected_chacha_tag
+
+    for env in (env_aes, env_chacha):
+        assert (
+            decrypt_chunk(
+                EncryptedChunkEnvelope.from_bytes(env.to_bytes()),
+                km,
+                expected_chunk_index=7,
+            )
+            == plaintext
         )
-        == plaintext
-    )
 
     # KDF + HKDF KAT lock
     km_kdf = derive_vault_keys(
@@ -183,23 +198,24 @@ def test_optional_pad_to_block_size_length_hiding_and_tamper_guards() -> None:
     with pytest.raises(VaultTamperDetectedError):
         EncryptedChunkEnvelope.from_bytes(bytes(raw_padded[:-60]))
 
-    # Forged non-zero decrypted padding tail signed with valid key -> VaultTamperDetectedError
+    # Forged envelope: a validly-sealed payload whose decrypted padding tail is
+    # non-zero is still rejected by the structural padding guard (defense in depth).
     from nexus_ai_agent.storage.personal_cloud_vault.crypto_chunk_envelope import (
         _FLAG_PADDED,
+        _aead_seal,
         _build_envelope_header,
-        _compute_etm_mac,
     )
 
     bad_padded_plain = b"hello" + (b"\xff" * 59)
-    bad_ct = sha256_ctr_crypt(km.enc_key, padded_env.nonce, bad_padded_plain)
     hdr = _build_envelope_header(padded_env.chunk_id, flags=_FLAG_PADDED)
-    forged_mac = _compute_etm_mac(
-        km.mac_key,
+    bad_ct, bad_tag = _aead_seal(
+        km.enc_key,
+        padded_env.nonce,
+        padded_env.cipher_suite,
         header=hdr,
-        nonce=padded_env.nonce,
-        ciphertext=bad_ct,
         chunk_index=0,
         plaintext_len=5,
+        plaintext=bad_padded_plain,
     )
     forged_pad_env = EncryptedChunkEnvelope(
         chunk_id=padded_env.chunk_id,
@@ -208,7 +224,7 @@ def test_optional_pad_to_block_size_length_hiding_and_tamper_guards() -> None:
         header=hdr,
         nonce=padded_env.nonce,
         ciphertext=bad_ct,
-        mac_tag=forged_mac,
+        aead_tag=bad_tag,
         key_id=km.key_id,
     )
     with pytest.raises(VaultTamperDetectedError):
@@ -322,14 +338,14 @@ def test_anti_forgery_1bit_tamper_wrong_key_and_chunk_reordering() -> None:
     with pytest.raises(VaultTamperDetectedError):
         decrypt_chunk(tampered_header, km_right, expected_chunk_index=3)
 
-    # 4) 1-bit flip in mac_tag -> VaultTamperDetectedError
-    tampered_mac = replace(env, mac_tag=_flip_byte_bit(env.mac_tag, 31, 0x04))
+    # 4) 1-bit flip in the AEAD tag -> VaultTamperDetectedError
+    tampered_tag = replace(env, aead_tag=_flip_byte_bit(env.aead_tag, 15, 0x04))
     with pytest.raises(VaultTamperDetectedError):
-        decrypt_chunk(tampered_mac, km_right, expected_chunk_index=3)
+        decrypt_chunk(tampered_tag, km_right, expected_chunk_index=3)
 
-    # 5) 1-bit flip in key_id -> VaultTamperDetectedError
+    # 5) 1-bit flip in key_id -> VaultAuthenticationError (unrecognised key material)
     tampered_kid = replace(env, key_id=_flip_byte_bit(env.key_id, 5, 0x02))
-    with pytest.raises(VaultTamperDetectedError):
+    with pytest.raises(VaultAuthenticationError):
         decrypt_chunk(tampered_kid, km_right, expected_chunk_index=3)
 
     # 6) Wrong chunk order / swapped sequence -> VaultTamperDetectedError
@@ -351,10 +367,34 @@ def test_envelope_edge_guards_and_wire_corruption_cases() -> None:
         encrypt_chunk(b"abc", km, chunk_index=-1)
     with pytest.raises(PersonalVaultError):
         encrypt_chunk(b"abc", km, nonce=b"short")
+    with pytest.raises(VaultCryptoError):
+        encrypt_chunk(b"abc", km, cipher_suite=99)
+
+    from nexus_ai_agent.storage.personal_cloud_vault.crypto_chunk_envelope import (
+        _WIRE_META_STRUCT,
+        _aead_seal,
+    )
+
     with pytest.raises(VaultAuthenticationError):
-        sha256_ctr_crypt(b"short", b"N" * 16, b"abc")
-    with pytest.raises(VaultTamperDetectedError):
-        sha256_ctr_crypt(km.enc_key, b"short", b"abc")
+        _aead_seal(
+            b"short",
+            b"N" * 12,
+            CIPHER_AES_256_GCM,
+            header=b"h",
+            chunk_index=0,
+            plaintext_len=0,
+            plaintext=b"",
+        )
+    with pytest.raises(VaultCryptoError):
+        _aead_seal(
+            km.enc_key,
+            b"N" * 12,
+            99,
+            header=b"h",
+            chunk_index=0,
+            plaintext_len=0,
+            plaintext=b"",
+        )
 
     env = encrypt_chunk(b"hello world", km, chunk_index=0)
     with pytest.raises(VaultTamperDetectedError):
@@ -368,17 +408,7 @@ def test_envelope_edge_guards_and_wire_corruption_cases() -> None:
     with pytest.raises(VaultTamperDetectedError):
         EncryptedChunkEnvelope.from_bytes(wire + b"\xff")
 
-    # Crafted envelopes where MAC was forged WITH the key to hit structural defense-in-depth guards
-    from nexus_ai_agent.storage.personal_cloud_vault.crypto_chunk_envelope import _compute_etm_mac
-
-    bad_nonce_len_mac = _compute_etm_mac(
-        km.mac_key,
-        header=env.header,
-        nonce=b"short",
-        ciphertext=env.ciphertext,
-        chunk_index=0,
-        plaintext_len=env.plaintext_len,
-    )
+    # Forged geometry: a short nonce is rejected before any AEAD work.
     forged_geom = EncryptedChunkEnvelope(
         chunk_id=env.chunk_id,
         chunk_index=0,
@@ -386,11 +416,21 @@ def test_envelope_edge_guards_and_wire_corruption_cases() -> None:
         header=env.header,
         nonce=b"short",
         ciphertext=env.ciphertext,
-        mac_tag=bad_nonce_len_mac,
+        aead_tag=env.aead_tag,
         key_id=km.key_id,
     )
     with pytest.raises(VaultTamperDetectedError):
         decrypt_chunk(forged_geom, km)
+
+    # A forged short AEAD tag is rejected by the geometry guard.
+    forged_short_tag = replace(env, aead_tag=b"\x00" * 8)
+    with pytest.raises(VaultTamperDetectedError):
+        decrypt_chunk(forged_short_tag, km)
+
+    # An unsupported cipher suite on a parsed envelope is rejected fail-closed.
+    forged_suite = replace(env, cipher_suite=99)
+    with pytest.raises(VaultTamperDetectedError):
+        decrypt_chunk(forged_suite, km)
 
     forged_non_hex_id = EncryptedChunkEnvelope(
         chunk_id="z" * 64,
@@ -399,7 +439,7 @@ def test_envelope_edge_guards_and_wire_corruption_cases() -> None:
         header=env.header,
         nonce=env.nonce,
         ciphertext=env.ciphertext,
-        mac_tag=env.mac_tag,
+        aead_tag=env.aead_tag,
         key_id=km.key_id,
     )
     with pytest.raises(VaultTamperDetectedError):
@@ -413,22 +453,14 @@ def test_envelope_edge_guards_and_wire_corruption_cases() -> None:
         header=env.header,
         nonce=env.nonce,
         ciphertext=env.ciphertext,
-        mac_tag=env.mac_tag,
+        aead_tag=env.aead_tag,
         key_id=km.key_id,
     )
     with pytest.raises(VaultTamperDetectedError):
         decrypt_chunk(forged_mismatched_id, km)
 
-    # Header matches fake chunk_id and MAC signed with km.mac_key, so decrypted content != chunk_id
+    # Header bound to a fake chunk_id: the version/flags header mismatch is rejected.
     fake_header = b"NPCV\x01\x00" + bytes.fromhex(other_id)
-    fake_mac = _compute_etm_mac(
-        km.mac_key,
-        header=fake_header,
-        nonce=env.nonce,
-        ciphertext=env.ciphertext,
-        chunk_index=0,
-        plaintext_len=env.plaintext_len,
-    )
     forged_content_mismatch = EncryptedChunkEnvelope(
         chunk_id=other_id,
         chunk_index=0,
@@ -436,11 +468,19 @@ def test_envelope_edge_guards_and_wire_corruption_cases() -> None:
         header=fake_header,
         nonce=env.nonce,
         ciphertext=env.ciphertext,
-        mac_tag=fake_mac,
+        aead_tag=env.aead_tag,
         key_id=km.key_id,
     )
     with pytest.raises(VaultTamperDetectedError):
         decrypt_chunk(forged_content_mismatch, km)
+
+    # A wire envelope carrying an unsupported suite byte is rejected at parse time.
+    bad_suite_wire = bytearray(env.to_bytes())
+    meta_offset = 2 + len(env.header)
+    suite_index = meta_offset + _WIRE_META_STRUCT.size - AEAD_TAG_BYTES - 1
+    bad_suite_wire[suite_index] = 42
+    with pytest.raises(VaultTamperDetectedError):
+        EncryptedChunkEnvelope.from_bytes(bytes(bad_suite_wire))
 
 
 def test_rfc6962_merkle_tree_domain_separation_and_cve_2012_2459_immunity() -> None:
@@ -712,10 +752,10 @@ def test_n4_n5_official_rfc5869_hkdf_and_pbkdf2_hmac_sha256_standard_vectors() -
     assert km.mac_key == hkdf_expand_sha256(expected_prk, b"nagar-pcv-v1/K_mac", 32)
     assert km.chunk_id_key == hkdf_expand_sha256(expected_prk, b"nagar-pcv-v1/K_chunk_id", 32)
 
-    # Multi-stride (>4 KiB) SHA-256 CTR round-trip & streaming file MAC consistency
+    # Multi-block (>4 KiB) AEAD round-trip & streaming file MAC consistency
     multi_stride = bytes((i * 37) & 0xFF for i in range(9000))
-    ct = sha256_ctr_crypt(km.enc_key, b"\xaa" * 16, multi_stride)
-    assert sha256_ctr_crypt(km.enc_key, b"\xaa" * 16, ct) == multi_stride
+    env_multi = encrypt_chunk(multi_stride, km, nonce=b"\xaa" * 12)
+    assert decrypt_chunk(env_multi, km) == multi_stride
 
     smac = init_streaming_file_mac("clips/scene.mp4", len(multi_stride), km)
     smac.update(multi_stride[:4096])
@@ -733,30 +773,28 @@ def test_streaming_wire_encoders_guard_invalid_inputs_fail_closed() -> None:
     from nexus_ai_agent.storage.personal_cloud_vault.crypto_chunk_envelope import (
         encrypt_chunk_from_fd_to_wire,
         encrypt_plaintext_to_wire,
-        sha256_ctr_crypt_inplace,
     )
 
     salt = generate_vault_salt()
     key_material = derive_vault_keys("streaming-guard-passphrase", salt, iterations=100_000)
     payload = os.urandom(4_000)
 
-    # Wrong enc key length and wrong nonce length are rejected by the in-place CTR.
-    with pytest.raises(VaultAuthenticationError, match="enc_key must be 32 bytes"):
-        sha256_ctr_crypt_inplace(b"short", b"N" * 16, bytearray(payload))
-    with pytest.raises(VaultTamperDetectedError, match="nonce must be 16 bytes"):
-        sha256_ctr_crypt_inplace(key_material.enc_key, b"short", bytearray(payload))
-
-    # Degenerate slices are a no-op rather than an allocation.
-    empty = bytearray(payload)
-    sha256_ctr_crypt_inplace(key_material.enc_key, b"N" * 16, empty, start=len(empty))
-    assert bytes(empty) == payload
-    sha256_ctr_crypt_inplace(key_material.enc_key, b"N" * 16, bytearray())
+    # An unsupported AEAD suite fails closed before any buffer is built.
+    with pytest.raises(VaultCryptoError, match="Unsupported AEAD cipher suite"):
+        encrypt_plaintext_to_wire(payload, key_material, cipher_suite=99)
+    with pytest.raises(VaultCryptoError, match="Unsupported AEAD cipher suite"):
+        encrypt_chunk_from_fd_to_wire(
+            file_handle=io.BytesIO(payload),
+            plaintext_len=len(payload),
+            key_material=key_material,
+            cipher_suite=99,
+        )
 
     # A Bad nonce supplied to the encoders fails closed before any buffer is built.
-    for bad_nonce in (b"short", b"X" * 17):
-        with pytest.raises(PersonalVaultError, match="nonce must be 16 bytes"):
+    for bad_nonce in (b"short", b"X" * 13):
+        with pytest.raises(PersonalVaultError, match="nonce must be 12 bytes"):
             encrypt_plaintext_to_wire(payload, key_material, nonce=bad_nonce)
-        with pytest.raises(PersonalVaultError, match="nonce must be 16 bytes"):
+        with pytest.raises(PersonalVaultError, match="nonce must be 12 bytes"):
             encrypt_chunk_from_fd_to_wire(
                 file_handle=io.BytesIO(payload),
                 plaintext_len=len(payload),
@@ -793,7 +831,7 @@ def test_streaming_wire_encoders_match_envelope_bytes_and_roundtrip() -> None:
 
     salt = generate_vault_salt()
     key_material = derive_vault_keys("streaming-equivalence-passphrase", salt, iterations=100_000)
-    nonce = b"E" * 16
+    nonce = b"E" * 12
 
     for size in (0, 1, 1_024, 65_535, 65_536, 100_000):
         plaintext = os.urandom(size)
@@ -857,43 +895,159 @@ def test_streaming_wire_encoders_feed_observers_plaintext_before_encryption() ->
     assert file_hasher.hexdigest() == expected
 
 
-def test_f5_ctr_inplace_rejects_out_of_range_start_fail_closed() -> None:
-    """F5: ``start`` must be a non-bool int inside ``[0, len(buffer)]`` or we abort.
+def test_aead_inplace_seal_matches_high_level_encrypt_for_both_suites() -> None:
+    """The in-place wire seal is byte-identical to ``encrypt_chunk(...).to_bytes()``.
 
-    A negative or oversized ``start`` would silently encrypt the wrong region (or wrap
-    around), producing a chunk whose MAC and content address no longer match — so it is
-    a hard ``VaultCryptoError``, never a silent no-op.
+    This is the memory-critical path: AES-256-GCM is sealed in place with no second
+    payload-sized buffer, and it must produce exactly the same wire bytes as the
+    high-level envelope API for both supported AEAD suites.
     """
+    import io
     import os
 
-    from nexus_ai_agent.storage.personal_cloud_vault import VaultCryptoError
     from nexus_ai_agent.storage.personal_cloud_vault.crypto_chunk_envelope import (
-        sha256_ctr_crypt_inplace,
+        encrypt_chunk_from_fd_to_wire,
+        encrypt_plaintext_to_wire,
     )
 
     salt = generate_vault_salt()
-    key_material = derive_vault_keys("f5-guard-passphrase", salt, iterations=100_000)
-    buffer = bytearray(os.urandom(128))
-    nonce = b"F" * 16
+    km = derive_vault_keys("aead-inplace-parity", salt, iterations=100_000)
+    nonce = b"F" * 12
 
-    for bad_start in (-1, 129, 10_000, -(2**63)):
-        with pytest.raises(VaultCryptoError, match=r"start=-?\d+ outside valid range"):
-            sha256_ctr_crypt_inplace(key_material.enc_key, nonce, buffer, start=bad_start)
+    for suite in (CIPHER_AES_256_GCM, CIPHER_CHACHA20_POLY1305):
+        for size in (0, 1, 1_024, 65_536):
+            plaintext = os.urandom(size)
+            expected = encrypt_chunk(
+                plaintext,
+                km,
+                nonce=nonce,
+                pad_to_block_size=16,
+                cipher_suite=suite,
+            ).to_bytes()
 
-    # ``start`` is typed ``int``, so feed the hostile values through ``**kwargs``: no
-    # ``# type: ignore`` is needed and the runtime guard is still exercised for real.
-    for non_int in (True, False, 1.0, "0", None, b"\x00"):
-        bad_kwargs: dict[str, Any] = {"start": non_int}
-        with pytest.raises(VaultCryptoError, match="start must be an int"):
-            sha256_ctr_crypt_inplace(key_material.enc_key, nonce, buffer, **bad_kwargs)
+            in_memory, mem_id = encrypt_plaintext_to_wire(
+                plaintext, km, nonce=nonce, pad_to_block_size=16, cipher_suite=suite
+            )
+            from_fd, fd_id = encrypt_chunk_from_fd_to_wire(
+                file_handle=io.BytesIO(plaintext),
+                plaintext_len=size,
+                key_material=km,
+                nonce=nonce,
+                pad_to_block_size=16,
+                cipher_suite=suite,
+            )
+            assert bytes(in_memory) == expected
+            assert bytes(from_fd) == expected
+            assert mem_id == fd_id == compute_chunk_id(plaintext, km)
+            parsed = EncryptedChunkEnvelope.from_bytes(bytes(in_memory))
+            assert decrypt_chunk(parsed, km) == plaintext
 
-    # Boundary values that ARE legal still work: 0 encrypts everything, len() is a no-op.
-    assert bytes(buffer) == bytes(buffer)  # untouched by the rejected calls above
-    pristine = bytes(buffer)
-    sha256_ctr_crypt_inplace(key_material.enc_key, nonce, buffer, start=len(buffer))
-    assert bytes(buffer) == pristine
-    sha256_ctr_crypt_inplace(key_material.enc_key, nonce, buffer, start=0)
-    assert bytes(buffer) != pristine
-    # Decrypting with the same start restores the plaintext exactly.
-    sha256_ctr_crypt_inplace(key_material.enc_key, nonce, buffer, start=0)
-    assert bytes(buffer) == pristine
+
+def test_vault_key_ring_matching_and_fail_closed_branches() -> None:
+    from nexus_ai_agent.storage.personal_cloud_vault import (
+        VaultIntegrityError,
+        VaultKeyRing,
+    )
+
+    km = derive_vault_keys("ring-secret", b"R" * 32)
+    data = b"ring-payload"
+    cid = compute_chunk_id(data, km)
+    manifest = build_snapshot_manifest(
+        project_id="ring-proj",
+        snapshot_id="ring-snap",
+        parent_snapshot_id=None,
+        created_at_utc="2026-11-16T08:00:00Z",
+        chunk_size=1024,
+        files=[
+            VaultFileEntry(
+                rel_path="a.bin",
+                total_size=len(data),
+                file_mac_hex=compute_file_mac("a.bin", data, km),
+                chunks=(VaultChunkRef(chunk_index=0, chunk_id=cid, plaintext_len=len(data)),),
+            )
+        ],
+        key_material=km,
+    )
+
+    # An empty ring holds nothing, and an empty master secret is refused outright.
+    assert not VaultKeyRing.from_secrets()
+    with pytest.raises(VaultAuthenticationError):
+        VaultKeyRing.from_secrets("")
+    with pytest.raises(VaultAuthenticationError):
+        VaultKeyRing.from_secrets(b"")
+
+    # A ring holding the right secret authenticates the manifest.
+    ring = VaultKeyRing.from_secrets("other", "ring-secret", "ring-secret")
+    assert ring.master_secrets == (b"other", b"ring-secret")
+    ring.verify_manifest(manifest)
+    assert ring.key_material_for(manifest) is not None
+
+    # A ring that holds no matching key returns None and refuses fail-closed.
+    stranger = VaultKeyRing.from_secrets("nope")
+    assert stranger.key_material_for(manifest) is None
+    with pytest.raises(VaultIntegrityError, match="No key in the vault key ring"):
+        stranger.verify_manifest(manifest)
+
+    # A manifest with an unparseable salt is treated as unheld, not a crash.
+    bad_salt = replace(manifest, salt_hex="not-hex")
+    assert stranger.key_material_for(bad_salt) is None
+
+
+def test_aead_unsupported_cipher_suite_and_chunk_id_mismatch_fail_closed() -> None:
+    from nexus_ai_agent.storage.personal_cloud_vault import crypto_chunk_envelope as cce
+
+    km = derive_vault_keys("aead-guard-secret", b"G" * 32)
+    plaintext = b"guard-payload"
+    envelope = encrypt_chunk(plaintext, km)
+
+    # An unknown cipher suite has no encryptor implementation.
+    with pytest.raises(VaultCryptoError, match="Unsupported AEAD cipher suite"):
+        cce._aead_encryptor(999, b"\x00" * 32)
+
+    # A cipher suite the module does not support is refused before decryption.
+    unsupported = replace(envelope, cipher_suite=999)
+    with pytest.raises(VaultTamperDetectedError, match="Unsupported AEAD cipher suite"):
+        decrypt_chunk(unsupported, km)
+
+    # The envelope's own chunk_id no longer matches the decrypted plaintext.
+    mismatched = replace(envelope, chunk_id="0" * 64)
+    with pytest.raises(VaultTamperDetectedError):
+        decrypt_chunk(mismatched, km)
+
+
+def test_decrypt_rejects_valid_tag_with_mislabeled_chunk_id() -> None:
+    """A sealed body whose recorded chunk_id is not its content's id is refused."""
+    from nexus_ai_agent.storage.personal_cloud_vault import crypto_chunk_envelope as cce
+
+    km = derive_vault_keys("mislabel-secret", b"L" * 32)
+    plaintext = b"genuine-body"
+    real_id = compute_chunk_id(plaintext, km)
+    forged_id = "f" * 64
+    assert forged_id != real_id
+
+    nonce = cce._resolve_nonce(None)
+    header = cce._build_envelope_header(forged_id, flags=cce._FLAG_NONE)
+    ciphertext, tag = cce._aead_seal(
+        km.enc_key,
+        nonce,
+        DEFAULT_CIPHER_SUITE,
+        header=header,
+        chunk_index=0,
+        plaintext_len=len(plaintext),
+        plaintext=plaintext,
+    )
+    forged = cce.EncryptedChunkEnvelope(
+        chunk_id=forged_id,
+        chunk_index=0,
+        plaintext_len=len(plaintext),
+        header=header,
+        nonce=nonce,
+        ciphertext=ciphertext,
+        aead_tag=tag,
+        key_id=km.key_id,
+    )
+
+    # The AEAD tag verifies and the header matches, yet the body's content does
+    # not hash to the recorded chunk_id, so decryption must fail closed.
+    with pytest.raises(VaultTamperDetectedError, match="does not match chunk_id"):
+        decrypt_chunk(forged, km)

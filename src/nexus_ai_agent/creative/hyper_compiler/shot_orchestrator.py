@@ -141,11 +141,16 @@ class HyperTimelineOrchestrator:
         *,
         max_buffer_bytes: int = DEFAULT_MAX_BUFFER_BYTES,
         hmac_key: bytes | None = None,
+        require_trusted_anchor: bool = False,
         ffmpeg_bin: str = "ffmpeg",
         timeout_seconds: float = 30.0,
     ) -> None:
         self.cache_dir = Path(cache_dir)
-        self.planner = SegmentCASPlanner(self.cache_dir, hmac_key=hmac_key)
+        self.planner = SegmentCASPlanner(
+            self.cache_dir,
+            hmac_key=hmac_key,
+            require_trusted_anchor=require_trusted_anchor,
+        )
         self.compiler = FFmpegFilterGraphCompiler()
         self.runner = BoundedMemoryPipeRunner(
             max_buffer_bytes=max_buffer_bytes,

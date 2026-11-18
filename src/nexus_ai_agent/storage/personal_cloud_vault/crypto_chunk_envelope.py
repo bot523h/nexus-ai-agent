@@ -1,15 +1,19 @@
-"""Client-side chunking, Encrypt-then-MAC envelope, and RFC 6962 Merkle manifests.
+"""Client-side chunking, AEAD chunk envelopes, and RFC 6962 Merkle manifests.
 
-All primitives in this module rely exclusively on the Python standard library:
+Cryptographic primitives:
 
 * **Key derivation**: ``PBKDF2-HMAC-SHA256`` (default ``iterations=600_000`` per
   OWASP 2026 guidance, minimum enforced ``MIN_PBKDF2_ITERATIONS=100_000``,
   ``dklen=64``) followed by RFC 5869 ``HKDF-SHA256`` domain separation for
   ``K_enc``, ``K_mac``, convergent ``K_chunk_id``, and non-secret ``key_id``.
-* **Encrypt-then-MAC (EtM)**: SHA-256 CTR stream cipher
-  (``SHA256(K_enc || nonce || counter_be64)``) paired with ``HMAC-SHA256`` over
-  ``(header || nonce || ciphertext || chunk_index_be64 || plaintext_len_be64)``
-  verified in constant time via :func:`hmac.compare_digest`.
+* **Authenticated encryption (AEAD)**: every chunk is sealed with an
+  industry-standard AEAD — ``AES-256-GCM`` (default) or ``ChaCha20-Poly1305`` —
+  from :mod:`cryptography`. The 32-byte data key is re-derived per chunk with
+  ``HKDF-SHA256`` from ``K_enc``, the cipher-suite label, and the full
+  associated data (``header || chunk_index_be64 || plaintext_len_be64``); the
+  AEAD tag therefore authenticates the ciphertext *and* the header/order/length
+  binding. A tag failure (``InvalidTag``) is mapped to the vault-domain integrity
+  error :class:`VaultTamperDetectedError` — never to a silent success.
 * **RFC 6962 Merkle tree**: domain-separated leaf prefix ``0x00``, interior node
   prefix ``0x01`` without odd-node duplication (immune to CVE-2012-2459), and
   length-bound root envelope ``SHA256(0x02 || total_leaves_be64 || raw_root)``.
@@ -17,15 +21,15 @@ All primitives in this module rely exclusively on the Python standard library:
 Threat Model
 ------------
 * **Untrusted storage provider**: Cloud buckets and portable media are treated as
-  adversarial (read/modify/reorder/replay/truncate). Confidentiality is provided by
-  128-bit random-nonce SHA-256-CTR; integrity and ordering are enforced fail-closed
-  via per-chunk EtM HMAC-SHA256, per-file HMAC-SHA256, and signed RFC 6962 Merkle
-  snapshot manifests before any plaintext is emitted to disk.
+  adversarial (read/modify/reorder/replay/truncate). Confidentiality is provided
+  by AEAD with a fresh random nonce; integrity and ordering are enforced
+  fail-closed via the per-chunk AEAD tag, per-file HMAC-SHA256, and signed
+  RFC 6962 Merkle snapshot manifests before any plaintext is emitted to disk.
 * **Cross-user deduplication leakage**: ``chunk_id`` is keyed with ``K_chunk_id``
   (HMAC-SHA256), preventing cross-vault confirmation-of-file attacks while
   preserving intra-vault deduplication across edits.
-* **Ciphertext length leakage**: Stream ciphers preserve plaintext length by
-  default (``pad_to_block_size=1``). Callers requiring length-hiding against size
+* **Ciphertext length leakage**: AEAD preserves plaintext length by default
+  (``pad_to_block_size=1``). Callers requiring length-hiding against size
   fingerprinting may set ``pad_to_block_size`` (e.g. ``4096`` or ``65536``) to
   round ``len(ciphertext)`` up to a block multiple while preserving the exact
   authenticated ``plaintext_len``.
@@ -43,10 +47,17 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
+from cryptography.exceptions import InvalidTag
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM, ChaCha20Poly1305
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+
 from nexus_ai_agent.storage.personal_cloud_vault.errors import (
     PersonalVaultError,
     VaultAuthenticationError,
     VaultCryptoError,
+    VaultIntegrityError,
     VaultTamperDetectedError,
     VaultTransportError,
 )
@@ -62,18 +73,24 @@ PBKDF2_DKLEN = 64
 MIN_SALT_BYTES = 16
 DEFAULT_SALT_BYTES = 32
 
-NONCE_BYTES = 16
+NONCE_BYTES = 12
 KEY_ID_BYTES = 16
+AEAD_TAG_BYTES = 16
 MAC_TAG_BYTES = 32
 SHA256_BLOCK_BYTES = 32
 
+#: AEAD cipher-suite identifiers written into every chunk envelope.
+CIPHER_AES_256_GCM = 1
+CIPHER_CHACHA20_POLY1305 = 2
+DEFAULT_CIPHER_SUITE = CIPHER_AES_256_GCM
+_SUPPORTED_CIPHER_SUITES = (CIPHER_AES_256_GCM, CIPHER_CHACHA20_POLY1305)
+
 ENVELOPE_MAGIC = b"NPCV"
-ENVELOPE_VERSION = 1
+ENVELOPE_VERSION = 2
 _FLAG_NONE = 0x00
 _FLAG_PADDED = 0x01
 _WIRE_FIXED_STRUCT = struct.Struct(">H")
-_WIRE_META_STRUCT = struct.Struct(">16s16sQQ32s")
-_WIRE_MAC_STRUCT = struct.Struct(">32s")
+_WIRE_META_STRUCT = struct.Struct(">16s12sQQB16s")
 
 
 def validate_chunk_size(chunk_size: int) -> int:
@@ -201,6 +218,69 @@ def derive_vault_keys(
     )
 
 
+@dataclass(frozen=True)
+class VaultKeyRing:
+    """An ordered set of master secrets used to authenticate stored vault manifests.
+
+    Destructive maintenance (garbage collection) must prove that every manifest it
+    reasons about was produced by a key we hold before it may delete anything. A ring
+    holds one or more master secrets; for a given manifest it derives the candidate
+    key material from that manifest's own ``salt_hex``/``kdf_iterations`` and matches
+    ``key_id_hex`` in constant time. Secrets are never stored as derived key material,
+    only as the caller-supplied master secrets.
+    """
+
+    master_secrets: tuple[str | bytes, ...] = ()
+
+    def __post_init__(self) -> None:
+        cleaned: list[bytes] = []
+        for secret in self.master_secrets:
+            raw = secret.encode("utf-8") if isinstance(secret, str) else bytes(secret)
+            if not raw:
+                raise VaultAuthenticationError("VaultKeyRing master secret must not be empty")
+            if raw not in cleaned:
+                cleaned.append(raw)
+        object.__setattr__(self, "master_secrets", tuple(cleaned))
+
+    @classmethod
+    def from_secrets(cls, *secrets: str | bytes) -> VaultKeyRing:
+        """Build a ring from one or more master secrets."""
+        return cls(master_secrets=secrets)
+
+    def __bool__(self) -> bool:
+        return bool(self.master_secrets)
+
+    def key_material_for(self, manifest: VaultSnapshotManifest) -> VaultKeyMaterial | None:
+        """Return the key material that authenticates ``manifest``, or ``None`` if unheld."""
+        try:
+            salt = bytes.fromhex(manifest.salt_hex)
+        except ValueError:
+            return None
+        for secret in self.master_secrets:
+            candidate = derive_vault_keys(
+                secret,
+                salt,
+                iterations=manifest.kdf_iterations,
+            )
+            if hmac.compare_digest(candidate.key_id.hex(), manifest.key_id_hex):
+                return candidate
+        return None
+
+    def verify_manifest(self, manifest: VaultSnapshotManifest) -> None:
+        """Authenticate ``manifest`` fail-closed, raising :class:`VaultIntegrityError`."""
+        key_material = self.key_material_for(manifest)
+        if key_material is None:
+            raise VaultIntegrityError(
+                f"No key in the vault key ring authenticates manifest {manifest.snapshot_id!r}"
+            )
+        try:
+            verify_manifest_integrity(manifest, key_material)
+        except (VaultTamperDetectedError, VaultAuthenticationError) as exc:
+            raise VaultIntegrityError(
+                f"Manifest {manifest.snapshot_id!r} failed integrity verification"
+            ) from exc
+
+
 def compute_chunk_id(
     plaintext: bytes | bytearray | memoryview,
     key_material: VaultKeyMaterial,
@@ -243,90 +323,114 @@ def split_into_chunks(data: bytes, chunk_size: int = DEFAULT_CHUNK_SIZE) -> tupl
     return tuple(data[offset : offset + chunk_size] for offset in range(0, len(data), chunk_size))
 
 
-_CTR_STRIDE_BLOCKS = 128
-_CTR_STRIDE_BYTES = _CTR_STRIDE_BLOCKS * SHA256_BLOCK_BYTES  # 4 KiB scratch buffer
+_AEAD_HKDF_INFO_PREFIX = b"nagar-pcv-aead-v1|"
 
 
-def sha256_ctr_crypt(enc_key: bytes, nonce: bytes, payload: bytes) -> bytes:
-    """Encrypt or decrypt ``payload`` using SHA-256 CTR mode with O(1) scratch memory."""
+def _aead_suite_label(cipher_suite: int) -> bytes:
+    if cipher_suite == CIPHER_AES_256_GCM:
+        return b"aes-256-gcm"
+    if cipher_suite == CIPHER_CHACHA20_POLY1305:
+        return b"chacha20-poly1305"
+    raise VaultCryptoError(f"Unsupported AEAD cipher suite: {cipher_suite!r}")
+
+
+def _aead_aad(header: bytes, chunk_index: int, plaintext_len: int) -> bytes:
+    """Associated data binding the header, chunk order, and authenticated length."""
+    return header + struct.pack(">QQ", chunk_index, plaintext_len)
+
+
+def _derive_aead_key(enc_key: bytes, nonce: bytes, cipher_suite: int, aad: bytes) -> bytes:
+    """HKDF-SHA256 derive the 32-byte AEAD data key from ``K_enc``, nonce, and AAD."""
     if len(enc_key) != 32:
         raise VaultAuthenticationError("enc_key must be 32 bytes")
-    if len(nonce) != NONCE_BYTES:
-        raise VaultTamperDetectedError(f"nonce must be {NONCE_BYTES} bytes, got {len(nonce)}")
-    if not payload:
-        return b""
-
-    total_len = len(payload)
-    base_hasher = hashlib.sha256(enc_key + nonce)
-    pack_u64 = struct.Struct(">Q").pack
-    out = bytearray(total_len)
-    view = memoryview(payload)
-    counter = 0
-
-    for offset in range(0, total_len, _CTR_STRIDE_BYTES):
-        slice_view = view[offset : offset + _CTR_STRIDE_BYTES]
-        slice_len = len(slice_view)
-        blocks_needed = (slice_len + SHA256_BLOCK_BYTES - 1) // SHA256_BLOCK_BYTES
-        ks_parts: list[bytes] = []
-        for _ in range(blocks_needed):
-            block_hasher = base_hasher.copy()
-            block_hasher.update(pack_u64(counter))
-            ks_parts.append(block_hasher.digest())
-            counter += 1
-        ks = b"".join(ks_parts)[:slice_len]
-        xored = int.from_bytes(slice_view, "big") ^ int.from_bytes(ks, "big")
-        out[offset : offset + slice_len] = xored.to_bytes(slice_len, "big")
-
-    return bytes(out)
+    info = _AEAD_HKDF_INFO_PREFIX + _aead_suite_label(cipher_suite) + b"|" + aad
+    return HKDF(algorithm=hashes.SHA256(), length=32, salt=nonce, info=info).derive(enc_key)
 
 
-def sha256_ctr_crypt_inplace(
+def _aead_encryptor(cipher_suite: int, key: bytes) -> Any:
+    if cipher_suite == CIPHER_AES_256_GCM:
+        return AESGCM(key)
+    if cipher_suite == CIPHER_CHACHA20_POLY1305:
+        return ChaCha20Poly1305(key)
+    raise VaultCryptoError(f"Unsupported AEAD cipher suite: {cipher_suite!r}")
+
+
+def _aead_seal(
     enc_key: bytes,
     nonce: bytes,
-    buffer: bytearray,
+    cipher_suite: int,
     *,
-    start: int = 0,
-) -> None:
-    """XOR the SHA-256 CTR keystream over ``buffer[start:]`` in place.
+    header: bytes,
+    chunk_index: int,
+    plaintext_len: int,
+    plaintext: bytes | bytearray | memoryview,
+) -> tuple[bytes, bytes]:
+    """Seal ``plaintext`` returning ``(ciphertext, tag)``."""
+    aad = _aead_aad(header, chunk_index, plaintext_len)
+    key = _derive_aead_key(enc_key, nonce, cipher_suite, aad)
+    sealed = _aead_encryptor(cipher_suite, key).encrypt(nonce, bytes(plaintext), aad)
+    return sealed[:-AEAD_TAG_BYTES], sealed[-AEAD_TAG_BYTES:]
 
-    The counter always restarts at zero for the given slice, so encryption and
-    decryption must use the same ``start``. Only a 4 KiB keystream scratch is
-    allocated: no payload-sized output copy is ever created.
-    """
-    if len(enc_key) != 32:
-        raise VaultAuthenticationError("enc_key must be 32 bytes")
-    if len(nonce) != NONCE_BYTES:
-        raise VaultTamperDetectedError(f"nonce must be {NONCE_BYTES} bytes, got {len(nonce)}")
-    # Fail closed on an out-of-range slice: silently encrypting the wrong region would
-    # corrupt the chunk, and a negative ``start`` would silently wrap around.
-    if isinstance(start, bool) or not isinstance(start, int):
-        raise VaultCryptoError(f"start must be an int, got {type(start).__name__}")
-    if not 0 <= start <= len(buffer):
-        raise VaultCryptoError(f"start={start} outside valid range [0, {len(buffer)}]")
-    total_len = len(buffer) - start
-    if total_len == 0:
-        return
-    base_hasher = hashlib.sha256(enc_key + nonce)
-    pack_u64 = struct.Struct(">Q").pack
-    view = memoryview(buffer)
-    counter = 0
+
+def _aead_open(
+    enc_key: bytes,
+    nonce: bytes,
+    cipher_suite: int,
+    *,
+    header: bytes,
+    chunk_index: int,
+    plaintext_len: int,
+    ciphertext: bytes,
+    tag: bytes,
+) -> bytes:
+    """Open an AEAD chunk; any tag failure becomes a vault-domain tamper error."""
+    aad = _aead_aad(header, chunk_index, plaintext_len)
+    key = _derive_aead_key(enc_key, nonce, cipher_suite, aad)
     try:
-        for offset in range(0, total_len, _CTR_STRIDE_BYTES):
-            slice_start = start + offset
-            slice_view = view[slice_start : slice_start + _CTR_STRIDE_BYTES]
-            slice_len = len(slice_view)
-            blocks_needed = (slice_len + SHA256_BLOCK_BYTES - 1) // SHA256_BLOCK_BYTES
-            ks_parts: list[bytes] = []
-            for _ in range(blocks_needed):
-                block_hasher = base_hasher.copy()
-                block_hasher.update(pack_u64(counter))
-                ks_parts.append(block_hasher.digest())
-                counter += 1
-            ks = b"".join(ks_parts)[:slice_len]
-            xored = int.from_bytes(slice_view, "big") ^ int.from_bytes(ks, "big")
-            slice_view[:] = xored.to_bytes(slice_len, "big")
-    finally:
-        view.release()
+        return _aead_encryptor(cipher_suite, key).decrypt(nonce, ciphertext + tag, aad)
+    except InvalidTag as exc:
+        raise VaultTamperDetectedError(
+            "Chunk AEAD authentication failed: ciphertext, header, nonce, or order tampered"
+        ) from exc
+
+
+def _aead_seal_inplace(
+    enc_key: bytes,
+    nonce: bytes,
+    cipher_suite: int,
+    *,
+    header: bytes,
+    plaintext_len: int,
+    buffer: bytearray,
+    slot_start: int,
+    slot_len: int,
+) -> bytes:
+    """Seal ``buffer[slot_start:slot_start+slot_len]`` in place and return the AEAD tag.
+
+    AES-256-GCM is sealed with ``Cipher``/``GCM`` ``update_into`` so no second
+    payload-sized buffer is ever allocated; ChaCha20-Poly1305 (never used on the
+    memory-critical streaming path) falls back to a single extra copy.
+    """
+    aad = _aead_aad(header, 0, plaintext_len)
+    key = _derive_aead_key(enc_key, nonce, cipher_suite, aad)
+    if cipher_suite == CIPHER_AES_256_GCM:
+        encryptor = Cipher(algorithms.AES(key), modes.GCM(nonce)).encryptor()
+        encryptor.authenticate_additional_data(aad)
+        view = memoryview(buffer)
+        try:
+            encryptor.update_into(
+                view[slot_start : slot_start + slot_len],
+                view[slot_start : slot_start + slot_len],
+            )
+        finally:
+            view.release()
+        encryptor.finalize()
+        return encryptor.tag
+    sealed = _aead_encryptor(cipher_suite, key).encrypt(
+        nonce, bytes(buffer[slot_start : slot_start + slot_len]), aad
+    )
+    buffer[slot_start : slot_start + slot_len] = sealed[:-AEAD_TAG_BYTES]
+    return sealed[-AEAD_TAG_BYTES:]
 
 
 def _build_envelope_header(chunk_id: str, *, flags: int = _FLAG_NONE) -> bytes:
@@ -334,27 +438,9 @@ def _build_envelope_header(chunk_id: str, *, flags: int = _FLAG_NONE) -> bytes:
     return ENVELOPE_MAGIC + bytes([ENVELOPE_VERSION, flags]) + bytes.fromhex(chunk_id)
 
 
-def _compute_etm_mac(
-    mac_key: bytes,
-    *,
-    header: bytes,
-    nonce: bytes,
-    ciphertext: bytes | bytearray | memoryview,
-    chunk_index: int,
-    plaintext_len: int,
-) -> bytes:
-    """Compute ``HMAC-SHA256(K_mac, header || nonce || ciphertext || chunk_index || len)``."""
-    mac = hmac.new(mac_key, digestmod=hashlib.sha256)
-    mac.update(header)
-    mac.update(nonce)
-    mac.update(ciphertext)
-    mac.update(struct.pack(">QQ", chunk_index, plaintext_len))
-    return mac.digest()
-
-
 @dataclass(frozen=True)
 class EncryptedChunkEnvelope:
-    """Authenticated Encrypt-then-MAC chunk container."""
+    """Authenticated AEAD chunk container."""
 
     chunk_id: str
     chunk_index: int
@@ -362,8 +448,9 @@ class EncryptedChunkEnvelope:
     header: bytes
     nonce: bytes
     ciphertext: bytes
-    mac_tag: bytes
+    aead_tag: bytes
     key_id: bytes
+    cipher_suite: int = DEFAULT_CIPHER_SUITE
 
     def to_bytes(self) -> bytes:
         """Serialize the envelope into a self-contained binary wire representation."""
@@ -375,7 +462,8 @@ class EncryptedChunkEnvelope:
                 self.nonce,
                 self.chunk_index,
                 self.plaintext_len,
-                self.mac_tag,
+                self.cipher_suite,
+                self.aead_tag,
             )
             + self.ciphertext
         )
@@ -392,9 +480,13 @@ class EncryptedChunkEnvelope:
             raise VaultTamperDetectedError("Truncated or malformed chunk envelope metadata")
 
         header = raw[_WIRE_FIXED_STRUCT.size : meta_offset]
-        key_id, nonce, chunk_index, plaintext_len, mac_tag = _WIRE_META_STRUCT.unpack_from(
-            raw, meta_offset
+        key_id, nonce, chunk_index, plaintext_len, cipher_suite, aead_tag = (
+            _WIRE_META_STRUCT.unpack_from(raw, meta_offset)
         )
+        if cipher_suite not in _SUPPORTED_CIPHER_SUITES:
+            raise VaultTamperDetectedError(
+                f"Unsupported AEAD cipher suite in envelope: {cipher_suite!r}"
+            )
         ciphertext = raw[cipher_offset:]
         flags = header[5]
         if flags == _FLAG_PADDED:
@@ -414,8 +506,9 @@ class EncryptedChunkEnvelope:
             header=header,
             nonce=nonce,
             ciphertext=ciphertext,
-            mac_tag=mac_tag,
+            aead_tag=aead_tag,
             key_id=key_id,
+            cipher_suite=cipher_suite,
         )
 
 
@@ -426,19 +519,20 @@ def encrypt_chunk(
     chunk_index: int = 0,
     nonce: bytes | None = None,
     pad_to_block_size: int = 1,
+    cipher_suite: int = DEFAULT_CIPHER_SUITE,
 ) -> EncryptedChunkEnvelope:
-    """Encrypt one chunk using SHA-256 CTR + Encrypt-then-MAC (HMAC-SHA256).
+    """Encrypt one chunk with AES-256-GCM (default) or ChaCha20-Poly1305 AEAD.
 
-    When ``pad_to_block_size > 1``, ``ciphertext`` is zero-padded prior to CTR
-    encryption so ``len(ciphertext)`` is rounded up to a positive multiple of
-    ``pad_to_block_size`` without altering ``plaintext_len``.
+    When ``pad_to_block_size > 1``, the plaintext is zero-padded before sealing so
+    ``len(ciphertext)`` is rounded up to a positive multiple of ``pad_to_block_size``
+    without altering ``plaintext_len``.
     """
     if chunk_index < 0:
         raise PersonalVaultError(f"chunk_index must be non-negative, got {chunk_index}")
+    if cipher_suite not in _SUPPORTED_CIPHER_SUITES:
+        raise VaultCryptoError(f"Unsupported AEAD cipher suite: {cipher_suite!r}")
     validate_pad_block_size(pad_to_block_size)
-    effective_nonce = secrets.token_bytes(NONCE_BYTES) if nonce is None else bytes(nonce)
-    if len(effective_nonce) != NONCE_BYTES:
-        raise PersonalVaultError(f"nonce must be {NONCE_BYTES} bytes, got {len(effective_nonce)}")
+    effective_nonce = _resolve_nonce(nonce)
 
     plaintext_len = len(plaintext)
     if pad_to_block_size == 1:
@@ -456,14 +550,14 @@ def encrypt_chunk(
 
     chunk_id = compute_chunk_id(plaintext, key_material)
     header = _build_envelope_header(chunk_id, flags=flags)
-    ciphertext = sha256_ctr_crypt(key_material.enc_key, effective_nonce, padded_plaintext)
-    mac_tag = _compute_etm_mac(
-        key_material.mac_key,
+    ciphertext, aead_tag = _aead_seal(
+        key_material.enc_key,
+        effective_nonce,
+        cipher_suite,
         header=header,
-        nonce=effective_nonce,
-        ciphertext=ciphertext,
         chunk_index=chunk_index,
         plaintext_len=plaintext_len,
+        plaintext=padded_plaintext,
     )
     return EncryptedChunkEnvelope(
         chunk_id=chunk_id,
@@ -472,13 +566,14 @@ def encrypt_chunk(
         header=header,
         nonce=effective_nonce,
         ciphertext=ciphertext,
-        mac_tag=mac_tag,
+        aead_tag=aead_tag,
         key_id=key_material.key_id,
+        cipher_suite=cipher_suite,
     )
 
 
 def _resolve_nonce(nonce: bytes | None) -> bytes:
-    """Return a validated 16-byte nonce (fresh random when ``nonce`` is ``None``)."""
+    """Return a validated nonce (fresh random when ``nonce`` is ``None``)."""
     effective_nonce = secrets.token_bytes(NONCE_BYTES) if nonce is None else bytes(nonce)
     if len(effective_nonce) != NONCE_BYTES:
         raise PersonalVaultError(f"nonce must be {NONCE_BYTES} bytes, got {len(effective_nonce)}")
@@ -514,8 +609,9 @@ def _finalize_wire(
     nonce: bytes,
     key_material: VaultKeyMaterial,
     plaintext_len: int,
+    cipher_suite: int = DEFAULT_CIPHER_SUITE,
 ) -> None:
-    """Write the authenticated prefix, CTR-encrypt in place, then patch the MAC tag."""
+    """Write the authenticated prefix, AEAD-seal the payload in place, patch the tag."""
     header = _build_envelope_header(chunk_id, flags=flags)
     prefix = (
         _WIRE_FIXED_STRUCT.pack(len(header))
@@ -525,24 +621,22 @@ def _finalize_wire(
             nonce,
             0,
             plaintext_len,
-            b"\x00" * MAC_TAG_BYTES,
+            cipher_suite,
+            b"\x00" * AEAD_TAG_BYTES,
         )
     )
     wire[0:prefix_len] = prefix
-    sha256_ctr_crypt_inplace(key_material.enc_key, nonce, wire, start=prefix_len)
-    wire_view = memoryview(wire)
-    try:
-        mac_tag = _compute_etm_mac(
-            key_material.mac_key,
-            header=header,
-            nonce=nonce,
-            ciphertext=wire_view[prefix_len:],
-            chunk_index=0,
-            plaintext_len=plaintext_len,
-        )
-    finally:
-        wire_view.release()
-    _WIRE_MAC_STRUCT.pack_into(wire, prefix_len - MAC_TAG_BYTES, mac_tag)
+    aead_tag = _aead_seal_inplace(
+        key_material.enc_key,
+        nonce,
+        cipher_suite,
+        header=header,
+        plaintext_len=plaintext_len,
+        buffer=wire,
+        slot_start=prefix_len,
+        slot_len=len(wire) - prefix_len,
+    )
+    wire[prefix_len - AEAD_TAG_BYTES : prefix_len] = aead_tag
 
 
 def encrypt_plaintext_to_wire(
@@ -552,14 +646,17 @@ def encrypt_plaintext_to_wire(
     nonce: bytes | None = None,
     pad_to_block_size: int = 1,
     plaintext_observers: Sequence[Any] = (),
+    cipher_suite: int = DEFAULT_CIPHER_SUITE,
 ) -> tuple[bytearray, str]:
     """Encrypt an in-memory chunk into its wire buffer without extra copies.
 
     Returns ``(wire_bytes, chunk_id)``. The plaintext is copied once into the
-    ciphertext slot of the final wire buffer and then overwritten in place by the
-    keystream, so only ONE payload-sized extra buffer is live (the ~4 of
-    ``encrypt_chunk(...).to_bytes()`` collapse to a single one).
+    ciphertext slot of the final wire buffer and then AEAD-sealed in place, so only
+    ONE payload-sized extra buffer is live (the ~4 of ``encrypt_chunk(...).to_bytes()``
+    collapse to a single one).
     """
+    if cipher_suite not in _SUPPORTED_CIPHER_SUITES:
+        raise VaultCryptoError(f"Unsupported AEAD cipher suite: {cipher_suite!r}")
     plaintext_len = len(plaintext)
     effective_nonce = _resolve_nonce(nonce)
     prefix_len, padded_len, pad_len, flags = _wire_geometry(plaintext_len, pad_to_block_size)
@@ -586,6 +683,7 @@ def encrypt_plaintext_to_wire(
         nonce=effective_nonce,
         key_material=key_material,
         plaintext_len=plaintext_len,
+        cipher_suite=cipher_suite,
     )
     return wire, chunk_id
 
@@ -598,13 +696,16 @@ def encrypt_chunk_from_fd_to_wire(
     nonce: bytes | None = None,
     pad_to_block_size: int = 1,
     plaintext_observers: Sequence[Any] = (),
+    cipher_suite: int = DEFAULT_CIPHER_SUITE,
 ) -> tuple[bytearray, str]:
-    """Read a chunk straight into its wire buffer and encrypt it in place.
+    """Read a chunk straight into its wire buffer and AEAD-seal it in place.
 
     Returns ``(wire_bytes, chunk_id)``. The plaintext is ``readinto`` the ciphertext
     slot of the final wire buffer, so exactly ONE payload-sized buffer exists at any
     instant — this is the memory-optimal path used by the streaming pusher.
     """
+    if cipher_suite not in _SUPPORTED_CIPHER_SUITES:
+        raise VaultCryptoError(f"Unsupported AEAD cipher suite: {cipher_suite!r}")
     effective_nonce = _resolve_nonce(nonce)
     prefix_len, padded_len, pad_len, flags = _wire_geometry(plaintext_len, pad_to_block_size)
 
@@ -634,6 +735,7 @@ def encrypt_chunk_from_fd_to_wire(
         nonce=effective_nonce,
         key_material=key_material,
         plaintext_len=plaintext_len,
+        cipher_suite=cipher_suite,
     )
     return wire, chunk_id
 
@@ -644,31 +746,21 @@ def decrypt_chunk(
     *,
     expected_chunk_index: int | None = None,
 ) -> bytes:
-    """Verify EtM HMAC-SHA256 in constant time and decrypt ``envelope`` fail-closed."""
+    """Verify the AEAD tag and structural bindings, then decrypt fail-closed."""
     verify_index = envelope.chunk_index if expected_chunk_index is None else expected_chunk_index
     if verify_index < 0 or envelope.plaintext_len < 0:
         raise VaultTamperDetectedError("Negative chunk index or plaintext length")
 
-    expected_mac = _compute_etm_mac(
-        key_material.mac_key,
-        header=envelope.header,
-        nonce=envelope.nonce,
-        ciphertext=envelope.ciphertext,
-        chunk_index=verify_index,
-        plaintext_len=envelope.plaintext_len,
-    )
-    mac_ok = hmac.compare_digest(expected_mac, envelope.mac_tag)
-    key_id_ok = hmac.compare_digest(envelope.key_id, key_material.key_id)
-
-    if not mac_ok and not key_id_ok:
+    if not hmac.compare_digest(envelope.key_id, key_material.key_id):
         raise VaultAuthenticationError("Chunk authentication failed: invalid vault key material")
-    if not mac_ok or not key_id_ok:
-        raise VaultTamperDetectedError(
-            "Chunk integrity verification failed: ciphertext, header, nonce, or order tampered"
-        )
 
+    if envelope.cipher_suite not in _SUPPORTED_CIPHER_SUITES:
+        raise VaultTamperDetectedError(
+            f"Unsupported AEAD cipher suite in envelope: {envelope.cipher_suite!r}"
+        )
     if (
         len(envelope.nonce) != NONCE_BYTES
+        or len(envelope.aead_tag) != AEAD_TAG_BYTES
         or len(envelope.ciphertext) < envelope.plaintext_len
         or len(envelope.chunk_id) != 64
     ):
@@ -685,7 +777,16 @@ def decrypt_chunk(
     if not hmac.compare_digest(envelope.header, expected_header):
         raise VaultTamperDetectedError("Envelope header does not match chunk_id binding")
 
-    decrypted_full = sha256_ctr_crypt(key_material.enc_key, envelope.nonce, envelope.ciphertext)
+    decrypted_full = _aead_open(
+        key_material.enc_key,
+        envelope.nonce,
+        envelope.cipher_suite,
+        header=envelope.header,
+        chunk_index=verify_index,
+        plaintext_len=envelope.plaintext_len,
+        ciphertext=envelope.ciphertext,
+        tag=envelope.aead_tag,
+    )
     if expected_flags == _FLAG_PADDED:
         pad_tail = decrypted_full[envelope.plaintext_len :]
         if not hmac.compare_digest(pad_tail, b"\x00" * len(pad_tail)):
@@ -1099,13 +1200,16 @@ def verify_manifest_integrity(
 
 
 __all__ = [
+    "AEAD_TAG_BYTES",
+    "CIPHER_AES_256_GCM",
+    "CIPHER_CHACHA20_POLY1305",
     "DEFAULT_CHUNK_SIZE",
+    "DEFAULT_CIPHER_SUITE",
     "DEFAULT_SALT_BYTES",
     "ENVELOPE_MAGIC",
     "ENVELOPE_VERSION",
     "EncryptedChunkEnvelope",
     "KEY_ID_BYTES",
-    "MAC_TAG_BYTES",
     "MAX_CHUNK_SIZE",
     "MAX_DEFAULT_CHUNK_SIZE",
     "MIN_CHUNK_SIZE",
@@ -1135,8 +1239,6 @@ __all__ = [
     "hkdf_extract_sha256",
     "init_streaming_file_mac",
     "normalize_relative_vault_path",
-    "sha256_ctr_crypt",
-    "sha256_ctr_crypt_inplace",
     "split_into_chunks",
     "validate_chunk_size",
     "validate_pad_block_size",

@@ -62,7 +62,9 @@ import hmac
 import math
 import os
 import secrets
+import shutil
 import stat
+import tempfile
 import threading
 import time
 from collections.abc import Collection, Iterable, Iterator, Mapping, Sequence
@@ -84,10 +86,10 @@ from nexus_ai_agent.storage.personal_cloud_vault.crypto_chunk_envelope import (
     VaultChunkRef,
     VaultFileEntry,
     VaultKeyMaterial,
+    VaultKeyRing,
     VaultSnapshotManifest,
     build_snapshot_manifest,
     compute_chunk_id,
-    compute_file_mac,
     decrypt_chunk,
     derive_vault_keys,
     encrypt_chunk_from_fd_to_wire,
@@ -101,6 +103,7 @@ from nexus_ai_agent.storage.personal_cloud_vault.crypto_chunk_envelope import (
 )
 from nexus_ai_agent.storage.personal_cloud_vault.errors import (
     PersonalVaultError,
+    VaultIntegrityError,
     VaultRevisionConflictError,
     VaultTamperDetectedError,
     VaultTransportError,
@@ -485,8 +488,14 @@ def _verify_source_digest(
         )
 
 
-def _write_verified_files_to_directory(target_dir: Path | str, files: Mapping[str, bytes]) -> None:
-    """Persist already-verified files atomically inside ``target_dir``."""
+def _publish_staged_files_to_directory(target_dir: Path | str, sources: Mapping[str, Path]) -> None:
+    """Stream verified staging files into ``target_dir`` atomically, O(1) in RAM.
+
+    Every destination is checked for symlink/path-escape before a byte is copied,
+    and each file is copied in fixed-size blocks from its staging path, so a
+    restore never has to hold a whole file (let alone the whole project) in
+    memory.
+    """
     raw_target = Path(target_dir)
     if raw_target.is_symlink():
         raise VaultTransportError(f"Target directory must not be a symlink: {raw_target}")
@@ -496,7 +505,7 @@ def _write_verified_files_to_directory(target_dir: Path | str, files: Mapping[st
         raise VaultTransportError(f"Cannot create target directory {raw_target}: {exc}") from exc
 
     root = raw_target.resolve()
-    for rel_path, content in sorted(files.items()):
+    for rel_path, source in sorted(sources.items()):
         norm = normalize_relative_vault_path(rel_path)
         dest = root / norm
         current = root
@@ -510,7 +519,27 @@ def _write_verified_files_to_directory(target_dir: Path | str, files: Mapping[st
         resolved_dest = dest.resolve()
         if not resolved_dest.is_relative_to(root) or dest.is_symlink():
             raise VaultTransportError(f"Refusing path escape or symlink target: {dest}")
-        _atomic_write_file(resolved_dest, content)
+        _stream_copy_file(source, resolved_dest)
+
+
+def _stream_copy_file(source: Path, dest: Path) -> None:
+    """Atomically copy ``source`` to ``dest`` in fixed-size blocks (O(1) in RAM)."""
+    fd, tmp_name = tempfile.mkstemp(dir=str(dest.parent), prefix=dest.name + ".", suffix=".tmp")
+    tmp_path = Path(tmp_name)
+    try:
+        with source.open("rb") as src, os.fdopen(fd, "wb") as out:
+            while True:
+                block = src.read(_SOURCE_DIGEST_BLOCK_BYTES)
+                if not block:
+                    break
+                out.write(block)
+            out.flush()
+            os.fsync(out.fileno())
+        os.replace(tmp_path, dest)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp_path)
+        raise
 
 
 class PersonalCloudVaultManager:
@@ -524,6 +553,7 @@ class PersonalCloudVaultManager:
         kdf_iterations: int = PBKDF2_ITERATIONS,
         pad_to_block_size: int = 1,
         lease_ttl_seconds: float = DEFAULT_LEASE_TTL_SECONDS,
+        key_ring: VaultKeyRing | None = None,
     ) -> None:
         validate_chunk_size(chunk_size)
         validate_pad_block_size(pad_to_block_size)
@@ -545,6 +575,7 @@ class PersonalCloudVaultManager:
         self._kdf_iterations = kdf_iterations
         self._pad_to_block_size = pad_to_block_size
         self._lease_ttl_seconds = float(lease_ttl_seconds)
+        self._key_ring = key_ring
         self._lock = threading.RLock()
         self._known_chunk_ids: set[str] = set()
         self._in_flight_chunks: set[str] = set()
@@ -1210,54 +1241,146 @@ class PersonalCloudVaultManager:
         )
         verify_manifest_integrity(manifest, key_material)
 
-        # Fail-closed phase: fetch, authenticate, and decrypt EVERY chunk BEFORE writing files.
-        verified_chunks: dict[str, bytes] = {}
-        for entry in manifest.files:
-            for ref in entry.chunks:
-                if ref.chunk_id in verified_chunks:
-                    cached = verified_chunks[ref.chunk_id]
-                    if len(cached) != ref.plaintext_len:
+        # Bounded-memory streaming: every chunk is verified and its plaintext
+        # written to a private staging area, then each file is reassembled by
+        # streaming those staged bytes through the file-MAC and into a second
+        # private staging file.  Nothing larger than a single chunk is ever held
+        # in RAM, so restoring a multi-gigabyte project is O(S_chunk), not O(S).
+        staging_root = self._open_pull_staging()
+        chunk_dir = staging_root / "chunks"
+        file_dir = staging_root / "files"
+        chunk_dir.mkdir(parents=True, exist_ok=True)
+        file_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            staged_chunks: dict[str, Path] = {}
+            for entry in manifest.files:
+                for ref in entry.chunks:
+                    if ref.chunk_id in staged_chunks:
+                        staged_size = staged_chunks[ref.chunk_id].stat().st_size
+                        if staged_size != ref.plaintext_len:
+                            raise VaultTamperDetectedError(
+                                f"Inconsistent chunk length for {ref.chunk_id}"
+                            )
+                        continue
+                    raw_envelope = self._driver.get_chunk(ref.chunk_id)
+                    envelope = EncryptedChunkEnvelope.from_bytes(raw_envelope)
+                    if not hmac.compare_digest(envelope.chunk_id, ref.chunk_id):
                         raise VaultTamperDetectedError(
-                            f"Inconsistent chunk length for {ref.chunk_id}"
+                            f"Chunk substitution detected: requested {ref.chunk_id}, "
+                            f"got {envelope.chunk_id}"
                         )
-                    continue
-                raw_envelope = self._driver.get_chunk(ref.chunk_id)
-                envelope = EncryptedChunkEnvelope.from_bytes(raw_envelope)
-                if not hmac.compare_digest(envelope.chunk_id, ref.chunk_id):
-                    raise VaultTamperDetectedError(
-                        f"Chunk substitution detected: requested {ref.chunk_id}, "
-                        f"got {envelope.chunk_id}"
-                    )
-                plaintext = decrypt_chunk(envelope, key_material, expected_chunk_index=0)
-                if len(plaintext) != ref.plaintext_len:
-                    raise VaultTamperDetectedError(
-                        f"Decrypted chunk size {len(plaintext)} != manifest {ref.plaintext_len}"
-                    )
-                verified_chunks[ref.chunk_id] = plaintext
-                with self._lock:
-                    self._known_chunk_ids.add(ref.chunk_id)
+                    plaintext = decrypt_chunk(envelope, key_material, expected_chunk_index=0)
+                    if len(plaintext) != ref.plaintext_len:
+                        raise VaultTamperDetectedError(
+                            f"Decrypted chunk size {len(plaintext)} != manifest {ref.plaintext_len}"
+                        )
+                    staged_path = chunk_dir / ref.chunk_id
+                    _atomic_write_file(staged_path, plaintext)
+                    staged_chunks[ref.chunk_id] = staged_path
+                    with self._lock:
+                        self._known_chunk_ids.add(ref.chunk_id)
 
-        restored_files: dict[str, bytes] = {}
-        total_bytes = 0
-        for entry in manifest.files:
-            assembled = b"".join(verified_chunks[ref.chunk_id] for ref in entry.chunks)
-            actual_file_mac = compute_file_mac(entry.rel_path, assembled, key_material)
-            if not hmac.compare_digest(actual_file_mac, entry.file_mac_hex):
-                raise VaultTamperDetectedError(
-                    f"Reassembled file MAC mismatch for {entry.rel_path!r}"
+            staged_sources: dict[str, Path] = {}
+            total_bytes = 0
+            for index, entry in enumerate(manifest.files):
+                staged_file = file_dir / f"{index:08d}.staged"
+                assembled_size = self._reassemble_staged_file(
+                    entry, staged_chunks, key_material, staged_file
                 )
-            restored_files[entry.rel_path] = assembled
-            total_bytes += len(assembled)
+                total_bytes += assembled_size
+                staged_sources[entry.rel_path] = staged_file
 
-        if target_dir is not None:
-            _write_verified_files_to_directory(target_dir, restored_files)
+            if target_dir is not None:
+                # Stream the verified staged files into the destination: the
+                # return value stays empty so restoring a huge project to disk is
+                # O(S_chunk) in RAM, never O(S).
+                _publish_staged_files_to_directory(target_dir, staged_sources)
+                restored_files: dict[str, bytes] = {}
+            else:
+                restored_files = {
+                    rel_path: source.read_bytes() for rel_path, source in staged_sources.items()
+                }
+        finally:
+            shutil.rmtree(staging_root, ignore_errors=True)
 
         return SnapshotPullReport(
             manifest=manifest,
             files=restored_files,
-            verified_unique_chunks=len(verified_chunks),
+            verified_unique_chunks=len(staged_chunks),
             total_restored_bytes=total_bytes,
         )
+
+    def _open_pull_staging(self) -> Path:
+        """Create a private, symlink-free staging root for a streaming pull."""
+        try:
+            staging_root = Path(tempfile.mkdtemp(prefix=".pcv-pull-"))
+        except OSError as exc:
+            raise VaultTransportError(f"Cannot create pull staging directory: {exc}") from exc
+        try:
+            os.chmod(staging_root, 0o700)
+        except OSError:
+            # A filesystem without POSIX mode bits still gives us a private mkdtemp
+            # name; the staging root is never exposed and is removed on the way out.
+            pass
+        return staging_root
+
+    def _reassemble_staged_file(
+        self,
+        entry: VaultFileEntry,
+        staged_chunks: Mapping[str, Path],
+        key_material: VaultKeyMaterial,
+        dest: Path,
+    ) -> int:
+        """Stream one file's staged chunks through the file-MAC into ``dest``.
+
+        The file never exists in RAM as a whole: it is read back chunk-by-chunk,
+        the streaming HMAC-SHA256 is advanced, and the bytes are appended to
+        ``dest``.  Only after the MAC matches the manifest is ``dest`` trusted;
+        a mismatch deletes it and raises fail-closed.
+        """
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            total_size = sum(ref.plaintext_len for ref in entry.chunks)
+        except (TypeError, ValueError) as exc:
+            raise VaultTamperDetectedError(
+                f"Invalid chunk geometry for {entry.rel_path!r}"
+            ) from exc
+        mac = init_streaming_file_mac(entry.rel_path, total_size, key_material)
+        written = 0
+        fd, tmp_name = tempfile.mkstemp(dir=str(dest.parent), suffix=".staged.tmp")
+        tmp_path = Path(tmp_name)
+        try:
+            with os.fdopen(fd, "wb") as handle:
+                for ref in entry.chunks:
+                    source = staged_chunks.get(ref.chunk_id)
+                    if source is None:
+                        raise VaultTamperDetectedError(
+                            f"Missing staged chunk {ref.chunk_id} for {entry.rel_path!r}"
+                        )
+                    with source.open("rb") as chunk_handle:
+                        while True:
+                            block = chunk_handle.read(_SOURCE_DIGEST_BLOCK_BYTES)
+                            if not block:
+                                break
+                            mac.update(block)
+                            handle.write(block)
+                            written += len(block)
+                handle.flush()
+                os.fsync(handle.fileno())
+            if written != total_size:
+                raise VaultTamperDetectedError(
+                    f"Reassembled size {written} != manifest {total_size} for {entry.rel_path!r}"
+                )
+            if not hmac.compare_digest(mac.hexdigest(), entry.file_mac_hex):
+                raise VaultTamperDetectedError(
+                    f"Reassembled file MAC mismatch for {entry.rel_path!r}"
+                )
+            os.replace(tmp_path, dest)
+        except BaseException:
+            with contextlib.suppress(OSError):
+                os.unlink(tmp_path)
+            raise
+        return written
 
     def _is_younger_than_min_age(
         self,
@@ -1295,8 +1418,15 @@ class PersonalCloudVaultManager:
         candidate_chunk_ids: Iterable[str] | None = None,
         protected_chunk_ids: Collection[str] = (),
         min_age_seconds: float = DEFAULT_GC_MIN_AGE_SECONDS,
+        key_ring: VaultKeyRing | None = None,
     ) -> GarbageCollectionReport:
-        """Delete orphan chunks not referenced by active manifests or in-flight leases."""
+        """Delete orphan chunks not referenced by active manifests or in-flight leases.
+
+        Every manifest is authenticated against ``key_ring`` (falling back to the ring
+        bound to the manager) *before* the first chunk is removed. A vault whose
+        manifests cannot be proven to belong to a held key is never mutated: the call
+        raises :class:`VaultIntegrityError` and deletes nothing.
+        """
         if (
             isinstance(min_age_seconds, bool)
             or not isinstance(min_age_seconds, (int, float))
@@ -1307,6 +1437,11 @@ class PersonalCloudVaultManager:
                 f"min_age_seconds must be finite and non-negative, got {min_age_seconds!r}"
             )
         effective_min_age = float(min_age_seconds)
+        effective_key_ring = key_ring if key_ring is not None else self._key_ring
+        if not effective_key_ring:
+            raise VaultIntegrityError(
+                "GC needs an authenticated VaultKeyRing to verify manifests before deletion"
+            )
 
         with self._lock:
             initial_in_flight = set(self._in_flight_chunks)
@@ -1328,8 +1463,10 @@ class PersonalCloudVaultManager:
         referenced_chunks: set[str] = set()
         superseded_chunks: set[str] = set()
 
+        # Fail-closed authentication phase: every manifest is verified before any delete.
         for sid in sorted(stored_manifest_ids):
             manifest = VaultSnapshotManifest.from_json_bytes(self._driver.get_manifest(sid))
+            effective_key_ring.verify_manifest(manifest)
             chunks_in_manifest = manifest.referenced_chunk_ids()
             if sid in active_ids:
                 referenced_chunks.update(chunks_in_manifest)

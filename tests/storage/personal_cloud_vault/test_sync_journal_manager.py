@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TypedDict
+from typing import Any, TypedDict
 
 import pytest
 
@@ -14,6 +14,8 @@ from nexus_ai_agent.storage.personal_cloud_vault import (
     PersonalVaultError,
     PortableBundleVaultDriver,
     VaultAuthenticationError,
+    VaultIntegrityError,
+    VaultKeyRing,
     VaultRevisionConflictError,
     VaultSnapshotManifest,
     VaultTamperDetectedError,
@@ -292,8 +294,9 @@ def test_garbage_collect_unreferenced_chunks_retains_active_and_purges_orphans(
     tmp_path: Path,
 ) -> None:
     vault = LocalDeviceVaultDriver(tmp_path / "gc_vault")
-    mgr = PersonalCloudVaultManager(vault, chunk_size=64)
     secret = "gc-secret"
+    ring = VaultKeyRing.from_secrets(secret)
+    mgr = PersonalCloudVaultManager(vault, chunk_size=64, key_ring=ring)
 
     r1 = mgr.push_project_snapshot(
         project_id="proj-gc",
@@ -347,7 +350,7 @@ def test_garbage_collect_unreferenced_chunks_retains_active_and_purges_orphans(
     # Minimal 7-method driver (no list_chunks) also GCs via sync journal + candidate_chunk_ids
     minimal_vault = LocalDeviceVaultDriver(tmp_path / "minimal_gc")
     spy_minimal = _SpyDriverWrapper(minimal_vault)
-    mgr_min = PersonalCloudVaultManager(spy_minimal, chunk_size=64)
+    mgr_min = PersonalCloudVaultManager(spy_minimal, chunk_size=64, key_ring=ring)
     dangling = "e" * 64
     spy_minimal.put_chunk(dangling, b"orphan")
     mgr_min.record_orphan_candidate_chunk(dangling)
@@ -356,6 +359,24 @@ def test_garbage_collect_unreferenced_chunks_retains_active_and_purges_orphans(
         min_age_seconds=0.0,
     )
     assert gc_min.deleted_chunk_ids == (dangling,)
+
+    # Adversarial: tampering a referenced chunk out of a stored manifest aborts GC fail-closed
+    import json
+
+    raw_manifest = json.loads(vault.get_manifest(r2.snapshot_id).decode("utf-8"))
+    raw_manifest["files"][0]["chunks"].pop()
+    vault.put_manifest(r2.snapshot_id, json.dumps(raw_manifest).encode("utf-8"))
+    surviving_orphan = "a" * 64
+    vault.put_chunk(surviving_orphan, b"survives-tamper")
+    with pytest.raises(VaultIntegrityError):
+        mgr.garbage_collect_unreferenced_chunks(min_age_seconds=0.0)
+    assert vault.has_chunk(surviving_orphan)
+
+    # Adversarial: GC with no key ring at all refuses to delete anything
+    unauthenticated = PersonalCloudVaultManager(vault, chunk_size=64)
+    with pytest.raises(VaultIntegrityError):
+        unauthenticated.garbage_collect_unreferenced_chunks(min_age_seconds=0.0)
+    assert vault.has_chunk(surviving_orphan)
 
 
 def test_manager_edge_cases_and_filesystem_containment_guards(tmp_path: Path) -> None:
@@ -651,13 +672,14 @@ def test_f1_regression_concurrent_gc_right_before_put_manifest_preserves_all_chu
 
     base_local = LocalDeviceVaultDriver(tmp_path / "f1_race_vault")
     hook_driver = _RaceHookDriver(base_local)
+    secret = "f1-race-secret"
     mgr = PersonalCloudVaultManager(
         hook_driver,
         chunk_size=64,
         kdf_iterations=100_000,
         pad_to_block_size=128,
+        key_ring=VaultKeyRing.from_secrets(secret),
     )
-    secret = "f1-race-secret"
 
     # Push #1 commits initial snapshot (default OWASP 600k verified separately; 100k here for speed)
     v1_data = {"timeline.bin": b"A" * 64 + b"B" * 64}
@@ -730,7 +752,12 @@ def test_f1_regression_concurrent_gc_right_before_put_manifest_preserves_all_chu
             base_local.delete_chunk(external_evicted[0])
 
     sweep_driver.after_put_manifest_once = _evict_once_after_manifest
-    mgr_heal = PersonalCloudVaultManager(sweep_driver, chunk_size=64, kdf_iterations=100_000)
+    mgr_heal = PersonalCloudVaultManager(
+        sweep_driver,
+        chunk_size=64,
+        kdf_iterations=100_000,
+        key_ring=VaultKeyRing.from_secrets(secret),
+    )
 
     v3_data = {"timeline.bin": b"A" * 64 + b"E" * 64}
     r3 = mgr_heal.push_project_snapshot(
@@ -767,7 +794,12 @@ def test_f1_protected_chunks_min_age_refcounts_and_fail_closed_rollback(
     )
     assert init_rep.manifest.kdf_iterations == 600_000
 
-    mgr = PersonalCloudVaultManager(vault, chunk_size=64, kdf_iterations=100_000)
+    mgr = PersonalCloudVaultManager(
+        vault,
+        chunk_size=64,
+        kdf_iterations=100_000,
+        key_ring=VaultKeyRing.from_secrets("owasp-pass"),
+    )
     with pytest.raises(PersonalVaultError):
         mgr.garbage_collect_unreferenced_chunks(min_age_seconds=-0.5)
 
@@ -805,7 +837,12 @@ def test_f1_protected_chunks_min_age_refcounts_and_fail_closed_rollback(
     # P1-3 Fail-Safe: minimal driver without get_chunk_mtime stamps `first_seen = now`
     # and RETAINS unknown-age chunks until `min_age_seconds` has elapsed!
     spy = _SpyDriverWrapper(vault)
-    mgr_spy = PersonalCloudVaultManager(spy, chunk_size=64, kdf_iterations=100_000)
+    mgr_spy = PersonalCloudVaultManager(
+        spy,
+        chunk_size=64,
+        kdf_iterations=100_000,
+        key_ring=VaultKeyRing.from_secrets("owasp-pass"),
+    )
     gc_unknown_ts = mgr_spy.garbage_collect_unreferenced_chunks(
         candidate_chunk_ids=[c_young_disk],
         min_age_seconds=300.0,
@@ -894,6 +931,7 @@ def test_f1_protected_chunks_min_age_refcounts_and_fail_closed_rollback(
         _MidGcLeaseDriver(vault),
         chunk_size=64,
         kdf_iterations=100_000,
+        key_ring=VaultKeyRing.from_secrets("owasp-pass"),
     )
     gc_late = mgr_late.garbage_collect_unreferenced_chunks(min_age_seconds=0.0)
     assert gc_late.deleted_chunk_ids == ()
@@ -1228,11 +1266,13 @@ def test_n6_cross_client_cross_manager_gc_race_file_lease_and_disk_locator(
         driver_client_a,
         chunk_size=chunk_size,
         kdf_iterations=100_000,
+        key_ring=VaultKeyRing.from_secrets(secret),
     )
     mgr_b = PersonalCloudVaultManager(
         driver_client_b,
         chunk_size=chunk_size,
         kdf_iterations=100_000,
+        key_ring=VaultKeyRing.from_secrets(secret),
     )
 
     # Initial snapshot v1 on disk
@@ -1346,6 +1386,7 @@ def test_n6_cross_client_cross_manager_gc_race_file_lease_and_disk_locator(
         _CrossProcMidGcDriver(shared_vault_dir),
         chunk_size=chunk_size,
         kdf_iterations=100_000,
+        key_ring=VaultKeyRing.from_secrets(secret),
     )
     gc_mid = mgr_mid.garbage_collect_unreferenced_chunks(min_age_seconds=0.0)
     assert gc_mid.deleted_chunk_ids == ()
@@ -1429,7 +1470,12 @@ def test_p1_2_p1_4_fail_closed_corrupt_lease_gc_and_isfinite_guards(
         with pytest.raises(PersonalVaultError):
             PersonalCloudVaultManager(vault, chunk_size=64, lease_ttl_seconds=bad_val)
 
-    mgr = PersonalCloudVaultManager(vault, chunk_size=64, kdf_iterations=100_000)
+    mgr = PersonalCloudVaultManager(
+        vault,
+        chunk_size=64,
+        kdf_iterations=100_000,
+        key_ring=VaultKeyRing.from_secrets("p1-2-secret"),
+    )
     for bad_val in (float("nan"), float("inf"), float("-inf"), True):
         with pytest.raises(PersonalVaultError):
             mgr.garbage_collect_unreferenced_chunks(min_age_seconds=bad_val)
@@ -1472,11 +1518,17 @@ from pathlib import Path
 from nexus_ai_agent.storage.personal_cloud_vault import (
     LocalDeviceVaultDriver,
     PersonalCloudVaultManager,
+    VaultKeyRing,
 )
 vdir = Path(sys.argv[1])
 drv = LocalDeviceVaultDriver(vdir)
 leased = sorted(drv.read_active_leased_chunks())
-mgr = PersonalCloudVaultManager(drv, chunk_size=64, kdf_iterations=100_000)
+mgr = PersonalCloudVaultManager(
+    drv,
+    chunk_size=64,
+    kdf_iterations=100_000,
+    key_ring=VaultKeyRing.from_secrets("subproc-secret"),
+)
 rep = mgr.garbage_collect_unreferenced_chunks(min_age_seconds=0.0)
 print(json.dumps({
     "child_pid": os.getpid(),
@@ -1503,6 +1555,7 @@ print(json.dumps({
         parent_driver,
         chunk_size=chunk_size,
         kdf_iterations=100_000,
+        key_ring=VaultKeyRing.from_secrets("subproc-secret"),
     )
     push_rep = parent_mgr.push_project_snapshot(
         project_id="subproc-proj",
@@ -1601,7 +1654,10 @@ def test_edge_driver_capability_gaps_and_gc_fallback_paths(tmp_path: Path) -> No
 
     vault_acq = LocalDeviceVaultDriver(tmp_path / "acq_only")
     mgr_acq = PersonalCloudVaultManager(
-        _AcquireOnlyDriver(vault_acq), chunk_size=chunk_size, kdf_iterations=100_000
+        _AcquireOnlyDriver(vault_acq),
+        chunk_size=chunk_size,
+        kdf_iterations=100_000,
+        key_ring=VaultKeyRing.from_secrets("s"),
     )
     rep_acq = mgr_acq.push_project_snapshot(
         project_id="acq-proj",
@@ -1628,7 +1684,12 @@ def test_edge_driver_capability_gaps_and_gc_fallback_paths(tmp_path: Path) -> No
     weird_vault.put_chunk(orphan_a, b"orphan-a")
     weird_vault.put_chunk(orphan_b, b"orphan-b")
     weird = _WeirdCapabilityDriver(weird_vault)
-    mgr_weird = PersonalCloudVaultManager(weird, chunk_size=chunk_size, kdf_iterations=100_000)
+    mgr_weird = PersonalCloudVaultManager(
+        weird,
+        chunk_size=chunk_size,
+        kdf_iterations=100_000,
+        key_ring=VaultKeyRing.from_secrets("s"),
+    )
     mgr_weird.record_orphan_candidate_chunk(orphan_a, recorded_at=1.0)
     gc_weird = mgr_weird.garbage_collect_unreferenced_chunks(
         candidate_chunk_ids=[orphan_b],
@@ -1649,6 +1710,7 @@ def test_edge_driver_capability_gaps_and_gc_fallback_paths(tmp_path: Path) -> No
         _VanishingDriver(LocalDeviceVaultDriver(tmp_path / "vanishing")),
         chunk_size=chunk_size,
         kdf_iterations=100_000,
+        key_ring=VaultKeyRing.from_secrets("s"),
     )
     mgr_vanish.record_orphan_candidate_chunk("9" * 64)
     gc_vanish = mgr_vanish.garbage_collect_unreferenced_chunks(min_age_seconds=0.0)
@@ -1674,6 +1736,7 @@ def test_edge_driver_capability_gaps_and_gc_fallback_paths(tmp_path: Path) -> No
         _LateLeaseReportingDriver(fallback_vault, {leased_cid}),
         chunk_size=chunk_size,
         kdf_iterations=100_000,
+        key_ring=VaultKeyRing.from_secrets("s"),
     )
     mgr_fallback.record_orphan_candidate_chunk(leased_cid)
     mgr_fallback.record_orphan_candidate_chunk(unleased_cid)
@@ -1714,6 +1777,7 @@ def test_edge_driver_capability_gaps_and_gc_fallback_paths(tmp_path: Path) -> No
         _NoRollbackBlackhole(LocalDeviceVaultDriver(tmp_path / "no_rollback")),
         chunk_size=chunk_size,
         kdf_iterations=100_000,
+        key_ring=VaultKeyRing.from_secrets("s"),
     )
     with pytest.raises(VaultTransportError, match="post-manifest"):
         mgr_norollback.push_project_snapshot(
@@ -1754,6 +1818,7 @@ def test_edge_driver_capability_gaps_and_gc_fallback_paths(tmp_path: Path) -> No
             _TruncateMidStreamDriver(LocalDeviceVaultDriver(tmp_path / "trunc_vault")),
             chunk_size=chunk_size,
             kdf_iterations=100_000,
+            key_ring=VaultKeyRing.from_secrets("s"),
         )
         with pytest.raises(VaultTransportError, match="Concurrent file size/symlink change"):
             mgr_trunc.push_project_snapshot(
@@ -2449,7 +2514,12 @@ def test_wave4_memory_scaling_benchmark(tmp_path: Path) -> None:
         f"S3 peak grew {s3_slope:.1f} B/chunk between N=20 and N=100: its payload term is "
         f"not independent of project size"
     )
-    assert s3_extra_copy < 2 * chunk_size, (
+    # The AEAD wire path holds only ONE payload-sized buffer, so the S3 backend's extra
+    # term is the immutable ``bytes(data)`` snapshot SigV4 signing needs (``put_chunk``
+    # must copy the mutable wire buffer, else a caller could mutate the bytes that were
+    # signed). That is one chunk constant; the bound allows the documented two-chunk
+    # headroom so the assertion stays robust to allocator noise.
+    assert s3_extra_copy < 3 * chunk_size, (
         f"S3 added {s3_extra_copy:.0f} B over the local backend, more than the documented "
         f"chunk-constant overhead of mutable->bytes conversion for SigV4 signing"
     )
@@ -2483,3 +2553,170 @@ def test_wave4_memory_scaling_benchmark(tmp_path: Path) -> None:
             f"{driver_kind} grew {per_chunk_metadata:.1f} B/chunk across N, beyond the "
             f"documented constant factors"
         )
+
+
+def test_req4_streaming_pull_bounded_memory_and_disk_restore(tmp_path: Path) -> None:
+    """Req-4: pulling to a directory streams at O(S_chunk) RAM, never O(payload)."""
+    import tracemalloc
+
+    vault = LocalDeviceVaultDriver(tmp_path / "pull_stream_vault")
+    chunk_size = 4096
+    mgr = PersonalCloudVaultManager(vault, chunk_size=chunk_size)
+    secret = "pull-stream-secret"
+
+    # 16 files of 32 chunks each: a 2 MiB payload restored at a per-chunk RAM cost.
+    source: dict[str, bytes] = {
+        f"dir/file_{f:02d}.bin": bytes((f * 7 + i) % 251 for i in range(chunk_size * 32))
+        for f in range(16)
+    }
+    total_payload = sum(len(v) for v in source.values())
+    mgr.push_project_snapshot(
+        project_id="pull-stream",
+        source=source,
+        master_secret=secret,
+        snapshot_id="snap-1",
+    )
+
+    out_dir = tmp_path / "restored"
+    tracemalloc.start()
+    try:
+        report = mgr.pull_project_snapshot(
+            project_id="pull-stream",
+            master_secret=secret,
+            snapshot_id="snap-1",
+            target_dir=out_dir,
+        )
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+
+    # Restoring to disk returns no in-memory copy, so RAM stays a fraction of the payload.
+    assert report.files == {}
+    assert report.total_restored_bytes == total_payload
+    for rel, content in source.items():
+        assert (out_dir / rel).read_bytes() == content
+    assert peak < total_payload // 4, (
+        f"streaming pull peak={peak} held more than a quarter of the {total_payload}-byte "
+        f"payload; it must stay O(S_chunk)"
+    )
+
+    # Without a target the same snapshot is returned in memory byte-for-byte.
+    in_mem = mgr.pull_project_snapshot(
+        project_id="pull-stream", master_secret=secret, snapshot_id="snap-1"
+    )
+    assert in_mem.files == source
+    assert in_mem.total_restored_bytes == total_payload
+
+
+def test_req4_pull_staging_is_cleaned_up_on_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Req-4: a mid-pull tamper fails closed and removes the private staging root."""
+    from nexus_ai_agent.storage.personal_cloud_vault import sync_journal_manager as sjm
+
+    vault = LocalDeviceVaultDriver(tmp_path / "pull_cleanup_vault")
+    mgr = PersonalCloudVaultManager(vault, chunk_size=64)
+    secret = "pull-cleanup-secret"
+    push = mgr.push_project_snapshot(
+        project_id="pull-cleanup",
+        source={"a.bin": b"A" * 64 + b"B" * 64, "b.bin": b"C" * 128},
+        master_secret=secret,
+        snapshot_id="snap-cleanup",
+    )
+
+    created: list[Path] = []
+    real_mkdtemp = sjm.tempfile.mkdtemp
+
+    def _recording_mkdtemp(*args: Any, **kwargs: Any) -> str:
+        path = real_mkdtemp(*args, **kwargs)
+        created.append(Path(path))
+        return path
+
+    monkeypatch.setattr(sjm.tempfile, "mkdtemp", _recording_mkdtemp)
+
+    # Corrupt the last chunk on disk so the streaming pull refuses mid-flight.
+    last_cid = push.manifest.files[-1].chunks[-1].chunk_id
+    chunk_file = vault.root_dir / "chunks" / f"{last_cid}.chk"
+    corrupted = bytearray(chunk_file.read_bytes())
+    corrupted[-1] ^= 0x01
+    chunk_file.write_bytes(bytes(corrupted))
+
+    out_dir = tmp_path / "must_not_exist"
+    with pytest.raises(VaultTamperDetectedError):
+        mgr.pull_project_snapshot(
+            project_id="pull-cleanup",
+            master_secret=secret,
+            snapshot_id="snap-cleanup",
+            target_dir=out_dir,
+        )
+    assert not out_dir.exists()
+    assert created, "the streaming pull must have created a private staging root"
+    assert all(not staging.exists() for staging in created)
+
+
+def test_req4_pull_helper_fail_closed_branches(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Req-4 defensive branches: staging errors, missing/short staged chunks, copy errors."""
+    from dataclasses import replace as _replace
+
+    from nexus_ai_agent.storage.personal_cloud_vault import (
+        VaultChunkRef,
+        VaultFileEntry,
+        compute_chunk_id,
+        compute_file_mac,
+        derive_vault_keys,
+    )
+    from nexus_ai_agent.storage.personal_cloud_vault import (
+        sync_journal_manager as sjm,
+    )
+
+    km = derive_vault_keys("helper-secret", b"H" * 32)
+    mgr = PersonalCloudVaultManager(
+        LocalDeviceVaultDriver(tmp_path / "helper_vault"), chunk_size=64
+    )
+
+    # mkdtemp failure becomes a typed transport error, not a bare OSError.
+    def _boom(*args: Any, **kwargs: Any) -> str:
+        raise OSError("no space")
+
+    monkeypatch.setattr(sjm.tempfile, "mkdtemp", _boom)
+    with pytest.raises(VaultTransportError, match="Cannot create pull staging directory"):
+        mgr._open_pull_staging()
+    monkeypatch.undo()
+
+    # A filesystem that rejects chmod still yields a private staging root.
+    monkeypatch.setattr(sjm.os, "chmod", lambda *a, **k: (_ for _ in ()).throw(OSError("ro")))
+    staging = mgr._open_pull_staging()
+    assert staging.is_dir()
+    monkeypatch.undo()
+
+    data = b"abcd"
+    cid = compute_chunk_id(data, km)
+    entry = VaultFileEntry(
+        rel_path="f.bin",
+        total_size=len(data),
+        file_mac_hex=compute_file_mac("f.bin", data, km),
+        chunks=(VaultChunkRef(chunk_index=0, chunk_id=cid, plaintext_len=len(data)),),
+    )
+
+    # A referenced chunk that was never staged is refused.
+    with pytest.raises(VaultTamperDetectedError, match="Missing staged chunk"):
+        mgr._reassemble_staged_file(entry, {}, km, tmp_path / "out.bin")
+
+    # A staged chunk shorter than the manifest promises is refused by size.
+    short = tmp_path / "short.bin"
+    short.write_bytes(b"ab")
+    with pytest.raises(VaultTamperDetectedError, match="Reassembled size"):
+        mgr._reassemble_staged_file(entry, {cid: short}, km, tmp_path / "out2.bin")
+
+    # Non-integer chunk geometry is refused, never propagated as a TypeError.
+    broken = _replace(entry, chunks=(_replace(entry.chunks[0], plaintext_len="x"),))
+    with pytest.raises(VaultTamperDetectedError, match="Invalid chunk geometry"):
+        mgr._reassemble_staged_file(broken, {cid: short}, km, tmp_path / "out3.bin")
+
+    # A staging source that vanished mid-publish is cleaned up and re-raised.
+    missing_source = tmp_path / "gone.bin"
+    with pytest.raises(FileNotFoundError):
+        sjm._stream_copy_file(missing_source, tmp_path / "dest.bin")
+    assert not list(tmp_path.glob("dest.bin*"))

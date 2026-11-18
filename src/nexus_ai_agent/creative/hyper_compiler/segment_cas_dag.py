@@ -411,9 +411,26 @@ def _decode_artifact(raw: bytes) -> tuple[str, bytes]:
 class SegmentCASPlanner:
     """Plan cache hits / re-renders and persist verified segment artifacts."""
 
-    def __init__(self, cache_dir: Path, *, hmac_key: bytes | None = None) -> None:
+    def __init__(
+        self,
+        cache_dir: Path,
+        *,
+        hmac_key: bytes | None = None,
+        require_trusted_anchor: bool = False,
+    ) -> None:
+        if require_trusted_anchor and hmac_key is None:
+            # An unsigned manifest can re-derive its own content-addressed key, so
+            # it is only ever trustworthy when tied to a secret the attacker does
+            # not hold.  Demanding the anchor up front makes "fail-closed" the
+            # construction-time default instead of a per-call decision a caller
+            # could forget.
+            raise HyperCompilerError(
+                "require_trusted_anchor demands an hmac_key: an unsigned manifest "
+                "cannot be anchored to anything outside itself"
+            )
         self.cache_dir = Path(cache_dir)
         self._hmac_key = hmac_key
+        self._require_trusted_anchor = require_trusted_anchor
 
     # -- keys & paths -------------------------------------------------------
     def cas_key(

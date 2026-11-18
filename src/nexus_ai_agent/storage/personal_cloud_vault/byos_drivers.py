@@ -25,6 +25,7 @@ import os
 import re
 import secrets
 import struct
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -1237,6 +1238,9 @@ class S3CompatibleSigV4Driver:
         )
         self._clean_prefix = config.prefix.strip("/")
         self._chunk_mtimes: dict[str, float] = {}
+        # Serialises lease acquisition against GC within this process; cross-process
+        # safety still comes from the conditional lease writes and the fence protocol.
+        self._coord_lock = threading.RLock()
 
     @property
     def config(self) -> S3SigV4Config:
@@ -1246,6 +1250,11 @@ class S3CompatibleSigV4Driver:
         if self._clean_prefix:
             return f"{self._clean_prefix}/{category}/{leaf_name}"
         return f"{category}/{leaf_name}"
+
+    def _gc_fence_key(self, chunk_id: str) -> str:
+        """Object key of the GC fence guarding ``chunk_id`` against a concurrent lease."""
+        valid = _validate_chunk_id(chunk_id)
+        return self._object_key("gc-fences", f"{valid}.fence")
 
     def _build_url(
         self, object_key: str | None = None, query: Mapping[str, str] | None = None
@@ -1431,8 +1440,14 @@ class S3CompatibleSigV4Driver:
         ttl_seconds: float = 3600.0,
         lease_id: str | None = None,
     ) -> str:
-        """Create a lease object under ``leases/<lease_id>.json`` on the S3 bucket."""
+        """Create a lease object under ``leases/<lease_id>.json`` on the S3 bucket.
+
+        The lease is written first; only then are any GC fences for its chunks
+        cleared, so a fence observed by :meth:`delete_chunk_if_unleased` always
+        implies the lease that protects the chunk is already durable.
+        """
         finite_ttl = _validate_positive_finite_seconds(ttl_seconds, name="ttl_seconds")
+        materialised_chunks = [_validate_chunk_id(cid) for cid in chunk_ids]
         now = self._clock().timestamp()
         effective_id = (
             f"{os.getpid()}-{int(now * 1000)}-{secrets.token_hex(6)}"
@@ -1452,7 +1467,7 @@ class S3CompatibleSigV4Driver:
             project_id=project_id,
             now_epoch=now,
             ttl_seconds=finite_ttl,
-            chunk_ids=chunk_ids,
+            chunk_ids=materialised_chunks,
         )
         put_resp = self._send(
             "PUT",
@@ -1467,6 +1482,9 @@ class S3CompatibleSigV4Driver:
             raise VaultTransportError(
                 f"S3 acquire_push_lease failed with HTTP {put_resp.status_code}"
             )
+        with self._coord_lock:
+            for valid_cid in materialised_chunks:
+                self._send("DELETE", object_key=self._gc_fence_key(valid_cid))
         return effective_id
 
     def update_push_lease(
@@ -1576,24 +1594,55 @@ class S3CompatibleSigV4Driver:
 
         The lease set is snapshotted, re-read immediately before the ``DELETE``, and the
         lease-object state token (ETag / Last-Modified per lease) must be identical
-        before and after the deletion decision. Any lease registered mid-check —
-        including a brand-new lease that does not list this chunk yet — aborts the
-        deletion, because a freshly acquired push lease may claim the chunk right after
-        our scan.
+        before and after the deletion decision. A two-sided fence around the ``DELETE``
+        closes the residual window: a push that acquires a lease between the last check
+        and the delete clears the fence (so we abort before touching the chunk), and a
+        push that acquires one *during* the delete restores the bytes we already read —
+        so a chunk that was unleased when we started is never lost to a concurrent push.
         """
         valid = _validate_chunk_id(chunk_id)
         effective_now = _validate_finite_epoch(now_epoch, default_now=self._clock().timestamp())
-        before_state = self._lease_state_token()
-        if valid in self.read_active_leased_chunks(now_epoch=effective_now):
-            return False
-        if self._lease_state_token() != before_state:
-            return False
-        if not self.has_chunk(valid):
-            return False
-        if self._lease_state_token() != before_state:
-            return False
-        self.delete_chunk(valid)
-        return True
+        with self._coord_lock:
+            before_state = self._lease_state_token()
+            if valid in self.read_active_leased_chunks(now_epoch=effective_now):
+                return False
+            if self._lease_state_token() != before_state:
+                return False
+            if not self.has_chunk(valid):
+                return False
+            if self._lease_state_token() != before_state:
+                return False
+
+            staged_payload = self.get_chunk(valid)
+            fence_key = self._gc_fence_key(valid)
+            fence_token = uuid.uuid4().hex
+            self._send("PUT", object_key=fence_key, body=fence_token.encode("ascii"))
+
+            fence_resp = self._send("GET", object_key=fence_key)
+            if (
+                fence_resp.status_code != 200
+                or fence_resp.body.decode("ascii", "replace") != fence_token
+                or self._lease_state_token() != before_state
+                or valid in self.read_active_leased_chunks(now_epoch=effective_now)
+            ):
+                self._send("DELETE", object_key=fence_key)
+                return False
+
+            self.delete_chunk(valid)
+
+            post_fence = self._send("GET", object_key=fence_key)
+            if (
+                post_fence.status_code != 200
+                or post_fence.body.decode("ascii", "replace") != fence_token
+                or self._lease_state_token() != before_state
+                or valid in self.read_active_leased_chunks(now_epoch=effective_now)
+            ):
+                self.put_chunk(valid, staged_payload)
+                self._send("DELETE", object_key=fence_key)
+                return False
+
+            self._send("DELETE", object_key=fence_key)
+            return True
 
     def _staging_journal_key(self, project_id: str, parent_snapshot_id: str | None) -> str:
         digest = _staging_journal_digest(project_id, parent_snapshot_id)

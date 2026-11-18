@@ -25,6 +25,16 @@ class VaultTamperDetectedError(PersonalVaultError):
     """Raised on any integrity, MAC, Merkle root, ordering, or bundle mismatch."""
 
 
+class VaultIntegrityError(PersonalVaultError):
+    """Raised when a destructive operation cannot first authenticate the vault.
+
+    A garbage collection that cannot cryptographically verify every stored
+    manifest must refuse to delete anything: an unverifiable manifest is either
+    tampered or was written by a key we do not hold, and deleting its chunks
+    could destroy data a legitimate peer still needs.
+    """
+
+
 class VaultQuotaExceededError(PersonalVaultError):
     """Raised when writing an object would exceed the configured vault quota."""
 
@@ -41,6 +51,7 @@ __all__ = [
     "PersonalVaultError",
     "VaultAuthenticationError",
     "VaultCryptoError",
+    "VaultIntegrityError",
     "VaultQuotaExceededError",
     "VaultRevisionConflictError",
     "VaultTamperDetectedError",

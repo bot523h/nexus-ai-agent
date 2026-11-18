@@ -2436,3 +2436,127 @@ def test_wave4_bundle_load_wraps_midstream_read_errors(
     with pytest.raises(VaultTransportError, match="Cannot read bundle"):
         PortableBundleVaultDriver(bundle_path)
     assert "handle" in holder
+
+
+def _fence_transport(
+    objects: dict[str, tuple[bytes, dict[str, str]]],
+    *,
+    bucket: str,
+    inject_on_key: str | None = None,
+    inject_lease: tuple[str, bytes],
+    inject_on_delete_key: str | None = None,
+) -> Any:
+    import json
+    import time
+    import urllib.parse
+
+    state = {"get_done": False, "delete_done": False}
+
+    def _transport(req: S3HttpRequest) -> S3HttpResponse:
+        parsed = urllib.parse.urlsplit(req.url)
+        query = dict(urllib.parse.parse_qsl(parsed.query))
+        key = parsed.path.split(f"/{bucket}/", 1)[-1]
+        if req.method == "GET" and query.get("list-type") == "2":
+            prefix = query.get("prefix", "")
+            body = (
+                "<ListBucketResult>"
+                + "".join(
+                    f"<Contents><Key>{k}</Key></Contents>"
+                    for k in sorted(objects)
+                    if k.startswith(prefix)
+                )
+                + "</ListBucketResult>"
+            ).encode()
+            return S3HttpResponse(status_code=200, body=body)
+        if req.method == "HEAD":
+            if key in objects:
+                return S3HttpResponse(status_code=200, headers=dict(objects[key][1]))
+            return S3HttpResponse(status_code=404)
+        if req.method == "PUT":
+            objects[key] = (req.body, {"etag": f'"e-{len(objects)}"'})
+            return S3HttpResponse(status_code=200)
+        if req.method == "GET":
+            if inject_on_key is not None and key == inject_on_key and not state["get_done"]:
+                state["get_done"] = True
+                lease_id, cid = inject_lease
+                objects[lease_id] = (
+                    json.dumps(
+                        {"expires_at_epoch": time.time() + 600.0, "chunk_ids": [cid]}
+                    ).encode(),
+                    {"etag": '"late"'},
+                )
+            if key in objects:
+                return S3HttpResponse(
+                    status_code=200, headers=dict(objects[key][1]), body=objects[key][0]
+                )
+            return S3HttpResponse(status_code=404)
+        if req.method == "DELETE":
+            if (
+                inject_on_delete_key is not None
+                and key == inject_on_delete_key
+                and not state["delete_done"]
+            ):
+                state["delete_done"] = True
+                lease_id, cid = inject_lease
+                objects[lease_id] = (
+                    json.dumps(
+                        {"expires_at_epoch": time.time() + 600.0, "chunk_ids": [cid]}
+                    ).encode(),
+                    {"etag": '"late"'},
+                )
+            objects.pop(key, None)
+            return S3HttpResponse(status_code=204)
+        return S3HttpResponse(status_code=405)
+
+    return _transport
+
+
+def _fence_driver(transport: Any) -> S3CompatibleSigV4Driver:
+    cfg = S3SigV4Config(
+        endpoint_url="https://fence.example.com",
+        bucket="fence-bkt",
+        region="us-east-1",
+        access_key_id="AKID",
+        secret_access_key="SECRET",
+        prefix="fence",
+    )
+    return S3CompatibleSigV4Driver(cfg, http_transport=transport)
+
+
+def test_p1_2_fence_restores_chunk_when_lease_lands_during_delete() -> None:
+    """A lease that lands *during* the DELETE makes GC restore the chunk and return False."""
+    cid = "a" * 64
+    objects: dict[str, tuple[bytes, dict[str, str]]] = {}
+    transport = _fence_transport(
+        objects,
+        bucket="fence-bkt",
+        inject_lease=("fence/leases/newcomer.json", cid),
+        inject_on_delete_key=f"fence/chunks/{cid}.chk",
+    )
+    s3 = _fence_driver(transport)
+    s3.put_chunk(cid, b"precious-bytes")
+
+    # The lease only appears while the chunk DELETE is in flight, so the chunk
+    # bytes were already read and are restored by the two-sided fence.
+    assert s3.delete_chunk_if_unleased(cid) is False
+    assert s3.has_chunk(cid)
+    assert s3.get_chunk(cid) == b"precious-bytes"
+    assert f"fence/gc-fences/{cid}.fence" not in objects
+
+
+def test_p1_2_fence_aborts_before_delete_when_lease_lands_after_fence_write() -> None:
+    """A lease that lands between the fence write and its re-read aborts GC pre-delete."""
+    cid = "b" * 64
+    objects: dict[str, tuple[bytes, dict[str, str]]] = {}
+    transport = _fence_transport(
+        objects,
+        bucket="fence-bkt",
+        inject_on_key=f"fence/gc-fences/{cid}.fence",
+        inject_lease=("fence/leases/newcomer.json", cid),
+    )
+    s3 = _fence_driver(transport)
+    s3.put_chunk(cid, b"still-here")
+
+    assert s3.delete_chunk_if_unleased(cid) is False
+    assert s3.has_chunk(cid)
+    assert f"fence/gc-fences/{cid}.fence" not in objects

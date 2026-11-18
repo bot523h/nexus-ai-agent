@@ -21,11 +21,13 @@ from nexus_ai_agent.creative.hyper_compiler.bounded_memory_pipe_runner import (
 )
 from nexus_ai_agent.creative.hyper_compiler.errors import (
     HyperCompilerError,
+    SegmentIntegrityError,
     SegmentTamperError,
 )
 from nexus_ai_agent.creative.hyper_compiler.segment_cas_dag import (
     SEGMENT_HEADER_LEN,
     PlannedSegment,
+    SegmentCASPlanner,
     SegmentStatus,
     TimelineSegmentSpec,
 )
@@ -679,3 +681,38 @@ def test_orchestrator_plan_from_specs_rejects_length_mismatch(tmp_path: Path) ->
             [default_pipe_spec(make_spec(0))],
             MuxMode.DETERMINISTIC_CPU_MUX,
         )
+
+
+# ── F5: require_trusted_anchor is fail-closed at construction and at verify ──
+def test_planner_require_trusted_anchor_demands_hmac_key(tmp_path: Path) -> None:
+    # An unsigned manifest can re-derive its own key, so a planner asked to demand
+    # a trusted anchor must refuse to exist without a secret to anchor to.
+    with pytest.raises(HyperCompilerError, match="require_trusted_anchor demands an hmac_key"):
+        SegmentCASPlanner(tmp_path, require_trusted_anchor=True)
+    with pytest.raises(HyperCompilerError, match="require_trusted_anchor demands an hmac_key"):
+        HyperTimelineOrchestrator(tmp_path, require_trusted_anchor=True)
+
+    # With a key present the anchored planner is constructed and usable.
+    anchored = SegmentCASPlanner(
+        tmp_path / "anchored", hmac_key=b"secret", require_trusted_anchor=True
+    )
+    spec = make_spec(0)
+    assert anchored.cas_key(spec)
+
+
+def test_anchored_planner_rejects_forged_manifest_without_seal(tmp_path: Path) -> None:
+    key = b"anchor-secret"
+    anchored = SegmentCASPlanner(tmp_path / "anchored", hmac_key=key, require_trusted_anchor=True)
+    spec = make_spec(0)
+    anchored.commit_segment(spec, b"payload-bytes")
+    cas_key = anchored.cas_key(spec)
+
+    # Strip the HMAC seal and rewrite the manifest: the content still hashes
+    # correctly, so only the anchor can rule the forgery out.
+    manifest_path = anchored.manifest_path(cas_key)
+    raw = json.loads(manifest_path.read_text(encoding="utf-8"))
+    raw.pop("manifest_hmac", None)
+    manifest_path.write_text(json.dumps(raw, sort_keys=True), encoding="utf-8")
+
+    with pytest.raises(SegmentIntegrityError, match="seal missing"):
+        anchored.verify_segment_artifact(cas_key)
