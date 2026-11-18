@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import os
+import stat
 import tempfile
 from pathlib import Path
 from typing import BinaryIO
@@ -25,8 +26,11 @@ def verified_download_snapshot(
     try:
         digest = hashlib.sha256()
         size = 0
-        fd = os.open(authorized.path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+        fd = os.open(authorized.path, flags)
         with os.fdopen(fd, "rb") as source:
+            if not stat.S_ISREG(os.fstat(source.fileno()).st_mode):
+                raise DownloadRefused(409, "artifact_changed")
             while chunk := source.read(65_536):
                 size += len(chunk)
                 if size > authorized.size_bytes:

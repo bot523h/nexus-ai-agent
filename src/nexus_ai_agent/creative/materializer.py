@@ -195,10 +195,10 @@ def validate_safe_id(value: object, name: str) -> str:
 def stream_sha256(path: Path) -> tuple[str, int, int]:
     """Return ``(sha256_hex, size, inode)`` by streaming the file in 64 KiB chunks.
 
-    ``O_NOFOLLOW`` makes the open itself refuse a symlink, closing the window
-    between a path check and the read.
+    ``O_NOFOLLOW`` refuses a final symlink. ``O_NONBLOCK`` prevents a FIFO
+    substituted before open from blocking before the descriptor is checked.
     """
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
     fd = os.open(path, flags)
     try:
         st = os.fstat(fd)

@@ -542,3 +542,74 @@ def test_studio_http_download_verified_snapshot_and_refusals(env: Env, monkeypat
         assert client.get(route, params={"path": rel}, headers=auth).status_code == 403
     finally:
         settings_module.get_settings.cache_clear()
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="POSIX FIFO required")
+def test_download_refuses_fifo_without_blocking(env: Env) -> None:
+    import subprocess
+
+    rel = _render_ok(env)
+    artifact = env.artifact()
+    passport = artifact.parent / f"storyboard{PASSPORT_SUFFIX}"
+    artifact.unlink()
+    os.mkfifo(artifact)
+    script = (
+        "import sys\n"
+        "from pathlib import Path\n"
+        "from nexus_ai_agent.creative.artifact_download import "
+        "authorize_artifact_download, DownloadRefused\n"
+        "try:\n"
+        " authorize_artifact_download(Path(sys.argv[1]), sys.argv[2], sys.argv[3])\n"
+        "except DownloadRefused:\n"
+        " sys.exit(0)\n"
+        "sys.exit(1)\n"
+    )
+    subprocess.run(
+        [sys.executable, "-c", script, str(env.ws), rel, SIGNING_KEY], check=True, timeout=5
+    )
+    artifact.unlink()
+    artifact.write_bytes(b"ordinary file")
+    passport.unlink()
+    os.mkfifo(passport)
+    subprocess.run(
+        [sys.executable, "-c", script, str(env.ws), rel, SIGNING_KEY], check=True, timeout=5
+    )
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="POSIX FIFO required")
+@pytest.mark.parametrize("target", ["artifact", "passport"])
+def test_download_refuses_fifo_substituted_during_open_without_blocking(
+    env: Env, target: str
+) -> None:
+    import subprocess
+
+    rel = _render_ok(env)
+    script = """
+import os, sys
+from pathlib import Path
+from nexus_ai_agent.creative.artifact_download import authorize_artifact_download, DownloadRefused
+root, rel, key, target = sys.argv[1:]
+artifact = Path(root) / rel
+victim = artifact if target == "artifact" else artifact.with_suffix(".passport.json")
+real_open = os.open
+swapped = False
+def racing_open(path, flags, *args, **kwargs):
+    global swapped
+    if not swapped and Path(path) == victim:
+        swapped = True
+        victim.unlink()
+        os.mkfifo(victim)
+    return real_open(path, flags, *args, **kwargs)
+os.open = racing_open
+try:
+    authorize_artifact_download(Path(root), rel, key)
+except DownloadRefused:
+    assert swapped
+    sys.exit(0)
+sys.exit(1)
+"""
+    subprocess.run(
+        [sys.executable, "-c", script, str(env.ws), rel, SIGNING_KEY, target],
+        check=True,
+        timeout=5,
+    )

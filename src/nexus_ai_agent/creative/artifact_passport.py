@@ -24,7 +24,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from nexus_ai_agent.creative.materializer import atomic_write, canonical_json, stream_sha256
+from nexus_ai_agent.creative.materializer import (
+    MaterializationError,
+    atomic_write,
+    canonical_json,
+    stream_sha256,
+)
 
 PASSPORT_VERSION = 1
 PASSPORT_SUFFIX = ".passport.json"
@@ -157,7 +162,18 @@ def verify_artifact_passport(
     if pst.st_size <= 0 or pst.st_size > MAX_PASSPORT_BYTES:
         raise PassportError("passport_size", str(pst.st_size))
     try:
-        passport = json.loads(Path(passport_path).read_bytes().decode("utf-8"))
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+        fd = os.open(passport_path, flags)
+        with os.fdopen(fd, "rb") as handle:
+            opened = os.fstat(handle.fileno())
+            if not stat.S_ISREG(opened.st_mode):
+                raise PassportError("passport_not_regular", str(passport_path))
+            if opened.st_size <= 0 or opened.st_size > MAX_PASSPORT_BYTES:
+                raise PassportError("passport_size", str(opened.st_size))
+            raw = handle.read(MAX_PASSPORT_BYTES + 1)
+        if len(raw) > MAX_PASSPORT_BYTES:
+            raise PassportError("passport_size", str(len(raw)))
+        passport = json.loads(raw.decode("utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise PassportError("passport_unreadable", type(exc).__name__) from exc
     if not isinstance(passport, dict):
@@ -176,7 +192,10 @@ def verify_artifact_passport(
     mst = _lstat_regular(mp4_path, "artifact")
     if mst.st_size != passport["output_size_bytes"]:
         raise PassportError("artifact_mismatch", "size differs from passport")
-    digest, _, _ = stream_sha256(Path(mp4_path))
+    try:
+        digest, _, _ = stream_sha256(Path(mp4_path))
+    except (OSError, MaterializationError) as exc:
+        raise PassportError("artifact_mismatch", "artifact changed during verification") from exc
     if not hmac.compare_digest(digest, str(passport["output_sha256"])):
         raise PassportError("artifact_mismatch", "sha256 differs from passport")
     return PassportCheck(passport=passport, output_path=Path(mp4_path))
