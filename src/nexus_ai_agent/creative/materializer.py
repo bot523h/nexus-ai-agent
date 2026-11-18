@@ -74,6 +74,9 @@ MAX_SHOT_SEC = 600.0
 SHOT_CONTENT_SCHEMA = "nagar-shot-content-v1"
 #: Schema tag carried by every serialised inclusion proof.
 SHOT_PROOF_SCHEMA = "nagar-merkle-inclusion-proof-v1"
+#: The name a verifier uses when it demands that tag: a proof that does not
+#: declare *this* schema is not a proof of this protocol and must be refused.
+MERKLE_PROOF_SCHEMA = SHOT_PROOF_SCHEMA
 #: RFC 6962 Merkle Tree Hash of the empty tree (``SHA-256("")``).
 EMPTY_MERKLE_ROOT = hashlib.sha256(b"").hexdigest()
 _SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
@@ -435,8 +438,15 @@ def _proof_is_valid(
     index: int,
     merkle_root: str,
 ) -> bool:
-    """Replay one audit path; every field must agree with the declared leaves."""
+    """Replay one audit path; every field must agree with the declared leaves.
+
+    The ``schema`` tag is checked first: a mapping that does not declare
+    :data:`MERKLE_PROOF_SCHEMA` may use the same field names for a different
+    protocol, so it is refused before any of its values are trusted.
+    """
     if not isinstance(proof, Mapping):  # noqa: SIM102 - explicit, flat fail-closed checks
+        return False
+    if proof.get("schema") != MERKLE_PROOF_SCHEMA:
         return False
     if proof.get("leaf_index") != index:
         return False
@@ -472,10 +482,13 @@ def verify_shot_inclusion_proofs(
     * ``shot_merkle_root_mismatch`` - the root does not equal the RFC 6962 root
       recomputed from the declared shot hashes;
     * ``shot_inclusion_proof_count_mismatch`` - the number of proofs differs
-      from the number of shots (only meaningful for a non-empty tree);
-    * ``shot_inclusion_proof_invalid`` - a proof is not a mapping, disagrees
-      with the declared leaf index/hash/root/leaf count, has a malformed path,
-      or replays to a different root.
+      from the number of leaves. This holds for the empty tree too: zero leaves
+      means zero proofs, so a passport that carries proofs for an empty
+      ``shot_hashes`` list is refused instead of silently ignored;
+    * ``shot_inclusion_proof_invalid`` - a proof is not a mapping, does not
+      declare :data:`MERKLE_PROOF_SCHEMA`, disagrees with the declared leaf
+      index/hash/root/leaf count, has a malformed path, or replays to a
+      different root.
     """
     if not isinstance(merkle_root, str) or not _HEX64.fullmatch(merkle_root):
         return ("shot_merkle_root_mismatch",)
@@ -487,7 +500,7 @@ def verify_shot_inclusion_proofs(
     recomputed = merkle_root_sha256(payloads)
     if not hmac.compare_digest(recomputed, merkle_root):
         violations.append("shot_merkle_root_mismatch")
-    if payloads and len(proofs) != len(payloads):
+    if len(proofs) != len(payloads):
         violations.append("shot_inclusion_proof_count_mismatch")
     if len(proofs) == len(payloads):
         for index, proof in enumerate(proofs):
@@ -884,6 +897,7 @@ __all__ = [
     "DEFAULT_SAMPLE_RATE_HZ",
     "EMPTY_MERKLE_ROOT",
     "MANIFEST_FILENAME",
+    "MERKLE_PROOF_SCHEMA",
     "SHOT_CONTENT_SCHEMA",
     "SHOT_PROOF_SCHEMA",
     "AssetRecord",
