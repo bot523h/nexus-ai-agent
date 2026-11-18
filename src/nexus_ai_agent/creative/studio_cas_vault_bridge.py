@@ -253,38 +253,71 @@ class StudioVaultSyncReport:
 # --------------------------------------------------------------------------- #
 
 
-def _create_directories(absolute: Path) -> None:
-    """Create ``absolute`` one component at a time, never following a symlink.
+def _open_directory(name: str, *, parent_fd: int | None = None, label: str = "") -> int:
+    """Open ``name`` as a directory descriptor, refusing a symlink or non-directory.
 
-    ``mkdir(parents=True)`` resolves every parent first, so a link swapped in
-    between the check and the create would be followed. Walking from the deepest
-    existing ancestor down means each new directory is created inside the
-    directory that was just proven genuine, and a component that appears under
-    our feet is re-examined instead of trusted.
+    ``parent_fd`` resolves ``name`` *relative to that descriptor*, which is the
+    only way to be sure a path component cannot be repointed between the check
+    and the open: the kernel resolves it inside the inode we already hold.
     """
-    missing: list[Path] = []
-    probe = absolute
-    while not probe.exists() and not probe.is_symlink():
-        missing.append(probe)
-        probe = probe.parent
-    for part in reversed(missing):
+    try:
+        if parent_fd is None:
+            return os.open(Path(name), _DIR_OPEN_FLAGS)
+        return os.open(name, _DIR_OPEN_FLAGS, dir_fd=parent_fd)
+    except OSError as exc:
+        raised_at = name if parent_fd is not None else str(name)
+        raise StudioBridgeError(
+            "not_a_directory", f"{label}: {raised_at} ({type(exc).__name__})"
+        ) from exc
+
+
+def _descend_or_create(parent_fd: int, name: str, *, label: str) -> int:
+    """Create-or-open ``name`` **inside** ``parent_fd`` and return its descriptor.
+
+    ``os.mkdir(..., dir_fd=parent_fd)`` creates the child relative to the
+    directory descriptor, so a parent that is renamed or replaced by a symlink
+    between two components cannot redirect the create: the descriptor still
+    names the original inode. The child is then opened with ``O_NOFOLLOW``
+    relative to the same descriptor, and only a genuine directory is returned.
+    """
+    try:
+        os.mkdir(name, DIR_MODE, dir_fd=parent_fd)
+    except FileExistsError:
         try:
-            os.mkdir(part, DIR_MODE)
-        except FileExistsError:  # something appeared between the scan and the create
-            if part.is_symlink() or not part.is_dir():
-                raise StudioBridgeError("not_a_directory", str(part)) from None
-        except OSError as exc:
-            raise StudioBridgeError("not_a_directory", f"{part}: {type(exc).__name__}") from exc
+            existing = os.lstat(name, dir_fd=parent_fd)
+        except OSError as exc:  # vanished between the create attempt and the stat
+            raise StudioBridgeError(
+                "not_a_directory", f"{label}: {name} ({type(exc).__name__})"
+            ) from exc
+        if stat.S_ISLNK(existing.st_mode):
+            raise StudioBridgeError("symlink_refused", f"{label}: {name}") from None
+        if not stat.S_ISDIR(existing.st_mode):
+            raise StudioBridgeError("not_a_directory", f"{label}: {name}") from None
+    except OSError as exc:
+        raise StudioBridgeError(
+            "not_a_directory", f"{label}: {name} ({type(exc).__name__})"
+        ) from exc
+    child_fd = _open_directory(name, parent_fd=parent_fd, label=label)
+    try:
+        child = os.fstat(child_fd)
+        if not stat.S_ISDIR(child.st_mode):
+            raise StudioBridgeError("not_a_directory", f"{label}: {name}")
+    except BaseException:
+        os.close(child_fd)
+        raise
+    return child_fd
 
 
 def _prepare_directory(root: Path, *, label: str) -> Path:
     """Create ``root`` (parents allowed) and prove it is a genuine directory.
 
-    TOCTOU-safe: the existing parent chain is checked for symlinks, each missing
-    component is created individually, and the result is proven by opening it
-    with ``O_DIRECTORY | O_NOFOLLOW`` and comparing the descriptor's
-    ``(st_dev, st_ino)`` with ``lstat`` of the path. A directory swapped for a
-    symlink between those two calls cannot satisfy both.
+    TOCTOU-safe by construction: the missing tail is created *component by
+    component*, each component relative to the descriptor of the directory above
+    it (``dir_fd=``), never by a multi-component path string. A parent that is
+    renamed and replaced by a symlink mid-walk therefore cannot redirect the
+    create into ``/outside`` - the descriptor still names the original inode -
+    and the final ``(st_dev, st_ino)`` comparison against ``lstat`` of the
+    requested path refuses the swap instead of silently following it.
     """
     candidate = Path(root)
     absolute = Path(os.path.abspath(candidate))
@@ -293,29 +326,42 @@ def _prepare_directory(root: Path, *, label: str) -> Path:
         refuse_symlink_chain(anchor, absolute)
     except MaterializationError as exc:
         raise StudioBridgeError("symlink_refused", f"{label}: {exc.detail}") from exc
-    _create_directories(absolute)
-    try:
-        refuse_symlink_chain(anchor, absolute)
-    except MaterializationError as exc:  # a component was swapped while we created
-        raise StudioBridgeError("symlink_refused", f"{label}: {exc.detail}") from exc
-    try:
-        dir_fd = os.open(absolute, _DIR_OPEN_FLAGS)
-    except OSError as exc:
-        reason = "symlink_refused" if absolute.is_symlink() else "not_a_directory"
-        raise StudioBridgeError(reason, f"{label}: {absolute}") from exc
+
+    existing = absolute
+    missing: list[str] = []
+    while not existing.exists() and not existing.is_symlink():
+        missing.append(existing.name)
+        existing = existing.parent
+    # The descriptor opened below is the proof: it names an inode, so neither a
+    # rename nor a symlink swap of the path can redirect what happens next.
+    dir_fd = _open_directory(str(existing), label=label)
     try:
         descriptor = os.fstat(dir_fd)
-        path_stat = os.lstat(absolute)
+        path_stat = os.lstat(existing)
+        if not stat.S_ISDIR(descriptor.st_mode):
+            raise StudioBridgeError("not_a_directory", f"{label}: {existing}")
+        if stat.S_ISLNK(path_stat.st_mode) or (descriptor.st_dev, descriptor.st_ino) != (
+            path_stat.st_dev,
+            path_stat.st_ino,
+        ):
+            raise StudioBridgeError("directory_identity_mismatch", f"{label}: {existing}")
+        for part in reversed(missing):
+            child_fd = _descend_or_create(dir_fd, part, label=label)
+            os.close(dir_fd)
+            dir_fd = child_fd
+        created = os.fstat(dir_fd)
+        try:
+            final_stat = os.lstat(absolute)
+        except OSError as exc:  # the path no longer names what we created
+            raise StudioBridgeError("directory_identity_mismatch", f"{label}: {absolute}") from exc
+        if stat.S_ISLNK(final_stat.st_mode) or (created.st_dev, created.st_ino) != (
+            final_stat.st_dev,
+            final_stat.st_ino,
+        ):
+            raise StudioBridgeError("directory_identity_mismatch", f"{label}: {absolute}")
     finally:
         os.close(dir_fd)
-    if not stat.S_ISDIR(descriptor.st_mode):
-        raise StudioBridgeError("not_a_directory", f"{label}: {absolute}")
-    if stat.S_ISLNK(path_stat.st_mode) or (descriptor.st_dev, descriptor.st_ino) != (
-        path_stat.st_dev,
-        path_stat.st_ino,
-    ):
-        raise StudioBridgeError("directory_identity_mismatch", f"{label}: {absolute}")
-    return absolute.resolve()
+    return absolute
 
 
 def _safe_child(root: Path, name: str, *, label: str) -> Path:

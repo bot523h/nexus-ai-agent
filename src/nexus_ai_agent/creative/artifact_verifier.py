@@ -59,6 +59,15 @@ VIDEO_HANDLER = "vide"
 AUDIO_HANDLER = "soun"
 #: Sample-entry format of AAC audio in an MP4 sample description.
 AUDIO_CODEC = "mp4a"
+#: Fixed ``AudioSampleEntry`` body of an ``mp4a`` entry, after its 8-byte header:
+#: 6 reserved + 2 data_reference_index + 8 reserved + 2 channelcount +
+#: 2 samplesize + 4 pre_defined/reserved + 4 sample rate (16.16 fixed point).
+MIN_AUDIO_SAMPLE_ENTRY_BODY = 28
+#: ``mdhd`` payload length per box version (version/flags + times + duration).
+MIN_MDHD_PAYLOAD = {0: 20, 1: 32}
+#: Typed structural failure codes reported by the ``moov`` parser.
+MALFORMED_MOOV = "malformed_moov_structure"
+MALFORMED_AUDIO_ENTRY = "malformed_audio_sample_entry"
 
 
 @dataclass(frozen=True)
@@ -160,11 +169,21 @@ class MoovTrack:
         return self.handler == AUDIO_HANDLER and self.codec == AUDIO_CODEC and self.timescale > 0
 
 
-def _iter_boxes(buffer: bytes, start: int, end: int) -> Iterator[tuple[str, int, int]]:
+def _iter_boxes(
+    buffer: bytes,
+    start: int,
+    end: int,
+    *,
+    problems: list[str],
+    context: str,
+) -> Iterator[tuple[str, int, int]]:
     """Yield ``(type, payload start, payload end)`` for the boxes in ``buffer[start:end]``.
 
-    A nested box that does not fit is not yielded, so a truncated inner box can
-    never be mistaken for a stream declaration (the caller reports the gap).
+    Every structural defect is *reported* through ``problems`` instead of being
+    silently skipped: a truncated header, a ``largesize`` that does not fit, a
+    box whose declared size overruns the buffer, and trailing bytes that do not
+    form a complete box all append a typed ``malformed_moov_structure`` problem
+    that forces the verdict to ``VIOLATED``.
     """
     offset = start
     while offset + 8 <= end:
@@ -173,53 +192,130 @@ def _iter_boxes(buffer: bytes, start: int, end: int) -> Iterator[tuple[str, int,
         header_len = 8
         if size == 1:
             if offset + 16 > end:
+                problems.append(f"{MALFORMED_MOOV}: {context} largesize at {offset} is truncated")
                 return
             size = int.from_bytes(buffer[offset + 8 : offset + 16], "big")
             header_len = 16
         elif size == 0:
             size = end - offset
         if size < header_len or offset + size > end:
+            problems.append(
+                f"{MALFORMED_MOOV}: {context} box {kind!r} at {offset} declares "
+                f"{size} bytes, only {end - offset} remain"
+            )
             return
         yield kind, offset + header_len, offset + size
         offset += size
+    if offset < end:
+        problems.append(
+            f"{MALFORMED_MOOV}: {context} has {end - offset} trailing bytes at {offset}"
+        )
 
 
-def _sample_format(buffer: bytes, start: int, end: int) -> str | None:
-    """Return the first sample-entry format inside a ``minf`` box (``avc1``/``mp4a``)."""
-    for kind, inner_start, inner_end in _iter_boxes(buffer, start, end):
-        if kind != "stbl":
-            continue
-        for entry, entry_start, entry_end in _iter_boxes(buffer, inner_start, inner_end):
-            if entry != "stsd":
-                continue
-            # version/flags (4) + entry_count (4) + entry_size (4) + format (4)
-            if entry_end - entry_start >= 16:
-                return buffer[entry_start + 12 : entry_start + 16].decode("latin-1")
-            return None
-    return None
+def _parse_mdhd(buffer: bytes, start: int, end: int) -> tuple[int, str | None]:
+    """Read a ``mdhd`` timescale, refusing a truncated or unknown-version box."""
+    length = end - start
+    if length < 4:
+        return 0, f"{MALFORMED_MOOV}: mdhd is {length} bytes, shorter than its version field"
+    version = buffer[start]
+    minimum = MIN_MDHD_PAYLOAD.get(version)
+    if minimum is None:
+        return 0, f"{MALFORMED_MOOV}: mdhd version {version} is not 0 or 1"
+    if length < minimum:
+        return 0, f"{MALFORMED_MOOV}: mdhd v{version} is {length} bytes, needs {minimum}"
+    # version/flags (4) + creation (4|8) + modification (4|8) + timescale (4)
+    offset = start + (20 if version == 1 else 12)
+    if end - offset < 4:  # pragma: no cover - the length check above already covers this
+        return 0, f"{MALFORMED_MOOV}: mdhd v{version} truncated before its timescale"
+    return int.from_bytes(buffer[offset : offset + 4], "big"), None
 
 
-def _parse_trak(buffer: bytes, start: int, end: int) -> MoovTrack:
+def _parse_stsd(buffer: bytes, start: int, end: int) -> tuple[str | None, list[str]]:
+    """Return the first sample-entry format of an ``stsd`` and every defect it shows.
+
+    A sample description is only usable when it declares at least one entry and
+    that entry is wholly contained in the box. For ``mp4a`` the fixed
+    ``AudioSampleEntry`` body must be present *and* advertise a real audio
+    configuration (channelcount >= 1, sample rate > 0), so an entry that merely
+    names ``mp4a`` without a sane audio header is refused rather than believed.
+    """
+    problems: list[str] = []
+    length = end - start
+    if length < 8:
+        return None, [f"{MALFORMED_MOOV}: stsd is {length} bytes, shorter than its entry table"]
+    entry_count = int.from_bytes(buffer[start + 4 : start + 8], "big")
+    if entry_count < 1:
+        return None, [f"{MALFORMED_MOOV}: stsd declares {entry_count} sample entries"]
+    if length < 16:
+        return None, [f"{MALFORMED_MOOV}: stsd declares {entry_count} entries but holds none"]
+    entry_size = int.from_bytes(buffer[start + 8 : start + 12], "big")
+    codec = buffer[start + 12 : start + 16].decode("latin-1")
+    if entry_size < 8 or 8 + entry_size > length:
+        return None, [
+            f"{MALFORMED_MOOV}: stsd entry {codec!r} declares {entry_size} bytes, "
+            f"only {length - 8} remain"
+        ]
+    if codec != AUDIO_CODEC:
+        return codec, problems
+    body_len = entry_size - 8
+    if body_len < MIN_AUDIO_SAMPLE_ENTRY_BODY:
+        return None, [
+            f"{MALFORMED_AUDIO_ENTRY}: {codec} body is {body_len} bytes, "
+            f"needs {MIN_AUDIO_SAMPLE_ENTRY_BODY}"
+        ]
+    body = start + 16
+    channels = int.from_bytes(buffer[body + 16 : body + 18], "big")
+    sample_rate = int.from_bytes(buffer[body + 24 : body + 28], "big") >> 16
+    if channels < 1:
+        problems.append(f"{MALFORMED_AUDIO_ENTRY}: {codec} declares {channels} channels")
+    if sample_rate <= 0:
+        problems.append(f"{MALFORMED_AUDIO_ENTRY}: {codec} declares sample rate {sample_rate}")
+    if problems:
+        # An entry that cannot describe real audio is not a belief we act on.
+        return None, problems
+    return codec, problems
+
+
+def _parse_trak(buffer: bytes, start: int, end: int) -> tuple[MoovTrack, list[str]]:
     """Parse one ``trak``: handler from ``hdlr``, codec from ``stsd``, ``mdhd`` timescale."""
+    problems: list[str] = []
     handler = ""
     codec: str | None = None
     timescale = 0
-    for kind, media_start, media_end in _iter_boxes(buffer, start, end):
+    for kind, media_start, media_end in _iter_boxes(
+        buffer, start, end, problems=problems, context="trak"
+    ):
         if kind != "mdia":
             continue
-        for entry, inner_start, inner_end in _iter_boxes(buffer, media_start, media_end):
-            if entry == "hdlr" and inner_end - inner_start >= 12:
-                handler = buffer[inner_start + 8 : inner_start + 12].decode("latin-1")
+        for entry, inner_start, inner_end in _iter_boxes(
+            buffer, media_start, media_end, problems=problems, context="mdia"
+        ):
+            if entry == "hdlr":
+                if inner_end - inner_start >= 12:
+                    handler = buffer[inner_start + 8 : inner_start + 12].decode("latin-1")
+                else:
+                    problems.append(f"{MALFORMED_MOOV}: hdlr is too short to declare a handler")
             elif entry == "mdhd":
-                # version/flags (4) + creation (4|8) + modification (4|8) + timescale (4)
-                offset = inner_start + (20 if buffer[inner_start] == 1 else 12)
-                if inner_end - offset >= 4:
-                    timescale = int.from_bytes(buffer[offset : offset + 4], "big")
+                parsed, problem = _parse_mdhd(buffer, inner_start, inner_end)
+                timescale = parsed
+                if problem is not None:
+                    problems.append(problem)
             elif entry == "minf":
-                found = _sample_format(buffer, inner_start, inner_end)
-                if found is not None:
-                    codec = found
-    return MoovTrack(handler=handler, codec=codec, timescale=timescale)
+                for inner, box_start, box_end in _iter_boxes(
+                    buffer, inner_start, inner_end, problems=problems, context="minf"
+                ):
+                    if inner != "stbl":
+                        continue
+                    for sample, table_start, table_end in _iter_boxes(
+                        buffer, box_start, box_end, problems=problems, context="stbl"
+                    ):
+                        if sample != "stsd":
+                            continue
+                        found, sample_problems = _parse_stsd(buffer, table_start, table_end)
+                        problems.extend(sample_problems)
+                        if found is not None:
+                            codec = found
+    return MoovTrack(handler=handler, codec=codec, timescale=timescale), problems
 
 
 def read_moov_tracks(path: Path) -> tuple[tuple[MoovTrack, ...], list[str]]:
@@ -240,14 +336,24 @@ def read_moov_tracks(path: Path) -> tuple[tuple[MoovTrack, ...], list[str]]:
     with open(path, "rb") as handle:
         handle.seek(payload_start)
         buffer = handle.read(payload_len)
-    tracks = [
-        _parse_trak(buffer, start, end)
-        for kind, start, end in _iter_boxes(buffer, 0, len(buffer))
-        if kind == "trak"
-    ]
+    problems: list[str] = []
+    tracks: list[MoovTrack] = []
+    for kind, start, end in _iter_boxes(buffer, 0, len(buffer), problems=problems, context="moov"):
+        if kind != "trak":
+            continue
+        track, track_problems = _parse_trak(buffer, start, end)
+        problems.extend(track_problems)
+        tracks.append(track)
     if not tracks:
-        return (), ["moov declares no trak box"]
-    return tuple(tracks), []
+        return (), [*problems, "moov declares no trak box"]
+    return tuple(tracks), problems
+
+
+def _is_aac_codec(name: object) -> bool:
+    """True when a reported codec name is absent or names AAC (``aac``/``mp4a``)."""
+    if name is None or name == "":
+        return True
+    return str(name).lower() in {"aac", "mp4a"}
 
 
 def _probe(path: Path, ffprobe: str, timeout_s: float) -> dict[str, object] | None:
@@ -374,10 +480,14 @@ def verify_mp4(
 
     streams = probe.get("streams")
     fmt = probe.get("format")
-    video = [
+    reported = streams if isinstance(streams, list) else []
+    video = [s for s in reported if isinstance(s, dict) and s.get("codec_type") == "video"]
+    audio = [
         s
-        for s in (streams if isinstance(streams, list) else [])
-        if isinstance(s, dict) and s.get("codec_type") == "video"
+        for s in reported
+        if isinstance(s, dict)
+        and s.get("codec_type") == "audio"
+        and _is_aac_codec(s.get("codec_name"))
     ]
     duration_raw = fmt.get("duration") if isinstance(fmt, dict) else None
     try:
@@ -389,6 +499,14 @@ def verify_mp4(
     # The container already declared a video track; the demuxer must agree.
     if not video:
         reasons.append("no_video_stream")
+    # ... and so must the audio track. The container promised AAC audio above
+    # (a container without one never reaches the demuxer), so a probe that
+    # enumerates streams but none of them AAC audio has observed a truncated or
+    # forged file. A probe that enumerates nothing at all is already refused as
+    # ``no_video_stream`` and needs no second code.
+    observed = [stream for stream in reported if isinstance(stream, dict)]
+    if require_audio and observed and not audio:
+        reasons.append("missing_audio_stream")
     if not math.isfinite(probed) or probed <= 0:
         reasons.append("probed_duration_not_positive_finite")
     elif abs(probed - expected_duration_s) > tolerance_s:
@@ -423,6 +541,10 @@ def verify_mp4(
 
 __all__ = [
     "AUDIO_CODEC",
+    "MALFORMED_AUDIO_ENTRY",
+    "MALFORMED_MOOV",
+    "MIN_AUDIO_SAMPLE_ENTRY_BODY",
+    "MIN_MDHD_PAYLOAD",
     "AUDIO_HANDLER",
     "PASS",
     "UNOBSERVED",

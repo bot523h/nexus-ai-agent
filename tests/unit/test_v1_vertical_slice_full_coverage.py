@@ -910,26 +910,76 @@ def test_verify_mp4_reports_box_layout_problems(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     "probe,expected",
     [
-        ({"streams": "not-a-list", "format": {"duration": "1.0"}}, {"no_video_stream"}),
+        # A probe that enumerates no stream at all is already refused as
+        # ``no_video_stream``; the audio gate speaks only about listed streams.
+        (
+            {"streams": "not-a-list", "format": {"duration": "1.0"}},
+            {"no_video_stream"},
+        ),
+        (
+            {"streams": [], "format": {"duration": "1.0"}},
+            {"no_video_stream"},
+        ),
         (
             {"streams": [{"codec_type": "video"}], "format": {"duration": "bad"}},
-            {"probed_duration_not_positive_finite"},
+            {"missing_audio_stream", "probed_duration_not_positive_finite"},
         ),
         (
             {"streams": [{"codec_type": "video"}], "format": {"duration": None}},
-            {"probed_duration_not_positive_finite"},
+            {"missing_audio_stream", "probed_duration_not_positive_finite"},
         ),
         (
             {"streams": [{"codec_type": "video"}], "format": {"duration": "-2"}},
-            {"probed_duration_not_positive_finite"},
+            {"missing_audio_stream", "probed_duration_not_positive_finite"},
         ),
         (
             {"streams": [{"codec_type": "video"}], "format": {"duration": "99.0"}},
-            {"duration_mismatch: probed=99.000000s expected=1.000000s"},
+            {
+                "missing_audio_stream",
+                "duration_mismatch: probed=99.000000s expected=1.000000s",
+            },
         ),
         (
             {"streams": [{"codec_type": "video"}], "format": "not-a-dict"},
-            {"probed_duration_not_positive_finite"},
+            {"missing_audio_stream", "probed_duration_not_positive_finite"},
+        ),
+        # A-08: an AAC audio stream the demuxer reports satisfies the gate ...
+        (
+            {
+                "streams": [
+                    {"codec_type": "video"},
+                    {"codec_type": "audio", "codec_name": "aac"},
+                ],
+                "format": {"duration": "99.0"},
+            },
+            {"duration_mismatch: probed=99.000000s expected=1.000000s"},
+        ),
+        # ... a stream that omits its codec name is believed to be AAC ...
+        (
+            {
+                "streams": [
+                    {"codec_type": "video"},
+                    {"codec_type": "audio"},
+                ],
+                "format": {"duration": "99.0"},
+            },
+            {"duration_mismatch: probed=99.000000s expected=1.000000s"},
+        ),
+        # ... but a non-AAC audio stream is refused as if it were silent ...
+        (
+            {
+                "streams": [
+                    {"codec_type": "video"},
+                    {"codec_type": "audio", "codec_name": "opus"},
+                ],
+                "format": {"duration": "1.0"},
+            },
+            {"missing_audio_stream"},
+        ),
+        # ... and non-dict stream entries cannot vouch for anything.
+        (
+            {"streams": ["video", 7], "format": {"duration": "1.0"}},
+            {"no_video_stream"},
         ),
     ],
 )
@@ -2692,15 +2742,47 @@ def _mp4_box(kind: str, payload: bytes, *, largesize: bool = False, size: int = 
     return declared.to_bytes(4, "big") + kind.encode("latin-1") + payload
 
 
-def _trak(handler: str, codec: str, timescale: int, *, mdhd_version: int = 0) -> bytes:
-    """Build a ``trak`` whose ``mdia`` declares one handler, one codec, one timescale."""
+def _mdhd_payload(timescale: int, *, mdhd_version: int = 0) -> bytes:
+    """Build a standards-conformant ``mdhd`` payload (20 bytes for v0, 32 for v1)."""
     if mdhd_version == 1:
-        mdhd_payload = (
-            b"\x01\x00\x00\x00" + b"\x00" * 8 + b"\x00" * 8 + timescale.to_bytes(4, "big")
+        return (
+            b"\x01\x00\x00\x00"
+            + b"\x00" * 8
+            + b"\x00" * 8
+            + timescale.to_bytes(4, "big")
+            + b"\x00" * 8
         )
-    else:
-        mdhd_payload = b"\x00\x00\x00\x00" + b"\x00" * 8 + timescale.to_bytes(4, "big")
-    stsd_entry = (16 + len(codec)).to_bytes(4, "big") + codec.encode("latin-1") + b"\x00" * 8
+    return b"\x00\x00\x00\x00" + b"\x00" * 8 + timescale.to_bytes(4, "big") + b"\x00" * 4
+
+
+def _sample_entry(codec: str, *, body: bytes | None = None) -> bytes:
+    """Build one ``stsd`` entry: size, format, then the 28-byte AudioSampleEntry body."""
+    if body is None:
+        # 6 reserved + data_reference_index(2) + 8 reserved + channelcount(2)
+        # + samplesize(2) + pre_defined/reserved(4) + samplerate(16.16 fixed).
+        body = (
+            b"\x00" * 6
+            + (1).to_bytes(2, "big")
+            + b"\x00" * 8
+            + (2).to_bytes(2, "big")
+            + (16).to_bytes(2, "big")
+            + b"\x00" * 4
+            + (16_000 << 16).to_bytes(4, "big")
+        )
+    return (8 + len(body)).to_bytes(4, "big") + codec.encode("latin-1") + body
+
+
+def _trak(
+    handler: str,
+    codec: str,
+    timescale: int,
+    *,
+    mdhd_version: int = 0,
+    body: bytes | None = None,
+) -> bytes:
+    """Build a ``trak`` whose ``mdia`` declares one handler, one codec, one timescale."""
+    mdhd_payload = _mdhd_payload(timescale, mdhd_version=mdhd_version)
+    stsd_entry = _sample_entry(codec, body=body)
     stsd_payload = b"\x00\x00\x00\x00" + (1).to_bytes(4, "big") + stsd_entry
     hdlr_payload = b"\x00\x00\x00\x00" + b"\x00" * 4 + handler.encode("latin-1") + b"\x00" * 8
     mdia = (
@@ -2803,7 +2885,7 @@ def test_moov_stream_table_refuses_a_malformed_stsd(tmp_path: Path) -> None:
         + _mp4_box("mdat", b"")
     )
     tracks, problems = av.read_moov_tracks(path)
-    assert problems == []
+    assert problems == ["malformed_moov_structure: stsd declares 1 entries but holds none"]
     assert [(t.handler, t.codec, t.timescale) for t in tracks] == [("soun", None, 0)]
     assert tracks[0].is_aac_audio is False
 
@@ -3087,7 +3169,11 @@ def test_moov_parser_handles_every_nested_box_irregularity(tmp_path: Path) -> No
         + _mp4_box("mdat", b"")
     )
     tracks, problems = av.read_moov_tracks(path)
-    assert problems == []
+    # A-08: every one of the three defects is reported, nothing is silently skipped.
+    assert [problem.split(":", 1)[0] for problem in problems] == [av.MALFORMED_MOOV] * 3
+    assert "mdhd v0 is 12 bytes, needs 20" in problems[0]
+    assert "declares 4 bytes" in problems[1]
+    assert "largesize at" in problems[2] and "truncated" in problems[2]
     assert [(t.handler, t.codec, t.timescale) for t in tracks] == [
         ("soun", None, 0),
         ("soun", None, 0),
@@ -3156,43 +3242,155 @@ def test_prepare_directory_detects_a_directory_swapped_after_creation(
         bridge._prepare_directory(target, label="out")
 
 
-def test_prepare_directory_refuses_a_link_created_underneath_it(
+def test_prepare_directory_never_writes_outside_a_swapped_parent(
     tmp_path: Path, monkeypatch: Any
 ) -> None:
-    """A-02: a racer that replaces the created directory with a link is caught."""
-    target = tmp_path / "swapped"
+    """A-02: the parent is renamed and replaced by a symlink *between* components.
 
-    def _noop_create(_absolute: Path) -> None:
-        # Simulate a racer that wins the race: the path becomes a symlink.
-        target.symlink_to(tmp_path, target_is_directory=True)
+    The create of ``b`` must land inside the descriptor of the real ``a`` inode,
+    never inside the symlink target: this is the exact attack the multi-component
+    ``os.mkdir("/workspace/a/b")`` was vulnerable to.
+    """
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    root = tmp_path / "root"
+    target = root / "a" / "b"
+    real_descend = bridge._descend_or_create
+    swapped = {"done": False}
 
-    monkeypatch.setattr(bridge, "_create_directories", _noop_create)
-    monkeypatch.setattr(bridge, "refuse_symlink_chain", lambda *_a, **_k: None)
-    with pytest.raises(bridge.StudioBridgeError, match="symlink_refused"):
+    def _racing_descend(parent_fd: int, name: str, *, label: str) -> int:
+        child_fd = real_descend(parent_fd, name, label=label)
+        if name == "a" and not swapped["done"]:
+            swapped["done"] = True
+            (root / "a").rename(root / "a-real")
+            (root / "a").symlink_to(outside, target_is_directory=True)
+        return child_fd
+
+    monkeypatch.setattr(bridge, "_descend_or_create", _racing_descend)
+    with pytest.raises(bridge.StudioBridgeError):
         bridge._prepare_directory(target, label="out")
 
+    # 1) nothing at all was created in the attacker's directory
+    assert list(outside.iterdir()) == []
+    # 2) the child was created inside the genuine inode we held open
+    assert (root / "a-real" / "b").is_dir()
+    assert swapped["done"] is True
 
-def test_prepare_directory_refuses_a_component_swapped_during_creation(
+
+def test_descend_or_create_accepts_an_existing_directory(tmp_path: Path) -> None:
+    """A-02: an existing component is opened and proven, not re-created."""
+    parent = tmp_path / "parent"
+    parent.mkdir()
+    (parent / "child").mkdir()
+    parent_fd = os.open(parent, bridge._DIR_OPEN_FLAGS)
+    try:
+        child_fd = bridge._descend_or_create(parent_fd, "child", label="child")
+        try:
+            assert stat.S_ISDIR(os.fstat(child_fd).st_mode)
+        finally:
+            os.close(child_fd)
+    finally:
+        os.close(parent_fd)
+
+
+@pytest.mark.parametrize(
+    "prepare,reason",
+    [
+        (lambda parent: (parent / "child").write_text("x", encoding="utf-8"), "not_a_directory"),
+        (
+            lambda parent: (parent / "child").symlink_to(parent, target_is_directory=True),
+            "symlink_refused",
+        ),
+    ],
+)
+def test_descend_or_create_refuses_a_non_directory_component(
+    tmp_path: Path, prepare: Any, reason: str
+) -> None:
+    """A-02: a file or a link already sitting on the component is refused."""
+    parent = tmp_path / "parent"
+    parent.mkdir()
+    prepare(parent)
+    parent_fd = os.open(parent, bridge._DIR_OPEN_FLAGS)
+    try:
+        with pytest.raises(bridge.StudioBridgeError, match=reason):
+            bridge._descend_or_create(parent_fd, "child", label="child")
+    finally:
+        os.close(parent_fd)
+
+
+def test_descend_or_create_reports_a_failing_mkdir_and_open(
     tmp_path: Path, monkeypatch: Any
 ) -> None:
-    """A-02: the chain is re-walked after creation, so a mid-flight swap is refused."""
-    target = tmp_path / "made" / "here"
-    elsewhere = tmp_path / "elsewhere"
-    elsewhere.mkdir()
+    """A-02: a refused ``mkdir`` and an unopenable component are typed refusals."""
+    parent = tmp_path / "parent"
+    parent.mkdir()
+    parent_fd = os.open(parent, bridge._DIR_OPEN_FLAGS)
 
-    def _create_with_a_link(absolute: Path) -> None:
-        first = absolute.parent
-        first.symlink_to(elsewhere, target_is_directory=True)
+    def _mkdir_refused(_name: str, _mode: int = 0o777, *, dir_fd: int | None = None) -> None:
+        raise PermissionError("mkdir refused")
 
-    monkeypatch.setattr(bridge, "_create_directories", _create_with_a_link)
-    with pytest.raises(bridge.StudioBridgeError, match="symlink_refused"):
-        bridge._prepare_directory(target, label="out")
+    try:
+        with monkeypatch.context() as patched:
+            patched.setattr(bridge.os, "mkdir", _mkdir_refused)
+            with pytest.raises(bridge.StudioBridgeError, match="not_a_directory"):
+                bridge._descend_or_create(parent_fd, "child", label="child")
+
+        # The component vanished between the create attempt and the open.
+        def _mkdir_noop(_name: str, _mode: int = 0o777, *, dir_fd: int | None = None) -> None:
+            return None
+
+        with monkeypatch.context() as patched:
+            patched.setattr(bridge.os, "mkdir", _mkdir_noop)
+            with pytest.raises(bridge.StudioBridgeError, match="not_a_directory"):
+                bridge._descend_or_create(parent_fd, "gone", label="child")
+
+        # ``lstat`` cannot see the component that ``mkdir`` reported as existing.
+        def _mkdir_exists(_name: str, _mode: int = 0o777, *, dir_fd: int | None = None) -> None:
+            raise FileExistsError(_name)
+
+        with monkeypatch.context() as patched:
+            patched.setattr(bridge.os, "mkdir", _mkdir_exists)
+            with pytest.raises(bridge.StudioBridgeError, match="not_a_directory"):
+                bridge._descend_or_create(parent_fd, "ghost", label="child")
+    finally:
+        os.close(parent_fd)
+
+
+def test_descend_or_create_refuses_a_descriptor_that_is_not_a_directory(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """A-02: even a descriptor that opened must be a directory, and is closed on refusal."""
+    parent = tmp_path / "parent"
+    parent.mkdir()
+    decoy = parent / "decoy"
+    decoy.write_text("x", encoding="utf-8")
+    parent_fd = os.open(parent, bridge._DIR_OPEN_FLAGS)
+    captured: list[int] = []
+
+    def _mkdir_noop(_name: str, _mode: int = 0o777, *, dir_fd: int | None = None) -> None:
+        return None
+
+    def _open_decoy(_name: str, *, parent_fd: int | None = None, label: str = "") -> int:
+        fd = os.open(decoy, os.O_RDONLY)
+        captured.append(fd)
+        return fd
+
+    try:
+        with monkeypatch.context() as patched:
+            patched.setattr(bridge.os, "mkdir", _mkdir_noop)
+            patched.setattr(bridge, "_open_directory", _open_decoy)
+            with pytest.raises(bridge.StudioBridgeError, match="not_a_directory"):
+                bridge._descend_or_create(parent_fd, "child", label="child")
+    finally:
+        os.close(parent_fd)
+    with pytest.raises(OSError):
+        os.fstat(captured[0])  # the refused descriptor was closed, not leaked
 
 
 def test_prepare_directory_refuses_a_descriptor_that_is_not_a_directory(
     tmp_path: Path, monkeypatch: Any
 ) -> None:
-    """A-02: even a descriptor that opened successfully must *be* a directory."""
+    """A-02: the opened descriptor itself must report a directory."""
     real_fstat = os.fstat
 
     def _fstat(fd: int) -> Any:
@@ -3217,32 +3415,36 @@ def test_prepare_directory_refuses_a_descriptor_that_is_not_a_directory(
         bridge._prepare_directory(tmp_path / "reg", label="out")
 
 
-def test_create_directories_tolerates_and_scrutinises_a_race(
+def test_prepare_directory_detects_a_final_identity_mismatch(
     tmp_path: Path, monkeypatch: Any
 ) -> None:
-    """A-02: a component that appears mid-create is re-examined, not trusted."""
-    target = tmp_path / "late"
-    real_mkdir = os.mkdir
+    """A-02: the path must still name the inode we created once the walk is done."""
+    target = tmp_path / "created" / "deep"
+    bridge._prepare_directory(tmp_path / "created", label="out")
+    real_lstat = os.lstat
 
-    def _mkdir_then_conflict(path: Any, mode: int = 0o777) -> None:
-        real_mkdir(path, mode)
-        raise FileExistsError(str(path))
+    def _lstat(path: Any, *args: Any, **kwargs: Any) -> Any:
+        fake = real_lstat(path, *args, **kwargs)
+        if Path(path) == target:  # only the *final* proof sees a different inode
+            return os.stat_result(
+                (
+                    fake.st_mode,
+                    fake.st_ino + 1,
+                    fake.st_dev,
+                    fake.st_nlink,
+                    fake.st_uid,
+                    fake.st_gid,
+                    fake.st_size,
+                    fake.st_atime,
+                    fake.st_mtime,
+                    fake.st_ctime,
+                )
+            )
+        return fake
 
-    monkeypatch.setattr(bridge.os, "mkdir", _mkdir_then_conflict)
-    bridge._prepare_directory(target, label="out")
-    assert target.is_dir()
-
-    outside = tmp_path / "outside.txt"
-    outside.write_text("x", encoding="utf-8")
-    other = tmp_path / "other"
-
-    def _mkdir_file_then_conflict(path: Any, mode: int = 0o777) -> None:
-        outside.write_text("not a directory", encoding="utf-8")
-        raise FileExistsError(str(path))
-
-    monkeypatch.setattr(bridge.os, "mkdir", _mkdir_file_then_conflict)
-    with pytest.raises(bridge.StudioBridgeError, match="not_a_directory"):
-        bridge._create_directories(other)
+    monkeypatch.setattr(bridge.os, "lstat", _lstat)
+    with pytest.raises(bridge.StudioBridgeError, match="directory_identity_mismatch"):
+        bridge._prepare_directory(target, label="out")
 
 
 def test_read_small_json_is_fd_bound_and_fail_closed(tmp_path: Path, monkeypatch: Any) -> None:
@@ -3783,3 +3985,202 @@ def test_mutant_bridge_ignoring_the_restored_manifest_hash_is_killed() -> None:
         "bridge_no_manifest_gate",
     )
     _kill(lambda: _behaviour(mutant.sync_and_verify_studio_bundle_in_vault, tmp_path_factory_dir()))
+
+
+# --------------------------------------------------------------------------- #
+# Audit finding A-08 - strict ISO-BMFF structure and ffprobe audio agreement
+# --------------------------------------------------------------------------- #
+
+
+def _moov_file(path: Path, moov_payload: bytes) -> Path:
+    """Write a minimal MP4 whose ``moov`` holds exactly ``moov_payload``."""
+    path.write_bytes(
+        _mp4_box("ftyp", b"isom") + _mp4_box("moov", moov_payload) + _mp4_box("mdat", b"\x00" * 8)
+    )
+    return path
+
+
+def test_moov_parser_reports_trailing_bytes_instead_of_ignoring_them(tmp_path: Path) -> None:
+    """A-08: stray bytes after the last child box are a typed structural defect."""
+    stray = _moov_file(tmp_path / "stray.mp4", _trak("soun", "mp4a", 16_000) + b"\x00\x00\x00")
+    tracks, problems = av.read_moov_tracks(stray)
+    assert [track.handler for track in tracks] == ["soun"]
+    assert len(problems) == 1
+    assert problems[0].startswith(f"{av.MALFORMED_MOOV}: moov has 3 trailing bytes at ")
+    verdict = av.verify_mp4(stray, expected_duration_s=1.0, tolerance_s=0.2)
+    assert verdict.status == av.VIOLATED
+    assert verdict.reasons[0].startswith("moov_layout: malformed_moov_structure:")
+
+
+@pytest.mark.parametrize(
+    "payload,expected",
+    [
+        (b"\x00", "mdhd is 1 bytes, shorter than its version field"),
+        (b"\x02\x00\x00\x00" + b"\x00" * 20, "mdhd version 2 is not 0 or 1"),
+        (b"\x01\x00\x00\x00" + b"\x00" * 20, "mdhd v1 is 24 bytes, needs 32"),
+    ],
+)
+def test_mdhd_rejects_an_unknown_version_or_a_short_payload(
+    tmp_path: Path, payload: bytes, expected: str
+) -> None:
+    """A-08: a ``mdhd`` whose version/length is not understood yields no timescale."""
+    mdia = (
+        _mp4_box("hdlr", b"\x00" * 8 + b"soun" + b"\x00" * 8)
+        + _mp4_box("mdhd", payload)
+        + _mp4_box("minf", _mp4_box("stbl", _mp4_box("stsd", b"\x00" * 8)))
+    )
+    path = _moov_file(tmp_path / "bad-mdhd.mp4", _mp4_box("trak", _mp4_box("mdia", mdia)))
+    tracks, problems = av.read_moov_tracks(path)
+    assert tracks[0].timescale == 0
+    assert any(problem.endswith(expected) for problem in problems)
+    assert av.verify_mp4(path, expected_duration_s=1.0, tolerance_s=0.2).status == av.VIOLATED
+
+
+@pytest.mark.parametrize(
+    "payload,expected",
+    [
+        (b"\x00\x00\x00\x00", "stsd is 4 bytes, shorter than its entry table"),
+        (
+            b"\x00\x00\x00\x00" + (0).to_bytes(4, "big"),
+            "stsd declares 0 sample entries",
+        ),
+        (
+            b"\x00\x00\x00\x00" + (1).to_bytes(4, "big") + b"\x00\x00\x00\x05",
+            "stsd declares 1 entries but holds none",
+        ),
+        (
+            b"\x00\x00\x00\x00" + (1).to_bytes(4, "big") + (4).to_bytes(4, "big") + b"mp4a",
+            "stsd entry 'mp4a' declares 4 bytes, only 8 remain",
+        ),
+        (
+            b"\x00\x00\x00\x00" + (1).to_bytes(4, "big") + (200).to_bytes(4, "big") + b"mp4a",
+            "stsd entry 'mp4a' declares 200 bytes, only 8 remain",
+        ),
+    ],
+)
+def test_stsd_rejects_a_broken_entry_table(tmp_path: Path, payload: bytes, expected: str) -> None:
+    """A-08: an ``stsd`` that cannot name one whole entry yields no codec at all."""
+    mdia = (
+        _mp4_box("hdlr", b"\x00" * 8 + b"soun" + b"\x00" * 8)
+        + _mp4_box("mdhd", _mdhd_payload(16_000))
+        + _mp4_box("minf", _mp4_box("stbl", _mp4_box("stsd", payload)))
+    )
+    path = _moov_file(tmp_path / "bad-stsd.mp4", _mp4_box("trak", _mp4_box("mdia", mdia)))
+    tracks, problems = av.read_moov_tracks(path)
+    assert tracks[0].codec is None
+    assert [problem.split(": ", 1)[1] for problem in problems] == [expected]
+    assert av.verify_mp4(path, expected_duration_s=1.0, tolerance_s=0.2).status == av.VIOLATED
+
+
+@pytest.mark.parametrize(
+    "body,expected",
+    [
+        (b"\x00" * 20, "mp4a body is 20 bytes, needs 28"),
+        (
+            b"\x00" * 6
+            + (1).to_bytes(2, "big")
+            + b"\x00" * 8
+            + (0).to_bytes(2, "big")
+            + (16).to_bytes(2, "big")
+            + b"\x00" * 4
+            + (16_000 << 16).to_bytes(4, "big"),
+            "mp4a declares 0 channels",
+        ),
+        (
+            b"\x00" * 6
+            + (1).to_bytes(2, "big")
+            + b"\x00" * 8
+            + (2).to_bytes(2, "big")
+            + (16).to_bytes(2, "big")
+            + b"\x00" * 4
+            + b"\x00" * 4,
+            "mp4a declares sample rate 0",
+        ),
+    ],
+)
+def test_audio_sample_entry_rejects_an_unusable_header(
+    tmp_path: Path, body: bytes, expected: str
+) -> None:
+    """A-08: naming ``mp4a`` is not enough - the AudioSampleEntry must be usable."""
+    path = _moov_file(tmp_path / "bad-entry.mp4", _trak("soun", "mp4a", 16_000, body=body))
+    tracks, problems = av.read_moov_tracks(path)
+    assert tracks[0].codec is None
+    assert [problem.split(": ", 1)[1] for problem in problems] == [expected]
+    verdict = av.verify_mp4(path, expected_duration_s=1.0, tolerance_s=0.2)
+    assert verdict.status == av.VIOLATED
+    assert verdict.has_audio_stream is False
+
+
+def _stsd_payload(*entries: bytes) -> bytes:
+    """Build an ``stsd`` payload: version/flags, entry count, then every entry."""
+    return b"\x00\x00\x00\x00" + len(entries).to_bytes(4, "big") + b"".join(entries)
+
+
+def test_audio_sample_entry_accepts_the_standard_28_byte_header(tmp_path: Path) -> None:
+    """A-08: a standards-conformant ``mp4a`` entry is believed, channels and rate intact."""
+    path = _moov_file(tmp_path / "good-entry.mp4", _trak("soun", "mp4a", 16_000))
+    tracks, problems = av.read_moov_tracks(path)
+    assert problems == []
+    assert [(track.codec, track.timescale) for track in tracks] == [("mp4a", 16_000)]
+    assert tracks[0].is_aac_audio is True
+
+
+def test_audio_sample_entry_is_skipped_for_non_audio_codecs(tmp_path: Path) -> None:
+    """A-08: the 28-byte AudioSampleEntry body is only required for ``mp4a``."""
+    path = _moov_file(tmp_path / "video-entry.mp4", _trak("vide", "avc1", 10_240))
+    tracks, problems = av.read_moov_tracks(path)
+    assert problems == []
+    assert [(track.handler, track.codec) for track in tracks] == [("vide", "avc1")]
+
+
+def test_verifier_reports_a_short_hdlr_as_a_structural_defect(tmp_path: Path) -> None:
+    """A-08: an ``hdlr`` too short to name its handler is reported, not guessed."""
+    mdia = (
+        _mp4_box("hdlr", b"\x00" * 4)
+        + _mp4_box("mdhd", _mdhd_payload(16_000))
+        + _mp4_box("minf", _mp4_box("stbl", _mp4_box("stsd", _stsd_payload(_sample_entry("mp4a")))))
+    )
+    path = _moov_file(tmp_path / "short-hdlr.mp4", _mp4_box("trak", _mp4_box("mdia", mdia)))
+    tracks, problems = av.read_moov_tracks(path)
+    assert [(track.handler, track.codec) for track in tracks] == [("", "mp4a")]
+    assert problems == ["malformed_moov_structure: hdlr is too short to declare a handler"]
+
+
+def test_verifier_reports_moov_layout_problems_before_audio_is_judged(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """A-08: a container defect decides the verdict before ffprobe is ever consulted."""
+    path = _moov_file(tmp_path / "no-audio-box.mp4", _trak("vide", "avc1", 10_240))
+    monkeypatch.setattr(
+        av,
+        "_probe",
+        lambda *a, **k: pytest.fail("a malformed container must not reach ffprobe"),
+    )
+    verdict = av.verify_mp4(path, expected_duration_s=1.0, tolerance_s=0.2)
+    assert verdict.status == av.VIOLATED
+    # A video-only container is refused on the container's own word alone.
+    assert verdict.reasons == ("missing_audio_stream",)
+    assert verdict.has_audio_stream is False
+    assert verdict.probed_duration_s == 0.0
+    assert verdict.size_bytes > 0
+
+
+def test_verifier_refuses_a_forged_audio_track(real_mp4: Path, monkeypatch: Any) -> None:
+    """A-08: the container's AAC claim is cross-checked against the demuxer's stream list."""
+    monkeypatch.setattr(
+        av,
+        "_probe",
+        lambda *a, **k: {
+            "streams": [{"codec_type": "video", "codec_name": "h264"}],
+            "format": {"duration": "1.0"},
+        },
+    )
+    verdict = av.verify_mp4(real_mp4, expected_duration_s=1.0, tolerance_s=0.3)
+    assert verdict.status == av.VIOLATED
+    assert verdict.reasons == ("missing_audio_stream",)
+    # The container's own evidence is still reported, so the refusal is diagnosable.
+    assert verdict.has_audio_stream is True
+    assert verdict.audio_codec == "mp4a"
+
+    allowed = av.verify_mp4(real_mp4, expected_duration_s=1.0, tolerance_s=0.3, require_audio=False)
+    assert allowed.status == av.PASS
