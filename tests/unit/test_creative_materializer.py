@@ -285,3 +285,38 @@ def test_materialize_links_and_hashes_a_user_image_inside_workspace(
     assert len(linked) == 1
     assert linked[0].sha256 == hashlib.sha256(user_png.read_bytes()).hexdigest()
     mat.verify_materialized_provenance(bundle)
+
+
+@pytest.mark.parametrize("n", range(1, 9))
+def test_inclusion_proofs_bind_leaf_index_and_tree_size(n: int) -> None:
+    leaves = [str(i).encode() for i in range(n)]
+    root, _ = mz.merkle_root(leaves)
+    for i, leaf in enumerate(leaves):
+        proof = mz.merkle_inclusion_proof(leaves, i)
+        verify = mz.verify_merkle_inclusion_proof
+        assert verify(leaf, index=i, total_leaves=n, proof=proof, expected_root=root)
+        assert not verify(leaf + b"!", index=i, total_leaves=n, proof=proof, expected_root=root)
+        assert not verify(
+            leaf, index=i, total_leaves=n, proof=proof + ("00" * 32,), expected_root=root
+        )
+        assert not verify(leaf, index=-1, total_leaves=n, proof=proof, expected_root=root)
+        assert not verify(leaf, index=n, total_leaves=n, proof=proof, expected_root=root)
+        assert not verify(leaf, index=i, total_leaves=0, proof=proof, expected_root=root)
+    with pytest.raises(ValueError):
+        mz.merkle_inclusion_proof(leaves, n)
+
+
+def test_inclusion_proof_rejects_duplicated_last_leaf_tree() -> None:
+    leaves = [b"a", b"b", b"c"]
+    proof = mz.merkle_inclusion_proof(leaves, 2)
+    duplicated_root, _ = mz.merkle_root(leaves + [b"c"])
+    assert not mz.verify_merkle_inclusion_proof(
+        b"c", index=2, total_leaves=3, proof=proof, expected_root=duplicated_root
+    )
+
+
+def test_planned_shot_durations_match_materialized_wav(tmp_path: Path, manifest) -> None:
+    bundle = mz.StoryboardMediaMaterializer(tmp_path, PROFILE).materialize(
+        manifest, tmp_path / "out"
+    )
+    assert mz.planned_shot_durations(manifest, PROFILE.sample_rate) == bundle.shot_durations_s

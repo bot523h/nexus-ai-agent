@@ -23,17 +23,15 @@ Guarantees, all fail-closed:
   status) and recomputes the asset Merkle root. The render handler calls it
   immediately before FFmpeg runs.
 
-Asset Merkle root: leaves are ``SHA-256(0x00 || record_json)``, internal nodes
-are ``SHA-256(0x01 || left || right)``, and an unpaired node at any level is
-promoted unchanged (promote-without-duplicate). ``total_leaves`` is recorded
-next to the root. This follows the prefix and promotion rules of the task
-specification; the tree shape is the level-by-level pairing, which is not the
-RFC 6962 largest-power-of-two split.
+Asset Merkle root: RFC 6962 section 2.1, with domain-separated SHA-256
+leaves and internal nodes. The previous level-by-level promotion algorithm has
+the same root. ``total_leaves`` is recorded next to the root.
 """
 
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import math
 import os
@@ -255,20 +253,94 @@ def _rfc6962_node(left: bytes, right: bytes) -> bytes:
     return hashlib.sha256(b"\x01" + left + right).digest()
 
 
+def _merkle_hash(leaves: Sequence[bytes], start: int, end: int) -> bytes:
+    n = end - start
+    if n == 0:
+        return hashlib.sha256(b"").digest()
+    if n == 1:
+        return _rfc6962_leaf(leaves[start])
+    k = 1 << ((n - 1).bit_length() - 1)
+    return _rfc6962_node(
+        _merkle_hash(leaves, start, start + k), _merkle_hash(leaves, start + k, end)
+    )
+
+
 def merkle_root(leaf_payloads: Sequence[bytes]) -> tuple[str, int]:
-    """Return ``(root_hex, total_leaves)`` using prefixed hashes and promotion."""
-    total = len(leaf_payloads)
-    if total == 0:
-        return hashlib.sha256(b"").hexdigest(), 0
-    level = [_rfc6962_leaf(payload) for payload in leaf_payloads]
-    while len(level) > 1:
-        nxt: list[bytes] = []
-        for index in range(0, len(level) - 1, 2):
-            nxt.append(_rfc6962_node(level[index], level[index + 1]))
-        if len(level) % 2 == 1:
-            nxt.append(level[-1])
-        level = nxt
-    return level[0].hex(), total
+    """Return the RFC 6962 root and leaf count (preserves the existing API)."""
+    return _merkle_hash(leaf_payloads, 0, len(leaf_payloads)).hex(), len(leaf_payloads)
+
+
+def merkle_inclusion_proof(leaves: Sequence[bytes], index: int) -> tuple[str, ...]:
+    """Return the bottom-up RFC 6962 audit path for a leaf."""
+    if isinstance(index, bool) or not isinstance(index, int) or not 0 <= index < len(leaves):
+        raise ValueError("leaf index outside tree")
+
+    def path(start: int, end: int, i: int) -> list[bytes]:
+        n = end - start
+        if n == 1:
+            return []
+        k = 1 << ((n - 1).bit_length() - 1)
+        if i < k:
+            return path(start, start + k, i) + [_merkle_hash(leaves, start + k, end)]
+        return path(start + k, end, i - k) + [_merkle_hash(leaves, start, start + k)]
+
+    return tuple(h.hex() for h in path(0, len(leaves), index))
+
+
+def verify_merkle_inclusion_proof(
+    leaf: bytes, *, index: int, total_leaves: int, proof: Sequence[str], expected_root: str
+) -> bool:
+    """Verify a tree-size-bound audit path; reject malformed or surplus hashes."""
+    if (
+        not isinstance(leaf, bytes)
+        or isinstance(index, bool)
+        or not isinstance(index, int)
+        or isinstance(total_leaves, bool)
+        or not isinstance(total_leaves, int)
+        or total_leaves <= 0
+        or index < 0
+        or index >= total_leaves
+        or not isinstance(expected_root, str)
+        or not re.fullmatch(r"[0-9a-f]{64}", expected_root)
+        or not isinstance(proof, (list, tuple))
+    ):
+        return False
+    # Construct directions from the authenticated tree size, then consume bottom-up.
+    directions: list[bool] = []
+    i, n = index, total_leaves
+    while n > 1:
+        k = 1 << ((n - 1).bit_length() - 1)
+        if i < k:
+            directions.append(False)  # sibling on right
+            n = k
+        else:
+            directions.append(True)  # sibling on left
+            i -= k
+            n -= k
+    if len(proof) != len(directions):
+        return False
+    result = _rfc6962_leaf(leaf)
+    for sibling, on_left in zip(proof, reversed(directions), strict=True):
+        if not isinstance(sibling, str) or not re.fullmatch(r"[0-9a-f]{64}", sibling):
+            return False
+        digest = bytes.fromhex(sibling)
+        result = _rfc6962_node(digest, result) if on_left else _rfc6962_node(result, digest)
+    return hmac.compare_digest(result.hex(), expected_root)
+
+
+DEFAULT_SAMPLE_RATE_HZ = 16_000
+
+
+def planned_shot_durations(
+    manifest: Any, sample_rate_hz: int = DEFAULT_SAMPLE_RATE_HZ
+) -> tuple[float, ...]:  # noqa: ANN401
+    """Compute the frame-quantized durations from the compiled editorial events."""
+    if isinstance(sample_rate_hz, bool) or sample_rate_hz not in SUPPORTED_SAMPLE_RATES:
+        raise MaterializationError("invalid_profile", "unsupported sample rate")
+    return tuple(
+        round(_finite_shot_duration(event.video_duration_sec) * sample_rate_hz) / sample_rate_hz
+        for event in manifest.editorial.events
+    )
 
 
 def atomic_write(final_path: Path, write: Callable[[IO[bytes]], None]) -> None:
@@ -564,6 +636,7 @@ def _finite_shot_duration(value: object) -> float:
 __all__ = [
     "ASSET_RECORD_SCHEMA",
     "CHUNK_BYTES",
+    "DEFAULT_SAMPLE_RATE_HZ",
     "MANIFEST_FILENAME",
     "AssetRecord",
     "MaterializationError",
@@ -572,12 +645,15 @@ __all__ = [
     "StoryboardMediaMaterializer",
     "atomic_write",
     "canonical_json",
+    "merkle_inclusion_proof",
     "merkle_root",
+    "planned_shot_durations",
     "refuse_symlink_chain",
     "resolve_within",
     "shot_seed",
     "stream_sha256",
     "validate_safe_id",
+    "verify_merkle_inclusion_proof",
     "write_slate_png",
     "write_tone_wav",
 ]
