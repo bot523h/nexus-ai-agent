@@ -357,3 +357,71 @@ def test_different_jobs_racing_reservation_have_exactly_one_owner(tmp_path) -> N
     assert ledger.consume(approval, identity=IDENT, job_id=winner).state is ApprovalState.CONSUMED
     ledger.finalize_consumption(approval, job_id=winner)
     ledger.close()
+
+
+@pytest.mark.parametrize("durable", [False, True])
+def test_attempt_fence_and_idempotent_finalization(tmp_path, durable: bool) -> None:
+    from nexus_ai_agent.nagar.ibpc.approval import DurableApprovalLedger
+
+    path = tmp_path / "attempts.sqlite3"
+    ledger = DurableApprovalLedger(path, now=NOW) if durable else ApprovalLedger(now=NOW)
+    approval = ledger.create(_binding()).approval_id
+    ledger.approve(approval, identity=IDENT, turn_is_active=lambda: True)
+    ledger.consume(approval, identity=IDENT, job_id="Q1", attempt=1)
+    ledger.assert_active_reservation(approval, job_id="Q1", identity=IDENT, attempt=1)
+    ledger.consume(approval, identity=IDENT, job_id="Q1", attempt=2)
+    for operation in (
+        lambda: ledger.consume(approval, identity=IDENT, job_id="Q1", attempt=1),
+        lambda: ledger.assert_active_reservation(approval, job_id="Q1", identity=IDENT, attempt=1),
+        lambda: ledger.finalize_consumption(approval, job_id="Q1", identity=IDENT, attempt=1),
+    ):
+        with pytest.raises(ApprovalError, match="stale_attempt"):
+            operation()
+    with pytest.raises(ApprovalError, match="replay"):
+        ledger.assert_active_reservation(
+            approval, job_id="Q1", identity=_identity(project_id="wrong"), attempt=2
+        )
+    ledger.finalize_consumption(approval, job_id="Q1", identity=IDENT, attempt=2)
+    if durable:
+        ledger.close()
+        ledger = DurableApprovalLedger(path, now=NOW)
+    ledger.finalize_consumption(approval, job_id="Q1", identity=IDENT, attempt=2)
+    ledger.assert_active_reservation(approval, job_id="Q1", identity=IDENT, attempt=2)
+    with pytest.raises(ApprovalError, match="replay"):
+        ledger.consume(approval, identity=IDENT, job_id="Q1", attempt=2)
+    if durable:
+        ledger.close()
+
+
+@pytest.mark.parametrize("attempt", [0, -1, True, 1.5, 2**63])
+def test_invalid_attempt_is_rejected_without_consuming(attempt: object) -> None:
+    ledger = ApprovalLedger(now=NOW)
+    approval = ledger.create(_binding()).approval_id
+    ledger.approve(approval, identity=IDENT, turn_is_active=lambda: True)
+    with pytest.raises(ApprovalError, match="invalid_attempt"):
+        ledger.consume(approval, identity=IDENT, job_id="Q1", attempt=attempt)
+    assert ledger.get(approval).state is ApprovalState.APPROVED
+
+
+def test_existing_database_reservation_is_migrated_and_fenced(tmp_path) -> None:
+    import sqlite3
+
+    from nexus_ai_agent.nagar.ibpc.approval import DurableApprovalLedger
+
+    path = tmp_path / "legacy.sqlite3"
+    ledger = DurableApprovalLedger(path, now=NOW)
+    approval = ledger.create(_binding()).approval_id
+    ledger.approve(approval, identity=IDENT, turn_is_active=lambda: True)
+    ledger.consume(approval, identity=IDENT, job_id="Q1")
+    ledger.close()
+    with sqlite3.connect(path) as db:
+        db.execute("ALTER TABLE approval_reservations DROP COLUMN last_attempt")
+    ledger = DurableApprovalLedger(path, now=NOW)
+    ledger.assert_active_reservation(approval, job_id="Q1", attempt=1, identity=IDENT)
+    ledger.consume(approval, identity=IDENT, job_id="Q1", attempt=2)
+    ledger.close()
+    ledger = DurableApprovalLedger(path, now=NOW)
+    with pytest.raises(ApprovalError, match="stale_attempt"):
+        ledger.assert_active_reservation(approval, job_id="Q1", attempt=1, identity=IDENT)
+    ledger.assert_active_reservation(approval, job_id="Q1", attempt=2, identity=IDENT)
+    ledger.close()

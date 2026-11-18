@@ -103,7 +103,7 @@ class ApprovalLedger:
         self._lock = threading.RLock()
         self._bindings: dict[str, ApprovalBinding] = {}
         # A missing reservation for a CONSUMED legacy binding means finalized.
-        self._reservations: dict[str, tuple[str, str, str | None]] = {}
+        self._reservations: dict[str, tuple[str, str, str | None, int]] = {}
 
     @contextmanager
     def _transaction(self):  # type: ignore[no-untyped-def]
@@ -122,13 +122,18 @@ class ApprovalLedger:
     def _all(self) -> tuple[ApprovalBinding, ...]:
         return tuple(self._bindings.values())
 
-    def _read_reservation(self, approval_id: str) -> tuple[str, str, str | None] | None:
+    def _read_reservation(self, approval_id: str) -> tuple[str, str, str | None, int] | None:
         return self._reservations.get(approval_id)
 
     def _write_reservation(
-        self, approval_id: str, job_id: str, fingerprint: str, finalized_at: str | None
+        self,
+        approval_id: str,
+        job_id: str,
+        fingerprint: str,
+        finalized_at: str | None,
+        attempt: int,
     ) -> None:
-        self._reservations[approval_id] = (job_id, fingerprint, finalized_at)
+        self._reservations[approval_id] = (job_id, fingerprint, finalized_at, attempt)
 
     def create(self, binding: ApprovalBinding) -> ApprovalBinding:
         """Register a PENDING binding. Re-creating the same id is refused."""
@@ -204,7 +209,12 @@ class ApprovalLedger:
             return approved
 
     def consume(
-        self, approval_id: str, *, identity: ApprovalIdentity, job_id: str | None = None
+        self,
+        approval_id: str,
+        *,
+        identity: ApprovalIdentity,
+        job_id: str | None = None,
+        attempt: int = 1,
     ) -> ApprovalBinding:
         """Consume once, or reserve for recovery of the same identified job.
 
@@ -213,6 +223,7 @@ class ApprovalLedger:
         """
         if job_id is not None and (not isinstance(job_id, str) or not job_id.strip()):
             raise ApprovalError("invalid_job_id", "job id must be a non-empty string")
+        self._validate_attempt(attempt)
         with self._transaction():
             binding = self._read(approval_id)
             if binding.state is ApprovalState.CONSUMED:
@@ -229,6 +240,10 @@ class ApprovalLedger:
                     self._check_identity(binding, identity)
                 except ApprovalError as exc:
                     raise ApprovalError("replay", "reserved identity changed") from exc
+                if attempt < reservation[3]:
+                    raise ApprovalError("stale_attempt", "attempt superseded")
+                if attempt > reservation[3]:
+                    self._write_reservation(approval_id, job_id, reservation[1], None, attempt)
                 return binding
             if binding.state is ApprovalState.REVOKED:
                 raise ApprovalError("revoked", "approval was revoked")
@@ -238,11 +253,28 @@ class ApprovalLedger:
             consumed = binding.model_copy(update={"state": ApprovalState.CONSUMED})
             self._write(consumed)
             if job_id is not None:
-                self._write_reservation(approval_id, job_id, identity.identity_digest(), None)
+                self._write_reservation(
+                    approval_id, job_id, identity.identity_digest(), None, attempt
+                )
             return consumed
 
-    def finalize_consumption(self, approval_id: str, *, job_id: str) -> None:
-        """Close a reservation owned by this job, preventing future recovery."""
+    @staticmethod
+    def _validate_attempt(attempt: int) -> None:
+        if (
+            isinstance(attempt, bool)
+            or not isinstance(attempt, int)
+            or not 1 <= attempt <= 2**63 - 1
+        ):
+            raise ApprovalError("invalid_attempt", "attempt must be a positive SQLite integer")
+
+    def assert_active_reservation(
+        self, approval_id: str, *, job_id: str, attempt: int, identity: ApprovalIdentity
+    ) -> None:
+        """Check identity and fencing token, including a completed reservation.
+
+        This is a point-in-time check, not a filesystem lock or publication fence.
+        """
+        self._validate_attempt(attempt)
         with self._transaction():
             binding = self._read(approval_id)
             reservation = self._read_reservation(approval_id)
@@ -250,10 +282,49 @@ class ApprovalLedger:
                 binding.state is not ApprovalState.CONSUMED
                 or reservation is None
                 or reservation[0] != job_id
-                or reservation[2] is not None
+                or reservation[1] != identity.identity_digest()
             ):
-                raise ApprovalError("replay", "no open reservation for this job")
-            self._write_reservation(approval_id, job_id, reservation[1], self._now())
+                raise ApprovalError("replay", "reservation identity mismatch")
+            try:
+                self._check_identity(binding, identity)
+            except ApprovalError as exc:
+                raise ApprovalError("replay", "reserved identity changed") from exc
+            if attempt != reservation[3]:
+                raise ApprovalError("stale_attempt", "attempt does not own reservation")
+
+    def finalize_consumption(
+        self,
+        approval_id: str,
+        *,
+        job_id: str,
+        identity: ApprovalIdentity | None = None,
+        attempt: int | None = None,
+    ) -> None:
+        """Idempotently finalize the matching reservation; consumed stays terminal."""
+        if attempt is not None:
+            self._validate_attempt(attempt)
+        with self._transaction():
+            binding = self._read(approval_id)
+            reservation = self._read_reservation(approval_id)
+            if (
+                binding.state is not ApprovalState.CONSUMED
+                or reservation is None
+                or reservation[0] != job_id
+            ):
+                raise ApprovalError("replay", "reservation does not belong to job")
+            if identity is not None:
+                if reservation[1] != identity.identity_digest():
+                    raise ApprovalError("replay", "reserved identity changed")
+                try:
+                    self._check_identity(binding, identity)
+                except ApprovalError as exc:
+                    raise ApprovalError("replay", "reserved identity changed") from exc
+            if attempt is not None and attempt != reservation[3]:
+                raise ApprovalError("stale_attempt", "attempt does not own reservation")
+            if reservation[2] is None:
+                self._write_reservation(
+                    approval_id, job_id, reservation[1], self._now(), reservation[3]
+                )
 
     def revoke(self, approval_id: str) -> ApprovalBinding:
         """REVOKED — terminal. Used on interrupt/cancel/stale turn."""
@@ -299,33 +370,51 @@ class DurableApprovalLedger(ApprovalLedger):
         )
         self._connection.execute("PRAGMA busy_timeout=5000")
         self._connection.execute("PRAGMA journal_mode=WAL")
-        self._connection.execute(
-            "CREATE TABLE IF NOT EXISTS approvals ("
-            "approval_id TEXT PRIMARY KEY, binding TEXT NOT NULL)"
-        )
-        self._connection.execute(
-            "CREATE TABLE IF NOT EXISTS approval_reservations ("
-            "approval_id TEXT PRIMARY KEY, job_id TEXT NOT NULL, "
-            "fingerprint TEXT NOT NULL, finalized_at TEXT)"
-        )
+        # Serialize schema inspection and migration across concurrent processes.
+        with self._transaction():
+            self._connection.execute(
+                "CREATE TABLE IF NOT EXISTS approvals ("
+                "approval_id TEXT PRIMARY KEY, binding TEXT NOT NULL)"
+            )
+            self._connection.execute(
+                "CREATE TABLE IF NOT EXISTS approval_reservations ("
+                "approval_id TEXT PRIMARY KEY, job_id TEXT NOT NULL, "
+                "fingerprint TEXT NOT NULL, finalized_at TEXT, "
+                "last_attempt INTEGER NOT NULL DEFAULT 1)"
+            )
+            columns = {
+                row[1]
+                for row in self._connection.execute("PRAGMA table_info(approval_reservations)")
+            }
+            if "last_attempt" not in columns:
+                self._connection.execute(
+                    "ALTER TABLE approval_reservations "
+                    "ADD COLUMN last_attempt INTEGER NOT NULL DEFAULT 1"
+                )
 
-    def _read_reservation(self, approval_id: str) -> tuple[str, str, str | None] | None:
+    def _read_reservation(self, approval_id: str) -> tuple[str, str, str | None, int] | None:
         row = self._connection.execute(
-            "SELECT job_id, fingerprint, finalized_at FROM approval_reservations "
+            "SELECT job_id, fingerprint, finalized_at, last_attempt FROM approval_reservations "
             "WHERE approval_id = ?",
             (approval_id,),
         ).fetchone()
-        return (row[0], row[1], row[2]) if row is not None else None
+        return (row[0], row[1], row[2], row[3]) if row is not None else None
 
     def _write_reservation(
-        self, approval_id: str, job_id: str, fingerprint: str, finalized_at: str | None
+        self,
+        approval_id: str,
+        job_id: str,
+        fingerprint: str,
+        finalized_at: str | None,
+        attempt: int,
     ) -> None:
         self._connection.execute(
-            "INSERT INTO approval_reservations (approval_id, job_id, fingerprint, finalized_at) "
-            "VALUES (?, ?, ?, ?) ON CONFLICT(approval_id) DO UPDATE SET "
+            "INSERT INTO approval_reservations (approval_id, job_id, fingerprint, "
+            "finalized_at, last_attempt) "
+            "VALUES (?, ?, ?, ?, ?) ON CONFLICT(approval_id) DO UPDATE SET "
             "job_id=excluded.job_id, fingerprint=excluded.fingerprint, "
-            "finalized_at=excluded.finalized_at",
-            (approval_id, job_id, fingerprint, finalized_at),
+            "finalized_at=excluded.finalized_at, last_attempt=excluded.last_attempt",
+            (approval_id, job_id, fingerprint, finalized_at, attempt),
         )
 
     @contextmanager
