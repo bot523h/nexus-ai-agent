@@ -184,19 +184,35 @@ def _rusage_scale() -> int:
     return 1 if sys.platform == "darwin" else 1024
 
 
-def _current_process_tree_peak_rss_bytes() -> int:
-    """Peak resident set of this process plus its reaped children, in bytes.
+def _rusage_peak_rss_bytes(who: int) -> int:
+    """One ``getrusage`` high-water mark (``who``), scaled to bytes."""
+    return int(resource.getrusage(who).ru_maxrss) * _rusage_scale()
 
-    ``RUSAGE_SELF`` covers the interpreter and the buffers the meter already
-    counts; ``RUSAGE_CHILDREN`` covers the FFmpeg subprocesses this pipeline
-    spawned. Reported next to :attr:`CasStoryboardRenderResult.peak_memory_bytes`
-    so a reviewer can see both the number the pipeline controls and the number
-    the operating system saw.
+
+def _process_tree_rss_hwm() -> tuple[int, int, int]:
+    """``(self, children, estimate)`` peak RSS of this process and its children, in bytes.
+
+    ``RUSAGE_SELF`` and ``RUSAGE_CHILDREN`` are *independent* high-water marks,
+    each remembering its own maximum over its own lifetime. Their sum is
+    therefore an **estimate - an upper bound on what the tree may have held at
+    once**, not a measurement of simultaneous resident memory: the child's peak
+    and the parent's peak need not have occurred at the same instant. Both halves
+    are reported separately so a reviewer can see that difference instead of
+    being handed one opaque number.
     """
-    scale = _rusage_scale()
-    own = int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
-    children = int(resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss)
-    return (own + children) * scale
+    own = _rusage_peak_rss_bytes(resource.RUSAGE_SELF)
+    children = _rusage_peak_rss_bytes(resource.RUSAGE_CHILDREN)
+    return own, children, own + children
+
+
+def _current_process_tree_peak_rss_bytes() -> int:
+    """Combined ``RUSAGE_SELF + RUSAGE_CHILDREN`` high-water-mark estimate, in bytes.
+
+    Kept for compatibility with round-1 receipts. This value sums two independent
+    peaks, so it is an upper bound on the tree's peak, *not* simultaneous RSS;
+    callers that need both halves should use :func:`_process_tree_rss_hwm`.
+    """
+    return _process_tree_rss_hwm()[2]
 
 
 # --------------------------------------------------------------------------- #
@@ -221,7 +237,14 @@ class CasStoryboardRenderResult:
     receipt_path: Path
     #: Peak live bytes of the buffers *this pipeline* allocated (the meter's peak).
     bridge_buffer_peak_bytes: int = 0
-    #: Peak RSS of this process plus its reaped FFmpeg children, in bytes.
+    #: Peak RSS of this process alone (``RUSAGE_SELF``), in bytes.
+    self_peak_rss_bytes: int = 0
+    #: Peak RSS of any reaped child process (``RUSAGE_CHILDREN``), in bytes.
+    children_max_rss_bytes: int = 0
+    #: ``self + children``: an upper-bound *estimate* of the tree's peak, never
+    #: a measurement of simultaneous resident memory.
+    process_hwm_estimate_bytes: int = 0
+    #: Compatibility alias for :attr:`process_hwm_estimate_bytes` (round-1 receipts).
     process_peak_rss_bytes: int = 0
 
     @property
@@ -542,45 +565,121 @@ def _segment_pipeline_digest(
     ).hexdigest()
 
 
-def _binary_identity(path: str) -> dict[str, Any]:
-    """Size and SHA-256 of the encoder binary itself (``unavailable`` if unreadable)."""
+def _resolve_binary(ffmpeg_bin: str) -> Path:
+    """Resolve a command name or path to the canonical file that would be executed.
+
+    A bare name is looked up on ``PATH`` exactly as a shell would resolve it, so
+    the fingerprint describes the binary the pipeline will actually run; a path
+    is resolved with ``strict=True`` so a dangling link or a missing file is a
+    typed refusal rather than an identity for something that is not there.
+    """
+    candidate = ffmpeg_bin
+    if os.sep not in candidate and (os.altsep is None or os.altsep not in candidate):
+        found = shutil.which(candidate)
+        if found is None:
+            raise StudioBridgeError("ffmpeg_unavailable", f"{ffmpeg_bin} is not on PATH")
+        candidate = found
     try:
-        digest, size, _ = stream_sha256(Path(path))
-    except (OSError, MaterializationError):
-        return {"sha256": "unavailable", "size_bytes": 0}
-    return {"sha256": digest, "size_bytes": size}
+        return Path(candidate).resolve(strict=True)
+    except OSError as exc:
+        raise StudioBridgeError(
+            "ffmpeg_unavailable", f"{ffmpeg_bin} ({type(exc).__name__})"
+        ) from exc
 
 
-@functools.lru_cache(maxsize=8)
+def _binary_identity(ffmpeg_bin: str) -> dict[str, Any]:
+    """Canonical path, size and SHA-256 of the encoder binary itself.
+
+    The binary is resolved (:func:`_resolve_binary`), opened with ``O_NOFOLLOW``
+    so a link swapped in after resolution cannot redirect the read, proven to be
+    a regular file with a positive size through ``fstat`` on that descriptor, and
+    hashed as a stream. A binary that cannot be vouched for raises
+    ``StudioBridgeError("ffmpeg_unavailable")``: an ``"unavailable"`` identity
+    could never be compared with an earlier one, so it must not exist.
+    """
+    resolved = _resolve_binary(ffmpeg_bin)
+    try:
+        fd = os.open(resolved, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError as exc:
+        raise StudioBridgeError("ffmpeg_unavailable", f"{resolved} ({type(exc).__name__})") from exc
+    digest = hashlib.sha256()
+    size = 0
+    try:
+        binary = os.fstat(fd)
+        if not stat.S_ISREG(binary.st_mode) or binary.st_size <= 0:
+            raise StudioBridgeError(
+                "ffmpeg_unavailable", f"{resolved} is not a non-empty regular file"
+            )
+        while True:
+            chunk = os.read(fd, CHUNK_BYTES)
+            if not chunk:
+                break
+            digest.update(chunk)
+            size += len(chunk)
+        if size != binary.st_size:
+            raise StudioBridgeError("ffmpeg_unavailable", f"{resolved} changed while hashed")
+    except OSError as exc:
+        raise StudioBridgeError("ffmpeg_unavailable", f"{resolved} ({type(exc).__name__})") from exc
+    finally:
+        os.close(fd)
+    return {"resolved_path": str(resolved), "sha256": digest.hexdigest(), "size_bytes": size}
+
+
+def _binary_stat_key(ffmpeg_bin: str) -> tuple[str, int, int]:
+    """Cheap ``(resolved path, mtime_ns, size)`` stamp of the binary on disk.
+
+    This is the cache key of :func:`_ffmpeg_toolchain_fingerprint`: replacing the
+    binary in place - same path, same ``-version`` line, new bytes - changes the
+    stamp, so a fingerprint computed from the old bytes can never be served for
+    the new ones.
+    """
+    resolved = _resolve_binary(ffmpeg_bin)
+    try:
+        binary = os.lstat(resolved)
+    except OSError as exc:
+        raise StudioBridgeError("ffmpeg_unavailable", f"{resolved} ({type(exc).__name__})") from exc
+    if not stat.S_ISREG(binary.st_mode) or binary.st_size <= 0:
+        raise StudioBridgeError("ffmpeg_unavailable", f"{resolved} is not a non-empty regular file")
+    return (str(resolved), int(binary.st_mtime_ns), int(binary.st_size))
+
+
 def _ffmpeg_toolchain_fingerprint(ffmpeg_bin: str) -> str:
     """Deterministic identity of the FFmpeg toolchain behind one binary path.
 
     Two builds can report the same version string and still encode different
-    bytes, so the fingerprint binds the first ``-version`` line *and* the size
-    and SHA-256 of the binary on disk. It is folded into both the shot cache key
-    and the CAS pipeline digest; a missing or unrunnable binary gets a stable
-    "unavailable" fingerprint so the failure surfaces later, in
-    :func:`_run_ffmpeg`, as a typed ``ffmpeg_unavailable`` instead of here.
+    bytes, so the fingerprint binds the first ``-version`` line *and* the
+    canonical path and SHA-256 of the binary on disk. It is folded into both the
+    shot cache key and the CAS pipeline digest. The result is memoised against
+    the binary's ``(path, mtime, size)`` stamp, so a rebuild in place busts the
+    cache, and a binary that cannot be resolved or hashed raises
+    ``StudioBridgeError("ffmpeg_unavailable")`` here rather than being folded
+    into the digest as an unusable placeholder.
     """
+    return _cached_toolchain_fingerprint(ffmpeg_bin, _binary_stat_key(ffmpeg_bin))
+
+
+@functools.lru_cache(maxsize=8)
+def _cached_toolchain_fingerprint(ffmpeg_bin: str, _stamp: tuple[str, int, int]) -> str:
+    """Cached body of :func:`_ffmpeg_toolchain_fingerprint`; ``_stamp`` only keys the cache."""
+    identity = _binary_identity(ffmpeg_bin)
     try:
         completed = subprocess.run(  # noqa: S603 - fixed argv list, no shell
-            [ffmpeg_bin, "-version"],
+            [identity["resolved_path"], "-version"],
             capture_output=True,
             timeout=30,
             check=False,
         )
     except (OSError, subprocess.TimeoutExpired):
-        return hashlib.sha256(
-            canonical_json({"ffmpeg": ffmpeg_bin, "toolchain": "unavailable"})
-        ).hexdigest()
-    lines = completed.stdout.decode("utf-8", errors="replace").splitlines()[:1]
+        version_line = ""
+    else:
+        lines = completed.stdout.decode("utf-8", errors="replace").splitlines()[:1]
+        version_line = lines[0] if lines else ""
+    # The identity - not the string the caller typed - is what gets hashed, so the
+    # same binary reached through a bare name, a symlink or its real path is one
+    # fingerprint, and a rebuild in place (same path, new bytes) is a new one.
     return hashlib.sha256(
         canonical_json(
-            {
-                "ffmpeg": ffmpeg_bin,
-                "version": lines[0] if lines else "",
-                "binary": _binary_identity(ffmpeg_bin),
-            }
+            {"ffmpeg": identity["resolved_path"], "version": version_line, "binary": identity}
         )
     ).hexdigest()
 
@@ -1295,7 +1394,7 @@ def render_storyboard_with_segment_cas(
     except Exception as exc:  # noqa: BLE001 - any passport refusal is fatal here
         raise StudioBridgeError("passport_verification_failed", type(exc).__name__) from exc
 
-    process_peak_rss = _current_process_tree_peak_rss_bytes()
+    self_peak_rss, children_rss, process_hwm = _process_tree_rss_hwm()
     receipt_path = _safe_child(out_dir, f"{job_id}.receipt.json", label="receipt")
     _write_receipt(
         receipt_path,
@@ -1319,7 +1418,10 @@ def render_storyboard_with_segment_cas(
             "cas_hits": cas_hits,
             "cas_misses": cas_misses,
             "bridge_buffer_peak_bytes": meter.peak_bytes,
-            "process_peak_rss_bytes": process_peak_rss,
+            "self_peak_rss_bytes": self_peak_rss,
+            "children_max_rss_bytes": children_rss,
+            "process_hwm_estimate_bytes": process_hwm,
+            "process_peak_rss_bytes": process_hwm,
             "ffmpeg_toolchain_fingerprint": toolchain,
         },
     )
@@ -1336,7 +1438,10 @@ def render_storyboard_with_segment_cas(
         output_mp4_path=output_mp4,
         receipt_path=receipt_path,
         bridge_buffer_peak_bytes=meter.peak_bytes,
-        process_peak_rss_bytes=process_peak_rss,
+        self_peak_rss_bytes=self_peak_rss,
+        children_max_rss_bytes=children_rss,
+        process_hwm_estimate_bytes=process_hwm,
+        process_peak_rss_bytes=process_hwm,
     )
 
 

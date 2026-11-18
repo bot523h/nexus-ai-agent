@@ -2160,6 +2160,7 @@ def test_vault_sync_raises_when_the_restored_artifact_is_not_pass(
 
 MUTATION_TARGETS = {
     "artifact_passport": "src/nexus_ai_agent/creative/artifact_passport.py",
+    "artifact_verifier": "src/nexus_ai_agent/creative/artifact_verifier.py",
     "materializer": "src/nexus_ai_agent/creative/materializer.py",
     "studio_cas_vault_bridge": "src/nexus_ai_agent/creative/studio_cas_vault_bridge.py",
     "artifact_download": "src/nexus_ai_agent/creative/artifact_download.py",
@@ -3566,26 +3567,67 @@ def test_vault_sync_refuses_a_tampered_restored_manifest(tmp_path: Path, monkeyp
         )
 
 
+def _stub_binary(path: Path, *, version: str, extra: str = "") -> Path:
+    """Write an executable stub FFmpeg whose ``-version`` prints ``version``."""
+    body = "#!/bin/sh\n" + (f"{extra}\n" if extra else "") + f"echo '{version}'\n"
+    path.write_text(body, encoding="utf-8")
+    path.chmod(0o755)
+    return path
+
+
 def test_rss_telemetry_reports_process_and_children(monkeypatch: Any) -> None:
-    """A-07: the reported peak covers this process and its reaped children."""
+    """A-07: the three reported values are honest about what each one measures."""
     from types import SimpleNamespace
 
     def _rusage(who: int) -> Any:
         return SimpleNamespace(ru_maxrss=1000 if who == bridge.resource.RUSAGE_SELF else 500)
 
     monkeypatch.setattr(bridge.resource, "getrusage", _rusage)
-    assert bridge._current_process_tree_peak_rss_bytes() == (1000 + 500) * 1024
+    assert bridge._process_tree_rss_hwm() == (1000 * 1024, 500 * 1024, 1500 * 1024)
+    # The compatibility accessor is the same combined estimate, not a new number.
+    assert bridge._current_process_tree_peak_rss_bytes() == 1500 * 1024
 
     monkeypatch.setattr(bridge.sys, "platform", "darwin")
-    assert bridge._current_process_tree_peak_rss_bytes() == 1000 + 500
+    assert bridge._process_tree_rss_hwm() == (1000, 500, 1500)
+    assert bridge._current_process_tree_peak_rss_bytes() == 1500
 
 
-def test_ffmpeg_fingerprint_binds_version_and_binary(tmp_path: Path, monkeypatch: Any) -> None:
-    """A-09: the toolchain identity is cached, stable and part of the shot cache key."""
-    bridge._ffmpeg_toolchain_fingerprint.cache_clear()
+def test_rss_telemetry_observes_a_real_child_process() -> None:
+    """A-07: both high-water marks are real - neither is a constant or a guess."""
+    before_self, before_children, _ = bridge._process_tree_rss_hwm()
+    assert before_self > 0
+    subprocess.run(
+        [sys.executable, "-c", "x = bytearray(2 * 1024 * 1024)"],
+        check=True,
+        timeout=120,
+        capture_output=True,
+    )
+    own, children, estimate = bridge._process_tree_rss_hwm()
+    assert own > 0
+    assert children > 0
+    assert children >= before_children
+    assert estimate == own + children
+
+
+def test_rss_hwm_docstrings_say_it_is_an_estimate_not_simultaneous_rss() -> None:
+    """A-07: the documentation may not present a sum of two peaks as one measurement."""
+    for function in (
+        bridge._process_tree_rss_hwm,
+        bridge._current_process_tree_peak_rss_bytes,
+    ):
+        doc = (function.__doc__ or "").lower()
+        assert "estimate" in doc
+        assert "simultaneous" in doc
+
+
+def test_ffmpeg_fingerprint_binds_version_and_binary(tmp_path: Path) -> None:
+    """A-09: the toolchain identity is cached, stable and binds the binary's bytes."""
+    bridge._cached_toolchain_fingerprint.cache_clear()
     real = bridge._ffmpeg_toolchain_fingerprint(_ffmpeg_bin())
     assert real == bridge._ffmpeg_toolchain_fingerprint(_ffmpeg_bin())
     assert len(real) == 64
+    # The second call was served from the cache, keyed by the binary's stamp.
+    assert bridge._cached_toolchain_fingerprint.cache_info().hits >= 1
 
     # A different binary path is a different fingerprint.
     twin = tmp_path / "ffmpeg-twin"
@@ -3593,23 +3635,182 @@ def test_ffmpeg_fingerprint_binds_version_and_binary(tmp_path: Path, monkeypatch
     twin.chmod(0o755)
     assert bridge._ffmpeg_toolchain_fingerprint(str(twin)) != real
 
-    # An unrunnable binary still yields a stable, non-empty identity.
-    bridge._ffmpeg_toolchain_fingerprint.cache_clear()
-    missing = bridge._ffmpeg_toolchain_fingerprint("/nonexistent/ffmpeg-binary")
-    assert len(missing) == 64
-    assert bridge._ffmpeg_toolchain_fingerprint("/nonexistent/ffmpeg-binary") == missing
 
-    # An unreadable binary is reported as unavailable rather than raising.
-    def _boom(_path: Any) -> Any:
+def test_binary_identity_records_the_real_file(tmp_path: Path) -> None:
+    """A-09: the identity is the canonical path, a real digest and a positive size."""
+    binary = _stub_binary(tmp_path / "ffmpeg", version="ffmpeg version 9.0.2")
+    identity = bridge._binary_identity(str(binary))
+    assert identity["resolved_path"] == str(binary.resolve(strict=True))
+    assert len(identity["sha256"]) == 64
+    int(identity["sha256"], 16)  # a real hex digest, never a placeholder word
+    assert identity["sha256"] == hashlib.sha256(binary.read_bytes()).hexdigest()
+    assert identity["size_bytes"] == binary.stat().st_size > 0
+
+
+def test_binary_identity_resolves_a_bare_command_name(tmp_path: Path) -> None:
+    """A-09: a bare ``ffmpeg`` is found on ``PATH`` exactly as the pipeline would find it."""
+    binary = _stub_binary(tmp_path / "ffmpeg", version="ffmpeg version 9.0.2")
+    monkeypatch_path = os.environ.get("PATH", "")
+    os.environ["PATH"] = f"{tmp_path}{os.pathsep}{monkeypatch_path}"
+    try:
+        assert bridge._resolve_binary("ffmpeg") == binary.resolve(strict=True)
+        named = bridge._ffmpeg_toolchain_fingerprint("ffmpeg")
+        explicit = bridge._ffmpeg_toolchain_fingerprint(str(binary))
+    finally:
+        os.environ["PATH"] = monkeypatch_path
+    # The same file reached two ways is one identity: the fingerprint is path-canonical.
+    assert named == explicit
+
+
+def test_binary_identity_follows_a_symlinked_binary(tmp_path: Path) -> None:
+    """A-09: a symlink to the binary resolves to the same file, and so to one identity."""
+    binary = _stub_binary(tmp_path / "ffmpeg-real", version="ffmpeg version 9.0.2")
+    link = tmp_path / "ffmpeg-link"
+    link.symlink_to(binary)
+    assert bridge._resolve_binary(str(link)) == binary.resolve(strict=True)
+    assert bridge._binary_identity(str(link)) == bridge._binary_identity(str(binary))
+    assert bridge._ffmpeg_toolchain_fingerprint(str(link)) == bridge._ffmpeg_toolchain_fingerprint(
+        str(binary)
+    )
+
+
+def test_binary_replaced_in_place_busts_the_fingerprint_cache(tmp_path: Path) -> None:
+    """A-09: new bytes at the same path are a new fingerprint, even with an identical version."""
+    binary = _stub_binary(tmp_path / "ffmpeg", version="ffmpeg version 9.0.2")
+    bridge._cached_toolchain_fingerprint.cache_clear()
+    before = bridge._ffmpeg_toolchain_fingerprint(str(binary))
+    stamp_before = bridge._binary_stat_key(str(binary))
+
+    # Same path, same ``-version`` output, different bytes: a rebuilt binary.
+    _stub_binary(binary, version="ffmpeg version 9.0.2", extra="# rebuilt")
+    stamp_after = bridge._binary_stat_key(str(binary))
+    assert stamp_after != stamp_before
+    after = bridge._ffmpeg_toolchain_fingerprint(str(binary))
+    assert after != before
+    # The cache key includes the bytes' stamp, so nothing stale can be served.
+    assert (str(binary.resolve()),) == (stamp_after[0],)
+    assert len({stamp_before, stamp_after}) == 2
+
+
+@pytest.mark.parametrize("target", ["missing", "directory", "empty", "dangling"])
+def test_binary_identity_refuses_an_unusable_binary(tmp_path: Path, target: str) -> None:
+    """A-09: an identity that cannot be vouched for raises, never ``"unavailable"``."""
+    path = tmp_path / "ffmpeg"
+    if target == "directory":
+        path.mkdir()
+    elif target == "empty":
+        path.write_bytes(b"")
+    elif target == "dangling":
+        path.symlink_to(tmp_path / "nowhere")
+    with pytest.raises(bridge.StudioBridgeError, match="ffmpeg_unavailable"):
+        bridge._binary_identity(str(path))
+    with pytest.raises(bridge.StudioBridgeError, match="ffmpeg_unavailable"):
+        bridge._binary_stat_key(str(path))
+    with pytest.raises(bridge.StudioBridgeError, match="ffmpeg_unavailable"):
+        bridge._ffmpeg_toolchain_fingerprint(str(path))
+
+
+def test_binary_identity_refuses_a_command_name_that_is_not_on_path() -> None:
+    """A-09: an unresolvable bare name is ``ffmpeg_unavailable``, not a silent fallback."""
+    with pytest.raises(bridge.StudioBridgeError, match="ffmpeg_unavailable"):
+        bridge._binary_identity("ffmpeg-that-does-not-exist-9f2c")
+
+
+def test_binary_identity_reports_an_unreadable_binary(monkeypatch: Any, tmp_path: Path) -> None:
+    """A-09: a refusal at the descriptor is reported as an unreadable binary."""
+    binary = _stub_binary(tmp_path / "ffmpeg", version="ffmpeg version 9.0.2")
+
+    def _boom(*_args: Any, **_kwargs: Any) -> Any:
         raise OSError("binary vanished")
 
-    monkeypatch.setattr(bridge, "stream_sha256", _boom)
-    bridge._ffmpeg_toolchain_fingerprint.cache_clear()
-    assert bridge._binary_identity("/nonexistent/ffmpeg-binary") == {
-        "sha256": "unavailable",
-        "size_bytes": 0,
-    }
-    bridge._ffmpeg_toolchain_fingerprint.cache_clear()
+    monkeypatch.setattr(bridge.os, "open", _boom)
+    with pytest.raises(bridge.StudioBridgeError, match="ffmpeg_unavailable"):
+        bridge._binary_identity(str(binary))
+
+
+def test_binary_identity_reports_a_failing_descriptor_stat(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    """A-09: a descriptor that cannot be stat'ed is an unusable binary, not a guess."""
+    binary = _stub_binary(tmp_path / "ffmpeg", version="ffmpeg version 9.0.2")
+
+    def _boom(_fd: int) -> Any:
+        raise OSError("descriptor vanished")
+
+    # ``os.fstat`` is shared with the test runner, so it is restored in a
+    # ``finally`` and the refusal is checked without pytest's own machinery.
+    real_fstat = bridge.os.fstat
+    bridge.os.fstat = _boom  # type: ignore[assignment]
+    try:
+        _refuses(
+            lambda: bridge._binary_identity(str(binary)),
+            bridge.StudioBridgeError,
+            contains="ffmpeg_unavailable",
+        )
+    finally:
+        bridge.os.fstat = real_fstat
+
+
+def test_binary_stat_key_reports_a_failing_stat(monkeypatch: Any, tmp_path: Path) -> None:
+    """A-09: a binary that cannot be stamped cannot key the fingerprint cache."""
+    binary = _stub_binary(tmp_path / "ffmpeg", version="ffmpeg version 9.0.2")
+
+    target = str(binary.resolve(strict=True))
+    state = {"armed": False}
+    real_lstat = bridge.os.lstat
+    real_resolve = bridge._resolve_binary
+
+    def _resolve_then_arm(name: str) -> Path:
+        resolved = real_resolve(name)
+        state["armed"] = True  # every lstat from here on is the one under test
+        return resolved
+
+    def _flakey_lstat(path: Any, *args: Any, **kwargs: Any) -> Any:
+        if state["armed"] and os.fspath(path) == target:
+            raise OSError("path vanished")
+        return real_lstat(path, *args, **kwargs)
+
+    bridge._resolve_binary = _resolve_then_arm  # type: ignore[assignment]
+    bridge.os.lstat = _flakey_lstat
+    try:
+        _refuses(
+            lambda: bridge._binary_stat_key(str(binary)),
+            bridge.StudioBridgeError,
+            contains="ffmpeg_unavailable",
+        )
+    finally:
+        bridge._resolve_binary = real_resolve
+        bridge.os.lstat = real_lstat
+
+
+def test_toolchain_fingerprint_binds_a_binary_that_cannot_run(tmp_path: Path) -> None:
+    """A-09: an executable that will not run still has an identity, without a version line."""
+    unusable = tmp_path / "ffmpeg-garbage"
+    unusable.write_bytes(b"\x00\x01\x02\x03" * 8)
+    unusable.chmod(0o755)
+    bridge._cached_toolchain_fingerprint.cache_clear()
+    fingerprint = bridge._ffmpeg_toolchain_fingerprint(str(unusable))
+    assert len(fingerprint) == 64
+    int(fingerprint, 16)
+    # Its identity is the bytes and the (empty) version line - not the stub's.
+    stub = _stub_binary(tmp_path / "ffmpeg-stub", version="ffmpeg version 9.0.2")
+    assert fingerprint != bridge._ffmpeg_toolchain_fingerprint(str(stub))
+
+
+def test_binary_identity_refuses_a_binary_that_shrank_while_hashed(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    """A-09: bytes that do not match the descriptor's size are refused, not hashed blindly."""
+    binary = _stub_binary(tmp_path / "ffmpeg", version="ffmpeg version 9.0.2")
+    calls = {"n": 0}
+
+    def _short_read(_fd: int, _size: int) -> bytes:
+        calls["n"] += 1
+        return b"#" if calls["n"] == 1 else b""
+
+    monkeypatch.setattr(bridge.os, "read", _short_read)
+    with pytest.raises(bridge.StudioBridgeError, match="changed while hashed"):
+        bridge._binary_identity(str(binary))
 
 
 def test_shot_cache_key_binds_the_toolchain() -> None:
@@ -3657,9 +3858,20 @@ def test_render_reports_bridge_and_process_memory_in_the_receipt(tmp_path: Path)
     )
     assert result.bridge_buffer_peak_bytes == result.peak_memory_bytes > 0
     assert result.process_peak_rss_bytes > 0
+    # A-07: the three honest values are recorded, and the compatibility alias
+    # carries the combined estimate - never one opaque number pretending to be RSS.
+    assert result.self_peak_rss_bytes > 0
+    assert result.children_max_rss_bytes > 0  # FFmpeg ran and was reaped
+    assert result.process_hwm_estimate_bytes == (
+        result.self_peak_rss_bytes + result.children_max_rss_bytes
+    )
+    assert result.process_peak_rss_bytes == result.process_hwm_estimate_bytes
     receipt = json.loads(result.receipt_path.read_text())
     assert receipt["bridge_buffer_peak_bytes"] == result.bridge_buffer_peak_bytes
     assert receipt["process_peak_rss_bytes"] == result.process_peak_rss_bytes
+    assert receipt["self_peak_rss_bytes"] == result.self_peak_rss_bytes
+    assert receipt["children_max_rss_bytes"] == result.children_max_rss_bytes
+    assert receipt["process_hwm_estimate_bytes"] == result.process_hwm_estimate_bytes
     assert len(receipt["ffmpeg_toolchain_fingerprint"]) == 64
 
 
@@ -3985,6 +4197,43 @@ def test_mutant_bridge_ignoring_the_restored_manifest_hash_is_killed() -> None:
         "bridge_no_manifest_gate",
     )
     _kill(lambda: _behaviour(mutant.sync_and_verify_studio_bundle_in_vault, tmp_path_factory_dir()))
+
+
+def test_mutant_verifier_without_the_audio_gate_is_killed(real_mp4: Path, monkeypatch: Any) -> None:
+    """A-08 mutant: drop the demuxer's audio-stream gate and a forged track passes.
+
+    The container test cannot see this defect - ``real_mp4`` genuinely declares an
+    ``mp4a`` track with a sane AudioSampleEntry - so the only observer of a
+    container whose audio the demuxer cannot find is the gate itself. This mutant
+    is the proof that the gate is load-bearing.
+    """
+
+    def _neuter(tree: ast.Module) -> None:
+        func = _function(tree, "verify_mp4")
+        found = False
+        for node in ast.walk(func):
+            if isinstance(node, ast.If) and "missing_audio_stream" in ast.unparse(node):
+                node.test = ast.Constant(value=False)
+                found = True
+        assert found, "the audio-stream gate must exist"
+
+    def _behaviour(module: Any) -> None:
+        with monkeypatch.context() as patch:
+            patch.setattr(
+                module,
+                "_probe",
+                lambda *a, **k: {
+                    "streams": [{"codec_type": "video", "codec_name": "h264"}],
+                    "format": {"duration": "1.0"},
+                },
+            )
+            verdict = module.verify_mp4(real_mp4, expected_duration_s=1.0, tolerance_s=0.3)
+        assert verdict.status == module.VIOLATED, "a forged audio track passed verification"
+        assert verdict.reasons == ("missing_audio_stream",)
+
+    _behaviour(av)  # positive control: the real gate refuses it
+    mutant = _load_mutant(MUTATION_TARGETS["artifact_verifier"], _neuter, "verifier_no_audio_gate")
+    _kill(lambda: _behaviour(mutant))
 
 
 # --------------------------------------------------------------------------- #
