@@ -617,9 +617,10 @@ def write_slate_png(
             if len(pending) >= CHUNK_BYTES:
                 handle.write(_png_chunk(b"IDAT", compressor.compress(bytes(pending))))
                 pending.clear()
+        # ``zlib.flush`` always terminates the stream with at least the zlib header
+        # and the Adler-32 trailer, so the final IDAT is written unconditionally.
         tail = compressor.compress(bytes(pending)) + compressor.flush()
-        if tail:
-            handle.write(_png_chunk(b"IDAT", tail))
+        handle.write(_png_chunk(b"IDAT", tail))
         handle.write(_png_chunk(b"IEND", b""))
 
     atomic_write(path, _write)

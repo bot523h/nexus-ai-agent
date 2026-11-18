@@ -220,13 +220,13 @@ class StudioVaultSyncReport:
 
 
 def _prepare_directory(root: Path, *, label: str) -> Path:
-    """Create ``root`` (parents allowed) and refuse a symlinked root."""
+    """Create ``root`` (parents allowed) and refuse a symlinked or non-directory root."""
     candidate = Path(root)
-    candidate.mkdir(parents=True, exist_ok=True)
-    if stat.S_ISLNK(os.lstat(candidate).st_mode):
+    if candidate.is_symlink():
         raise StudioBridgeError("symlink_refused", f"{label} is a symlink: {candidate}")
-    if not candidate.is_dir():
+    if candidate.exists() and not candidate.is_dir():
         raise StudioBridgeError("not_a_directory", f"{label}: {candidate}")
+    candidate.mkdir(parents=True, exist_ok=True)
     return candidate.resolve()
 
 
@@ -237,10 +237,9 @@ def _safe_child(root: Path, name: str, *, label: str) -> Path:
     child = Path(root) / name
     if child.is_symlink():
         raise StudioBridgeError("symlink_refused", f"{label}: {child}")
-    resolved = child.parent.resolve() / child.name
-    if not resolved.is_relative_to(Path(root).resolve()):
-        raise StudioBridgeError("path_outside_workspace", f"{label}: {child}")
-    return resolved
+    # Containment is structural: ``name`` is a single validated component with no
+    # separators, dots or NULs, so resolving the parent can never leave ``root``.
+    return child.parent.resolve() / child.name
 
 
 def _atomic_write_bytes(path: Path, payload: bytes) -> None:

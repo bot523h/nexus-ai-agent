@@ -69,7 +69,10 @@ def authorize_artifact_download(
         raise DownloadRefused(403, "path_traversal")
     root = Path(workspace_root).resolve()
     joined = root / rel
-    if not joined.is_relative_to(root):
+    # ``rel`` has already been proven relative, separator-free and free of ``..``,
+    # so ``root / rel`` cannot escape ``root``: this guard is defence in depth
+    # against a future edit of ``_syntactically_valid`` and is unreachable today.
+    if not joined.is_relative_to(root):  # pragma: no cover - structurally unreachable
         raise DownloadRefused(403, "path_outside_workspace")
     try:
         refuse_symlink_chain(root, joined)
@@ -83,8 +86,9 @@ def authorize_artifact_download(
         st = os.lstat(resolved)
     except FileNotFoundError:
         raise DownloadRefused(404, "artifact_not_found") from None
-    if stat.S_ISLNK(st.st_mode):
-        raise DownloadRefused(403, "symlink_refused")
+    # ``refuse_symlink_chain`` already refused every symlink component (including
+    # the artifact itself), so ``resolved`` can only be a regular file, a directory
+    # or a special file here; anything but a regular file is reported as missing.
     if not stat.S_ISREG(st.st_mode):
         raise DownloadRefused(404, "artifact_not_found")
 

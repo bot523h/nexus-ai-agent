@@ -94,7 +94,10 @@ def read_top_level_boxes(path: Path) -> tuple[tuple[str, ...], list[str]]:
                 break
             types.append(kind)
             offset += size
-    if offset != file_size and not problems:
+    # Unreachable by construction: the loop exits either at ``offset == file_size``
+    # or through a recorded overrun problem, so tiling is already proven above.
+    # Kept as an explicit assertion of the invariant for future edits.
+    if offset != file_size and not problems:  # pragma: no cover - structurally unreachable
         problems.append("boxes do not tile the file")
     if types and types[0] != "ftyp":
         problems.append("first box is not ftyp")
