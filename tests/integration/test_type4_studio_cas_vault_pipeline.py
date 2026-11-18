@@ -158,6 +158,7 @@ def test_cache_key_is_domain_separated_and_content_addressed() -> None:
         "width": 320,
         "height": 180,
         "image_sha256": "b" * 64,
+        "toolchain_fingerprint": "1" * 64,
     }
     key = shot_cache_key_hash(**kwargs)
     assert key == shot_cache_key_hash(**kwargs)
@@ -175,12 +176,15 @@ def test_cache_key_is_domain_separated_and_content_addressed() -> None:
                     "width": 320,
                     "height": 180,
                     "image_sha256": "b" * 64,
+                    "toolchain_fingerprint": "1" * 64,
                 }
             )
         ).hexdigest()
     )
     assert shot_cache_key_hash(**{**kwargs, "duration_ms": 1501}) != key
     assert shot_cache_key_hash(**{**kwargs, "image_sha256": "c" * 64}) != key
+    # A different FFmpeg build must invalidate the whole shot cache.
+    assert shot_cache_key_hash(**{**kwargs, "toolchain_fingerprint": "2" * 64}) != key
 
 
 def test_local_image_override_changes_only_that_shots_segment(tmp_path: Path) -> None:

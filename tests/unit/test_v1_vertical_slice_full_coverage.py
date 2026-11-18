@@ -32,6 +32,7 @@ import io
 import json
 import math
 import os
+import re
 import sqlite3
 import stat
 import struct
@@ -1165,7 +1166,7 @@ def test_cli_reads_secrets_from_file_flag_and_environment(tmp_path: Path) -> Non
     assert studio_cli._read_secret(inline=None, path=secret_file, env_name="X") == "file-secret"
     assert studio_cli._read_secret(inline="inline", path=None, env_name="X") == "inline"
     assert studio_cli._read_secret(inline=None, path=None, env_name="MISSING_ENV_VAR_XYZ") is None
-    with pytest.raises(studio_cli.StudioCliError, match="secret file unreadable"):
+    with pytest.raises(studio_cli.StudioCliError, match="secret file missing"):
         studio_cli._read_secret(
             inline=None, path=tmp_path / "nope.txt", env_name="MISSING_ENV_VAR_XYZ"
         )
@@ -1652,6 +1653,20 @@ def _ffmpeg_available() -> bool:
     return shutil.which("ffmpeg") is not None and shutil.which("ffprobe") is not None
 
 
+def _ffmpeg_bin() -> str:
+    """Path of the real FFmpeg binary under test (``NEXUS_FFMPEG`` overrides)."""
+    import shutil
+
+    return os.environ.get("NEXUS_FFMPEG") or shutil.which("ffmpeg") or "ffmpeg"
+
+
+def _ffprobe_bin() -> str:
+    """Path of the real ffprobe binary under test (``NEXUS_FFPROBE`` overrides)."""
+    import shutil
+
+    return os.environ.get("NEXUS_FFPROBE") or shutil.which("ffprobe") or "ffprobe"
+
+
 needs_media = pytest.mark.skipif(
     not _ffmpeg_available(), reason="real ffmpeg and ffprobe are required"
 )
@@ -1896,12 +1911,13 @@ class _FakeRenderResult:
         manifest.write_text("{}", encoding="utf-8")
         passport = out / "render.passport.json"
         passport.write_text("{}", encoding="utf-8")
+        manifest_sha = hashlib.sha256(manifest.read_bytes()).hexdigest()
         profile = mz.RenderProfile.from_mapping(PROFILE)
         bundle = mz.MaterializedBundle(
             out_dir=str(out),
             profile=profile,
             manifest_path=str(manifest),
-            manifest_sha256="a" * 64,
+            manifest_sha256=manifest_sha,
             manifest_size=2,
             manifest_inode=1,
             assets=(),
@@ -1915,7 +1931,11 @@ class _FakeRenderResult:
         self._result = CasStoryboardRenderResult(
             artifact=bundle,
             verification=av.Mp4Verdict(status=av.PASS),
-            passport={"job_id": "job", "output_sha256": hashlib.sha256(b"\x00" * 32).hexdigest()},
+            passport={
+                "job_id": "job",
+                "output_sha256": hashlib.sha256(b"\x00" * 32).hexdigest(),
+                "manifest_sha256": manifest_sha,
+            },
             passport_path=passport,
             manifest_path=manifest,
             cas_hits=0,
@@ -2060,7 +2080,13 @@ def test_vault_sync_raises_when_the_restored_artifact_is_not_pass(
             return SimpleNamespace(files={"render.mp4": b"x"})
 
     monkeypatch.setattr(bridge, "PersonalCloudVaultManager", _Manager)
-    monkeypatch.setattr(bridge, "verify_artifact_passport", lambda *_a, **_k: SimpleNamespace())
+    monkeypatch.setattr(
+        bridge,
+        "verify_artifact_passport",
+        lambda *_a, **_k: SimpleNamespace(
+            passport={"manifest_sha256": hashlib.sha256(b"{}").hexdigest()}
+        ),
+    )
     monkeypatch.setattr(
         bridge,
         "verify_mp4",
@@ -2237,7 +2263,9 @@ def test_mutant_bridge_ignoring_restored_pass_status_is_killed() -> None:
         original_verify_mp4 = sync_fn.__globals__["verify_mp4"]
         try:
             sync_fn.__globals__["PersonalCloudVaultManager"] = _Manager
-            sync_fn.__globals__["verify_artifact_passport"] = lambda *_a, **_k: SimpleNamespace()
+            sync_fn.__globals__["verify_artifact_passport"] = lambda *_a, **_k: SimpleNamespace(
+                passport={"manifest_sha256": hashlib.sha256(b"{}").hexdigest()}
+            )
             sync_fn.__globals__["verify_mp4"] = lambda *_a, **_k: av.Mp4Verdict(
                 status=av.VIOLATED, reasons=("forged",)
             )
@@ -2648,3 +2676,1110 @@ def test_vault_head_resolution_refuses_an_ambiguous_head(monkeypatch: Any) -> No
     with pytest.raises(bridge.StudioBridgeError, match="vault_ambiguous_head"):
         bridge._current_vault_head(_Driver(), "proj")
     assert bridge._current_vault_head(_Driver(), "other-project") == "snap-other"
+
+
+# --------------------------------------------------------------------------- #
+# Audit findings A-01 / A-04 / A-05 / A-08
+# --------------------------------------------------------------------------- #
+
+
+def _mp4_box(kind: str, payload: bytes, *, largesize: bool = False, size: int = 0) -> bytes:
+    """Build one ISO-BMFF box; ``size`` forces a declared size (0 means "to EOF")."""
+    header = b"\x00\x00\x00\x01" + kind.encode("latin-1") if largesize else b""
+    if largesize:
+        return header + (16 + len(payload)).to_bytes(8, "big") + payload
+    declared = 8 + len(payload) if size == 0 else size
+    return declared.to_bytes(4, "big") + kind.encode("latin-1") + payload
+
+
+def _trak(handler: str, codec: str, timescale: int, *, mdhd_version: int = 0) -> bytes:
+    """Build a ``trak`` whose ``mdia`` declares one handler, one codec, one timescale."""
+    if mdhd_version == 1:
+        mdhd_payload = (
+            b"\x01\x00\x00\x00" + b"\x00" * 8 + b"\x00" * 8 + timescale.to_bytes(4, "big")
+        )
+    else:
+        mdhd_payload = b"\x00\x00\x00\x00" + b"\x00" * 8 + timescale.to_bytes(4, "big")
+    stsd_entry = (16 + len(codec)).to_bytes(4, "big") + codec.encode("latin-1") + b"\x00" * 8
+    stsd_payload = b"\x00\x00\x00\x00" + (1).to_bytes(4, "big") + stsd_entry
+    hdlr_payload = b"\x00\x00\x00\x00" + b"\x00" * 4 + handler.encode("latin-1") + b"\x00" * 8
+    mdia = (
+        _mp4_box("hdlr", hdlr_payload)
+        + _mp4_box("mdhd", mdhd_payload)
+        + _mp4_box("minf", _mp4_box("stbl", _mp4_box("stsd", stsd_payload)))
+    )
+    return _mp4_box("trak", _mp4_box("mdia", mdia))
+
+
+def test_moov_stream_table_reads_every_track_shape(tmp_path: Path) -> None:
+    """A-08: the container's own stream table is parsed, never assumed."""
+    path = tmp_path / "synthetic.mp4"
+    path.write_bytes(
+        _mp4_box("ftyp", b"isom")
+        + _mp4_box(
+            "moov",
+            _mp4_box("free", b"")
+            + _trak("vide", "avc1", 10_240)
+            + _trak("soun", "mp4a", 16_000, mdhd_version=1)
+            + _trak("soun", "mp4a", 0),
+        )
+        + _mp4_box("mdat", b"\x00" * 8)
+    )
+    tracks, problems = av.read_moov_tracks(path)
+    assert problems == []
+    assert [(t.handler, t.codec, t.timescale) for t in tracks] == [
+        ("vide", "avc1", 10_240),
+        ("soun", "mp4a", 16_000),
+        ("soun", "mp4a", 0),
+    ]
+    assert tracks[0].is_video is True
+    assert tracks[1].is_aac_audio is True
+    # A zero timescale is not a playable audio track, so it never satisfies A-08.
+    assert tracks[2].is_aac_audio is False
+
+
+def test_moov_stream_table_reports_layout_gaps(tmp_path: Path) -> None:
+    """Unparsable metadata is a typed refusal, never a silent pass."""
+    no_moov = tmp_path / "no-moov.mp4"
+    no_moov.write_bytes(_mp4_box("ftyp", b"isom") + _mp4_box("mdat", b"\x00" * 8))
+    assert av.read_moov_tracks(no_moov) == ((), [])
+
+    empty_moov = tmp_path / "empty-moov.mp4"
+    empty_moov.write_bytes(
+        _mp4_box("ftyp", b"isom") + _mp4_box("moov", b"") + _mp4_box("mdat", b"")
+    )
+    assert av.read_moov_tracks(empty_moov) == ((), ["moov payload size 0 out of range"])
+
+    trackless = tmp_path / "trackless-moov.mp4"
+    trackless.write_bytes(
+        _mp4_box("ftyp", b"isom") + _mp4_box("moov", _mp4_box("free", b"")) + _mp4_box("mdat", b"")
+    )
+    assert av.read_moov_tracks(trackless) == ((), ["moov declares no trak box"])
+
+    oversized = tmp_path / "oversized-moov.mp4"
+    oversized.write_bytes(
+        _mp4_box("ftyp", b"isom") + _mp4_box("moov", b"\x00" * 64) + _mp4_box("mdat", b"")
+    )
+    monkeypatched = av._MAX_MOOV_BYTES
+    try:
+        av._MAX_MOOV_BYTES = 8
+        assert av.read_moov_tracks(oversized)[1] == ["moov payload size 64 out of range"]
+    finally:
+        av._MAX_MOOV_BYTES = monkeypatched
+
+
+def test_moov_stream_table_survives_largesize_and_open_ended_boxes(tmp_path: Path) -> None:
+    """A ``largesize`` trak and an inner box that does not fit are handled, not trusted."""
+    path = tmp_path / "largesize.mp4"
+    bad_inner = b"\x00\x00\x00\x02free"  # declares 2 bytes: smaller than its header
+    path.write_bytes(
+        _mp4_box("ftyp", b"isom")
+        + _mp4_box(
+            "moov",
+            _trak("vide", "avc1", 10_240, mdhd_version=1),
+            largesize=True,
+        )
+        + _mp4_box("mdat", bad_inner, size=0)
+    )
+    tracks, problems = av.read_moov_tracks(path)
+    assert problems == []
+    assert [(t.handler, t.codec) for t in tracks] == [("vide", "avc1")]
+    # The malformed inner box simply cannot declare a stream: no audio, no crash.
+    verdict = av.verify_mp4(path, expected_duration_s=1.0, tolerance_s=0.2)
+    assert verdict.status != av.PASS
+    assert "missing_audio_stream" in verdict.reasons
+
+
+def test_moov_stream_table_refuses_a_malformed_stsd(tmp_path: Path) -> None:
+    """A ``stsd`` too short to hold a sample entry yields no codec, never a guess."""
+    short_stsd = _mp4_box("stsd", b"\x00\x00\x00\x00\x00\x00\x00\x01")
+    mdia = _mp4_box("hdlr", b"\x00" * 8 + b"soun" + b"\x00" * 8) + _mp4_box(
+        "minf", _mp4_box("stbl", short_stsd)
+    )
+    path = tmp_path / "short-stsd.mp4"
+    path.write_bytes(
+        _mp4_box("ftyp", b"isom")
+        + _mp4_box("moov", _mp4_box("trak", _mp4_box("mdia", mdia)))
+        + _mp4_box("mdat", b"")
+    )
+    tracks, problems = av.read_moov_tracks(path)
+    assert problems == []
+    assert [(t.handler, t.codec, t.timescale) for t in tracks] == [("soun", None, 0)]
+    assert tracks[0].is_aac_audio is False
+
+
+@pytest.fixture(scope="module")
+def silent_mp4(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """A genuine H.264 MP4 with no audio track at all (the A-08 failure mode)."""
+    out = tmp_path_factory.mktemp("silent") / "silent.mp4"
+    try:
+        subprocess.run(
+            [
+                "ffmpeg",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc=size=160x90:rate=10:duration=1",
+                "-c:v",
+                "libx264",
+                "-preset",
+                "ultrafast",
+                "-pix_fmt",
+                "yuv420p",
+                "-an",
+                "-movflags",
+                "+faststart",
+                "-f",
+                "mp4",
+                str(out),
+            ],
+            check=True,
+            timeout=120,
+            capture_output=True,
+        )
+    except (OSError, subprocess.SubprocessError):  # pragma: no cover - environment gate
+        pytest.skip("real ffmpeg is required for the audio-contract tests")
+    return out
+
+
+def test_verify_mp4_refuses_a_missing_audio_stream(silent_mp4: Path, real_mp4: Path) -> None:
+    """A-08: a silent render is VIOLATED unless the caller explicitly allows silence."""
+    verdict = av.verify_mp4(silent_mp4, expected_duration_s=1.0, tolerance_s=0.3)
+    assert verdict.status == av.VIOLATED
+    assert verdict.reasons == ("missing_audio_stream",)
+    assert verdict.has_audio_stream is False
+    assert verdict.audio_codec is None
+    assert verdict.video_codec == "avc1"
+
+    relaxed = av.verify_mp4(
+        silent_mp4, expected_duration_s=1.0, tolerance_s=0.3, require_audio=False
+    )
+    assert relaxed.status == av.PASS
+    assert relaxed.has_audio_stream is False
+    assert relaxed.reasons == ()
+
+    with_audio = av.verify_mp4(real_mp4, expected_duration_s=1.0, tolerance_s=0.3)
+    assert with_audio.status == av.PASS
+    assert with_audio.has_audio_stream is True
+    assert with_audio.audio_codec == "mp4a"
+
+
+def test_verify_mp4_reports_moov_layout_problems(tmp_path: Path) -> None:
+    """A ``moov`` without a single usable ``trak`` is a violation, not an observation."""
+    trackless = tmp_path / "no-trak.mp4"
+    trackless.write_bytes(
+        _mp4_box("ftyp", b"isom")
+        + _mp4_box("moov", _mp4_box("free", b""))
+        + _mp4_box("mdat", b"\x00")
+    )
+    verdict = av.verify_mp4(trackless, expected_duration_s=1.0, tolerance_s=0.2)
+    assert verdict.status == av.VIOLATED
+    assert verdict.reasons == ("moov_layout: moov declares no trak box",)
+
+    empty_moov = tmp_path / "empty-moov.mp4"
+    empty_moov.write_bytes(
+        _mp4_box("ftyp", b"isom") + _mp4_box("moov", b"") + _mp4_box("mdat", b"\x00")
+    )
+    verdict = av.verify_mp4(empty_moov, expected_duration_s=1.0, tolerance_s=0.2)
+    assert verdict.status == av.VIOLATED
+    assert verdict.reasons == ("moov_layout: moov payload size 0 out of range",)
+
+
+def test_verify_mp4_refuses_a_video_free_container(tmp_path: Path) -> None:
+    """A container with only an audio track is violated before ffprobe is asked."""
+    path = tmp_path / "audio-only.mp4"
+    path.write_bytes(
+        _mp4_box("ftyp", b"isom")
+        + _mp4_box("moov", _trak("soun", "mp4a", 16_000))
+        + _mp4_box("mdat", b"\x00")
+    )
+    verdict = av.verify_mp4(path, expected_duration_s=1.0, tolerance_s=0.2)
+    assert verdict.status == av.VIOLATED
+    assert verdict.reasons == ("no_video_stream",)
+    assert verdict.has_video is False
+    assert verdict.has_audio_stream is True
+
+
+def test_empty_shot_tree_refuses_a_stray_inclusion_proof() -> None:
+    """A-04: zero leaves means zero proofs - a proof for the empty tree is refused."""
+    empty_root = mz.EMPTY_MERKLE_ROOT
+    assert mz.verify_shot_inclusion_proofs(shot_hashes=(), merkle_root=empty_root, proofs=()) == ()
+    assert mz.verify_shot_inclusion_proofs(
+        shot_hashes=(), merkle_root=empty_root, proofs=[{"unexpected": "proof"}]
+    ) == ("shot_inclusion_proof_count_mismatch",)
+    assert mz.verify_shot_inclusion_proofs(
+        shot_hashes=(), merkle_root=empty_root, proofs=[{"schema": mz.MERKLE_PROOF_SCHEMA}]
+    ) == ("shot_inclusion_proof_count_mismatch",)
+
+
+def test_proof_schema_tag_is_mandatory() -> None:
+    """A-05: a proof must declare ``MERKLE_PROOF_SCHEMA`` or it is not a proof."""
+    hashes = _shot_hashes(3)
+    payloads = mz.shot_leaf_payloads(hashes)
+    root = mz.merkle_root_sha256(payloads)
+    proof = mz.merkle_inclusion_proof_record(payloads, 1)
+    assert proof["schema"] == mz.MERKLE_PROOF_SCHEMA
+    assert (
+        mz.verify_shot_inclusion_proofs(
+            shot_hashes=hashes,
+            merkle_root=root,
+            proofs=[mz.merkle_inclusion_proof_record(payloads, i) for i in range(3)],
+        )
+        == ()
+    )
+
+    for poisoned in (
+        {k: v for k, v in proof.items() if k != "schema"},
+        dict(proof, schema="some-other-protocol-v1"),
+        dict(proof, schema=None),
+    ):
+        proofs = [
+            mz.merkle_inclusion_proof_record(payloads, index) if index != 1 else poisoned
+            for index in range(3)
+        ]
+        assert mz.verify_shot_inclusion_proofs(
+            shot_hashes=hashes, merkle_root=root, proofs=proofs
+        ) == ("shot_inclusion_proof_invalid",)
+
+
+def test_build_passport_emits_version_two(copied_mp4: Path) -> None:
+    """A-01: new passports are version 2 and always carry the sealed shot tree."""
+    passport = _passport(copied_mp4)
+    assert passport["passport_version"] == 2
+    assert ap.PASSPORT_VERSION == 2
+    assert ap.SUPPORTED_PASSPORT_VERSIONS == (1, 2)
+    assert set(ap.REQUIRED_FIELDS) - set(ap.REQUIRED_V1_FIELDS) == set(ap.SHOT_MERKLE_FIELDS)
+    assert ap.REQUIRED_FIELDS == ap.REQUIRED_V1_FIELDS | frozenset(ap.SHOT_MERKLE_FIELDS)
+
+
+def _legacy_v1_passport(mp4: Path, **overrides: Any) -> dict[str, Any]:
+    """A passport exactly as version 1 wrote it: no Merkle field at all."""
+    base = _passport(mp4)
+    legacy = {name: base[name] for name in ap.PASSPORT_V1_FIELDS if name in base}
+    legacy["passport_version"] = 1
+    legacy.update(overrides)
+    return _sealed(legacy)
+
+
+def test_version_one_passports_still_verify(copied_mp4: Path, tmp_path: Path) -> None:
+    """A-01: legacy passports on disk keep verifying - no forced migration."""
+    path = _write(tmp_path / "storyboard.passport.json", _legacy_v1_passport(copied_mp4))
+    check = ap.verify_artifact_passport(path, copied_mp4, KEY)
+    assert check.passport["passport_version"] == 1
+    assert "shot_inclusion_proofs" not in check.passport
+
+    with pytest.raises(ap.PassportError, match="passport_version_unsupported"):
+        ap.verify_artifact_passport(path, copied_mp4, KEY, min_version=2)
+    assert (
+        ap.verify_artifact_passport(path, copied_mp4, KEY, min_version=1).passport[
+            "passport_version"
+        ]
+        == 1
+    )
+
+
+def test_version_two_passports_satisfy_a_min_version_of_two(
+    copied_mp4: Path, tmp_path: Path
+) -> None:
+    path = _write(
+        tmp_path / "storyboard.passport.json",
+        _passport(copied_mp4, shot_hashes=list(_shot_hashes(2))),
+    )
+    check = ap.verify_artifact_passport(path, copied_mp4, KEY, min_version=2)
+    assert check.passport["passport_version"] == 2
+    assert len(check.passport["shot_inclusion_proofs"]) == 2
+
+
+@pytest.mark.parametrize("bad", [0, -1, True, "1", 1.0])
+def test_verify_passport_refuses_an_invalid_min_version(copied_mp4: Path, bad: object) -> None:
+    path = _write(Path(str(copied_mp4) + ".passport.json"), _legacy_v1_passport(copied_mp4))
+    with pytest.raises(ap.PassportError, match="invalid_min_version"):
+        ap.verify_artifact_passport(path, copied_mp4, KEY, min_version=bad)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("version", [0, 3, "2", None, 2.0, True])
+def test_verify_passport_refuses_an_unsupported_version(
+    copied_mp4: Path, tmp_path: Path, version: object
+) -> None:
+    data = _passport(copied_mp4)
+    data["passport_version"] = version
+    path = _write(tmp_path / "storyboard.passport.json", _sealed(data))
+    with pytest.raises(ap.PassportError, match="passport_version_unsupported"):
+        ap.verify_artifact_passport(path, copied_mp4, KEY)
+
+
+def test_version_one_passport_with_partial_merkle_material_is_still_strict(
+    copied_mp4: Path, tmp_path: Path
+) -> None:
+    """A-01: a version 1 passport that *does* carry Merkle fields is fully validated."""
+    hashes = list(_shot_hashes(2))
+    data = _passport(copied_mp4, shot_hashes=hashes)
+
+    good = _sealed(dict(data, passport_version=1))
+    path = _write(tmp_path / "good.passport.json", good)
+    assert ap.verify_artifact_passport(path, copied_mp4, KEY).passport["passport_version"] == 1
+
+    broken_root = _sealed(dict(data, passport_version=1, shot_merkle_root="f" * 64))
+    with pytest.raises(ap.PassportError, match="shot_merkle_root_mismatch"):
+        ap.verify_artifact_passport(
+            _write(tmp_path / "broken.passport.json", broken_root), copied_mp4, KEY
+        )
+
+    short = _sealed(
+        dict(data, passport_version=1, shot_inclusion_proofs=data["shot_inclusion_proofs"][:1])
+    )
+    with pytest.raises(ap.PassportError, match="shot_inclusion_proof_count_mismatch"):
+        ap.verify_artifact_passport(
+            _write(tmp_path / "short.passport.json", short), copied_mp4, KEY
+        )
+
+    # A version 1 passport that carries only *one* of the three fields is refused:
+    # the tree is either present in full or absent entirely.
+    lone_root = {name: data[name] for name in ap.PASSPORT_V1_FIELDS if name in data}
+    lone_root["passport_version"] = 1
+    lone_root["shot_merkle_root"] = data["shot_merkle_root"]
+    with pytest.raises(ap.PassportError, match="shot_inclusion_proof_invalid"):
+        ap.verify_artifact_passport(
+            _write(tmp_path / "lone.passport.json", _sealed(lone_root)), copied_mp4, KEY
+        )
+
+
+def test_version_two_passport_missing_a_merkle_field_is_malformed(
+    copied_mp4: Path, tmp_path: Path
+) -> None:
+    data = _passport(copied_mp4, shot_hashes=list(_shot_hashes(2)))
+    for field in ap.SHOT_MERKLE_FIELDS:
+        partial = {k: v for k, v in data.items() if k != field}
+        partial["hmac_sha256"] = ap._seal(partial, KEY.encode())
+        with pytest.raises(ap.PassportError, match="passport_malformed"):
+            ap.verify_artifact_passport(
+                _write(tmp_path / f"missing-{field}.json", partial), copied_mp4, KEY
+            )
+
+
+def test_moov_parser_handles_every_nested_box_irregularity(tmp_path: Path) -> None:
+    """Nested ``largesize``/open-ended/overrunning boxes are parsed or ignored, never trusted."""
+    largesize_free = b"\x00\x00\x00\x01" + b"free" + (24).to_bytes(8, "big") + b"\x00" * 8
+    open_ended_free = b"\x00\x00\x00\x00" + b"free" + b"\x00" * 4
+    overrun_free = b"\x00\x00\x00\x04" + b"free"
+    short_mdhd = _mp4_box("mdhd", b"\x00\x00\x00\x00" + b"\x00" * 8)
+    stbl_without_stsd = _mp4_box("minf", _mp4_box("stbl", _mp4_box("free", b"")))
+    hdlr = _mp4_box("hdlr", b"\x00" * 8 + b"soun" + b"\x00" * 8)
+
+    # trak A: a too-short mdhd, a minf without stsd, then a large and an open-ended box.
+    trak_a = _mp4_box(
+        "trak",
+        _mp4_box("mdia", hdlr + short_mdhd + stbl_without_stsd + largesize_free + open_ended_free),
+    )
+    # trak B: an inner box that claims to be smaller than its own header ends the walk.
+    trak_b = _mp4_box("trak", _mp4_box("mdia", hdlr + overrun_free))
+    # trak C: a 64-bit size whose ``largesize`` field does not fit in the buffer.
+    trak_c = _mp4_box("trak", _mp4_box("mdia", hdlr + b"\x00\x00\x00\x01free"))
+
+    path = tmp_path / "irregular.mp4"
+    path.write_bytes(
+        _mp4_box("ftyp", b"isom")
+        + _mp4_box("moov", trak_a + trak_b + trak_c)
+        + _mp4_box("mdat", b"")
+    )
+    tracks, problems = av.read_moov_tracks(path)
+    assert problems == []
+    assert [(t.handler, t.codec, t.timescale) for t in tracks] == [
+        ("soun", None, 0),
+        ("soun", None, 0),
+        ("soun", None, 0),
+    ]
+    assert all(track.is_aac_audio is False for track in tracks)
+
+
+# --------------------------------------------------------------------------- #
+# Audit findings A-02 / A-03 / A-06 / A-07 / A-09 / A-10 / A-11
+# --------------------------------------------------------------------------- #
+
+
+def test_prepare_directory_creates_a_missing_chain_without_following_links(
+    tmp_path: Path,
+) -> None:
+    """A-02: each component is created individually, then proven by descriptor."""
+    deep = tmp_path / "a" / "b" / "c"
+    assert bridge._prepare_directory(deep, label="out") == deep.resolve()
+    assert deep.is_dir()
+
+    # An existing symlink anywhere on the chain is refused before anything is made.
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    link = tmp_path / "linked"
+    link.symlink_to(elsewhere, target_is_directory=True)
+    with pytest.raises(bridge.StudioBridgeError, match="symlink_refused"):
+        bridge._prepare_directory(link / "inner", label="out")
+    assert not (elsewhere / "inner").exists()
+
+    # A component that is a regular file cannot be a parent.
+    blocker = tmp_path / "blocker"
+    blocker.write_text("x", encoding="utf-8")
+    with pytest.raises(bridge.StudioBridgeError, match="not_a_directory"):
+        bridge._prepare_directory(blocker / "inner", label="out")
+    with pytest.raises(bridge.StudioBridgeError, match="not_a_directory"):
+        bridge._prepare_directory(blocker, label="out")
+
+
+def test_prepare_directory_detects_a_directory_swapped_after_creation(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """A-02: the descriptor and ``lstat`` must agree on dev/inode, or nothing is returned."""
+    target = tmp_path / "raced"
+    real_fstat = os.fstat
+
+    def _fstat(fd: int) -> Any:
+        fake = real_fstat(fd)
+        return os.stat_result(
+            (
+                fake.st_mode,
+                fake.st_ino + 1,  # a different inode than the path reports
+                fake.st_dev,
+                fake.st_nlink,
+                fake.st_uid,
+                fake.st_gid,
+                fake.st_size,
+                fake.st_atime,
+                fake.st_mtime,
+                fake.st_ctime,
+            )
+        )
+
+    monkeypatch.setattr(bridge.os, "fstat", _fstat)
+    with pytest.raises(bridge.StudioBridgeError, match="directory_identity_mismatch"):
+        bridge._prepare_directory(target, label="out")
+
+
+def test_prepare_directory_refuses_a_link_created_underneath_it(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """A-02: a racer that replaces the created directory with a link is caught."""
+    target = tmp_path / "swapped"
+
+    def _noop_create(_absolute: Path) -> None:
+        # Simulate a racer that wins the race: the path becomes a symlink.
+        target.symlink_to(tmp_path, target_is_directory=True)
+
+    monkeypatch.setattr(bridge, "_create_directories", _noop_create)
+    monkeypatch.setattr(bridge, "refuse_symlink_chain", lambda *_a, **_k: None)
+    with pytest.raises(bridge.StudioBridgeError, match="symlink_refused"):
+        bridge._prepare_directory(target, label="out")
+
+
+def test_prepare_directory_refuses_a_component_swapped_during_creation(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """A-02: the chain is re-walked after creation, so a mid-flight swap is refused."""
+    target = tmp_path / "made" / "here"
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+
+    def _create_with_a_link(absolute: Path) -> None:
+        first = absolute.parent
+        first.symlink_to(elsewhere, target_is_directory=True)
+
+    monkeypatch.setattr(bridge, "_create_directories", _create_with_a_link)
+    with pytest.raises(bridge.StudioBridgeError, match="symlink_refused"):
+        bridge._prepare_directory(target, label="out")
+
+
+def test_prepare_directory_refuses_a_descriptor_that_is_not_a_directory(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """A-02: even a descriptor that opened successfully must *be* a directory."""
+    real_fstat = os.fstat
+
+    def _fstat(fd: int) -> Any:
+        fake = real_fstat(fd)
+        return os.stat_result(
+            (
+                stat.S_IFREG | 0o600,
+                fake.st_ino,
+                fake.st_dev,
+                fake.st_nlink,
+                fake.st_uid,
+                fake.st_gid,
+                fake.st_size,
+                fake.st_atime,
+                fake.st_mtime,
+                fake.st_ctime,
+            )
+        )
+
+    monkeypatch.setattr(bridge.os, "fstat", _fstat)
+    with pytest.raises(bridge.StudioBridgeError, match="not_a_directory"):
+        bridge._prepare_directory(tmp_path / "reg", label="out")
+
+
+def test_create_directories_tolerates_and_scrutinises_a_race(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """A-02: a component that appears mid-create is re-examined, not trusted."""
+    target = tmp_path / "late"
+    real_mkdir = os.mkdir
+
+    def _mkdir_then_conflict(path: Any, mode: int = 0o777) -> None:
+        real_mkdir(path, mode)
+        raise FileExistsError(str(path))
+
+    monkeypatch.setattr(bridge.os, "mkdir", _mkdir_then_conflict)
+    bridge._prepare_directory(target, label="out")
+    assert target.is_dir()
+
+    outside = tmp_path / "outside.txt"
+    outside.write_text("x", encoding="utf-8")
+    other = tmp_path / "other"
+
+    def _mkdir_file_then_conflict(path: Any, mode: int = 0o777) -> None:
+        outside.write_text("not a directory", encoding="utf-8")
+        raise FileExistsError(str(path))
+
+    monkeypatch.setattr(bridge.os, "mkdir", _mkdir_file_then_conflict)
+    with pytest.raises(bridge.StudioBridgeError, match="not_a_directory"):
+        bridge._create_directories(other)
+
+
+def test_read_small_json_is_fd_bound_and_fail_closed(tmp_path: Path, monkeypatch: Any) -> None:
+    """A-03: one descriptor, ``fstat`` on it, a hard cap and a metered buffer."""
+    meter = bridge._MemoryMeter(1024 * 1024)
+    target = tmp_path / "target.json"
+    target.write_text('{"a": 1}', encoding="utf-8")
+    link = tmp_path / "link.json"
+    link.symlink_to(target)
+    with pytest.raises(bridge.StudioBridgeError, match="not_regular_file"):
+        bridge._read_small_json(link, limit=1024, meter=meter)
+
+    missing = tmp_path / "absent.json"
+    with pytest.raises(bridge.StudioBridgeError, match="not_regular_file"):
+        bridge._read_small_json(missing, limit=1024, meter=meter)
+
+    # A file that is large before the cap is checked is refused by fstat.
+    big = tmp_path / "big.json"
+    big.write_bytes(b"{}" + b" " * 4096)
+    with pytest.raises(bridge.StudioBridgeError, match="invalid_json_size"):
+        bridge._read_small_json(big, limit=1024, meter=meter)
+
+    # A file that grows after the fstat is refused by the running total.
+    small = tmp_path / "grow.json"
+    payload = b'{"a": ' + b"1" * 200 + b"}"
+    small.write_bytes(payload)
+    real_fstat = os.fstat
+
+    def _fstat(fd: int) -> Any:
+        fake = real_fstat(fd)
+        return os.stat_result(
+            (
+                fake.st_mode,
+                fake.st_ino,
+                fake.st_dev,
+                fake.st_nlink,
+                fake.st_uid,
+                fake.st_gid,
+                8,  # claims to be tiny
+                fake.st_atime,
+                fake.st_mtime,
+                fake.st_ctime,
+            )
+        )
+
+    with monkeypatch.context() as patched:
+        patched.setattr(bridge.os, "fstat", _fstat)
+        with pytest.raises(bridge.StudioBridgeError, match="grew past"):
+            bridge._read_small_json(small, limit=64, meter=meter)
+    # The meter released everything it charged, even on the refusal path.
+    assert meter.live_bytes == 0
+
+
+def test_shot_index_reader_ignores_undecodable_bytes(tmp_path: Path) -> None:
+    """A-03: a corrupt index entry is a cache miss, never an exception."""
+    meter = bridge._MemoryMeter(1024 * 1024)
+    key = "a" * 64
+    path = tmp_path / f"{key}.json"
+    path.write_bytes(b"\xff\xfe\x00")
+    assert bridge._read_shot_index(path, segment_key_hash=key, meter=meter) is None
+
+
+def test_vault_sync_refuses_a_manifest_that_disagrees_with_the_passport(tmp_path: Path) -> None:
+    """A-06: the manifest digest is re-derived before anything is encrypted."""
+    fake = _FakeRenderResult(tmp_path)
+    stored = dict(fake.passport)
+    object.__setattr__(fake._result, "passport", dict(stored, manifest_sha256="b" * 64))
+    with pytest.raises(bridge.StudioBridgeError, match="manifest_sha256_mismatch"):
+        bridge.sync_and_verify_studio_bundle_in_vault(
+            render_result=fake,
+            vault_storage_dir=tmp_path / "vault",
+            vault_journal_db_path=tmp_path / "journal.jsonl",
+            restore_dir=tmp_path / "restore",
+            master_secret=b"secret",
+            project_id="proj",
+            signing_key=KEY,
+        )
+
+
+def test_vault_sync_refuses_a_tampered_restored_manifest(tmp_path: Path, monkeypatch: Any) -> None:
+    """A-06: a vault that reconstitutes a different manifest must not pass as a backup."""
+    from types import SimpleNamespace
+
+    fake = _FakeRenderResult(tmp_path)
+    sealed_manifest_sha = hashlib.sha256(fake.manifest_path.read_bytes()).hexdigest()
+
+    class _TamperingManager:
+        def __init__(self, *_args: Any, **_kwargs: Any) -> None:
+            pass
+
+        def push_project_snapshot(self, **_kwargs: Any) -> Any:
+            return SimpleNamespace(
+                snapshot_id="snap-x", uploaded_chunks=1, deduplicated_chunks=0, total_chunks=1
+            )
+
+        def pull_project_snapshot(self, *, target_dir: Path, **_kwargs: Any) -> Any:
+            target = Path(target_dir)
+            (target / "render.mp4").write_bytes(fake.output_mp4_path.read_bytes())
+            (target / "job.manifest.json").write_text('{"tampered": true}', encoding="utf-8")
+            (target / "render.passport.json").write_text("{}", encoding="utf-8")
+            return SimpleNamespace(files={"render.mp4": b"x"})
+
+    monkeypatch.setattr(bridge, "PersonalCloudVaultManager", _TamperingManager)
+    monkeypatch.setattr(
+        bridge,
+        "verify_artifact_passport",
+        lambda *_a, **_k: SimpleNamespace(passport={"manifest_sha256": sealed_manifest_sha}),
+    )
+    monkeypatch.setattr(bridge, "verify_mp4", lambda *_a, **_k: av.Mp4Verdict(status=av.PASS))
+    with pytest.raises(bridge.StudioBridgeError, match="vault_restored_manifest_mismatch"):
+        bridge.sync_and_verify_studio_bundle_in_vault(
+            render_result=fake,
+            vault_storage_dir=tmp_path / "vault",
+            vault_journal_db_path=tmp_path / "journal.jsonl",
+            restore_dir=tmp_path / "restore",
+            master_secret=b"secret",
+            project_id="proj",
+            signing_key=KEY,
+        )
+
+
+def test_rss_telemetry_reports_process_and_children(monkeypatch: Any) -> None:
+    """A-07: the reported peak covers this process and its reaped children."""
+    from types import SimpleNamespace
+
+    def _rusage(who: int) -> Any:
+        return SimpleNamespace(ru_maxrss=1000 if who == bridge.resource.RUSAGE_SELF else 500)
+
+    monkeypatch.setattr(bridge.resource, "getrusage", _rusage)
+    assert bridge._current_process_tree_peak_rss_bytes() == (1000 + 500) * 1024
+
+    monkeypatch.setattr(bridge.sys, "platform", "darwin")
+    assert bridge._current_process_tree_peak_rss_bytes() == 1000 + 500
+
+
+def test_ffmpeg_fingerprint_binds_version_and_binary(tmp_path: Path, monkeypatch: Any) -> None:
+    """A-09: the toolchain identity is cached, stable and part of the shot cache key."""
+    bridge._ffmpeg_toolchain_fingerprint.cache_clear()
+    real = bridge._ffmpeg_toolchain_fingerprint(_ffmpeg_bin())
+    assert real == bridge._ffmpeg_toolchain_fingerprint(_ffmpeg_bin())
+    assert len(real) == 64
+
+    # A different binary path is a different fingerprint.
+    twin = tmp_path / "ffmpeg-twin"
+    twin.write_bytes(Path(_ffmpeg_bin()).read_bytes()[:4096])
+    twin.chmod(0o755)
+    assert bridge._ffmpeg_toolchain_fingerprint(str(twin)) != real
+
+    # An unrunnable binary still yields a stable, non-empty identity.
+    bridge._ffmpeg_toolchain_fingerprint.cache_clear()
+    missing = bridge._ffmpeg_toolchain_fingerprint("/nonexistent/ffmpeg-binary")
+    assert len(missing) == 64
+    assert bridge._ffmpeg_toolchain_fingerprint("/nonexistent/ffmpeg-binary") == missing
+
+    # An unreadable binary is reported as unavailable rather than raising.
+    def _boom(_path: Any) -> Any:
+        raise OSError("binary vanished")
+
+    monkeypatch.setattr(bridge, "stream_sha256", _boom)
+    bridge._ffmpeg_toolchain_fingerprint.cache_clear()
+    assert bridge._binary_identity("/nonexistent/ffmpeg-binary") == {
+        "sha256": "unavailable",
+        "size_bytes": 0,
+    }
+    bridge._ffmpeg_toolchain_fingerprint.cache_clear()
+
+
+def test_shot_cache_key_binds_the_toolchain() -> None:
+    """A-09: the fingerprint reaches both the payload and the CAS pipeline digest."""
+    keyed = {
+        "shot_id": "s000-sh000",
+        "shot_content_hash": "a" * 64,
+        "duration_ms": 1000,
+        "fps": 12,
+        "width": 320,
+        "height": 180,
+        "image_sha256": "b" * 64,
+    }
+    one = bridge.shot_cache_key_hash(**keyed, toolchain_fingerprint="1" * 64)
+    two = bridge.shot_cache_key_hash(**keyed, toolchain_fingerprint="2" * 64)
+    assert one != two
+    assert b"toolchain_fingerprint" in bridge.shot_cache_key_payload(
+        **keyed, toolchain_fingerprint="1" * 64
+    )
+    digest_one = bridge._segment_pipeline_digest(
+        fps=12, width=320, height=180, sample_rate=16_000, toolchain_fingerprint="1" * 64
+    )
+    digest_two = bridge._segment_pipeline_digest(
+        fps=12, width=320, height=180, sample_rate=16_000, toolchain_fingerprint="2" * 64
+    )
+    assert digest_one != digest_two
+
+
+def test_render_reports_bridge_and_process_memory_in_the_receipt(tmp_path: Path) -> None:
+    """A-07: both numbers are reported, and the receipt records them."""
+    if not _ffmpeg_available():  # pragma: no cover - environment gate
+        pytest.skip("real ffmpeg is required for the ink-and-memory test")
+    result = bridge.render_storyboard_with_segment_cas(
+        "INT. ROOM - DAY\nA: Hello there.\n",
+        "memory",
+        tmp_path / "out",
+        tmp_path / "cas",
+        "job",
+        signing_key=KEY,
+        fps=12,
+        width=320,
+        height=180,
+        ffmpeg=_ffmpeg_bin(),
+        ffprobe=_ffprobe_bin(),
+    )
+    assert result.bridge_buffer_peak_bytes == result.peak_memory_bytes > 0
+    assert result.process_peak_rss_bytes > 0
+    receipt = json.loads(result.receipt_path.read_text())
+    assert receipt["bridge_buffer_peak_bytes"] == result.bridge_buffer_peak_bytes
+    assert receipt["process_peak_rss_bytes"] == result.process_peak_rss_bytes
+    assert len(receipt["ffmpeg_toolchain_fingerprint"]) == 64
+
+
+def test_cli_reads_secret_and_script_through_one_descriptor(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """A-11: oversized, empty, symlinked and non-UTF-8 files are all refused."""
+    oversized = tmp_path / "huge.txt"
+    oversized.write_bytes(b"x" * (studio_cli.MAX_SECRET_BYTES + 1))
+    with pytest.raises(studio_cli.StudioCliError, match="size out of range"):
+        studio_cli._read_bounded_text(
+            oversized, limit=studio_cli.MAX_SECRET_BYTES, label="secret file"
+        )
+
+    blank = tmp_path / "blank.txt"
+    blank.write_bytes(b"")
+    with pytest.raises(studio_cli.StudioCliError, match="size out of range"):
+        studio_cli._read_bounded_text(blank, limit=1024, label="secret file")
+
+    binary = tmp_path / "binary.txt"
+    binary.write_bytes(b"\xff\xfe")
+    with pytest.raises(studio_cli.StudioCliError, match="not valid UTF-8"):
+        studio_cli._read_bounded_text(binary, limit=1024, label="script file")
+
+    target = tmp_path / "target.txt"
+    target.write_text("secret", encoding="utf-8")
+    link = tmp_path / "link.txt"
+    link.symlink_to(target)
+    with pytest.raises(studio_cli.StudioCliError, match="non-symlink"):
+        studio_cli._read_bounded_text(link, limit=1024, label="secret file")
+
+    with pytest.raises(studio_cli.StudioCliError, match="must be a regular, non-symlink file"):
+        studio_cli._read_bounded_text(tmp_path, limit=1024, label="secret file")
+
+    # A text file that grows after the fstat is refused by the running total.
+    growing = tmp_path / "growing.txt"
+    growing.write_bytes(b"y" * 64)
+    real_fstat = os.fstat
+
+    def _fstat(fd: int) -> Any:
+        fake = real_fstat(fd)
+        return os.stat_result(
+            (
+                fake.st_mode,
+                fake.st_ino,
+                fake.st_dev,
+                fake.st_nlink,
+                fake.st_uid,
+                fake.st_gid,
+                4,
+                fake.st_atime,
+                fake.st_mtime,
+                fake.st_ctime,
+            )
+        )
+
+    with monkeypatch.context() as patched:
+        patched.setattr(studio_cli.os, "fstat", _fstat)
+        with pytest.raises(studio_cli.StudioCliError, match="grew past"):
+            studio_cli._read_bounded_text(growing, limit=32, label="script file")
+
+
+def test_cli_secret_file_environment_fallbacks(tmp_path: Path, monkeypatch: Any) -> None:
+    """A-10: the file *paths* may come from the environment, never the secrets."""
+    key_file = tmp_path / "signing.key"
+    key_file.write_text("  " + KEY + "  \n", encoding="utf-8")
+    vault_file = tmp_path / "vault.secret"
+    vault_file.write_text("vault-secret\n", encoding="utf-8")
+
+    monkeypatch.delenv(studio_cli.SIGNING_KEY_ENV, raising=False)
+    monkeypatch.setenv(studio_cli.SIGNING_KEY_FILE_ENV, str(key_file))
+    monkeypatch.setenv(studio_cli.VAULT_SECRET_FILE_ENV, str(vault_file))
+    assert (
+        studio_cli._read_secret(
+            inline=None,
+            path=None,
+            env_name=studio_cli.SIGNING_KEY_ENV,
+            file_env_name=studio_cli.SIGNING_KEY_FILE_ENV,
+        )
+        == KEY
+    )
+    assert (
+        studio_cli._read_secret(
+            inline=None,
+            path=None,
+            env_name=studio_cli.VAULT_SECRET_ENV,
+            file_env_name=studio_cli.VAULT_SECRET_FILE_ENV,
+        )
+        == "vault-secret"
+    )
+
+    # An empty value in the environment falls through to the inline/env sources.
+    monkeypatch.setenv(studio_cli.SIGNING_KEY_FILE_ENV, "   ")
+    monkeypatch.setenv(studio_cli.SIGNING_KEY_ENV, "env-key")
+    assert (
+        studio_cli._read_secret(
+            inline=None,
+            path=None,
+            env_name=studio_cli.SIGNING_KEY_ENV,
+            file_env_name=studio_cli.SIGNING_KEY_FILE_ENV,
+        )
+        == "env-key"
+    )
+
+    # An empty secret file is refused instead of silently yielding "".
+    blank = tmp_path / "blank.key"
+    blank.write_text("\n", encoding="utf-8")
+    with pytest.raises(studio_cli.StudioCliError, match="empty or oversized"):
+        studio_cli._read_secret(
+            inline=None,
+            path=blank,
+            env_name=studio_cli.SIGNING_KEY_ENV,
+            file_env_name=studio_cli.SIGNING_KEY_FILE_ENV,
+        )
+
+
+def test_cli_utc_timestamp_is_a_sortable_zulu_string() -> None:
+    """A-10: the durable ledger gets a UTC, second-resolution timestamp."""
+    stamp = studio_cli._utc_now_iso()
+    assert re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", stamp)
+
+
+def test_cli_resolves_the_durable_approval_database(tmp_path: Path, monkeypatch: Any) -> None:
+    """A-10: an explicit ``--approval-db`` wins, else the conventional name is found."""
+    parser = studio_cli.build_parser()
+    explicit = parser.parse_args(
+        [
+            "render",
+            "--script",
+            "INT. ROOM - DAY\nA: Hi.\n",
+            "--output-dir",
+            str(tmp_path / "out"),
+            "--approval-db",
+            str(tmp_path / "custom.sqlite3"),
+        ]
+    )
+    assert studio_cli._resolve_approval_db(explicit) == tmp_path / "custom.sqlite3"
+
+    plain = parser.parse_args(
+        ["render", "--script", "INT. ROOM - DAY\nA: Hi.\n", "--output-dir", str(tmp_path / "out")]
+    )
+    monkeypatch.chdir(tmp_path)
+    assert studio_cli._resolve_approval_db(plain) is None
+
+    beside_output = tmp_path / "out" / studio_cli.DEFAULT_APPROVAL_DB
+    beside_output.parent.mkdir(parents=True, exist_ok=True)
+    beside_output.write_bytes(b"")
+    assert studio_cli._resolve_approval_db(plain) == beside_output
+
+    beside_output.unlink()
+    in_cwd = tmp_path / studio_cli.DEFAULT_APPROVAL_DB
+    in_cwd.write_bytes(b"")
+    assert studio_cli._resolve_approval_db(plain) == in_cwd
+
+    with pytest.raises(studio_cli.StudioCliError, match="approval database unusable"):
+        studio_cli._open_durable_ledger(tmp_path / "missing-dir" / "x.sqlite3")
+
+
+def test_cli_renders_with_a_real_durable_approval_ledger(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A-10: ``main()`` consumes ``--approval-id`` from a real SQLite ledger."""
+    from nexus_ai_agent.creative.storyboard_render import issue_render_approval
+    from nexus_ai_agent.nagar.ibpc.approval import DurableApprovalLedger
+
+    if not _ffmpeg_available():  # pragma: no cover - environment gate
+        pytest.skip("real ffmpeg is required for the durable-ledger render")
+
+    script = "INT. ROOM - DAY\nA: Hello there, friend.\n"
+    compiled = compile_storyboard(script)
+    profile_hash = mz.RenderProfile.from_mapping(PROFILE).profile_hash()
+    db_path = tmp_path / "approvals.sqlite3"
+    ledger = DurableApprovalLedger(db_path, now=lambda: "2026-11-18T00:00:00Z")
+    try:
+        approval_id = issue_render_approval(
+            ledger,
+            project_id="proj-cli",
+            job_id="cli-job",
+            principal_id="owner-1",
+            source_sha256=hashlib.sha256(script.encode("utf-8")).hexdigest(),
+            script_sha256=compiled.script_sha256,
+            manifest_sha256=compiled.manifest_sha256,
+            render_profile_hash=profile_hash,
+        )
+    finally:
+        ledger.close()
+
+    argv = [
+        "render",
+        "--script",
+        script,
+        "--job-id",
+        "cli-job",
+        "--project-id",
+        "proj-cli",
+        "--output-dir",
+        str(tmp_path / "out"),
+        "--cas-dir",
+        str(tmp_path / "cas"),
+        "--fps",
+        "12",
+        "--width",
+        "320",
+        "--height",
+        "180",
+        "--signing-key",
+        KEY,
+        "--approval-id",
+        approval_id,
+        "--principal-id",
+        "owner-1",
+        "--approval-db",
+        str(db_path),
+        "--ffmpeg",
+        _ffmpeg_bin(),
+        "--ffprobe",
+        _ffprobe_bin(),
+    ]
+    assert studio_cli.main(argv) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["status"] == "rendered"
+    assert payload["verifier_status"] == av.PASS
+
+    # The approval really was consumed in the database, so a replay is refused.
+    replay = io.StringIO()
+    assert studio_cli.run_studio_cli(argv, out=replay) == 2
+    assert json.loads(replay.getvalue())["status"] == "refused"
+
+    # Without --approval-db the conventional database beside the output is found.
+    beside = tmp_path / "out" / studio_cli.DEFAULT_APPROVAL_DB
+    beside.parent.mkdir(parents=True, exist_ok=True)
+    beside.write_bytes(db_path.read_bytes())
+    assert (
+        studio_cli._resolve_approval_db(
+            studio_cli.build_parser().parse_args(
+                [
+                    "render",
+                    "--script",
+                    script,
+                    "--output-dir",
+                    str(tmp_path / "out"),
+                ]
+            )
+        )
+        == beside
+    )
+
+
+def test_mutant_bridge_ignoring_the_restored_manifest_hash_is_killed() -> None:
+    """A-06 mutant: dropping the restored-manifest digest check must be caught.
+
+    The check has no other observer - a vault that reconstitutes a different
+    manifest would otherwise pass as a verified backup - so this mutant is the
+    proof that the new gate is load-bearing rather than decorative.
+    """
+
+    def _neuter(tree: ast.Module) -> None:
+        func = _function(tree, "sync_and_verify_studio_bundle_in_vault")
+        found = False
+        for node in ast.walk(func):
+            if isinstance(node, ast.If) and "vault_restored_manifest_mismatch" in ast.unparse(node):
+                node.test = ast.Constant(value=False)
+                found = True
+        assert found, "the restored-manifest gate must exist"
+
+    def _behaviour(sync_fn: Any, tmp_root: Path) -> None:
+        from types import SimpleNamespace
+
+        fake = _FakeRenderResult(tmp_root)
+        sealed_manifest_sha = hashlib.sha256(fake.manifest_path.read_bytes()).hexdigest()
+
+        class _TamperingManager:
+            def __init__(self, *_args: Any, **_kwargs: Any) -> None:
+                pass
+
+            def push_project_snapshot(self, **_kwargs: Any) -> Any:
+                return SimpleNamespace(
+                    snapshot_id="snap-x", uploaded_chunks=1, deduplicated_chunks=0, total_chunks=1
+                )
+
+            def pull_project_snapshot(self, *, target_dir: Path, **_kwargs: Any) -> Any:
+                target = Path(target_dir)
+                (target / "render.mp4").write_bytes(fake.output_mp4_path.read_bytes())
+                (target / "job.manifest.json").write_text('{"tampered": true}', encoding="utf-8")
+                (target / "render.passport.json").write_text("{}", encoding="utf-8")
+                return SimpleNamespace(files={"render.mp4": b"x"})
+
+        original = (
+            sync_fn.__globals__["PersonalCloudVaultManager"],
+            sync_fn.__globals__["verify_artifact_passport"],
+            sync_fn.__globals__["verify_mp4"],
+        )
+        try:
+            sync_fn.__globals__["PersonalCloudVaultManager"] = _TamperingManager
+            sync_fn.__globals__["verify_artifact_passport"] = lambda *_a, **_k: SimpleNamespace(
+                passport={"manifest_sha256": sealed_manifest_sha}
+            )
+            sync_fn.__globals__["verify_mp4"] = lambda *_a, **_k: av.Mp4Verdict(status=av.PASS)
+            _refuses(
+                lambda: sync_fn(
+                    render_result=fake,
+                    vault_storage_dir=tmp_root / "vault",
+                    vault_journal_db_path=tmp_root / "journal.jsonl",
+                    restore_dir=tmp_root / "restore",
+                    master_secret=b"secret",
+                    project_id="proj",
+                    signing_key=KEY,
+                ),
+                bridge.StudioBridgeError,
+                contains="vault_restored_manifest_mismatch",
+            )
+        finally:
+            (
+                sync_fn.__globals__["PersonalCloudVaultManager"],
+                sync_fn.__globals__["verify_artifact_passport"],
+                sync_fn.__globals__["verify_mp4"],
+            ) = original
+
+    _behaviour(bridge.sync_and_verify_studio_bundle_in_vault, tmp_path_factory_dir())
+    mutant = _load_mutant(
+        MUTATION_TARGETS["studio_cas_vault_bridge"],
+        _neuter,
+        "bridge_no_manifest_gate",
+    )
+    _kill(lambda: _behaviour(mutant.sync_and_verify_studio_bundle_in_vault, tmp_path_factory_dir()))

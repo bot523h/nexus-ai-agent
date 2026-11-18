@@ -26,14 +26,22 @@ import sys
 import tempfile
 from collections.abc import Sequence
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, TextIO
 
 #: Bounded read for ``--script-file`` so a huge file can never be slurped.
 MAX_SCRIPT_BYTES = 1_048_576
+#: Bounded read for ``--signing-key-file`` / ``--vault-secret-file``.
+MAX_SECRET_BYTES = 4_096
 #: Environment fallbacks for secrets, so they never have to appear on argv.
 SIGNING_KEY_ENV = "NEXUS_STUDIO_SIGNING_KEY"
 VAULT_SECRET_ENV = "NEXUS_STUDIO_VAULT_SECRET"
+#: Environment fallbacks that name a *file* holding the secret (no argv, no env value).
+SIGNING_KEY_FILE_ENV = "NAGAR_SIGNING_KEY_FILE"
+VAULT_SECRET_FILE_ENV = "NAGAR_VAULT_SECRET_FILE"
+#: Durable approval database looked up when ``--approval-db`` is not given.
+DEFAULT_APPROVAL_DB = "approvals.sqlite3"
 #: Where ``render`` keeps its shot cache when ``--cas-dir`` is not supplied.
 DEFAULT_CAS_DIRNAME = ".segment-cas"
 
@@ -254,18 +262,83 @@ def build_parser() -> argparse.ArgumentParser:
     render_cmd.add_argument("--vault-secret-file", type=Path, default=None)
     render_cmd.add_argument("--approval-id", default=None)
     render_cmd.add_argument("--principal-id", default=None)
+    render_cmd.add_argument(
+        "--approval-db",
+        type=Path,
+        default=None,
+        help=(
+            "durable SQLite approval ledger to consume --approval-id from "
+            f"(default: ./{DEFAULT_APPROVAL_DB} when it exists)"
+        ),
+    )
     render_cmd.add_argument("--ffmpeg", default="ffmpeg")
     render_cmd.add_argument("--ffprobe", default="ffprobe")
     return parser
 
 
-def _read_secret(*, inline: str | None, path: Path | None, env_name: str) -> str | None:
-    """Resolve a secret from a file, then an explicit flag, then the environment."""
+def _read_bounded_text(path: Path, *, limit: int, label: str) -> str:
+    """Read a text file through one ``O_NOFOLLOW`` descriptor, capped at ``limit``.
+
+    One ``os.open`` means the bytes that are read are the bytes that were
+    measured: there is no window in which the path can be repointed at a symlink
+    or a FIFO between a check and a ``read_text``. The running total is checked
+    on every chunk, so a file that grows while it is being read is refused
+    instead of being buffered.
+    """
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+    try:
+        fd = os.open(path, flags)
+    except OSError as exc:
+        if Path(path).is_symlink():
+            raise StudioCliError(f"{label} must be a regular, non-symlink file: {path}") from exc
+        raise StudioCliError(f"{label} missing: {path} ({type(exc).__name__})") from exc
+    chunks: list[bytes] = []
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode):
+            raise StudioCliError(f"{label} must be a regular, non-symlink file: {path}")
+        if st.st_size <= 0 or st.st_size > limit:
+            raise StudioCliError(f"{label} size out of range: {st.st_size}")
+        with os.fdopen(fd, "rb") as handle:
+            fd = -1  # the file object owns the descriptor from here on
+            while True:
+                chunk = handle.read(8192)
+                if not chunk:
+                    break
+                if sum(len(part) for part in chunks) + len(chunk) > limit:
+                    raise StudioCliError(f"{label} grew past {limit} bytes: {path}")
+                chunks.append(chunk)
+    finally:
+        if fd >= 0:
+            os.close(fd)
+    try:
+        return b"".join(chunks).decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise StudioCliError(f"{label} is not valid UTF-8: {path}") from exc
+
+
+def _read_secret(
+    *,
+    inline: str | None,
+    path: Path | None,
+    env_name: str,
+    file_env_name: str | None = None,
+) -> str | None:
+    """Resolve a secret from a file, then an explicit flag, then the environment.
+
+    ``file_env_name`` names an environment variable holding the *path* of the
+    file to read, which keeps the secret itself out of both argv (visible in
+    ``ps``) and the environment block.
+    """
+    if path is None and file_env_name is not None:
+        from_env_path = os.environ.get(file_env_name)
+        if from_env_path and from_env_path.strip():
+            path = Path(from_env_path.strip())
     if path is not None:
-        try:
-            return path.read_text(encoding="utf-8").strip()
-        except OSError as exc:
-            raise StudioCliError(f"secret file unreadable: {path} ({type(exc).__name__})") from exc
+        secret = _read_bounded_text(path, limit=MAX_SECRET_BYTES, label="secret file").strip()
+        if not secret or len(secret.encode("utf-8")) > MAX_SECRET_BYTES:
+            raise StudioCliError(f"secret file is empty or oversized: {path}")
+        return secret
     if inline:
         return inline
     from_env = os.environ.get(env_name)
@@ -280,18 +353,43 @@ def _read_script(args: argparse.Namespace) -> str:
         return args.script
     if args.script_file is None:
         raise StudioCliError("one of --script or --script-file is required")
-    try:
-        st = os.lstat(args.script_file)
-    except OSError as exc:
-        raise StudioCliError(f"script file missing: {args.script_file}") from exc
-    if stat.S_ISLNK(st.st_mode) or not stat.S_ISREG(st.st_mode):
-        raise StudioCliError(f"script file must be a regular, non-symlink file: {args.script_file}")
-    if st.st_size <= 0 or st.st_size > MAX_SCRIPT_BYTES:
-        raise StudioCliError(f"script file size out of range: {st.st_size}")
-    text = args.script_file.read_text(encoding="utf-8")
+    text = _read_bounded_text(args.script_file, limit=MAX_SCRIPT_BYTES, label="script file")
     if not text.strip():
         raise StudioCliError("script file is empty")
     return text
+
+
+def _utc_now_iso() -> str:
+    """Timestamp for a durable approval binding (UTC, second resolution, ``Z``)."""
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _resolve_approval_db(args: argparse.Namespace) -> Path | None:
+    """Return the durable approval database to consume from, or ``None``.
+
+    An explicit ``--approval-db`` always wins; otherwise the conventional
+    ``approvals.sqlite3`` beside the render output (or in the working directory)
+    is used when it exists, so the CLI works with a real ledger and no wrapper.
+    """
+    if args.approval_db is not None:
+        return Path(args.approval_db)
+    for candidate in (
+        Path(args.output_dir) / DEFAULT_APPROVAL_DB,
+        Path.cwd() / DEFAULT_APPROVAL_DB,
+    ):
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def _open_durable_ledger(path: Path) -> Any:  # noqa: ANN401 - DurableApprovalLedger
+    """Open the SQLite-backed approval ledger, refusing an unusable database."""
+    from nexus_ai_agent.nagar.ibpc.approval import DurableApprovalLedger
+
+    try:
+        return DurableApprovalLedger(path, now=_utc_now_iso)
+    except (OSError, sqlite3.Error) as exc:
+        raise StudioCliError(f"approval database unusable: {path} ({type(exc).__name__})") from exc
 
 
 def _parse_image_specs(specs: Sequence[str]) -> dict[str, Path]:
@@ -324,12 +422,15 @@ def _render_command(
 
     script_text = _read_script(args)
     signing_key = _read_secret(
-        inline=args.signing_key, path=args.signing_key_file, env_name=SIGNING_KEY_ENV
+        inline=args.signing_key,
+        path=args.signing_key_file,
+        env_name=SIGNING_KEY_ENV,
+        file_env_name=SIGNING_KEY_FILE_ENV,
     )
     if signing_key is None:
         raise StudioCliError(
             "a passport signing key is required "
-            f"(--signing-key, --signing-key-file or {SIGNING_KEY_ENV})"
+            f"(--signing-key, --signing-key-file, {SIGNING_KEY_FILE_ENV} or {SIGNING_KEY_ENV})"
         )
     output_dir = Path(args.output_dir)
     cas_dir = Path(args.cas_dir) if args.cas_dir is not None else output_dir / DEFAULT_CAS_DIRNAME
@@ -338,18 +439,30 @@ def _render_command(
     vault_secret: str | None = None
     if args.vault_dir is not None:
         vault_secret = _read_secret(
-            inline=args.vault_secret, path=args.vault_secret_file, env_name=VAULT_SECRET_ENV
+            inline=args.vault_secret,
+            path=args.vault_secret_file,
+            env_name=VAULT_SECRET_ENV,
+            file_env_name=VAULT_SECRET_FILE_ENV,
         )
         if vault_secret is None:
             raise StudioCliError(
                 "--vault-dir needs a vault secret "
-                f"(--vault-secret, --vault-secret-file or {VAULT_SECRET_ENV})"
+                f"(--vault-secret, --vault-secret-file, {VAULT_SECRET_FILE_ENV} "
+                f"or {VAULT_SECRET_ENV})"
             )
 
     before_render = None
+    owned_ledger: Any = None
     if args.approval_id is not None:
         if ledger is None:
-            raise StudioCliError("an approval ledger is required to consume --approval-id")
+            approval_db = _resolve_approval_db(args)
+            if approval_db is None:
+                raise StudioCliError(
+                    "an approval ledger is required to consume --approval-id "
+                    f"(--approval-db, or a {DEFAULT_APPROVAL_DB} beside the output)"
+                )
+            owned_ledger = _open_durable_ledger(approval_db)
+            ledger = owned_ledger
         if not args.principal_id:
             raise StudioCliError("--approval-id requires --principal-id")
         from nexus_ai_agent.creative.storyboard_render import approval_identity_for
@@ -409,6 +522,9 @@ def _render_command(
         json.dump(payload, out, sort_keys=True)
         out.write("\n")
         return 1
+    finally:
+        if owned_ledger is not None:
+            owned_ledger.close()
 
     payload = {
         "status": "rendered",
@@ -524,10 +640,14 @@ if __name__ == "__main__":  # pragma: no cover - exercised through ``main`` in t
 
 
 __all__ = [
+    "DEFAULT_APPROVAL_DB",
     "DEFAULT_CAS_DIRNAME",
     "MAX_SCRIPT_BYTES",
+    "MAX_SECRET_BYTES",
     "SIGNING_KEY_ENV",
+    "SIGNING_KEY_FILE_ENV",
     "VAULT_SECRET_ENV",
+    "VAULT_SECRET_FILE_ENV",
     "WORKSPACE_DIRS",
     "DoctorCheck",
     "DoctorReport",

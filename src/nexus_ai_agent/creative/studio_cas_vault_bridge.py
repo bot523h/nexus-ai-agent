@@ -33,13 +33,16 @@ to continue once ``memory_ceiling_bytes`` would be crossed.
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import json
 import os
 import re
+import resource
 import shutil
 import stat
 import subprocess
+import sys
 import tempfile
 import time
 from collections.abc import Callable, Mapping, Sequence
@@ -76,6 +79,7 @@ from nexus_ai_agent.creative.materializer import (
     merkle_root,
     merkle_root_sha256,
     planned_shot_durations,
+    refuse_symlink_chain,
     shot_content_hash,
     shot_leaf_payloads,
     shot_seed,
@@ -107,6 +111,12 @@ DURATION_MARGIN_S = 0.05
 #: Every concatenated segment may add one frame of slack.
 FRAME_MARGIN_PER_SHOT = 1.0
 MAX_INDEX_BYTES = 65_536
+#: Upper bound for the append-only sync journal (a sync receipt per snapshot).
+MAX_JOURNAL_BYTES = 8 * 1024 * 1024
+#: Mode used for every directory this module creates.
+DIR_MODE = 0o700
+#: ``os.open`` flags that prove a path really is a directory and not a link.
+_DIR_OPEN_FLAGS = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
 _HEX64 = re.compile(r"^[0-9a-f]{64}$")
 _UNSAFE_CONCAT_CHARS = ("\n", "\r", "'", "\x00")
 
@@ -169,6 +179,26 @@ class _MemoryMeter:
         self._live = max(0, self._live - max(0, size))
 
 
+def _rusage_scale() -> int:
+    """``ru_maxrss`` is reported in bytes on macOS and in KiB everywhere else."""
+    return 1 if sys.platform == "darwin" else 1024
+
+
+def _current_process_tree_peak_rss_bytes() -> int:
+    """Peak resident set of this process plus its reaped children, in bytes.
+
+    ``RUSAGE_SELF`` covers the interpreter and the buffers the meter already
+    counts; ``RUSAGE_CHILDREN`` covers the FFmpeg subprocesses this pipeline
+    spawned. Reported next to :attr:`CasStoryboardRenderResult.peak_memory_bytes`
+    so a reviewer can see both the number the pipeline controls and the number
+    the operating system saw.
+    """
+    scale = _rusage_scale()
+    own = int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
+    children = int(resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss)
+    return (own + children) * scale
+
+
 # --------------------------------------------------------------------------- #
 # Result records
 # --------------------------------------------------------------------------- #
@@ -189,6 +219,10 @@ class CasStoryboardRenderResult:
     peak_memory_bytes: int
     output_mp4_path: Path
     receipt_path: Path
+    #: Peak live bytes of the buffers *this pipeline* allocated (the meter's peak).
+    bridge_buffer_peak_bytes: int = 0
+    #: Peak RSS of this process plus its reaped FFmpeg children, in bytes.
+    process_peak_rss_bytes: int = 0
 
     @property
     def output_dir(self) -> Path:
@@ -219,15 +253,69 @@ class StudioVaultSyncReport:
 # --------------------------------------------------------------------------- #
 
 
+def _create_directories(absolute: Path) -> None:
+    """Create ``absolute`` one component at a time, never following a symlink.
+
+    ``mkdir(parents=True)`` resolves every parent first, so a link swapped in
+    between the check and the create would be followed. Walking from the deepest
+    existing ancestor down means each new directory is created inside the
+    directory that was just proven genuine, and a component that appears under
+    our feet is re-examined instead of trusted.
+    """
+    missing: list[Path] = []
+    probe = absolute
+    while not probe.exists() and not probe.is_symlink():
+        missing.append(probe)
+        probe = probe.parent
+    for part in reversed(missing):
+        try:
+            os.mkdir(part, DIR_MODE)
+        except FileExistsError:  # something appeared between the scan and the create
+            if part.is_symlink() or not part.is_dir():
+                raise StudioBridgeError("not_a_directory", str(part)) from None
+        except OSError as exc:
+            raise StudioBridgeError("not_a_directory", f"{part}: {type(exc).__name__}") from exc
+
+
 def _prepare_directory(root: Path, *, label: str) -> Path:
-    """Create ``root`` (parents allowed) and refuse a symlinked or non-directory root."""
+    """Create ``root`` (parents allowed) and prove it is a genuine directory.
+
+    TOCTOU-safe: the existing parent chain is checked for symlinks, each missing
+    component is created individually, and the result is proven by opening it
+    with ``O_DIRECTORY | O_NOFOLLOW`` and comparing the descriptor's
+    ``(st_dev, st_ino)`` with ``lstat`` of the path. A directory swapped for a
+    symlink between those two calls cannot satisfy both.
+    """
     candidate = Path(root)
-    if candidate.is_symlink():
-        raise StudioBridgeError("symlink_refused", f"{label} is a symlink: {candidate}")
-    if candidate.exists() and not candidate.is_dir():
-        raise StudioBridgeError("not_a_directory", f"{label}: {candidate}")
-    candidate.mkdir(parents=True, exist_ok=True)
-    return candidate.resolve()
+    absolute = Path(os.path.abspath(candidate))
+    anchor = Path(absolute.anchor or ".")
+    try:
+        refuse_symlink_chain(anchor, absolute)
+    except MaterializationError as exc:
+        raise StudioBridgeError("symlink_refused", f"{label}: {exc.detail}") from exc
+    _create_directories(absolute)
+    try:
+        refuse_symlink_chain(anchor, absolute)
+    except MaterializationError as exc:  # a component was swapped while we created
+        raise StudioBridgeError("symlink_refused", f"{label}: {exc.detail}") from exc
+    try:
+        dir_fd = os.open(absolute, _DIR_OPEN_FLAGS)
+    except OSError as exc:
+        reason = "symlink_refused" if absolute.is_symlink() else "not_a_directory"
+        raise StudioBridgeError(reason, f"{label}: {absolute}") from exc
+    try:
+        descriptor = os.fstat(dir_fd)
+        path_stat = os.lstat(absolute)
+    finally:
+        os.close(dir_fd)
+    if not stat.S_ISDIR(descriptor.st_mode):
+        raise StudioBridgeError("not_a_directory", f"{label}: {absolute}")
+    if stat.S_ISLNK(path_stat.st_mode) or (descriptor.st_dev, descriptor.st_ino) != (
+        path_stat.st_dev,
+        path_stat.st_ino,
+    ):
+        raise StudioBridgeError("directory_identity_mismatch", f"{label}: {absolute}")
+    return absolute.resolve()
 
 
 def _safe_child(root: Path, name: str, *, label: str) -> Path:
@@ -249,19 +337,51 @@ def _atomic_write_bytes(path: Path, payload: bytes) -> None:
     atomic_write(path, _write)
 
 
-def _read_small_json(path: Path, *, limit: int, meter: _MemoryMeter) -> Any:  # noqa: ANN401
-    """Read a small JSON document with an explicit size bound and a metered buffer."""
-    st = os.lstat(path)
-    if stat.S_ISLNK(st.st_mode) or not stat.S_ISREG(st.st_mode):
-        raise StudioBridgeError("not_regular_file", str(path))
-    if st.st_size <= 0 or st.st_size > limit:
-        raise StudioBridgeError("invalid_json_size", f"{path}: {st.st_size}")
-    meter.charge(st.st_size)
+def _read_bounded_bytes(
+    path: Path, *, limit: int, meter: _MemoryMeter, reason: str = "invalid_json_size"
+) -> bytes:
+    """Read at most ``limit`` bytes from one ``O_NOFOLLOW`` descriptor.
+
+    The size is taken from ``fstat`` on the descriptor that is then read, so a
+    file swapped between the stat and the read cannot change what the bound is
+    computed from - and the running total is checked again on every chunk, so a
+    file that grows while it is being read is refused before it is buffered.
+    The meter is charged for the bytes actually read and released in ``finally``.
+    """
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
     try:
-        raw = path.read_bytes()
+        fd = os.open(path, flags)
+    except OSError as exc:
+        raise StudioBridgeError("not_regular_file", f"{path}: {type(exc).__name__}") from exc
+    charged = 0
+    chunks: list[bytes] = []
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode):
+            raise StudioBridgeError("not_regular_file", str(path))
+        if st.st_size <= 0 or st.st_size > limit:
+            raise StudioBridgeError(reason, f"{path}: {st.st_size}")
+        with os.fdopen(fd, "rb") as handle:
+            fd = -1  # the file object owns the descriptor from here on
+            while True:
+                chunk = handle.read(CHUNK_BYTES)
+                if not chunk:
+                    break
+                if sum(len(part) for part in chunks) + len(chunk) > limit:
+                    raise StudioBridgeError(reason, f"{path}: grew past {limit} bytes")
+                meter.charge(len(chunk))
+                charged += len(chunk)
+                chunks.append(chunk)
     finally:
-        meter.release(st.st_size)
-    return json.loads(raw.decode("utf-8"))
+        if fd >= 0:
+            os.close(fd)
+        meter.release(charged)
+    return b"".join(chunks)
+
+
+def _read_small_json(path: Path, *, limit: int, meter: _MemoryMeter) -> Any:  # noqa: ANN401
+    """Read a small JSON document through a bounded, symlink-safe descriptor."""
+    return json.loads(_read_bounded_bytes(path, limit=limit, meter=meter).decode("utf-8"))
 
 
 def _copy_streaming(source: Path, target: Path, *, meter: _MemoryMeter) -> tuple[str, int]:
@@ -317,8 +437,15 @@ def shot_cache_key_payload(
     width: int,
     height: int,
     image_sha256: str,
+    toolchain_fingerprint: str = "",
 ) -> bytes:
-    """Canonical JSON describing exactly the inputs a shot segment is made from."""
+    """Canonical JSON describing exactly the inputs a shot segment is made from.
+
+    ``toolchain_fingerprint`` identifies the FFmpeg build that will encode the
+    segment (see :func:`_ffmpeg_toolchain_fingerprint`). It is part of the key,
+    so a different binary - an upgrade, a rebuild, a repackaged container - can
+    never reuse segments encoded by the previous one.
+    """
     return canonical_json(
         {
             "schema": SHOT_SEGMENT_SCHEMA,
@@ -329,6 +456,7 @@ def shot_cache_key_payload(
             "width": width,
             "height": height,
             "image_sha256": image_sha256,
+            "toolchain_fingerprint": toolchain_fingerprint,
         }
     )
 
@@ -338,12 +466,14 @@ def shot_cache_key_hash(**kwargs: Any) -> str:  # noqa: ANN401 - typed passthrou
     return hashlib.sha256(SHOT_CACHE_KEY_DOMAIN + shot_cache_key_payload(**kwargs)).hexdigest()
 
 
-def _segment_pipeline_digest(*, fps: float, width: int, height: int, sample_rate: int) -> str:
+def _segment_pipeline_digest(
+    *, fps: float, width: int, height: int, sample_rate: int, toolchain_fingerprint: str
+) -> str:
     """Fingerprint of every encoder knob, so a pipeline change invalidates the cache.
 
     The CAS folds this into its own content-addressed key, which means tuning the
-    preset, CRF, pixel format or audio settings can never silently serve
-    segments that were encoded with the old ones.
+    preset, CRF, pixel format or audio settings - or switching to a different
+    FFmpeg build - can never silently serve segments encoded with the old ones.
     """
     return hashlib.sha256(
         canonical_json(
@@ -360,6 +490,50 @@ def _segment_pipeline_digest(*, fps: float, width: int, height: int, sample_rate
                 "width": width,
                 "height": height,
                 "mux_mode": SEGMENT_MUX_MODE,
+                "toolchain_fingerprint": toolchain_fingerprint,
+            }
+        )
+    ).hexdigest()
+
+
+def _binary_identity(path: str) -> dict[str, Any]:
+    """Size and SHA-256 of the encoder binary itself (``unavailable`` if unreadable)."""
+    try:
+        digest, size, _ = stream_sha256(Path(path))
+    except (OSError, MaterializationError):
+        return {"sha256": "unavailable", "size_bytes": 0}
+    return {"sha256": digest, "size_bytes": size}
+
+
+@functools.lru_cache(maxsize=8)
+def _ffmpeg_toolchain_fingerprint(ffmpeg_bin: str) -> str:
+    """Deterministic identity of the FFmpeg toolchain behind one binary path.
+
+    Two builds can report the same version string and still encode different
+    bytes, so the fingerprint binds the first ``-version`` line *and* the size
+    and SHA-256 of the binary on disk. It is folded into both the shot cache key
+    and the CAS pipeline digest; a missing or unrunnable binary gets a stable
+    "unavailable" fingerprint so the failure surfaces later, in
+    :func:`_run_ffmpeg`, as a typed ``ffmpeg_unavailable`` instead of here.
+    """
+    try:
+        completed = subprocess.run(  # noqa: S603 - fixed argv list, no shell
+            [ffmpeg_bin, "-version"],
+            capture_output=True,
+            timeout=30,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return hashlib.sha256(
+            canonical_json({"ffmpeg": ffmpeg_bin, "toolchain": "unavailable"})
+        ).hexdigest()
+    lines = completed.stdout.decode("utf-8", errors="replace").splitlines()[:1]
+    return hashlib.sha256(
+        canonical_json(
+            {
+                "ffmpeg": ffmpeg_bin,
+                "version": lines[0] if lines else "",
+                "binary": _binary_identity(ffmpeg_bin),
             }
         )
     ).hexdigest()
@@ -591,6 +765,7 @@ def _materialize_shot_assets(
     output_dir: Path,
     local_images: Mapping[str, Path] | None,
     meter: _MemoryMeter,
+    toolchain_fingerprint: str,
 ) -> tuple[list[_ShotPlan], list[AssetRecord], list[float]]:
     """Write one PNG and one WAV per shot, then derive its content-addressed key."""
     plans: list[_ShotPlan] = []
@@ -694,6 +869,7 @@ def _materialize_shot_assets(
                     width=profile.width,
                     height=profile.height,
                     image_sha256=image_sha,
+                    toolchain_fingerprint=toolchain_fingerprint,
                 ),
             )
         )
@@ -896,16 +1072,22 @@ def render_storyboard_with_segment_cas(
     if before_render is not None:
         before_render(compiled)
 
+    toolchain = _ffmpeg_toolchain_fingerprint(ffmpeg)
     plans, records, durations = _materialize_shot_assets(
         manifest=compiled,
         profile=profile,
         output_dir=out_dir,
         local_images=local_images,
         meter=meter,
+        toolchain_fingerprint=toolchain,
     )
     cas = SegmentCASPlanner(cas_dir)
     pipeline_digest = _segment_pipeline_digest(
-        fps=profile.fps, width=width, height=height, sample_rate=sample_rate
+        fps=profile.fps,
+        width=width,
+        height=height,
+        sample_rate=sample_rate,
+        toolchain_fingerprint=toolchain,
     )
     segments_dir = _prepare_directory(out_dir / "segments", label="segments")
     staged_segments: list[Path] = []
@@ -1067,6 +1249,7 @@ def render_storyboard_with_segment_cas(
     except Exception as exc:  # noqa: BLE001 - any passport refusal is fatal here
         raise StudioBridgeError("passport_verification_failed", type(exc).__name__) from exc
 
+    process_peak_rss = _current_process_tree_peak_rss_bytes()
     receipt_path = _safe_child(out_dir, f"{job_id}.receipt.json", label="receipt")
     _write_receipt(
         receipt_path,
@@ -1089,7 +1272,9 @@ def render_storyboard_with_segment_cas(
             "shot_merkle_root": bundle.shot_merkle_root,
             "cas_hits": cas_hits,
             "cas_misses": cas_misses,
-            "peak_memory_bytes": meter.peak_bytes,
+            "bridge_buffer_peak_bytes": meter.peak_bytes,
+            "process_peak_rss_bytes": process_peak_rss,
+            "ffmpeg_toolchain_fingerprint": toolchain,
         },
     )
     return CasStoryboardRenderResult(
@@ -1104,6 +1289,8 @@ def render_storyboard_with_segment_cas(
         peak_memory_bytes=meter.peak_bytes,
         output_mp4_path=output_mp4,
         receipt_path=receipt_path,
+        bridge_buffer_peak_bytes=meter.peak_bytes,
+        process_peak_rss_bytes=process_peak_rss,
     )
 
 
@@ -1162,14 +1349,14 @@ def _read_journal(path: Path, *, meter: _MemoryMeter) -> list[dict[str, Any]]:
         return []
     if path.is_symlink() or not path.is_file():
         raise StudioBridgeError("journal_invalid", str(path))
-    st = os.lstat(path)
-    if st.st_size <= 0:
+    if os.lstat(path).st_size <= 0:
         return []
-    meter.charge(st.st_size)
-    try:
-        raw = path.read_text(encoding="utf-8")
-    finally:
-        meter.release(st.st_size)
+    # ``_read_bounded_bytes`` is the only reader: it opens once with O_NOFOLLOW,
+    # bounds the size on that descriptor and raises typed refusals, so the journal
+    # can never be read through a swapped link or slurped without a cap.
+    raw = _read_bounded_bytes(
+        path, limit=MAX_JOURNAL_BYTES, meter=meter, reason="journal_invalid"
+    ).decode("utf-8")
     entries: list[dict[str, Any]] = []
     for line in raw.splitlines():
         if not line.strip():
@@ -1271,6 +1458,20 @@ def sync_and_verify_studio_bundle_in_vault(
     previous = _read_journal(journal_path, meter=meter)
     snapshot_seq = 1 + sum(1 for entry in previous if entry.get("project_id") == project_id)
 
+    # The manifest is the only record of *how* the film was assembled, so its
+    # digest is re-derived from the bytes on disk before they are ever encrypted:
+    # a passport that names a different manifest must never reach the vault.
+    staged_manifest_sha = stream_sha256(render_result.manifest_path)[0]
+    passport_manifest_sha = str(render_result.passport.get("manifest_sha256", ""))
+    if (
+        staged_manifest_sha != passport_manifest_sha
+        or staged_manifest_sha != render_result.artifact.manifest_sha256
+    ):
+        raise StudioBridgeError(
+            "manifest_sha256_mismatch",
+            f"{render_result.manifest_path}: {staged_manifest_sha} != {passport_manifest_sha}",
+        )
+
     driver = LocalDeviceVaultDriver(vault_dir)
     manager = PersonalCloudVaultManager(driver)
     parent_snapshot_id = _current_vault_head(driver, project_id)
@@ -1334,6 +1535,15 @@ def sync_and_verify_studio_bundle_in_vault(
         passport_check = verify_artifact_passport(restored_passport, restored_mp4, signing_key)
     except Exception as exc:  # noqa: BLE001
         raise StudioBridgeError("vault_passport_verification_failed", type(exc).__name__) from exc
+    # The restored manifest must be the same bytes that were pushed *and* the
+    # bytes the restored passport seals: a single flipped byte is a failed backup.
+    restored_manifest_sha = stream_sha256(restored_manifest)[0]
+    sealed_manifest_sha = str(passport_check.passport.get("manifest_sha256", ""))
+    if restored_manifest_sha != sealed_manifest_sha or restored_manifest_sha != staged_manifest_sha:
+        raise StudioBridgeError(
+            "vault_restored_manifest_mismatch",
+            f"{restored_manifest}: {restored_manifest_sha} != {sealed_manifest_sha}",
+        )
     artifact_verdict = verify_mp4(
         restored_mp4,
         expected_duration_s=render_result.artifact.total_duration_s,
