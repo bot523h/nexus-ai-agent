@@ -307,3 +307,53 @@ def test_reserved_approval_identity_mismatch_does_not_consume(tmp_path) -> None:
     assert ledger.get(approval).state is ApprovalState.APPROVED
     ledger.consume(approval, identity=IDENT, job_id="render-1")
     ledger.close()
+
+
+def _race_reservation(path, approval_id, job_id, barrier, results) -> None:
+    from nexus_ai_agent.nagar.ibpc.approval import DurableApprovalLedger
+
+    ledger = DurableApprovalLedger(path, now=NOW)
+    try:
+        barrier.wait(timeout=10)
+        try:
+            ledger.consume(approval_id, identity=IDENT, job_id=job_id)
+            results.put((job_id, "reserved"))
+        except ApprovalError as exc:
+            results.put((job_id, exc.reason))
+    finally:
+        ledger.close()
+
+
+def test_different_jobs_racing_reservation_have_exactly_one_owner(tmp_path) -> None:
+    import multiprocessing
+
+    from nexus_ai_agent.nagar.ibpc.approval import DurableApprovalLedger
+
+    path = tmp_path / "reservation-race.sqlite3"
+    ledger = DurableApprovalLedger(path, now=NOW)
+    approval = ledger.create(_binding()).approval_id
+    ledger.approve(approval, identity=IDENT, turn_is_active=lambda: True)
+    ledger.close()
+    ctx = multiprocessing.get_context("spawn")
+    barrier = ctx.Barrier(2)
+    results = ctx.Queue()
+    workers = [
+        ctx.Process(target=_race_reservation, args=(path, approval, job_id, barrier, results))
+        for job_id in ("render-a", "render-b")
+    ]
+    for worker in workers:
+        worker.start()
+    for worker in workers:
+        worker.join(20)
+        if worker.is_alive():
+            worker.terminate()
+            worker.join()
+            pytest.fail("worker timed out")
+        assert worker.exitcode == 0
+    outcomes = [results.get(timeout=5), results.get(timeout=5)]
+    assert sorted(value for _, value in outcomes) == ["replay", "reserved"]
+    winner = next(job for job, value in outcomes if value == "reserved")
+    ledger = DurableApprovalLedger(path, now=NOW)
+    assert ledger.consume(approval, identity=IDENT, job_id=winner).state is ApprovalState.CONSUMED
+    ledger.finalize_consumption(approval, job_id=winner)
+    ledger.close()
