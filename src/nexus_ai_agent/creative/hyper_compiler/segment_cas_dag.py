@@ -416,14 +416,14 @@ class SegmentCASPlanner:
         cache_dir: Path,
         *,
         hmac_key: bytes | None = None,
-        require_trusted_anchor: bool = False,
+        require_trusted_anchor: bool = True,
     ) -> None:
         if require_trusted_anchor and hmac_key is None:
             # An unsigned manifest can re-derive its own content-addressed key, so
             # it is only ever trustworthy when tied to a secret the attacker does
-            # not hold.  Demanding the anchor up front makes "fail-closed" the
-            # construction-time default instead of a per-call decision a caller
-            # could forget.
+            # not hold.  Demanding the anchor by default makes "fail-closed" the
+            # construction-time default; a caller must opt out *explicitly*
+            # (``require_trusted_anchor=False``) to run keyless.
             raise HyperCompilerError(
                 "require_trusted_anchor demands an hmac_key: an unsigned manifest "
                 "cannot be anchored to anything outside itself"
@@ -431,6 +431,16 @@ class SegmentCASPlanner:
         self.cache_dir = Path(cache_dir)
         self._hmac_key = hmac_key
         self._require_trusted_anchor = require_trusted_anchor
+
+    def _assert_anchor_configured(self) -> None:
+        """Refuse keyless verification when a trusted anchor was demanded.
+
+        The constructor already guarantees this pairing, so this is defense in
+        depth: it keeps the invariant enforced inside the manifest-validation
+        path itself rather than trusting construction order.
+        """
+        if self._require_trusted_anchor and self._hmac_key is None:
+            raise SegmentIntegrityError("trusted anchor required but no hmac_key is configured")
 
     # -- keys & paths -------------------------------------------------------
     def cas_key(
@@ -566,6 +576,7 @@ class SegmentCASPlanner:
         manifest_file = self.manifest_path(cas_key)
         if not manifest_file.is_file():
             raise SegmentIntegrityError(f"segment manifest missing: {manifest_file}")
+        self._assert_anchor_configured()
         try:
             manifest_size = os.stat(manifest_file).st_size
         except OSError as exc:

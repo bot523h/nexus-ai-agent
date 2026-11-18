@@ -2720,3 +2720,120 @@ def test_req4_pull_helper_fail_closed_branches(
     with pytest.raises(FileNotFoundError):
         sjm._stream_copy_file(missing_source, tmp_path / "dest.bin")
     assert not list(tmp_path.glob("dest.bin*"))
+
+
+def test_gc_rejects_manifest_identity_mismatch(tmp_path: Path) -> None:
+    """A validly signed manifest for snapshot B parked under A's key must abort GC."""
+    import json
+
+    vault = LocalDeviceVaultDriver(tmp_path / "gc_id_vault")
+    secret = "gc-identity-secret"
+    ring = VaultKeyRing.from_secrets(secret)
+    mgr = PersonalCloudVaultManager(vault, chunk_size=64, key_ring=ring)
+
+    r1 = mgr.push_project_snapshot(
+        project_id="proj-id",
+        source={"a.bin": b"A" * 64},
+        master_secret=secret,
+        snapshot_id="snap-A",
+    )
+    mgr.push_project_snapshot(
+        project_id="proj-id",
+        source={"a.bin": b"B" * 64},
+        master_secret=secret,
+        parent_snapshot_id=r1.snapshot_id,
+        snapshot_id="snap-B",
+    )
+    # Park a still-valid signed manifest for snap-B under snap-A's storage key.
+    b_manifest = vault.get_manifest("snap-B")
+    assert json.loads(b_manifest)["snapshot_id"] == "snap-B"
+    vault.put_manifest("snap-A", b_manifest)
+
+    orphan = "0" * 64
+    vault.put_chunk(orphan, b"must-not-be-collected")
+    with pytest.raises(VaultIntegrityError, match="Manifest identity mismatch"):
+        mgr.garbage_collect_unreferenced_chunks(min_age_seconds=0.0)
+    assert vault.has_chunk(orphan)
+
+
+def test_pull_migrates_legacy_v1_chunk_only_when_opted_in(tmp_path: Path) -> None:
+    """A stored legacy v1 chunk is rejected by default and restored via migration."""
+    import hashlib
+    import hmac
+    import struct
+
+    from nexus_ai_agent.storage.personal_cloud_vault import (
+        compute_chunk_id,
+        derive_vault_keys,
+    )
+
+    vault = LocalDeviceVaultDriver(tmp_path / "legacy_vault")
+    secret = "legacy-pull-secret"
+    ring = VaultKeyRing.from_secrets(secret)
+    mgr = PersonalCloudVaultManager(vault, chunk_size=64, key_ring=ring)
+
+    plaintext = b"L" * 64
+    push = mgr.push_project_snapshot(
+        project_id="proj-legacy",
+        source={"a.bin": plaintext},
+        master_secret=secret,
+        snapshot_id="snap-legacy",
+    )
+    km = derive_vault_keys(secret, bytes.fromhex(push.manifest.salt_hex))
+    chunk_id = compute_chunk_id(plaintext, km)
+    assert push.manifest.files[0].chunks[0].chunk_id == chunk_id
+
+    # Rewrite the stored chunk as a legacy v1 envelope (SHA-256 CTR + Encrypt-then-MAC).
+    nonce = b"L" * 16
+    header = b"NPCV" + bytes([1, 0]) + bytes.fromhex(chunk_id)
+    base = hashlib.sha256(km.enc_key + nonce)
+    ciphertext_out = bytearray(len(plaintext))
+    for offset in range(0, len(plaintext), 32):
+        block = base.copy()
+        block.update(struct.pack(">Q", offset // 32))
+        ks = block.digest()
+        for i in range(min(32, len(plaintext) - offset)):
+            ciphertext_out[offset + i] = plaintext[offset + i] ^ ks[i]
+    ciphertext = bytes(ciphertext_out)
+    mac = hmac.new(km.mac_key, digestmod=hashlib.sha256)
+    mac.update(header)
+    mac.update(nonce)
+    mac.update(ciphertext)
+    mac.update(struct.pack(">QQ", 0, len(plaintext)))
+    legacy_wire = (
+        struct.pack(">H", len(header))
+        + header
+        + struct.pack(">16s16sQQ32s", km.key_id, nonce, 0, len(plaintext), mac.digest())
+        + ciphertext
+    )
+    vault.put_chunk(chunk_id, legacy_wire)
+
+    # Default pull refuses the legacy wire format (downgrade protection).
+    with pytest.raises(VaultTamperDetectedError, match="Legacy v1 envelope rejected"):
+        mgr.pull_project_snapshot(
+            project_id="proj-legacy",
+            master_secret=secret,
+            snapshot_id="snap-legacy",
+            target_dir=tmp_path / "must_not_exist",
+        )
+    assert not (tmp_path / "must_not_exist").exists()
+
+    # Explicit opt-in authenticates and migrates it (in-memory restore).
+    report = mgr.pull_project_snapshot(
+        project_id="proj-legacy",
+        master_secret=secret,
+        snapshot_id="snap-legacy",
+        allow_legacy_v1=True,
+    )
+    assert report.files == {"a.bin": plaintext}
+
+    # And it also restores to disk through the streaming path.
+    disk_report = mgr.pull_project_snapshot(
+        project_id="proj-legacy",
+        master_secret=secret,
+        snapshot_id="snap-legacy",
+        target_dir=tmp_path / "restored",
+        allow_legacy_v1=True,
+    )
+    assert disk_report.files == {}
+    assert (tmp_path / "restored" / "a.bin").read_bytes() == plaintext

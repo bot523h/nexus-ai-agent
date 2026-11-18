@@ -68,10 +68,19 @@ MAX_DEFAULT_CHUNK_SIZE = 4_194_304  # 4 MiB
 MAX_CHUNK_SIZE = 16_777_216  # 16 MiB
 
 MIN_PBKDF2_ITERATIONS = 100_000
+#: Upper bound on PBKDF2 iterations accepted from a manifest, so a hostile
+#: manifest cannot turn one key-derivation into an unbounded CPU burn.
+MAX_KDF_ITERATIONS = 2_000_000
 PBKDF2_ITERATIONS = 600_000  # OWASP recommendation for PBKDF2-HMAC-SHA256
 PBKDF2_DKLEN = 64
 MIN_SALT_BYTES = 16
 DEFAULT_SALT_BYTES = 32
+
+#: Hard ceiling on the serialized size of a snapshot manifest, checked *before*
+#: ``json.loads`` so a hostile multi-gigabyte manifest is never parsed.
+MAX_MANIFEST_JSON_BYTES = 16 * 1024 * 1024
+#: Hard ceiling on a serialized chunk envelope, checked *before* parsing.
+MAX_ENVELOPE_BYTES = 64 * 1024 * 1024
 
 NONCE_BYTES = 12
 KEY_ID_BYTES = 16
@@ -87,10 +96,30 @@ _SUPPORTED_CIPHER_SUITES = (CIPHER_AES_256_GCM, CIPHER_CHACHA20_POLY1305)
 
 ENVELOPE_MAGIC = b"NPCV"
 ENVELOPE_VERSION = 2
+#: Version 1 used SHA-256 CTR + Encrypt-then-MAC.  It is *read-only* legacy:
+#: nothing new is ever written in it, and it is only accepted through the
+#: explicit :func:`migrate_legacy_v1_envelope_bytes` migration path.
+LEGACY_ENVELOPE_VERSION = 1
 _FLAG_NONE = 0x00
 _FLAG_PADDED = 0x01
 _WIRE_FIXED_STRUCT = struct.Struct(">H")
 _WIRE_META_STRUCT = struct.Struct(">16s12sQQB16s")
+#: Legacy v1 metadata layout: key_id(16) nonce(16) chunk_index(8) len(8) mac(32).
+_V1_WIRE_META_STRUCT = struct.Struct(">16s16sQQ32s")
+_V1_NONCE_BYTES = 16
+_V1_MAC_TAG_BYTES = 32
+
+
+def envelope_wire_version(raw: bytes) -> int | None:
+    """Return the wire version of ``raw``, or ``None`` if it is not an envelope.
+
+    Reads only the fixed prefix, so it never parses untrusted payload.
+    """
+    if len(raw) < _WIRE_FIXED_STRUCT.size + 6:
+        return None
+    if raw[2:6] != ENVELOPE_MAGIC:
+        return None
+    return raw[6]
 
 
 def validate_chunk_size(chunk_size: int) -> int:
@@ -195,6 +224,10 @@ def derive_vault_keys(
         raise VaultAuthenticationError(
             f"PBKDF2 iterations must be at least {MIN_PBKDF2_ITERATIONS}, got {iterations}"
         )
+    if iterations > MAX_KDF_ITERATIONS:
+        raise VaultAuthenticationError(
+            f"PBKDF2 iterations must not exceed {MAX_KDF_ITERATIONS}, got {iterations}"
+        )
 
     ikm = hashlib.pbkdf2_hmac(
         "sha256",
@@ -252,6 +285,13 @@ class VaultKeyRing:
 
     def key_material_for(self, manifest: VaultSnapshotManifest) -> VaultKeyMaterial | None:
         """Return the key material that authenticates ``manifest``, or ``None`` if unheld."""
+        # A hostile manifest could declare an astronomically high iteration count
+        # to burn CPU on every probe; refuse it before any PBKDF2 runs.
+        if manifest.kdf_iterations > MAX_KDF_ITERATIONS:
+            raise VaultAuthenticationError(
+                f"Manifest kdf_iterations {manifest.kdf_iterations} exceeds the "
+                f"{MAX_KDF_ITERATIONS} ceiling"
+            )
         try:
             salt = bytes.fromhex(manifest.salt_hex)
         except ValueError:
@@ -470,9 +510,29 @@ class EncryptedChunkEnvelope:
 
     @classmethod
     def from_bytes(cls, raw: bytes) -> EncryptedChunkEnvelope:
-        """Parse a binary chunk envelope fail-closed."""
+        """Parse a binary chunk envelope fail-closed.
+
+        Only the current AEAD wire version is ever accepted here.  A legacy v1
+        envelope is rejected with an explicit error (downgrade protection); a
+        stored v1 chunk must first be converted with
+        :func:`migrate_legacy_v1_envelope_bytes`, which authenticates it with the
+        vault key material that ``from_bytes`` deliberately does not receive.
+        """
+        # Bound the wire size before any parsing/decryption work is attempted.
+        if len(raw) > MAX_ENVELOPE_BYTES:
+            raise VaultTamperDetectedError(
+                f"Chunk envelope is too large: {len(raw)} > {MAX_ENVELOPE_BYTES} bytes"
+            )
         if len(raw) < _WIRE_FIXED_STRUCT.size:
             raise VaultTamperDetectedError("Truncated chunk envelope: missing header length")
+        version = envelope_wire_version(raw)
+        if version is not None and version != ENVELOPE_VERSION:
+            if version == LEGACY_ENVELOPE_VERSION:
+                raise VaultTamperDetectedError(
+                    "Legacy v1 envelope rejected: migrate it with "
+                    "migrate_legacy_v1_envelope_bytes before use"
+                )
+            raise VaultTamperDetectedError(f"Unsupported envelope version: {version!r}")
         (header_len,) = _WIRE_FIXED_STRUCT.unpack_from(raw, 0)
         meta_offset = _WIRE_FIXED_STRUCT.size + header_len
         cipher_offset = meta_offset + _WIRE_META_STRUCT.size
@@ -799,6 +859,116 @@ def decrypt_chunk(
     return plaintext
 
 
+def _legacy_v1_sha256_ctr_crypt(enc_key: bytes, nonce: bytes, payload: bytes) -> bytes:
+    """Reproduce v1's SHA-256 CTR keystream (legacy read-only path only)."""
+    if len(enc_key) != 32:
+        raise VaultAuthenticationError("enc_key must be 32 bytes")
+    if len(nonce) != _V1_NONCE_BYTES:
+        raise VaultTamperDetectedError(
+            f"legacy v1 nonce must be {_V1_NONCE_BYTES} bytes, got {len(nonce)}"
+        )
+    if not payload:
+        return b""
+    total_len = len(payload)
+    base_hasher = hashlib.sha256(enc_key + nonce)
+    pack_u64 = struct.Struct(">Q").pack
+    out = bytearray(total_len)
+    view = memoryview(payload)
+    counter = 0
+    stride = 128 * SHA256_BLOCK_BYTES
+    for offset in range(0, total_len, stride):
+        slice_view = view[offset : offset + stride]
+        slice_len = len(slice_view)
+        blocks_needed = (slice_len + SHA256_BLOCK_BYTES - 1) // SHA256_BLOCK_BYTES
+        ks_parts: list[bytes] = []
+        for _ in range(blocks_needed):
+            block_hasher = base_hasher.copy()
+            block_hasher.update(pack_u64(counter))
+            ks_parts.append(block_hasher.digest())
+            counter += 1
+        ks = b"".join(ks_parts)[:slice_len]
+        out[offset : offset + slice_len] = (
+            int.from_bytes(slice_view, "big") ^ int.from_bytes(ks, "big")
+        ).to_bytes(slice_len, "big")
+    return bytes(out)
+
+
+def migrate_legacy_v1_envelope_bytes(
+    wire_bytes: bytes,
+    keys: VaultKeyMaterial,
+    *,
+    expected_chunk_id: str | None = None,
+    cipher_suite: int = DEFAULT_CIPHER_SUITE,
+) -> EncryptedChunkEnvelope:
+    """Authenticate a legacy v1 envelope and re-encode it as a v2 AEAD envelope.
+
+    The v1 HMAC-SHA256 tag is verified *before* the CTR ciphertext is touched, so
+    a tampered v1 envelope is rejected fail-closed.  Only a genuinely authentic
+    v1 chunk is migrated; nothing else can reach the v2 writer.
+    """
+    if len(wire_bytes) > MAX_ENVELOPE_BYTES:
+        raise VaultTamperDetectedError(
+            f"Legacy envelope is too large: {len(wire_bytes)} > {MAX_ENVELOPE_BYTES} bytes"
+        )
+    if len(wire_bytes) < _WIRE_FIXED_STRUCT.size:
+        raise VaultTamperDetectedError("Truncated legacy envelope: missing header length")
+    (header_len,) = _WIRE_FIXED_STRUCT.unpack_from(wire_bytes, 0)
+    meta_offset = _WIRE_FIXED_STRUCT.size + header_len
+    if header_len < 38 or len(wire_bytes) < meta_offset:
+        raise VaultTamperDetectedError("Truncated or malformed legacy envelope metadata")
+    header = wire_bytes[_WIRE_FIXED_STRUCT.size : meta_offset]
+    if header[:4] != ENVELOPE_MAGIC:
+        raise VaultTamperDetectedError("Legacy envelope magic mismatch")
+    if header[4] != LEGACY_ENVELOPE_VERSION:
+        raise VaultTamperDetectedError(f"Not a legacy v1 envelope: version byte {header[4]!r}")
+    cipher_offset = meta_offset + _V1_WIRE_META_STRUCT.size
+    if len(wire_bytes) < cipher_offset:
+        raise VaultTamperDetectedError("Truncated or malformed legacy envelope metadata")
+    flags = header[5]
+    chunk_id = header[6:38].hex()
+    key_id, nonce, chunk_index, plaintext_len, mac_tag = _V1_WIRE_META_STRUCT.unpack_from(
+        wire_bytes, meta_offset
+    )
+    ciphertext = wire_bytes[cipher_offset:]
+    if not hmac.compare_digest(key_id, keys.key_id):
+        raise VaultAuthenticationError("Legacy chunk authentication failed: invalid key material")
+    if flags == _FLAG_PADDED:
+        if len(ciphertext) <= plaintext_len:
+            raise VaultTamperDetectedError("Legacy padded ciphertext shorter than plaintext")
+    elif len(ciphertext) != plaintext_len:
+        raise VaultTamperDetectedError("Legacy ciphertext length does not match declared length")
+
+    expected_mac = hmac.new(keys.mac_key, digestmod=hashlib.sha256)
+    expected_mac.update(header)
+    expected_mac.update(nonce)
+    expected_mac.update(ciphertext)
+    expected_mac.update(struct.pack(">QQ", chunk_index, plaintext_len))
+    if not hmac.compare_digest(expected_mac.digest(), mac_tag):
+        raise VaultTamperDetectedError("Legacy envelope MAC verification failed")
+
+    decrypted = _legacy_v1_sha256_ctr_crypt(keys.enc_key, nonce, ciphertext)
+    if expected_chunk_id is not None and not hmac.compare_digest(chunk_id, expected_chunk_id):
+        raise VaultTamperDetectedError(
+            f"Legacy chunk substitution detected: expected {expected_chunk_id}, got {chunk_id}"
+        )
+    if flags == _FLAG_PADDED:
+        pad_tail = decrypted[plaintext_len:]
+        if not hmac.compare_digest(pad_tail, b"\x00" * len(pad_tail)):
+            raise VaultTamperDetectedError("Legacy envelope has non-zero padding bytes")
+    plaintext = decrypted[:plaintext_len]
+    recomputed_id = compute_chunk_id(plaintext, keys)
+    if not hmac.compare_digest(recomputed_id, chunk_id):
+        raise VaultTamperDetectedError("Legacy decrypted content does not match chunk_id")
+
+    # Re-encode through the standard v2 AEAD writer (fresh nonce, GCM tag).
+    return encrypt_chunk(
+        plaintext,
+        keys,
+        chunk_index=chunk_index,
+        cipher_suite=cipher_suite,
+    )
+
+
 def encrypt_stream_chunks(
     data: bytes,
     key_material: VaultKeyMaterial,
@@ -1090,6 +1260,12 @@ class VaultSnapshotManifest:
     @classmethod
     def from_json_bytes(cls, raw: bytes) -> VaultSnapshotManifest:
         """Parse UTF-8 JSON bytes into a :class:`VaultSnapshotManifest` fail-closed."""
+        # Size is checked before ``json.loads`` so a hostile multi-gigabyte
+        # manifest cannot force an unbounded allocation/parse.
+        if len(raw) > MAX_MANIFEST_JSON_BYTES:
+            raise VaultTamperDetectedError(
+                f"Snapshot manifest is too large: {len(raw)} > {MAX_MANIFEST_JSON_BYTES} bytes"
+            )
         try:
             decoded = json.loads(raw.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
@@ -1208,7 +1384,13 @@ __all__ = [
     "DEFAULT_SALT_BYTES",
     "ENVELOPE_MAGIC",
     "ENVELOPE_VERSION",
+    "LEGACY_ENVELOPE_VERSION",
+    "MAX_ENVELOPE_BYTES",
+    "MAX_KDF_ITERATIONS",
+    "MAX_MANIFEST_JSON_BYTES",
     "EncryptedChunkEnvelope",
+    "envelope_wire_version",
+    "migrate_legacy_v1_envelope_bytes",
     "KEY_ID_BYTES",
     "MAX_CHUNK_SIZE",
     "MAX_DEFAULT_CHUNK_SIZE",

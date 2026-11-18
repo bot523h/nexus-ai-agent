@@ -80,6 +80,7 @@ from nexus_ai_agent.storage.personal_cloud_vault.byos_drivers import (
 )
 from nexus_ai_agent.storage.personal_cloud_vault.crypto_chunk_envelope import (
     DEFAULT_CHUNK_SIZE,
+    LEGACY_ENVELOPE_VERSION,
     MIN_PBKDF2_ITERATIONS,
     PBKDF2_ITERATIONS,
     EncryptedChunkEnvelope,
@@ -94,8 +95,10 @@ from nexus_ai_agent.storage.personal_cloud_vault.crypto_chunk_envelope import (
     derive_vault_keys,
     encrypt_chunk_from_fd_to_wire,
     encrypt_plaintext_to_wire,
+    envelope_wire_version,
     generate_vault_salt,
     init_streaming_file_mac,
+    migrate_legacy_v1_envelope_bytes,
     normalize_relative_vault_path,
     validate_chunk_size,
     validate_pad_block_size,
@@ -1209,6 +1212,7 @@ class PersonalCloudVaultManager:
         master_secret: str | bytes,
         snapshot_id: str | None = None,
         target_dir: Path | str | None = None,
+        allow_legacy_v1: bool = False,
     ) -> SnapshotPullReport:
         """Verify manifest, RFC 6962 Merkle root, and all chunk HMACs before restoring."""
         if not project_id.strip():
@@ -1263,7 +1267,16 @@ class PersonalCloudVaultManager:
                             )
                         continue
                     raw_envelope = self._driver.get_chunk(ref.chunk_id)
-                    envelope = EncryptedChunkEnvelope.from_bytes(raw_envelope)
+                    if allow_legacy_v1 and envelope_wire_version(raw_envelope) == (
+                        LEGACY_ENVELOPE_VERSION
+                    ):
+                        envelope = migrate_legacy_v1_envelope_bytes(
+                            raw_envelope,
+                            key_material,
+                            expected_chunk_id=ref.chunk_id,
+                        )
+                    else:
+                        envelope = EncryptedChunkEnvelope.from_bytes(raw_envelope)
                     if not hmac.compare_digest(envelope.chunk_id, ref.chunk_id):
                         raise VaultTamperDetectedError(
                             f"Chunk substitution detected: requested {ref.chunk_id}, "
@@ -1467,6 +1480,16 @@ class PersonalCloudVaultManager:
         for sid in sorted(stored_manifest_ids):
             manifest = VaultSnapshotManifest.from_json_bytes(self._driver.get_manifest(sid))
             effective_key_ring.verify_manifest(manifest)
+            # The manifest stored under ``sid`` must actually *be* that snapshot.
+            # A validly signed manifest for snapshot B parked under snapshot A's
+            # key would otherwise let A's reference set be replaced by B's, so a
+            # still-referenced chunk could be collected.  Identity mismatch is a
+            # tamper signal: refuse the whole pass before deleting anything.
+            if manifest.snapshot_id != sid:
+                raise VaultIntegrityError(
+                    f"Manifest identity mismatch for {sid!r}: stored manifest claims "
+                    f"snapshot_id {manifest.snapshot_id!r}"
+                )
             chunks_in_manifest = manifest.referenced_chunk_ids()
             if sid in active_ids:
                 referenced_chunks.update(chunks_in_manifest)

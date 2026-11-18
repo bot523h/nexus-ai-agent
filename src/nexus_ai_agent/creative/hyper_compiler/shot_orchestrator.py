@@ -141,7 +141,7 @@ class HyperTimelineOrchestrator:
         *,
         max_buffer_bytes: int = DEFAULT_MAX_BUFFER_BYTES,
         hmac_key: bytes | None = None,
-        require_trusted_anchor: bool = False,
+        require_trusted_anchor: bool = True,
         ffmpeg_bin: str = "ffmpeg",
         timeout_seconds: float = 30.0,
     ) -> None:

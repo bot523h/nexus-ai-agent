@@ -86,14 +86,16 @@ def test_default_pipe_spec_mirrors_geometry() -> None:
 
 
 def test_orchestrator_plan_delegates_to_planner(tmp_path: Path) -> None:
-    orch = HyperTimelineOrchestrator(tmp_path)
+    orch = HyperTimelineOrchestrator(tmp_path, require_trusted_anchor=False)
     plan = orch.plan([make_spec(0), make_spec(1)])
     assert plan.total_leaves == 2
     assert plan.cache_hits == 0
 
 
 def test_orchestrator_first_run_renders_every_segment(tmp_path: Path) -> None:
-    orch = HyperTimelineOrchestrator(tmp_path, max_buffer_bytes=1024 * 1024)
+    orch = HyperTimelineOrchestrator(
+        tmp_path, require_trusted_anchor=False, max_buffer_bytes=1024 * 1024
+    )
     execution = orch.execute([make_spec(i) for i in range(20)], frame_factory=frame_factory())
     assert execution.receipt.rendered_segments == 20
     assert execution.receipt.cache_hits == 0
@@ -102,7 +104,9 @@ def test_orchestrator_first_run_renders_every_segment(tmp_path: Path) -> None:
 
 
 def test_orchestrator_output_is_deterministic(tmp_path: Path) -> None:
-    orch = HyperTimelineOrchestrator(tmp_path, max_buffer_bytes=1024 * 1024)
+    orch = HyperTimelineOrchestrator(
+        tmp_path, require_trusted_anchor=False, max_buffer_bytes=1024 * 1024
+    )
     timeline = [make_spec(i) for i in range(4)]
     first = orch.execute(timeline, frame_factory=frame_factory())
     second = orch.execute(timeline, frame_factory=frame_factory())
@@ -112,7 +116,9 @@ def test_orchestrator_output_is_deterministic(tmp_path: Path) -> None:
 
 def test_orchestrator_95_percent_cache_recovery(tmp_path: Path) -> None:
     """The headline proof: change 1 of 20 segments, re-render exactly 1."""
-    orch = HyperTimelineOrchestrator(tmp_path, max_buffer_bytes=1024 * 1024)
+    orch = HyperTimelineOrchestrator(
+        tmp_path, require_trusted_anchor=False, max_buffer_bytes=1024 * 1024
+    )
     timeline = [make_spec(i) for i in range(20)]
 
     first = orch.execute(timeline, frame_factory=frame_factory())
@@ -134,7 +140,9 @@ def test_orchestrator_95_percent_cache_recovery(tmp_path: Path) -> None:
     # The reused-cache output is bit-identical to a full from-scratch render of
     # the same changed timeline in a fresh cache: 19 cached segments + 1 render
     # must produce exactly the bytes of 20 renders.
-    scratch = HyperTimelineOrchestrator(tmp_path / "scratch", max_buffer_bytes=1024 * 1024)
+    scratch = HyperTimelineOrchestrator(
+        tmp_path / "scratch", require_trusted_anchor=False, max_buffer_bytes=1024 * 1024
+    )
     full = scratch.execute(changed, frame_factory=frame_factory())
     assert full.receipt.rendered_segments == 20
     assert second.output_digest == full.output_digest
@@ -145,7 +153,9 @@ def test_orchestrator_rejects_forged_cache_and_rerenders(tmp_path: Path) -> None
     # F1 end-to-end: if a cached artifact's manifest is tampered (forged engine
     # mode), the orchestrator must not trust it — it re-renders and emits an
     # honest receipt rather than minting a false cache hit.
-    orch = HyperTimelineOrchestrator(tmp_path, max_buffer_bytes=1024 * 1024)
+    orch = HyperTimelineOrchestrator(
+        tmp_path, require_trusted_anchor=False, max_buffer_bytes=1024 * 1024
+    )
     timeline = [make_spec(0)]
     first = orch.execute(timeline, frame_factory=frame_factory())
     assert first.receipt.cache_hits == 0
@@ -168,7 +178,9 @@ def test_orchestrator_rejects_forged_cache_and_rerenders(tmp_path: Path) -> None
 
 
 def test_orchestrator_unchanged_segments_are_not_rewritten(tmp_path: Path) -> None:
-    orch = HyperTimelineOrchestrator(tmp_path, max_buffer_bytes=1024 * 1024)
+    orch = HyperTimelineOrchestrator(
+        tmp_path, require_trusted_anchor=False, max_buffer_bytes=1024 * 1024
+    )
     timeline = [make_spec(i) for i in range(5)]
     orch.execute(timeline, frame_factory=frame_factory())
     keys = {
@@ -196,7 +208,9 @@ def test_orchestrator_unchanged_segments_are_not_rewritten(tmp_path: Path) -> No
 
 def test_orchestrator_pipeline_change_re_renders_every_segment(tmp_path: Path) -> None:
     """P1-4: a pipeline-knob change invalidates segments even if the spec is equal."""
-    orch = HyperTimelineOrchestrator(tmp_path, max_buffer_bytes=1024 * 1024)
+    orch = HyperTimelineOrchestrator(
+        tmp_path, require_trusted_anchor=False, max_buffer_bytes=1024 * 1024
+    )
     timeline = [make_spec(i) for i in range(5)]
     orch.execute(timeline, frame_factory=frame_factory())
 
@@ -213,7 +227,9 @@ def test_orchestrator_pipeline_change_re_renders_every_segment(tmp_path: Path) -
 
 
 def test_orchestrator_cache_hit_payloads_are_byte_identical(tmp_path: Path) -> None:
-    orch = HyperTimelineOrchestrator(tmp_path, max_buffer_bytes=1024 * 1024)
+    orch = HyperTimelineOrchestrator(
+        tmp_path, require_trusted_anchor=False, max_buffer_bytes=1024 * 1024
+    )
     timeline = [make_spec(i) for i in range(3)]
     first = orch.execute(timeline, frame_factory=frame_factory())
     second = orch.execute(timeline, frame_factory=frame_factory())
@@ -224,13 +240,15 @@ def test_orchestrator_cache_hit_payloads_are_byte_identical(tmp_path: Path) -> N
 
 
 def test_orchestrator_requires_frames_for_uncached_segment(tmp_path: Path) -> None:
-    orch = HyperTimelineOrchestrator(tmp_path)
+    orch = HyperTimelineOrchestrator(tmp_path, require_trusted_anchor=False)
     with pytest.raises(HyperCompilerError):
         orch.execute([make_spec(0)])
 
 
 def test_orchestrator_writes_output_file(tmp_path: Path) -> None:
-    orch = HyperTimelineOrchestrator(tmp_path / "cache", max_buffer_bytes=1024 * 1024)
+    orch = HyperTimelineOrchestrator(
+        tmp_path / "cache", require_trusted_anchor=False, max_buffer_bytes=1024 * 1024
+    )
     out = tmp_path / "final.nagartl"
     execution = orch.execute([make_spec(0)], frame_factory=frame_factory(), output_path=out)
     assert execution.output_path == out
@@ -240,7 +258,9 @@ def test_orchestrator_writes_output_file(tmp_path: Path) -> None:
 
 
 def test_orchestrator_execute_delta_is_equivalent(tmp_path: Path) -> None:
-    orch = HyperTimelineOrchestrator(tmp_path, max_buffer_bytes=1024 * 1024)
+    orch = HyperTimelineOrchestrator(
+        tmp_path, require_trusted_anchor=False, max_buffer_bytes=1024 * 1024
+    )
     timeline = [make_spec(i) for i in range(3)]
     orch.execute(timeline, frame_factory=frame_factory())
     delta = orch.execute_delta(timeline, frame_factory=frame_factory())
@@ -248,7 +268,9 @@ def test_orchestrator_execute_delta_is_equivalent(tmp_path: Path) -> None:
 
 
 def test_orchestrator_custom_pipe_spec_factory(tmp_path: Path) -> None:
-    orch = HyperTimelineOrchestrator(tmp_path, max_buffer_bytes=1024 * 1024)
+    orch = HyperTimelineOrchestrator(
+        tmp_path, require_trusted_anchor=False, max_buffer_bytes=1024 * 1024
+    )
     timeline = [make_spec(0), make_spec(1)]
     orch.execute(
         timeline,
@@ -261,7 +283,9 @@ def test_orchestrator_custom_pipe_spec_factory(tmp_path: Path) -> None:
 
 
 def test_orchestrator_render_segment_directly(tmp_path: Path) -> None:
-    orch = HyperTimelineOrchestrator(tmp_path, max_buffer_bytes=1024 * 1024)
+    orch = HyperTimelineOrchestrator(
+        tmp_path, require_trusted_anchor=False, max_buffer_bytes=1024 * 1024
+    )
     planned = orch.plan([make_spec(0)]).segments[0]
     assert planned.status is SegmentStatus.RENDER_REQUIRED
     outcome = orch.render_segment(planned, frame_factory()(make_spec(0)))
@@ -271,7 +295,9 @@ def test_orchestrator_render_segment_directly(tmp_path: Path) -> None:
 
 
 def test_orchestrator_verify_timeline(tmp_path: Path) -> None:
-    orch = HyperTimelineOrchestrator(tmp_path, max_buffer_bytes=1024 * 1024)
+    orch = HyperTimelineOrchestrator(
+        tmp_path, require_trusted_anchor=False, max_buffer_bytes=1024 * 1024
+    )
     timeline = [make_spec(i) for i in range(3)]
     execution = orch.execute(timeline, frame_factory=frame_factory())
     assert orch.verify_timeline(timeline) == execution.plan.merkle_root
@@ -280,13 +306,17 @@ def test_orchestrator_verify_timeline(tmp_path: Path) -> None:
 def test_orchestrator_verify_timeline_skips_uncached(tmp_path: Path) -> None:
     # Nothing is cached yet, so every segment is RENDER_REQUIRED: verify must
     # skip them (nothing on disk to check) and still return the Merkle root.
-    orch = HyperTimelineOrchestrator(tmp_path, max_buffer_bytes=1024 * 1024)
+    orch = HyperTimelineOrchestrator(
+        tmp_path, require_trusted_anchor=False, max_buffer_bytes=1024 * 1024
+    )
     timeline = [make_spec(i) for i in range(3)]
     assert orch.verify_timeline(timeline) == orch.plan(timeline).merkle_root
 
 
 def test_orchestrator_cpu_mode_receipt_reports_cpu(tmp_path: Path) -> None:
-    orch = HyperTimelineOrchestrator(tmp_path, max_buffer_bytes=1024 * 1024)
+    orch = HyperTimelineOrchestrator(
+        tmp_path, require_trusted_anchor=False, max_buffer_bytes=1024 * 1024
+    )
     execution = orch.execute([make_spec(0)], frame_factory=frame_factory())
     assert execution.receipt.mode == "deterministic_cpu_mux"
     assert execution.segments[0].mode == "deterministic_cpu_mux"
@@ -296,7 +326,9 @@ def test_orchestrator_cpu_mode_receipt_reports_cpu(tmp_path: Path) -> None:
 def test_orchestrator_ffmpeg_mode_really_runs(tmp_path: Path) -> None:
     """P1-1: FFMPEG_SUBPROCESS_PIPE must really drive the engine, not just label it."""
     assert FFMPEG is not None
-    orch = HyperTimelineOrchestrator(tmp_path, max_buffer_bytes=1024 * 1024, ffmpeg_bin=FFMPEG)
+    orch = HyperTimelineOrchestrator(
+        tmp_path, require_trusted_anchor=False, max_buffer_bytes=1024 * 1024, ffmpeg_bin=FFMPEG
+    )
     execution = orch.execute(
         [make_spec(0)],
         frame_factory=frame_factory(),
@@ -318,7 +350,10 @@ def test_orchestrator_ffmpeg_mode_really_runs(tmp_path: Path) -> None:
 
 def test_orchestrator_ffmpeg_mode_fails_closed_without_binary(tmp_path: Path) -> None:
     orch = HyperTimelineOrchestrator(
-        tmp_path, max_buffer_bytes=1024 * 1024, ffmpeg_bin="/nonexistent/ffmpeg-xyz"
+        tmp_path,
+        require_trusted_anchor=False,
+        max_buffer_bytes=1024 * 1024,
+        ffmpeg_bin="/nonexistent/ffmpeg-xyz",
     )
     from nexus_ai_agent.creative.hyper_compiler.errors import PipeExecutionError
 
@@ -333,7 +368,7 @@ def test_orchestrator_ffmpeg_mode_fails_closed_without_binary(tmp_path: Path) ->
 def test_orchestrator_peak_memory_stays_bounded(tmp_path: Path) -> None:
     # 8x8x3 = 192 B/frame; the CPU working set for this geometry is 832 B, so a
     # 4096 B budget still bounds the reported peak.
-    orch = HyperTimelineOrchestrator(tmp_path, max_buffer_bytes=4096)
+    orch = HyperTimelineOrchestrator(tmp_path, require_trusted_anchor=False, max_buffer_bytes=4096)
     execution = orch.execute([make_spec(0)], frame_factory=frame_factory())
     assert execution.receipt.peak_buffer_bytes <= 4096
 
@@ -351,7 +386,9 @@ def test_orchestrator_hmac_key_is_honoured(tmp_path: Path) -> None:
 
 
 def test_orchestrator_cache_hit_segment_reports_zero_peak(tmp_path: Path) -> None:
-    orch = HyperTimelineOrchestrator(tmp_path, max_buffer_bytes=1024 * 1024)
+    orch = HyperTimelineOrchestrator(
+        tmp_path, require_trusted_anchor=False, max_buffer_bytes=1024 * 1024
+    )
     timeline = [make_spec(0)]
     orch.execute(timeline, frame_factory=frame_factory())
     second = orch.execute(timeline, frame_factory=frame_factory())
@@ -362,7 +399,9 @@ def test_orchestrator_cache_hit_segment_reports_zero_peak(tmp_path: Path) -> Non
 def test_orchestrator_switching_engine_is_a_cache_miss(tmp_path: Path) -> None:
     """P1-A: the same segment rendered by one engine is a CACHE_MISS for the other."""
     assert FFMPEG is not None
-    orch = HyperTimelineOrchestrator(tmp_path, max_buffer_bytes=1024 * 1024, ffmpeg_bin=FFMPEG)
+    orch = HyperTimelineOrchestrator(
+        tmp_path, require_trusted_anchor=False, max_buffer_bytes=1024 * 1024, ffmpeg_bin=FFMPEG
+    )
     timeline = [make_spec(0)]
 
     cpu_run = orch.execute(timeline, frame_factory=frame_factory())
@@ -383,7 +422,9 @@ def test_orchestrator_switching_engine_is_a_cache_miss(tmp_path: Path) -> None:
 
 def test_orchestrator_cpu_cache_hit_reports_cpu_mode(tmp_path: Path) -> None:
     # P1-A: a cache hit reports the mode recorded in the manifest, not a default.
-    orch = HyperTimelineOrchestrator(tmp_path, max_buffer_bytes=1024 * 1024)
+    orch = HyperTimelineOrchestrator(
+        tmp_path, require_trusted_anchor=False, max_buffer_bytes=1024 * 1024
+    )
     timeline = [make_spec(0)]
     orch.execute(timeline, frame_factory=frame_factory())
     second = orch.execute(timeline, frame_factory=frame_factory())
@@ -412,7 +453,9 @@ def test_orchestrator_rejects_unknown_manifest_mode() -> None:
 
 def test_orchestrator_empty_timeline_receipt_mode(tmp_path: Path) -> None:
     # With no segments the receipt falls back to the requested mode.
-    orch = HyperTimelineOrchestrator(tmp_path, max_buffer_bytes=1024 * 1024)
+    orch = HyperTimelineOrchestrator(
+        tmp_path, require_trusted_anchor=False, max_buffer_bytes=1024 * 1024
+    )
     execution = orch.execute([], frame_factory=frame_factory())
     assert execution.receipt.mode == "deterministic_cpu_mux"
     assert execution.receipt.total_segments == 0
@@ -420,7 +463,9 @@ def test_orchestrator_empty_timeline_receipt_mode(tmp_path: Path) -> None:
 
 # ── F1: render_segment is bound to the planned segment ──────────────────────
 def test_orchestrator_render_segment_rejects_mode_mismatch(tmp_path: Path) -> None:
-    orch = HyperTimelineOrchestrator(tmp_path, max_buffer_bytes=1024 * 1024)
+    orch = HyperTimelineOrchestrator(
+        tmp_path, require_trusted_anchor=False, max_buffer_bytes=1024 * 1024
+    )
     planned = orch.plan([make_spec(0)]).segments[0]
     with pytest.raises(SegmentTamperError, match="mode"):
         orch.render_segment(
@@ -433,7 +478,9 @@ def test_orchestrator_render_segment_rejects_mode_mismatch(tmp_path: Path) -> No
 
 
 def test_orchestrator_render_segment_rejects_pipeline_mismatch(tmp_path: Path) -> None:
-    orch = HyperTimelineOrchestrator(tmp_path, max_buffer_bytes=1024 * 1024)
+    orch = HyperTimelineOrchestrator(
+        tmp_path, require_trusted_anchor=False, max_buffer_bytes=1024 * 1024
+    )
     planned = orch.plan([make_spec(0)]).segments[0]
     brighter = FramePipelineSpec(width=8, height=8, fps=24.0, brightness=0.5)
     with pytest.raises(SegmentTamperError, match="pipeline"):
@@ -442,7 +489,9 @@ def test_orchestrator_render_segment_rejects_pipeline_mismatch(tmp_path: Path) -
 
 
 def test_orchestrator_render_segment_rejects_key_mismatch(tmp_path: Path) -> None:
-    orch = HyperTimelineOrchestrator(tmp_path, max_buffer_bytes=1024 * 1024)
+    orch = HyperTimelineOrchestrator(
+        tmp_path, require_trusted_anchor=False, max_buffer_bytes=1024 * 1024
+    )
     planned = orch.plan([make_spec(0)]).segments[0]
     forged = PlannedSegment(
         planned.spec,
@@ -459,7 +508,7 @@ def test_orchestrator_render_segment_rejects_key_mismatch(tmp_path: Path) -> Non
 
 # ── F2: the orchestrator forwards the watchdog timeout to the runner ────────
 def test_orchestrator_forwards_timeout_to_runner(tmp_path: Path) -> None:
-    orch = HyperTimelineOrchestrator(tmp_path, timeout_seconds=1.25)
+    orch = HyperTimelineOrchestrator(tmp_path, require_trusted_anchor=False, timeout_seconds=1.25)
     assert orch.runner.timeout_seconds == 1.25
 
 
@@ -467,7 +516,7 @@ def test_orchestrator_rejects_invalid_timeout(tmp_path: Path) -> None:
     from nexus_ai_agent.creative.hyper_compiler.errors import PipeExecutionError
 
     with pytest.raises(PipeExecutionError):
-        HyperTimelineOrchestrator(tmp_path, timeout_seconds=0.0)
+        HyperTimelineOrchestrator(tmp_path, require_trusted_anchor=False, timeout_seconds=0.0)
 
 
 # ── F4: execute() makes the output rename durable ───────────────────────────
@@ -485,7 +534,9 @@ def test_orchestrator_execute_fsyncs_output_directory(
         _fsync_directory(path)
 
     monkeypatch.setattr(so, "_fsync_directory", spy)
-    orch = HyperTimelineOrchestrator(tmp_path / "cache", max_buffer_bytes=1024 * 1024)
+    orch = HyperTimelineOrchestrator(
+        tmp_path / "cache", require_trusted_anchor=False, max_buffer_bytes=1024 * 1024
+    )
     out = tmp_path / "nested" / "final.nagartl"
     orch.execute([make_spec(0)], frame_factory=frame_factory(), output_path=out)
     assert out.parent in synced
@@ -500,7 +551,9 @@ def test_orchestrator_execute_propagates_fsync_failure(
         raise OSError("disk error")
 
     monkeypatch.setattr(so, "_fsync_directory", boom)
-    orch = HyperTimelineOrchestrator(tmp_path / "cache", max_buffer_bytes=1024 * 1024)
+    orch = HyperTimelineOrchestrator(
+        tmp_path / "cache", require_trusted_anchor=False, max_buffer_bytes=1024 * 1024
+    )
     out = tmp_path / "final.nagartl"
     with pytest.raises(OSError):
         orch.execute([make_spec(0)], frame_factory=frame_factory(), output_path=out)
@@ -518,7 +571,9 @@ def test_orchestrator_snapshots_pipe_spec_once(tmp_path: Path) -> None:
         calls.append(s.segment_id)
         return FramePipelineSpec(width=s.width, height=s.height, fps=s.fps, brightness=0.25)
 
-    orch = HyperTimelineOrchestrator(tmp_path, max_buffer_bytes=1024 * 1024)
+    orch = HyperTimelineOrchestrator(
+        tmp_path, require_trusted_anchor=False, max_buffer_bytes=1024 * 1024
+    )
     timeline = [make_spec(0), make_spec(1)]
     orch.execute(timeline, frame_factory=frame_factory(), pipe_spec_factory=counting_factory)
     assert calls == ["seg0", "seg1"]
@@ -537,7 +592,9 @@ def test_orchestrator_unstable_pipe_spec_factory_is_rejected(tmp_path: Path) -> 
         brightness = 0.1 if n == 0 else 0.9  # second call would differ
         return FramePipelineSpec(width=s.width, height=s.height, fps=s.fps, brightness=brightness)
 
-    orch = HyperTimelineOrchestrator(tmp_path, max_buffer_bytes=1024 * 1024)
+    orch = HyperTimelineOrchestrator(
+        tmp_path, require_trusted_anchor=False, max_buffer_bytes=1024 * 1024
+    )
     timeline = [make_spec(0)]
     execution = orch.execute(
         timeline, frame_factory=frame_factory(), pipe_spec_factory=unstable_factory
@@ -562,7 +619,9 @@ def test_orchestrator_execute_fails_closed_on_provenance_mismatch(
     # F1: even if a planned segment's key were forged to disagree with the
     # snapshot pipeline, execute() must refuse *before* rendering or writing to
     # the cache — never commit bytes under a mismatched key.
-    orch = HyperTimelineOrchestrator(tmp_path, max_buffer_bytes=1024 * 1024)
+    orch = HyperTimelineOrchestrator(
+        tmp_path, require_trusted_anchor=False, max_buffer_bytes=1024 * 1024
+    )
     real_plan = orch._plan_from_specs
 
     def forging_plan(timeline: object, specs: object, mode: object) -> object:
@@ -611,7 +670,9 @@ def test_orchestrator_output_replace_is_same_filesystem(
         real_replace(src, dst)
 
     monkeypatch.setattr(os, "replace", spy)
-    orch = HyperTimelineOrchestrator(tmp_path / "cache", max_buffer_bytes=1024 * 1024)
+    orch = HyperTimelineOrchestrator(
+        tmp_path / "cache", require_trusted_anchor=False, max_buffer_bytes=1024 * 1024
+    )
     out = tmp_path / "nested" / "final.nagartl"
     orch.execute([make_spec(0)], frame_factory=frame_factory(), output_path=out)
     timeline_pairs = [p for p in pairs if p[0].name.endswith(".nagartl.tmp")]
@@ -626,7 +687,9 @@ def test_orchestrator_output_temp_cleaned_on_render_failure(
 ) -> None:
     # F4: if the render fails before os.replace, the same-filesystem temp file
     # must be removed so no ``.nagartl.tmp`` is left behind next to the target.
-    orch = HyperTimelineOrchestrator(tmp_path / "cache", max_buffer_bytes=1024 * 1024)
+    orch = HyperTimelineOrchestrator(
+        tmp_path / "cache", require_trusted_anchor=False, max_buffer_bytes=1024 * 1024
+    )
     out = tmp_path / "final.nagartl"
 
     def boom(_spec: TimelineSegmentSpec) -> Iterator[Frame]:
@@ -640,7 +703,9 @@ def test_orchestrator_output_temp_cleaned_on_render_failure(
 
 def test_orchestrator_assert_provenance_rejects_mode_mismatch(tmp_path: Path) -> None:
     # Directly exercise the execute()-path guard's fail-closed branches.
-    orch = HyperTimelineOrchestrator(tmp_path, max_buffer_bytes=1024 * 1024)
+    orch = HyperTimelineOrchestrator(
+        tmp_path, require_trusted_anchor=False, max_buffer_bytes=1024 * 1024
+    )
     spec0 = make_spec(0)
     pipe = default_pipe_spec(spec0)
     planned = PlannedSegment(
@@ -656,7 +721,9 @@ def test_orchestrator_assert_provenance_rejects_mode_mismatch(tmp_path: Path) ->
 
 
 def test_orchestrator_assert_provenance_rejects_pipeline_mismatch(tmp_path: Path) -> None:
-    orch = HyperTimelineOrchestrator(tmp_path, max_buffer_bytes=1024 * 1024)
+    orch = HyperTimelineOrchestrator(
+        tmp_path, require_trusted_anchor=False, max_buffer_bytes=1024 * 1024
+    )
     spec0 = make_spec(0)
     pipe = default_pipe_spec(spec0)
     planned = PlannedSegment(
@@ -674,7 +741,9 @@ def test_orchestrator_assert_provenance_rejects_pipeline_mismatch(tmp_path: Path
 
 
 def test_orchestrator_plan_from_specs_rejects_length_mismatch(tmp_path: Path) -> None:
-    orch = HyperTimelineOrchestrator(tmp_path, max_buffer_bytes=1024 * 1024)
+    orch = HyperTimelineOrchestrator(
+        tmp_path, require_trusted_anchor=False, max_buffer_bytes=1024 * 1024
+    )
     with pytest.raises(HyperCompilerError, match="snapshot length"):
         orch._plan_from_specs(
             [make_spec(0), make_spec(1)],
@@ -683,14 +752,25 @@ def test_orchestrator_plan_from_specs_rejects_length_mismatch(tmp_path: Path) ->
         )
 
 
+def test_planner_anchor_guard_is_defense_in_depth(tmp_path: Path) -> None:
+    # A keyless planner may be built only with an explicit opt-out, but if the
+    # invariant is ever violated the manifest-validation path must still refuse.
+    planner = SegmentCASPlanner(tmp_path, require_trusted_anchor=False)
+    cas_key = "0" * 64
+    planner.manifest_path(cas_key).write_text("{}", encoding="utf-8")
+    planner._require_trusted_anchor = True  # simulate an invariant break
+    with pytest.raises(SegmentIntegrityError, match="no hmac_key is configured"):
+        planner.read_manifest(cas_key)
+
+
 # ── F5: require_trusted_anchor is fail-closed at construction and at verify ──
 def test_planner_require_trusted_anchor_demands_hmac_key(tmp_path: Path) -> None:
     # An unsigned manifest can re-derive its own key, so a planner asked to demand
     # a trusted anchor must refuse to exist without a secret to anchor to.
     with pytest.raises(HyperCompilerError, match="require_trusted_anchor demands an hmac_key"):
-        SegmentCASPlanner(tmp_path, require_trusted_anchor=True)
+        SegmentCASPlanner(tmp_path)
     with pytest.raises(HyperCompilerError, match="require_trusted_anchor demands an hmac_key"):
-        HyperTimelineOrchestrator(tmp_path, require_trusted_anchor=True)
+        HyperTimelineOrchestrator(tmp_path)
 
     # With a key present the anchored planner is constructed and usable.
     anchored = SegmentCASPlanner(

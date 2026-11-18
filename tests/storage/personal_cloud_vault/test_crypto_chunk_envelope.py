@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
+import struct
 from dataclasses import replace
 
 import pytest
@@ -24,6 +26,7 @@ from nexus_ai_agent.storage.personal_cloud_vault import (
     VaultCryptoError,
     VaultFileEntry,
     VaultKeyMaterial,
+    VaultKeyRing,
     VaultSnapshotManifest,
     VaultTamperDetectedError,
     VaultTransportError,
@@ -37,9 +40,11 @@ from nexus_ai_agent.storage.personal_cloud_vault import (
     derive_vault_keys,
     encrypt_chunk,
     encrypt_stream_chunks,
+    envelope_wire_version,
     generate_vault_salt,
     hkdf_expand_sha256,
     hkdf_extract_sha256,
+    migrate_legacy_v1_envelope_bytes,
     normalize_relative_vault_path,
     split_into_chunks,
     validate_chunk_size,
@@ -1051,3 +1056,246 @@ def test_decrypt_rejects_valid_tag_with_mislabeled_chunk_id() -> None:
     # not hash to the recorded chunk_id, so decryption must fail closed.
     with pytest.raises(VaultTamperDetectedError, match="does not match chunk_id"):
         decrypt_chunk(forged, km)
+
+
+# --------------------------------------------------------------------------- #
+# Checkpoint 1: DoS resource caps + legacy v1 -> v2 migration
+# --------------------------------------------------------------------------- #
+
+
+def _build_legacy_v1_envelope(
+    plaintext: bytes,
+    km: VaultKeyMaterial,
+    *,
+    chunk_index: int = 0,
+    nonce: bytes | None = None,
+    pad_to: int | None = None,
+    pad_fill: bytes = b"\x00",
+    chunk_id_override: str | None = None,
+) -> bytes:
+    """Reconstruct the exact v1 wire bytes (SHA-256 CTR + Encrypt-then-MAC).
+
+    ``pad_to`` zero-pads the plaintext to a block boundary before encryption
+    (v1's ``_FLAG_PADDED`` path); ``chunk_id_override`` lets a caller forge the
+    recorded content id while keeping a valid MAC.
+    """
+    effective_nonce = nonce if nonce is not None else b"N" * 16
+    chunk_id = (
+        chunk_id_override if chunk_id_override is not None else compute_chunk_id(plaintext, km)
+    )
+    flags = 0x01 if pad_to is not None else 0x00
+    body = plaintext if pad_to is None else plaintext + pad_fill * (-len(plaintext) % pad_to)
+    header = b"NPCV" + bytes([1, flags]) + bytes.fromhex(chunk_id)
+    # v1 SHA-256 CTR keystream over the (possibly padded) body.
+    base = hashlib.sha256(km.enc_key + effective_nonce)
+    out = bytearray(len(body))
+    counter = 0
+    for offset in range(0, len(body), 32):
+        block = base.copy()
+        block.update(struct.pack(">Q", counter))
+        counter += 1
+        ks = block.digest()
+        for i in range(min(32, len(body) - offset)):
+            out[offset + i] = body[offset + i] ^ ks[i]
+    ciphertext = bytes(out)
+    mac = hmac.new(km.mac_key, digestmod=hashlib.sha256)
+    mac.update(header)
+    mac.update(effective_nonce)
+    mac.update(ciphertext)
+    mac.update(struct.pack(">QQ", chunk_index, len(plaintext)))
+    mac_tag = mac.digest()
+    return (
+        struct.pack(">H", len(header))
+        + header
+        + struct.pack(
+            ">16s16sQQ32s", km.key_id, effective_nonce, chunk_index, len(plaintext), mac_tag
+        )
+        + ciphertext
+    )
+
+
+def _minimal_manifest(km: VaultKeyMaterial) -> VaultSnapshotManifest:
+    """Build one authentic single-file manifest for the given key material."""
+    data = b"manifest-body"
+    cid = compute_chunk_id(data, km)
+    return build_snapshot_manifest(
+        project_id="cap-proj",
+        snapshot_id="cap-snap",
+        parent_snapshot_id=None,
+        created_at_utc="2026-11-16T08:00:00Z",
+        chunk_size=1024,
+        files=[
+            VaultFileEntry(
+                rel_path="a.bin",
+                total_size=len(data),
+                file_mac_hex=compute_file_mac("a.bin", data, km),
+                chunks=(VaultChunkRef(chunk_index=0, chunk_id=cid, plaintext_len=len(data)),),
+            )
+        ],
+        key_material=km,
+    )
+
+
+def test_derive_vault_keys_rejects_excessive_kdf_iterations() -> None:
+    salt = generate_vault_salt()
+    with pytest.raises(VaultAuthenticationError, match="must not exceed"):
+        derive_vault_keys("secret", salt, iterations=2_000_001)
+
+
+def test_key_material_for_rejects_hostile_kdf_iterations() -> None:
+    km = derive_vault_keys("ring-secret", generate_vault_salt())
+    ring = VaultKeyRing.from_secrets("ring-secret")
+    manifest = _minimal_manifest(km)
+    hostile = replace(manifest, kdf_iterations=99_999_999)
+    with pytest.raises(VaultAuthenticationError, match="exceeds the"):
+        ring.key_material_for(hostile)
+
+
+def test_manifest_from_json_bytes_rejects_oversized_payload() -> None:
+    from nexus_ai_agent.storage.personal_cloud_vault.crypto_chunk_envelope import (
+        MAX_MANIFEST_JSON_BYTES,
+    )
+
+    oversized = b"{" + b"a" * (MAX_MANIFEST_JSON_BYTES + 1)
+    with pytest.raises(VaultTamperDetectedError, match="too large"):
+        VaultSnapshotManifest.from_json_bytes(oversized)
+
+
+def test_envelope_from_bytes_rejects_oversized_payload() -> None:
+    from nexus_ai_agent.storage.personal_cloud_vault.crypto_chunk_envelope import (
+        MAX_ENVELOPE_BYTES,
+    )
+
+    oversized = b"\x00" * (MAX_ENVELOPE_BYTES + 1)
+    with pytest.raises(VaultTamperDetectedError, match="too large"):
+        EncryptedChunkEnvelope.from_bytes(oversized)
+
+
+def test_migrate_legacy_v1_envelope_round_trips_to_v2() -> None:
+    km = derive_vault_keys("legacy-secret", generate_vault_salt())
+    plaintext = b"legacy chunk payload that must survive migration"
+    v1_wire = _build_legacy_v1_envelope(plaintext, km)
+
+    # Sanity: the raw v1 bytes are recognised as version 1 and rejected by from_bytes.
+    assert envelope_wire_version(v1_wire) == 1
+    with pytest.raises(VaultTamperDetectedError, match="Legacy v1 envelope rejected"):
+        EncryptedChunkEnvelope.from_bytes(v1_wire)
+
+    migrated = migrate_legacy_v1_envelope_bytes(v1_wire, km)
+    assert migrated.cipher_suite in (1, 2)
+    # The migrated envelope is a genuine v2 AEAD container that decrypts to the plaintext.
+    assert decrypt_chunk(migrated, km) == plaintext
+    assert envelope_wire_version(migrated.to_bytes()) == 2
+
+
+def test_migrate_legacy_v1_rejects_tampered_mac() -> None:
+    km = derive_vault_keys("legacy-secret", generate_vault_salt())
+    v1_wire = bytearray(_build_legacy_v1_envelope(b"tamper-me-please", km))
+    v1_wire[-1] ^= 0x01  # flip a ciphertext bit -> MAC must fail
+    with pytest.raises(VaultTamperDetectedError, match="MAC verification failed"):
+        migrate_legacy_v1_envelope_bytes(bytes(v1_wire), km)
+
+
+def test_migrate_legacy_v1_rejects_wrong_key_and_wrong_chunk_id() -> None:
+    km = derive_vault_keys("legacy-secret", generate_vault_salt())
+    other = derive_vault_keys("other-secret", generate_vault_salt())
+    v1_wire = _build_legacy_v1_envelope(b"payload", km)
+    with pytest.raises(VaultAuthenticationError, match="invalid key material"):
+        migrate_legacy_v1_envelope_bytes(v1_wire, other)
+    with pytest.raises(VaultTamperDetectedError, match="substitution detected"):
+        migrate_legacy_v1_envelope_bytes(v1_wire, km, expected_chunk_id="0" * 64)
+
+
+def test_migrate_legacy_v1_rejects_non_v1_and_malformed() -> None:
+    km = derive_vault_keys("legacy-secret", generate_vault_salt())
+    # A v2 envelope is not a legacy envelope.
+    v2_wire = encrypt_chunk(b"modern", km).to_bytes()
+    with pytest.raises(VaultTamperDetectedError, match="Not a legacy v1 envelope"):
+        migrate_legacy_v1_envelope_bytes(v2_wire, km)
+    # Wrong magic.
+    bad_magic = b"XXXX" + b"\x01\x00" + b"\x00" * 32
+    with pytest.raises(VaultTamperDetectedError, match="magic mismatch"):
+        migrate_legacy_v1_envelope_bytes(struct.pack(">H", 38) + bad_magic, km)
+    # Truncated.
+    with pytest.raises(VaultTamperDetectedError, match="Truncated legacy envelope"):
+        migrate_legacy_v1_envelope_bytes(b"\x00", km)
+    # Header length claims fewer than the mandatory 38 bytes.
+    with pytest.raises(VaultTamperDetectedError, match="Truncated or malformed"):
+        migrate_legacy_v1_envelope_bytes(struct.pack(">H", 10) + b"\x00" * 10, km)
+    # Metadata block is present but the ciphertext region is cut short.
+    short_header = b"NPCV" + bytes([1, 0]) + b"\x00" * 32
+    with pytest.raises(VaultTamperDetectedError, match="Truncated or malformed"):
+        migrate_legacy_v1_envelope_bytes(struct.pack(">H", 38) + short_header, km)
+
+
+def test_migrate_legacy_v1_enforces_envelope_size_cap() -> None:
+    from nexus_ai_agent.storage.personal_cloud_vault.crypto_chunk_envelope import (
+        MAX_ENVELOPE_BYTES,
+    )
+
+    km = derive_vault_keys("legacy-secret", generate_vault_salt())
+    with pytest.raises(VaultTamperDetectedError, match="Legacy envelope is too large"):
+        migrate_legacy_v1_envelope_bytes(b"\x00" * (MAX_ENVELOPE_BYTES + 1), km)
+
+
+def test_migrate_legacy_v1_rejects_declared_length_mismatch() -> None:
+    km = derive_vault_keys("legacy-secret", generate_vault_salt())
+    # Declare a plaintext length that disagrees with the unpadded ciphertext.
+    wire = bytearray(_build_legacy_v1_envelope(b"abcdef", km))
+    struct.pack_into(">Q", wire, 2 + 38 + 16 + 16 + 8, 999)
+    with pytest.raises(VaultTamperDetectedError, match="length does not match"):
+        migrate_legacy_v1_envelope_bytes(bytes(wire), km)
+
+
+def test_migrate_legacy_v1_padded_round_trip_and_nonzero_padding() -> None:
+    km = derive_vault_keys("legacy-secret", generate_vault_salt())
+    # A genuinely padded v1 chunk (valid MAC) migrates back to its plaintext.
+    padded = _build_legacy_v1_envelope(b"padded-body!", km, pad_to=16)
+    migrated = migrate_legacy_v1_envelope_bytes(padded, km)
+    assert decrypt_chunk(migrated, km) == b"padded-body!"
+
+    # Non-zero padding bytes are rejected even though the MAC is valid.
+    dirty = _build_legacy_v1_envelope(b"padded-body!", km, pad_to=16, pad_fill=b"\xaa")
+    with pytest.raises(VaultTamperDetectedError, match="non-zero padding"):
+        migrate_legacy_v1_envelope_bytes(dirty, km)
+
+
+def test_migrate_legacy_v1_rejects_padded_shorter_than_plaintext() -> None:
+    km = derive_vault_keys("legacy-secret", generate_vault_salt())
+    wire = bytearray(_build_legacy_v1_envelope(b"abcdef", km))
+    wire[2 + 5] = 0x01  # mark the padded flag while ciphertext == plaintext length
+    struct.pack_into(">Q", wire, 2 + 38 + 16 + 16 + 8, 99)
+    with pytest.raises(VaultTamperDetectedError, match="padded ciphertext shorter"):
+        migrate_legacy_v1_envelope_bytes(bytes(wire), km)
+
+
+def test_migrate_legacy_v1_rejects_forged_content_id_with_valid_mac() -> None:
+    km = derive_vault_keys("legacy-secret", generate_vault_salt())
+    forged = _build_legacy_v1_envelope(b"real-body", km, chunk_id_override="a" * 64)
+    with pytest.raises(VaultTamperDetectedError, match="does not match chunk_id"):
+        migrate_legacy_v1_envelope_bytes(forged, km)
+
+
+def test_legacy_v1_ctr_crypt_rejects_bad_key_and_nonce() -> None:
+    from nexus_ai_agent.storage.personal_cloud_vault.crypto_chunk_envelope import (
+        _legacy_v1_sha256_ctr_crypt,
+    )
+
+    with pytest.raises(VaultAuthenticationError, match="enc_key must be 32 bytes"):
+        _legacy_v1_sha256_ctr_crypt(b"short", b"N" * 16, b"payload")
+    with pytest.raises(VaultTamperDetectedError, match="legacy v1 nonce must be"):
+        _legacy_v1_sha256_ctr_crypt(b"k" * 32, b"short", b"payload")
+    assert _legacy_v1_sha256_ctr_crypt(b"k" * 32, b"N" * 16, b"") == b""
+
+
+def test_envelope_wire_version_returns_none_for_short_or_foreign_bytes() -> None:
+    assert envelope_wire_version(b"\x00") is None
+    assert envelope_wire_version(b"\x00\x01\x02\x03\x04\x05\x06\x07") is None
+    # Correct magic, unknown version -> reported as that version.
+    assert envelope_wire_version(struct.pack(">H", 38) + b"NPCV" + bytes([7, 0])) == 7
+
+
+def test_from_bytes_rejects_unknown_envelope_version() -> None:
+    unknown = struct.pack(">H", 38) + b"NPCV" + bytes([9, 0]) + b"\x00" * 32
+    with pytest.raises(VaultTamperDetectedError, match="Unsupported envelope version"):
+        EncryptedChunkEnvelope.from_bytes(unknown)

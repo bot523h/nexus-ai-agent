@@ -236,7 +236,7 @@ def test_validate_cas_key_rejects_non_canonical(bad: str) -> None:
 
 @pytest.mark.parametrize("traversal", ["../" + "a" * 61, "a" * 60 + "/../"])
 def test_artifact_and_manifest_paths_reject_traversal(tmp_path: Path, traversal: str) -> None:
-    planner = SegmentCASPlanner(tmp_path)
+    planner = SegmentCASPlanner(tmp_path, require_trusted_anchor=False)
     with pytest.raises(SegmentIntegrityError):
         planner.artifact_path(traversal)
     with pytest.raises(SegmentIntegrityError):
@@ -245,19 +245,19 @@ def test_artifact_and_manifest_paths_reject_traversal(tmp_path: Path, traversal:
 
 @pytest.mark.parametrize("traversal", ["../" + "a" * 61, "a" * 60 + "/../"])
 def test_write_segment_artifact_rejects_traversal(tmp_path: Path, traversal: str) -> None:
-    planner = SegmentCASPlanner(tmp_path)
+    planner = SegmentCASPlanner(tmp_path, require_trusted_anchor=False)
     with pytest.raises(SegmentIntegrityError):
         planner.write_segment_artifact(traversal, b"body")
 
 
 def test_verify_segment_artifact_rejects_traversal(tmp_path: Path) -> None:
-    planner = SegmentCASPlanner(tmp_path)
+    planner = SegmentCASPlanner(tmp_path, require_trusted_anchor=False)
     with pytest.raises(SegmentIntegrityError):
         planner.verify_segment_artifact("../" + "a" * 61)
 
 
 def test_read_segment_artifact_rejects_traversal(tmp_path: Path) -> None:
-    planner = SegmentCASPlanner(tmp_path)
+    planner = SegmentCASPlanner(tmp_path, require_trusted_anchor=False)
     with pytest.raises(SegmentIntegrityError):
         planner.read_segment_artifact("../" + "a" * 61)
 
@@ -265,7 +265,7 @@ def test_read_segment_artifact_rejects_traversal(tmp_path: Path) -> None:
 def test_safe_cache_path_rejects_escape(tmp_path: Path) -> None:
     # The containment guard is the last line of defence: even a name that slips
     # past key validation must not resolve outside the cache directory.
-    planner = SegmentCASPlanner(tmp_path / "cache")
+    planner = SegmentCASPlanner(tmp_path / "cache", require_trusted_anchor=False)
     planner.cache_dir.mkdir(parents=True)
     with pytest.raises(SegmentIntegrityError):
         planner._safe_cache_path("../escape.nagarseg")
@@ -273,7 +273,7 @@ def test_safe_cache_path_rejects_escape(tmp_path: Path) -> None:
 
 
 def test_commit_stream_rejects_negative_size(tmp_path: Path) -> None:
-    planner = SegmentCASPlanner(tmp_path)
+    planner = SegmentCASPlanner(tmp_path, require_trusted_anchor=False)
     with pytest.raises(SegmentIntegrityError):
         planner.commit_stream(
             "a" * 64, io.BytesIO(b"x"), size=-1, digest="00" * 32, spec=make_spec(0)
@@ -281,7 +281,7 @@ def test_commit_stream_rejects_negative_size(tmp_path: Path) -> None:
 
 
 def test_verify_and_open_rejects_content_hash_mismatch(tmp_path: Path) -> None:
-    planner = SegmentCASPlanner(tmp_path)
+    planner = SegmentCASPlanner(tmp_path, require_trusted_anchor=False)
     spec = make_spec(0)
     key = planner.cas_key(spec)
     planner.commit_segment(spec, b"payload")
@@ -298,7 +298,7 @@ def test_verify_and_open_rejects_content_hash_mismatch(tmp_path: Path) -> None:
 def test_verify_and_open_rejects_artifact_key_mismatch(tmp_path: Path) -> None:
     # The artifact on disk is valid for a *different* key while the manifest
     # still re-derives this key: the embedded key mismatch must be refused.
-    planner = SegmentCASPlanner(tmp_path)
+    planner = SegmentCASPlanner(tmp_path, require_trusted_anchor=False)
     spec = make_spec(0)
     key = planner.cas_key(spec)
     planner.commit_segment(spec, b"payload")
@@ -309,7 +309,7 @@ def test_verify_and_open_rejects_artifact_key_mismatch(tmp_path: Path) -> None:
 
 
 def test_verify_and_open_rejects_file_hash_mismatch(tmp_path: Path) -> None:
-    planner = SegmentCASPlanner(tmp_path)
+    planner = SegmentCASPlanner(tmp_path, require_trusted_anchor=False)
     spec = make_spec(0)
     key = planner.cas_key(spec)
     planner.commit_segment(spec, b"payload")
@@ -321,7 +321,7 @@ def test_verify_and_open_rejects_file_hash_mismatch(tmp_path: Path) -> None:
 
 
 def test_verify_and_open_rejects_length_mismatch(tmp_path: Path) -> None:
-    planner = SegmentCASPlanner(tmp_path)
+    planner = SegmentCASPlanner(tmp_path, require_trusted_anchor=False)
     spec = make_spec(0)
     key = planner.cas_key(spec)
     planner.commit_segment(spec, b"payload")
@@ -334,7 +334,7 @@ def test_verify_and_open_rejects_length_mismatch(tmp_path: Path) -> None:
 
 
 def test_commit_stream_rejects_traversal(tmp_path: Path) -> None:
-    planner = SegmentCASPlanner(tmp_path)
+    planner = SegmentCASPlanner(tmp_path, require_trusted_anchor=False)
     with pytest.raises(SegmentIntegrityError):
         planner.commit_stream(
             "../" + "a" * 61,
@@ -406,14 +406,14 @@ def test_decode_artifact_roundtrip() -> None:
 
 # ── SegmentCASPlanner ───────────────────────────────────────────────────────
 def test_planner_paths_are_derived_from_key(tmp_path: Path) -> None:
-    planner = SegmentCASPlanner(tmp_path)
+    planner = SegmentCASPlanner(tmp_path, require_trusted_anchor=False)
     key = planner.cas_key(make_spec(0))
     assert planner.artifact_path(key) == tmp_path / f"{key}.nagarseg"
     assert planner.manifest_path(key) == tmp_path / f"{key}.manifest.json"
 
 
 def test_planner_first_run_renders_everything(tmp_path: Path) -> None:
-    planner = SegmentCASPlanner(tmp_path)
+    planner = SegmentCASPlanner(tmp_path, require_trusted_anchor=False)
     plan = planner.plan(make_timeline(5))
     assert plan.cache_hits == 0
     assert plan.render_required == 5
@@ -423,7 +423,7 @@ def test_planner_first_run_renders_everything(tmp_path: Path) -> None:
 
 
 def test_planner_reuses_cached_segments(tmp_path: Path) -> None:
-    planner = SegmentCASPlanner(tmp_path)
+    planner = SegmentCASPlanner(tmp_path, require_trusted_anchor=False)
     for spec in make_timeline(5):
         planner.commit_segment(spec, b"payload-" + spec.segment_id.encode())
     plan = planner.plan(make_timeline(5))
@@ -434,7 +434,7 @@ def test_planner_reuses_cached_segments(tmp_path: Path) -> None:
 
 
 def test_planner_records_content_sha_and_body_size(tmp_path: Path) -> None:
-    planner = SegmentCASPlanner(tmp_path)
+    planner = SegmentCASPlanner(tmp_path, require_trusted_anchor=False)
     spec = make_spec(0)
     planner.commit_segment(spec, b"payload")
     planned = planner.plan([spec]).segments[0]
@@ -444,7 +444,7 @@ def test_planner_records_content_sha_and_body_size(tmp_path: Path) -> None:
 
 
 def test_planner_marks_only_changed_segment_for_render(tmp_path: Path) -> None:
-    planner = SegmentCASPlanner(tmp_path)
+    planner = SegmentCASPlanner(tmp_path, require_trusted_anchor=False)
     timeline = make_timeline(20)
     for spec in timeline:
         planner.commit_segment(spec, b"p")
@@ -458,7 +458,7 @@ def test_planner_marks_only_changed_segment_for_render(tmp_path: Path) -> None:
 
 
 def test_planner_pipeline_digest_change_forces_render(tmp_path: Path) -> None:
-    planner = SegmentCASPlanner(tmp_path)
+    planner = SegmentCASPlanner(tmp_path, require_trusted_anchor=False)
     timeline = make_timeline(3)
     digests = ["pipe-a"] * 3
     for spec in timeline:
@@ -479,7 +479,7 @@ def test_planner_pipeline_digest_change_forces_render(tmp_path: Path) -> None:
 def test_planner_mux_mode_separates_engine_caches(tmp_path: Path) -> None:
     # P1-A: a segment rendered by the CPU mux must NOT satisfy an FFmpeg request
     # (and vice versa) — the two engines can never share a cache entry.
-    planner = SegmentCASPlanner(tmp_path)
+    planner = SegmentCASPlanner(tmp_path, require_trusted_anchor=False)
     spec = make_spec(0)
     cpu_key = planner.cas_key(spec, mux_mode="deterministic_cpu_mux")
     ffmpeg_key = planner.cas_key(spec, mux_mode="ffmpeg_subprocess_pipe")
@@ -501,13 +501,13 @@ def test_planner_mux_mode_separates_engine_caches(tmp_path: Path) -> None:
 
 
 def test_planner_rejects_mismatched_mux_modes(tmp_path: Path) -> None:
-    planner = SegmentCASPlanner(tmp_path)
+    planner = SegmentCASPlanner(tmp_path, require_trusted_anchor=False)
     with pytest.raises(HyperCompilerError):
         planner.plan(make_timeline(3), mux_modes=["only-one"])
 
 
 def test_manifest_records_mode_and_renderer_version(tmp_path: Path) -> None:
-    planner = SegmentCASPlanner(tmp_path)
+    planner = SegmentCASPlanner(tmp_path, require_trusted_anchor=False)
     spec = make_spec(0)
     key = planner.cas_key(spec, mux_mode="ffmpeg_subprocess_pipe")
     planner.write_segment_artifact(key, b"body", mode="ffmpeg_subprocess_pipe", spec=spec)
@@ -517,7 +517,7 @@ def test_manifest_records_mode_and_renderer_version(tmp_path: Path) -> None:
 
 
 def test_verify_rejects_incompatible_renderer_version(tmp_path: Path) -> None:
-    planner = SegmentCASPlanner(tmp_path)
+    planner = SegmentCASPlanner(tmp_path, require_trusted_anchor=False)
     spec = make_spec(0)
     key = planner.cas_key(spec)
     planner.commit_segment(spec, b"body")
@@ -531,7 +531,7 @@ def test_verify_rejects_incompatible_renderer_version(tmp_path: Path) -> None:
 def test_verify_rejects_none_renderer_version(tmp_path: Path) -> None:
     # F1a: a manifest whose renderer_version is null/empty must be refused, not
     # waved through by an ``is not None`` guard.
-    planner = SegmentCASPlanner(tmp_path)
+    planner = SegmentCASPlanner(tmp_path, require_trusted_anchor=False)
     spec = make_spec(0)
     key = planner.cas_key(spec)
     planner.commit_segment(spec, b"body")
@@ -544,7 +544,7 @@ def test_verify_rejects_none_renderer_version(tmp_path: Path) -> None:
 
 def test_verify_rejects_unknown_manifest_mode(tmp_path: Path) -> None:
     # F1b: a manifest naming a mode the engine does not know is refused.
-    planner = SegmentCASPlanner(tmp_path)
+    planner = SegmentCASPlanner(tmp_path, require_trusted_anchor=False)
     spec = make_spec(0)
     key = planner.cas_key(spec)
     planner.commit_segment(spec, b"body")
@@ -556,7 +556,7 @@ def test_verify_rejects_unknown_manifest_mode(tmp_path: Path) -> None:
 
 
 def test_verify_rejects_missing_manifest_mode(tmp_path: Path) -> None:
-    planner = SegmentCASPlanner(tmp_path)
+    planner = SegmentCASPlanner(tmp_path, require_trusted_anchor=False)
     spec = make_spec(0)
     key = planner.cas_key(spec)
     planner.commit_segment(spec, b"body")
@@ -569,7 +569,7 @@ def test_verify_rejects_missing_manifest_mode(tmp_path: Path) -> None:
 
 def test_verify_rejects_mode_mismatch_with_request(tmp_path: Path) -> None:
     # F1c: the manifest's mode must equal the requested mode.
-    planner = SegmentCASPlanner(tmp_path)
+    planner = SegmentCASPlanner(tmp_path, require_trusted_anchor=False)
     spec = make_spec(0)
     key = planner.cas_key(spec)
     planner.commit_segment(spec, b"body")
@@ -578,7 +578,7 @@ def test_verify_rejects_mode_mismatch_with_request(tmp_path: Path) -> None:
 
 
 def test_verify_rejects_pipeline_digest_mismatch(tmp_path: Path) -> None:
-    planner = SegmentCASPlanner(tmp_path)
+    planner = SegmentCASPlanner(tmp_path, require_trusted_anchor=False)
     spec = make_spec(0)
     key = planner.cas_key(spec)
     planner.commit_segment(spec, b"body")
@@ -587,7 +587,7 @@ def test_verify_rejects_pipeline_digest_mismatch(tmp_path: Path) -> None:
 
 
 def test_verify_rejects_non_string_pipeline_digest(tmp_path: Path) -> None:
-    planner = SegmentCASPlanner(tmp_path)
+    planner = SegmentCASPlanner(tmp_path, require_trusted_anchor=False)
     spec = make_spec(0)
     key = planner.cas_key(spec)
     planner.commit_segment(spec, b"body")
@@ -602,7 +602,7 @@ def test_verify_rejects_forged_mode_in_unsigned_manifest(tmp_path: Path) -> None
     # F1d: the strongest case — an attacker flips a *single-segment* manifest's
     # mode on disk (no hmac_key).  The key cannot be re-derived from the forged
     # mode, so verification fails closed instead of minting a false receipt.
-    planner = SegmentCASPlanner(tmp_path)
+    planner = SegmentCASPlanner(tmp_path, require_trusted_anchor=False)
     spec = make_spec(0)
     key = planner.cas_key(spec, mux_mode="deterministic_cpu_mux")
     planner.write_segment_artifact(key, b"cpu-body", mode="deterministic_cpu_mux", spec=spec)
@@ -615,7 +615,7 @@ def test_verify_rejects_forged_mode_in_unsigned_manifest(tmp_path: Path) -> None
 
 def test_verify_rejects_spec_not_matching_key(tmp_path: Path) -> None:
     # F1d: tampering the recorded spec so it no longer hashes to the key fails.
-    planner = SegmentCASPlanner(tmp_path)
+    planner = SegmentCASPlanner(tmp_path, require_trusted_anchor=False)
     spec = make_spec(0)
     key = planner.cas_key(spec)
     planner.commit_segment(spec, b"body")
@@ -627,7 +627,7 @@ def test_verify_rejects_spec_not_matching_key(tmp_path: Path) -> None:
 
 
 def test_verify_rejects_missing_spec_binding(tmp_path: Path) -> None:
-    planner = SegmentCASPlanner(tmp_path)
+    planner = SegmentCASPlanner(tmp_path, require_trusted_anchor=False)
     spec = make_spec(0)
     key = planner.cas_key(spec)
     planner.commit_segment(spec, b"body")
@@ -639,7 +639,7 @@ def test_verify_rejects_missing_spec_binding(tmp_path: Path) -> None:
 
 
 def test_verify_rejects_wrong_spec_fields(tmp_path: Path) -> None:
-    planner = SegmentCASPlanner(tmp_path)
+    planner = SegmentCASPlanner(tmp_path, require_trusted_anchor=False)
     spec = make_spec(0)
     key = planner.cas_key(spec)
     planner.commit_segment(spec, b"body")
@@ -651,7 +651,7 @@ def test_verify_rejects_wrong_spec_fields(tmp_path: Path) -> None:
 
 
 def test_verify_rejects_invalid_spec_values(tmp_path: Path) -> None:
-    planner = SegmentCASPlanner(tmp_path)
+    planner = SegmentCASPlanner(tmp_path, require_trusted_anchor=False)
     spec = make_spec(0)
     key = planner.cas_key(spec)
     planner.commit_segment(spec, b"body")
@@ -672,7 +672,7 @@ def test_tamper_error_is_a_segment_integrity_error() -> None:
 def test_planner_plan_ignores_artifact_with_forged_mode(tmp_path: Path) -> None:
     # F1 end-to-end: a forged-mode artifact cannot satisfy a plan; it is treated
     # as RENDER_REQUIRED instead of a cache hit.
-    planner = SegmentCASPlanner(tmp_path)
+    planner = SegmentCASPlanner(tmp_path, require_trusted_anchor=False)
     spec = make_spec(0)
     key = planner.cas_key(spec, mux_mode="deterministic_cpu_mux")
     planner.write_segment_artifact(key, b"cpu-body", mode="deterministic_cpu_mux", spec=spec)
@@ -687,7 +687,7 @@ def test_planner_plan_ignores_artifact_with_forged_mode(tmp_path: Path) -> None:
 def test_read_manifest_rejects_oversized_file(tmp_path: Path) -> None:
     # P1-D/P2: a hostile multi-megabyte manifest must be refused before it is
     # read into memory.
-    planner = SegmentCASPlanner(tmp_path)
+    planner = SegmentCASPlanner(tmp_path, require_trusted_anchor=False)
     key = "a" * 64
     planner.cache_dir.mkdir(parents=True, exist_ok=True)
     planner.manifest_path(key).write_bytes(b"x" * (dag._MAX_MANIFEST_BYTES + 1))
@@ -698,7 +698,7 @@ def test_read_manifest_rejects_oversized_file(tmp_path: Path) -> None:
 def test_read_manifest_reports_stat_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    planner = SegmentCASPlanner(tmp_path)
+    planner = SegmentCASPlanner(tmp_path, require_trusted_anchor=False)
     key = "a" * 64
     planner.cache_dir.mkdir(parents=True, exist_ok=True)
     planner.manifest_path(key).write_text("{}", encoding="utf-8")
@@ -714,7 +714,7 @@ def test_read_manifest_reports_stat_failure(
 def test_verify_rejects_explicit_path_outside_cache_dir(tmp_path: Path) -> None:
     # P1-D: an explicit ``path`` must still be confined to cache_dir, even when
     # the key itself is canonical.
-    planner = SegmentCASPlanner(tmp_path / "cache")
+    planner = SegmentCASPlanner(tmp_path / "cache", require_trusted_anchor=False)
     spec = make_spec(0)
     key = planner.cas_key(spec)
     planner.commit_segment(spec, b"body")
@@ -727,13 +727,13 @@ def test_verify_rejects_explicit_path_outside_cache_dir(tmp_path: Path) -> None:
 
 
 def test_planner_rejects_mismatched_pipeline_digests(tmp_path: Path) -> None:
-    planner = SegmentCASPlanner(tmp_path)
+    planner = SegmentCASPlanner(tmp_path, require_trusted_anchor=False)
     with pytest.raises(HyperCompilerError):
         planner.plan(make_timeline(3), pipeline_digests=["only-one"])
 
 
 def test_planner_detects_tampered_artifact(tmp_path: Path) -> None:
-    planner = SegmentCASPlanner(tmp_path)
+    planner = SegmentCASPlanner(tmp_path, require_trusted_anchor=False)
     spec = make_spec(0)
     path = planner.commit_segment(spec, b"original")
     path.write_bytes(path.read_bytes() + b"tamper")
@@ -743,13 +743,13 @@ def test_planner_detects_tampered_artifact(tmp_path: Path) -> None:
 
 
 def test_verify_reports_missing_artifact(tmp_path: Path) -> None:
-    planner = SegmentCASPlanner(tmp_path)
+    planner = SegmentCASPlanner(tmp_path, require_trusted_anchor=False)
     with pytest.raises(SegmentIntegrityError):
         planner.verify_segment_artifact("f" * 64)
 
 
 def test_verify_reports_missing_manifest(tmp_path: Path) -> None:
-    planner = SegmentCASPlanner(tmp_path)
+    planner = SegmentCASPlanner(tmp_path, require_trusted_anchor=False)
     key = planner.cas_key(make_spec(0))
     atomic_write_bytes(planner.artifact_path(key), dag._encode_artifact(key, b"x"))
     with pytest.raises(SegmentIntegrityError):
@@ -757,7 +757,7 @@ def test_verify_reports_missing_manifest(tmp_path: Path) -> None:
 
 
 def test_verify_rejects_unreadable_manifest(tmp_path: Path) -> None:
-    planner = SegmentCASPlanner(tmp_path)
+    planner = SegmentCASPlanner(tmp_path, require_trusted_anchor=False)
     spec = make_spec(0)
     key = planner.cas_key(spec)
     planner.commit_segment(spec, b"x")
@@ -767,7 +767,7 @@ def test_verify_rejects_unreadable_manifest(tmp_path: Path) -> None:
 
 
 def test_verify_rejects_non_object_manifest(tmp_path: Path) -> None:
-    planner = SegmentCASPlanner(tmp_path)
+    planner = SegmentCASPlanner(tmp_path, require_trusted_anchor=False)
     spec = make_spec(0)
     key = planner.cas_key(spec)
     planner.commit_segment(spec, b"x")
@@ -777,7 +777,7 @@ def test_verify_rejects_non_object_manifest(tmp_path: Path) -> None:
 
 
 def test_verify_rejects_size_mismatch(tmp_path: Path) -> None:
-    planner = SegmentCASPlanner(tmp_path)
+    planner = SegmentCASPlanner(tmp_path, require_trusted_anchor=False)
     spec = make_spec(0)
     key = planner.cas_key(spec)
     planner.commit_segment(spec, b"x")
@@ -789,7 +789,7 @@ def test_verify_rejects_size_mismatch(tmp_path: Path) -> None:
 
 
 def test_verify_rejects_stored_key_mismatch(tmp_path: Path) -> None:
-    planner = SegmentCASPlanner(tmp_path)
+    planner = SegmentCASPlanner(tmp_path, require_trusted_anchor=False)
     spec = make_spec(0)
     key = planner.cas_key(spec)
     other = "9" * 64
@@ -811,7 +811,7 @@ def test_verify_rejects_stored_key_mismatch(tmp_path: Path) -> None:
 
 
 def test_verify_rejects_manifest_key_mismatch(tmp_path: Path) -> None:
-    planner = SegmentCASPlanner(tmp_path)
+    planner = SegmentCASPlanner(tmp_path, require_trusted_anchor=False)
     spec = make_spec(0)
     key = planner.cas_key(spec)
     planner.commit_segment(spec, b"x")
@@ -823,7 +823,7 @@ def test_verify_rejects_manifest_key_mismatch(tmp_path: Path) -> None:
 
 
 def test_verify_rejects_content_hash_mismatch(tmp_path: Path) -> None:
-    planner = SegmentCASPlanner(tmp_path)
+    planner = SegmentCASPlanner(tmp_path, require_trusted_anchor=False)
     spec = make_spec(0)
     key = planner.cas_key(spec)
     planner.commit_segment(spec, b"x")
@@ -835,7 +835,7 @@ def test_verify_rejects_content_hash_mismatch(tmp_path: Path) -> None:
 
 
 def test_verify_accepts_explicit_path(tmp_path: Path) -> None:
-    planner = SegmentCASPlanner(tmp_path)
+    planner = SegmentCASPlanner(tmp_path, require_trusted_anchor=False)
     spec = make_spec(0)
     key = planner.cas_key(spec)
     path = planner.commit_segment(spec, b"verified-body")
@@ -845,7 +845,7 @@ def test_verify_accepts_explicit_path(tmp_path: Path) -> None:
 
 
 def test_stream_segment_body_copies_payload(tmp_path: Path) -> None:
-    planner = SegmentCASPlanner(tmp_path)
+    planner = SegmentCASPlanner(tmp_path, require_trusted_anchor=False)
     spec = make_spec(0)
     planner.commit_segment(spec, b"streamed-body")
     sink = io.BytesIO()
@@ -855,7 +855,7 @@ def test_stream_segment_body_copies_payload(tmp_path: Path) -> None:
 
 
 def test_commit_stream_rejects_bad_digest(tmp_path: Path) -> None:
-    planner = SegmentCASPlanner(tmp_path)
+    planner = SegmentCASPlanner(tmp_path, require_trusted_anchor=False)
     key = "a" * 64
     with pytest.raises(SegmentIntegrityError):
         planner.commit_stream(key, io.BytesIO(b"x"), size=1, digest="not-hex", spec=make_spec(0))
@@ -864,7 +864,7 @@ def test_commit_stream_rejects_bad_digest(tmp_path: Path) -> None:
 
 
 def test_commit_stream_rejects_size_mismatch(tmp_path: Path) -> None:
-    planner = SegmentCASPlanner(tmp_path)
+    planner = SegmentCASPlanner(tmp_path, require_trusted_anchor=False)
     key = "a" * 64
     with pytest.raises(SegmentIntegrityError):
         planner.commit_stream(
@@ -878,7 +878,7 @@ def test_commit_stream_rejects_size_mismatch(tmp_path: Path) -> None:
 
 
 def test_commit_stream_rejects_hash_mismatch(tmp_path: Path) -> None:
-    planner = SegmentCASPlanner(tmp_path)
+    planner = SegmentCASPlanner(tmp_path, require_trusted_anchor=False)
     key = "a" * 64
     with pytest.raises(SegmentIntegrityError):
         planner.commit_stream(
@@ -891,7 +891,7 @@ def test_commit_stream_rejects_hash_mismatch(tmp_path: Path) -> None:
 
 
 def test_commit_stream_roundtrips_and_verifies(tmp_path: Path) -> None:
-    planner = SegmentCASPlanner(tmp_path)
+    planner = SegmentCASPlanner(tmp_path, require_trusted_anchor=False)
     spec = make_spec(0)
     key = planner.cas_key(spec)
     planner.commit_stream(
@@ -906,7 +906,7 @@ def test_commit_stream_roundtrips_and_verifies(tmp_path: Path) -> None:
 
 
 def test_planner_hmac_key_changes_plan_keys(tmp_path: Path) -> None:
-    plain = SegmentCASPlanner(tmp_path)
+    plain = SegmentCASPlanner(tmp_path, require_trusted_anchor=False)
     keyed = SegmentCASPlanner(tmp_path, hmac_key=b"k")
     assert plain.cas_key(make_spec(0)) != keyed.cas_key(make_spec(0))
 
@@ -949,7 +949,7 @@ def test_keyed_planner_rejects_manifest_without_seal(tmp_path: Path) -> None:
 
 def test_plain_planner_ignores_missing_seal(tmp_path: Path) -> None:
     # Without a key, the seal is neither required nor checked.
-    planner = SegmentCASPlanner(tmp_path)
+    planner = SegmentCASPlanner(tmp_path, require_trusted_anchor=False)
     spec = make_spec(0)
     key = planner.cas_key(spec)
     planner.commit_segment(spec, b"payload")
@@ -980,7 +980,7 @@ def test_verified_segment_is_frozen_value() -> None:
 def test_write_segment_artifact_requires_spec(tmp_path: Path) -> None:
     # A manifest without a spec binding could never be verified, so the writer
     # refuses *before* any bytes reach the cache.
-    planner = SegmentCASPlanner(tmp_path)
+    planner = SegmentCASPlanner(tmp_path, require_trusted_anchor=False)
     key = planner.cas_key(make_spec(0))
     with pytest.raises(SegmentTamperError):
         planner.write_segment_artifact(key, b"body")
@@ -989,7 +989,7 @@ def test_write_segment_artifact_requires_spec(tmp_path: Path) -> None:
 
 
 def test_commit_stream_requires_spec(tmp_path: Path) -> None:
-    planner = SegmentCASPlanner(tmp_path)
+    planner = SegmentCASPlanner(tmp_path, require_trusted_anchor=False)
     key = planner.cas_key(make_spec(0))
     with pytest.raises(SegmentTamperError):
         planner.commit_stream(
@@ -1002,7 +1002,7 @@ def test_commit_stream_requires_spec(tmp_path: Path) -> None:
 def test_manifest_spec_binding_is_never_null(tmp_path: Path) -> None:
     # With a spec supplied the manifest always records the full spec object, so
     # verification can re-derive the key; it is never ``None``.
-    planner = SegmentCASPlanner(tmp_path)
+    planner = SegmentCASPlanner(tmp_path, require_trusted_anchor=False)
     spec = make_spec(0)
     key = planner.cas_key(spec)
     planner.write_segment_artifact(key, b"body", spec=spec)
