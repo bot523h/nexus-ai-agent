@@ -183,7 +183,8 @@ CAPABILITIES: tuple[dict[str, str], ...] = (
     {
         "id": "approvals",
         "status": "DEFERRED",
-        "reason": "Approval persistence and cross-process single-use are not durable yet.",
+        "reason": "No HTTP approval session exists; the storyboard worker can use a durable "
+        "SQLite approval ledger when configured.",
         "evidence": "docs/engineering/NAGAR_ONE_TRUTH_MATRIX.md",
     },
     {

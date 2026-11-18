@@ -35,7 +35,7 @@ If this table and the code disagree, the code wins and this table is corrected i
 | user_identity | BLOCKED | AppPrincipal/AppChannelBinding exist in storage but no HTTP login binds to them. Every browser session is the single operator credential. |
 | job_listing | DEFERRED | No list/query contract exists: JobRegistry only exposes get_job(job_id). |
 | intent_submit | VERIFIED_WITH_LIMITATIONS | POST /api/studio/projects/{id}/renders admits one render intent into the canonical queue and answers 202. Limitations: the body must be HMAC-signed with the deployment key, only the configured projects are accepted (NEXUS_STUDIO_PROJECT_IDS), and there is no preview/approval session — IBPC approval stays in-process (Stage 3 of NAGAR-ONE). |
-| approvals | DEFERRED | Approval persistence and cross-process single-use are not durable yet. |
+| approvals | DEFERRED | No HTTP approval session exists; the storyboard worker can use a durable SQLite approval ledger when configured. |
 | asset_library | DEFERRED | The Asset Library has no HTTP surface; the app cannot browse or ingest assets. |
 | resource_packs | VERIFIED_WITH_LIMITATIONS | GET /api/studio/resource-packs re-verifies every installed resource pack on disk against its signed manifest and reports one row per pack (ready, unsigned_allowed or signature_required). Limitations: it is read-only and only reports packs under NEXUS_RESOURCE_PACK_ROOT — the app can neither install, repair nor activate a pack. |
 | artifact_download | VERIFIED_WITH_LIMITATIONS | The authenticated operator can download a passport-verified MP4 for a configured project. Per-user membership and a download button are not implemented. |
