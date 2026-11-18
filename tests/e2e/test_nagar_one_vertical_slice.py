@@ -613,3 +613,35 @@ sys.exit(1)
         check=True,
         timeout=5,
     )
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="POSIX FIFO required")
+def test_snapshot_refuses_fifo_swapped_after_authorization_without_blocking(env: Env) -> None:
+    import subprocess
+
+    rel = _render_ok(env)
+    script = """
+import os, sys
+from pathlib import Path
+from nexus_ai_agent.api import studio_artifacts as bridge
+from nexus_ai_agent.creative.artifact_download import DownloadRefused
+root, rel, key = sys.argv[1:]
+authorize = bridge.authorize_artifact_download
+def swap_after_authorization(*args):
+    approved = authorize(*args)
+    approved.path.unlink()
+    os.mkfifo(approved.path)
+    return approved
+bridge.authorize_artifact_download = swap_after_authorization
+try:
+    bridge.verified_download_snapshot(Path(root), rel, key)
+except DownloadRefused as exc:
+    assert exc.reason == "artifact_changed"
+    sys.exit(0)
+sys.exit(1)
+"""
+    subprocess.run(
+        [sys.executable, "-c", script, str(env.ws), rel, SIGNING_KEY],
+        check=True,
+        timeout=5,
+    )
