@@ -31,6 +31,7 @@ def default_job_handlers() -> dict[str, JobHandler]:
     """
     from nexus_ai_agent.creative.render_jobs import creative_render_job
     from nexus_ai_agent.creative.slideshow.worker_adapter import slideshow_render_job
+    from nexus_ai_agent.creative.storyboard_jobs import storyboard_render_job
 
     return {
         "pdf_extract": process_pdf_job,
@@ -40,6 +41,7 @@ def default_job_handlers() -> dict[str, JobHandler]:
         # task-166 (P0-B): one-shot /edit, /caption, /grade through the same
         # canonical chain (registry → CommandBus → lane → measured artifact).
         "creative_render": creative_render_job,
+        "storyboard_render": storyboard_render_job,
     }
 
 

@@ -750,12 +750,28 @@ def validate_storyboard_render_request(payload: Mapping[str, Any]) -> Storyboard
     )
 
 
+def build_storyboard_render_job_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Validate and freeze the storyboard job's canonical queue payload."""
+    req = validate_storyboard_render_request(payload)
+    return {
+        "project_id": req.project_id,
+        "job_id": req.job_id,
+        "screenplay_text": req.screenplay_text,
+        "source_sha256": req.source_sha256,
+        "manifest_sha256": req.manifest_sha256,
+        "approval_id": req.approval_id,
+        "principal_id": req.principal_id,
+        **req.profile,
+    }
+
+
 __all__ = [
     "CREATIVE_RENDER_JOB_TYPE",
     "MAX_INTENT_CHARS",
     "MAX_SCREENPLAY_CHARS",
     "STORYBOARD_RENDER_JOB_TYPE",
     "StoryboardRenderRequest",
+    "build_storyboard_render_job_payload",
     "validate_storyboard_render_request",
     "TRIM_COMMAND",
     "TRIM_OPERATION",

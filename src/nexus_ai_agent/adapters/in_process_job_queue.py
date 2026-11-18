@@ -389,6 +389,7 @@ def default_artifact_verifiers() -> dict[str, ArtifactVerifier]:
     registered without a verifier, so no job type can silently regress to
     the historical unverified semantics.
     """
+    from nexus_ai_agent.creative.storyboard_jobs import storyboard_render_verifier
     from nexus_ai_agent.jobs.creative_verification import (
         creative_render_verifier,
         slideshow_render_verifier,
@@ -397,6 +398,7 @@ def default_artifact_verifiers() -> dict[str, ArtifactVerifier]:
 
     return {
         "creative_render": creative_render_verifier,
+        "storyboard_render": storyboard_render_verifier,
         "slideshow_render": slideshow_render_verifier,
         "story": story_verifier,
         "pdf_extract": pdf_extract_verifier,

@@ -423,3 +423,65 @@ def test_durable_approval_render_and_replay_across_restarts(env: Env) -> None:
         assert exc.value.reason == "approval_replay"
     finally:
         third.close()
+
+
+@pytest.mark.asyncio
+async def test_storyboard_queue_verifies_real_render_and_refuses_tampering(
+    env: Env, monkeypatch
+) -> None:
+    import asyncio
+
+    from nexus_ai_agent.adapters.in_process_job_queue import InProcessJobQueue
+    from nexus_ai_agent.application.ports.job_queue import JobStatus
+    from nexus_ai_agent.creative.storyboard_jobs import storyboard_render_verifier
+    from nexus_ai_agent.nagar.creative.handoff import build_storyboard_render_job_payload
+    from nexus_ai_agent.nagar.ibpc.approval import DurableApprovalLedger
+    from nexus_ai_agent.worker import default_job_handlers
+
+    db = env.root / "approval.sqlite3"
+    monkeypatch.setenv("NEXUS_STUDIO_WORKSPACE", str(env.ws))
+    monkeypatch.setenv("NEXUS_STUDIO_APPROVAL_DB", str(db))
+    monkeypatch.setenv("NEXUS_STUDIO_SIGNING_KEY", SIGNING_KEY)
+    ledger = DurableApprovalLedger(db, now=lambda: "2026-11-18T07:40:00Z")
+    env.ledger = ledger
+    approval = env.approve()
+    ledger.close()
+    payload = build_storyboard_render_job_payload(env.payload(approval))
+    queue = InProcessJobQueue(env.root / "queue.sqlite3", handlers=default_job_handlers())
+    await queue.acquire_ownership()
+    try:
+        job = await queue.enqueue(
+            job_type="storyboard_render", idempotency_key="queue-test", payload=payload
+        )
+        for _ in range(300):
+            status = await queue.get_status(job)
+            if status in {
+                JobStatus.COMPLETED,
+                JobStatus.FAILED_RETRYABLE,
+                JobStatus.FAILED_TERMINAL,
+            }:
+                break
+            await asyncio.sleep(0.1)
+        assert status == JobStatus.COMPLETED, await queue.get_result(job)
+        result = await queue.get_result(job)
+        assert result is not None and storyboard_render_verifier(payload, result).ok
+        assert not storyboard_render_verifier(payload, {**result, "output_size_bytes": 1}).ok
+        assert not storyboard_render_verifier({**payload, "approval_id": "unknown"}, result).ok
+        artifact = env.artifact()
+        original = artifact.read_bytes()
+        altered = bytearray(original)
+        altered[len(altered) // 2] ^= 1
+        artifact.write_bytes(altered)
+        assert not storyboard_render_verifier(payload, result).ok
+        artifact.write_bytes(original)
+        passport = artifact.parent / f"storyboard{PASSPORT_SUFFIX}"
+        passport_bytes = passport.read_bytes()
+        data = json.loads(passport_bytes)
+        data["hmac_sha256"] = "0" * 64
+        passport.write_text(json.dumps(data))
+        assert not storyboard_render_verifier(payload, result).ok
+        passport.write_bytes(passport_bytes)
+        monkeypatch.delenv("NEXUS_STUDIO_SIGNING_KEY")
+        assert not storyboard_render_verifier(payload, result).ok
+    finally:
+        await queue.shutdown()
