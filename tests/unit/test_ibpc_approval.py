@@ -193,3 +193,68 @@ class TestApprovalLedger:
         assert results == ["consumed"]
         assert errors == ["replay"] * 15
         assert ledger.get(binding.approval_id).state is ApprovalState.CONSUMED
+
+
+def _consume_in_process(path, approval_id, barrier, results) -> None:
+    from nexus_ai_agent.nagar.ibpc.approval import DurableApprovalLedger
+
+    ledger = DurableApprovalLedger(path, now=NOW)
+    try:
+        barrier.wait(timeout=10)
+        try:
+            ledger.consume(approval_id, identity=IDENT)
+            results.put("consumed")
+        except ApprovalError as exc:
+            results.put(exc.reason)
+    finally:
+        ledger.close()
+
+
+def test_durable_restart_mismatch_and_permissions(tmp_path) -> None:
+    from nexus_ai_agent.nagar.ibpc.approval import DurableApprovalLedger
+
+    path = tmp_path / "approvals.sqlite3"
+    ledger = DurableApprovalLedger(path, now=NOW)
+    binding = ledger.create(_binding())
+    ledger.approve(binding.approval_id, identity=IDENT, turn_is_active=lambda: True)
+    ledger.close()
+    assert path.stat().st_mode & 0o777 == 0o600
+    ledger = DurableApprovalLedger(path, now=NOW)
+    with pytest.raises(ApprovalError, match="identity_mismatch"):
+        ledger.consume(binding.approval_id, identity=_identity(project_id="different"))
+    assert ledger.get(binding.approval_id).state is ApprovalState.APPROVED
+    ledger.consume(binding.approval_id, identity=IDENT)
+    ledger.close()
+    ledger = DurableApprovalLedger(path, now=NOW)
+    with pytest.raises(ApprovalError, match="replay"):
+        ledger.consume(binding.approval_id, identity=IDENT)
+    ledger.close()
+
+
+def test_durable_cross_process_consume_has_one_winner(tmp_path) -> None:
+    import multiprocessing
+
+    from nexus_ai_agent.nagar.ibpc.approval import DurableApprovalLedger
+
+    path = tmp_path / "race.sqlite3"
+    ledger = DurableApprovalLedger(path, now=NOW)
+    binding = ledger.create(_binding())
+    ledger.approve(binding.approval_id, identity=IDENT, turn_is_active=lambda: True)
+    ledger.close()
+    ctx = multiprocessing.get_context("spawn")
+    barrier = ctx.Barrier(2)
+    results = ctx.Queue()
+    workers = [
+        ctx.Process(target=_consume_in_process, args=(path, binding.approval_id, barrier, results))
+        for _ in range(2)
+    ]
+    for worker in workers:
+        worker.start()
+    for worker in workers:
+        worker.join(20)
+        if worker.is_alive():
+            worker.terminate()
+            worker.join()
+            pytest.fail("worker timed out")
+        assert worker.exitcode == 0
+    assert sorted([results.get(timeout=5), results.get(timeout=5)]) == ["consumed", "replay"]

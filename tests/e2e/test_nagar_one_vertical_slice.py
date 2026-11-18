@@ -397,3 +397,29 @@ def test_studio_doctor_reports_missing_layout_without_crashing(tmp_path: Path) -
     report = studio_doctor(tmp_path / "never-initialized")
     assert report.healthy is False
     assert next(c for c in report.checks if c.name == "workspace_layout").ok is False
+
+
+def test_durable_approval_render_and_replay_across_restarts(env: Env) -> None:
+    from dataclasses import replace
+
+    from nexus_ai_agent.nagar.ibpc.approval import DurableApprovalLedger
+
+    path = env.root / "approval.sqlite3"
+    now = lambda: "2026-11-18T07:40:00Z"  # noqa: E731
+    first = DurableApprovalLedger(path, now=now)
+    env.ledger = first
+    approval = env.approve()
+    first.close()
+    second = DurableApprovalLedger(path, now=now)
+    ctx = replace(env.ctx, approval_ledger=second)
+    try:
+        assert render_storyboard_sync(env.payload(approval), ctx)["verifier_status"] == "PASS"
+    finally:
+        second.close()
+    third = DurableApprovalLedger(path, now=now)
+    try:
+        with pytest.raises(StoryboardRenderError) as exc:
+            render_storyboard_sync(env.payload(approval), replace(env.ctx, approval_ledger=third))
+        assert exc.value.reason == "approval_replay"
+    finally:
+        third.close()

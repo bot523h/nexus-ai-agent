@@ -19,17 +19,19 @@ Rules enforced here (mission NAGAR-IBPC-SECURITY-CLOSURE-01 §4):
 * the binding is **not** a permission grant — it is evidence of a human
   decision; the canonical Policy/CommandBus/queue still authorize.
 
-The ledger is in-memory session state, not a durable evidence store: durable
-evidence lives in the existing provenance journal/passport (see
-:mod:`nagar.ibpc.service`). No parallel ledger is created. Restart semantics:
-all bindings vanish (documented in docs/engineering/NAGAR_IBPC.md §Lifecycle).
+The default ledger is process-local. DurableApprovalLedger provides the same
+authority and state transitions backed by a transactional SQLite database.
 """
 
 from __future__ import annotations
 
+import os
+import sqlite3
 import threading
 from collections.abc import Callable
+from contextlib import contextmanager
 from dataclasses import dataclass
+from pathlib import Path
 
 from nexus_ai_agent.nagar.ibpc.canonical import digest_of
 from nexus_ai_agent.nagar.ibpc.models import ApprovalBinding, ApprovalState
@@ -101,23 +103,42 @@ class ApprovalLedger:
         self._lock = threading.RLock()
         self._bindings: dict[str, ApprovalBinding] = {}
 
+    @contextmanager
+    def _transaction(self):  # type: ignore[no-untyped-def]
+        with self._lock:
+            yield
+
+    def _read(self, approval_id: str) -> ApprovalBinding:
+        try:
+            return self._bindings[approval_id]
+        except KeyError:
+            raise ApprovalError("unknown_approval", approval_id) from None
+
+    def _write(self, binding: ApprovalBinding) -> None:
+        self._bindings[binding.approval_id] = binding
+
+    def _all(self) -> tuple[ApprovalBinding, ...]:
+        return tuple(self._bindings.values())
+
     def create(self, binding: ApprovalBinding) -> ApprovalBinding:
         """Register a PENDING binding. Re-creating the same id is refused."""
         if binding.state is not ApprovalState.PENDING:
             raise ApprovalError("invalid_state", "only PENDING bindings can be registered")
-        with self._lock:
-            if binding.approval_id in self._bindings:
+        with self._transaction():
+            try:
+                self._read(binding.approval_id)
+            except ApprovalError as exc:
+                if exc.reason != "unknown_approval":
+                    raise
+            else:
                 raise ApprovalError("duplicate_approval", binding.approval_id)
             stored = binding.model_copy(update={"created_at": self._now()})
-            self._bindings[stored.approval_id] = stored
+            self._write(stored)
             return stored
 
     def get(self, approval_id: str) -> ApprovalBinding:
-        with self._lock:
-            try:
-                return self._bindings[approval_id]
-            except KeyError:
-                raise ApprovalError("unknown_approval", approval_id) from None
+        with self._transaction():
+            return self._read(approval_id)
 
     @staticmethod
     def _check_identity(binding: ApprovalBinding, identity: ApprovalIdentity) -> None:
@@ -155,8 +176,8 @@ class ApprovalLedger:
         turn_is_active: Callable[[], bool],
     ) -> ApprovalBinding:
         """PENDING → APPROVED, only when the full identity still matches."""
-        with self._lock:
-            binding = self.get(approval_id)
+        with self._transaction():
+            binding = self._read(approval_id)
             if binding.state is ApprovalState.CONSUMED:
                 raise ApprovalError("replay", "approval already consumed")
             if binding.state is ApprovalState.REVOKED:
@@ -169,7 +190,7 @@ class ApprovalLedger:
             approved = binding.model_copy(
                 update={"state": ApprovalState.APPROVED, "decided_at": self._now()}
             )
-            self._bindings[approval_id] = approved
+            self._write(approved)
             return approved
 
     def consume(self, approval_id: str, *, identity: ApprovalIdentity) -> ApprovalBinding:
@@ -179,8 +200,8 @@ class ApprovalLedger:
         concurrent consumers cannot both win: the first transitions the state,
         every later call sees CONSUMED and is a typed ``replay`` refusal.
         """
-        with self._lock:
-            binding = self.get(approval_id)
+        with self._transaction():
+            binding = self._read(approval_id)
             if binding.state is ApprovalState.CONSUMED:
                 raise ApprovalError("replay", "approval already consumed — execution is single-use")
             if binding.state is ApprovalState.REVOKED:
@@ -189,31 +210,93 @@ class ApprovalLedger:
                 raise ApprovalError("not_approved", f"cannot consume from {binding.state.value}")
             self._check_identity(binding, identity)
             consumed = binding.model_copy(update={"state": ApprovalState.CONSUMED})
-            self._bindings[approval_id] = consumed
+            self._write(consumed)
             return consumed
 
     def revoke(self, approval_id: str) -> ApprovalBinding:
         """REVOKED — terminal. Used on interrupt/cancel/stale turn."""
-        with self._lock:
-            binding = self.get(approval_id)
+        with self._transaction():
+            binding = self._read(approval_id)
             if binding.state is ApprovalState.CONSUMED:
                 raise ApprovalError("replay", "a consumed approval cannot be revoked")
             revoked = binding.model_copy(update={"state": ApprovalState.REVOKED})
-            self._bindings[approval_id] = revoked
+            self._write(revoked)
             return revoked
 
     def revoke_turn(self, session_id: str, turn_id: str) -> tuple[ApprovalBinding, ...]:
         """Revoke every non-terminal binding of one turn (interrupt/cancel)."""
-        with self._lock:
+        with self._transaction():
             out: list[ApprovalBinding] = []
-            for approval_id, binding in list(self._bindings.items()):
+            for binding in self._all():
                 if (
                     binding.session_id == session_id
                     and binding.turn_id == turn_id
                     and binding.state in (ApprovalState.PENDING, ApprovalState.APPROVED)
                 ):
-                    out.append(self.revoke(approval_id))
+                    revoked = binding.model_copy(update={"state": ApprovalState.REVOKED})
+                    self._write(revoked)
+                    out.append(revoked)
             return tuple(out)
 
 
-__all__ = ["ApprovalError", "ApprovalIdentity", "ApprovalLedger"]
+class DurableApprovalLedger(ApprovalLedger):
+    """The IBPC approval ledger persisted with cross-process atomic transitions."""
+
+    def __init__(self, path: str | Path, *, now: Callable[[], str]) -> None:
+        super().__init__(now=now)
+        self._path = Path(path)
+        # Create with restrictive permissions, without following a final symlink.
+        flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
+        fd = os.open(self._path, flags, 0o600)
+        try:
+            os.fchmod(fd, 0o600)
+        finally:
+            os.close(fd)
+        self._connection = sqlite3.connect(
+            self._path, timeout=5, isolation_level=None, check_same_thread=False
+        )
+        self._connection.execute("PRAGMA busy_timeout=5000")
+        self._connection.execute("PRAGMA journal_mode=WAL")
+        self._connection.execute(
+            "CREATE TABLE IF NOT EXISTS approvals ("
+            "approval_id TEXT PRIMARY KEY, binding TEXT NOT NULL)"
+        )
+
+    @contextmanager
+    def _transaction(self):  # type: ignore[no-untyped-def]
+        with self._lock:
+            self._connection.execute("BEGIN IMMEDIATE")
+            try:
+                yield
+                self._connection.execute("COMMIT")
+            except BaseException:
+                self._connection.execute("ROLLBACK")
+                raise
+
+    def _read(self, approval_id: str) -> ApprovalBinding:
+        row = self._connection.execute(
+            "SELECT binding FROM approvals WHERE approval_id = ?", (approval_id,)
+        ).fetchone()
+        if row is None:
+            raise ApprovalError("unknown_approval", approval_id)
+        return ApprovalBinding.model_validate_json(row[0])
+
+    def _write(self, binding: ApprovalBinding) -> None:
+        self._connection.execute(
+            "INSERT INTO approvals (approval_id, binding) VALUES (?, ?) "
+            "ON CONFLICT(approval_id) DO UPDATE SET binding=excluded.binding",
+            (binding.approval_id, binding.model_dump_json()),
+        )
+
+    def _all(self) -> tuple[ApprovalBinding, ...]:
+        return tuple(
+            ApprovalBinding.model_validate_json(row[0])
+            for row in self._connection.execute("SELECT binding FROM approvals")
+        )
+
+    def close(self) -> None:
+        with self._lock:
+            self._connection.close()
+
+
+__all__ = ["ApprovalError", "ApprovalIdentity", "ApprovalLedger", "DurableApprovalLedger"]
