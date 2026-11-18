@@ -102,6 +102,8 @@ class ApprovalLedger:
         self._now = now
         self._lock = threading.RLock()
         self._bindings: dict[str, ApprovalBinding] = {}
+        # A missing reservation for a CONSUMED legacy binding means finalized.
+        self._reservations: dict[str, tuple[str, str, str | None]] = {}
 
     @contextmanager
     def _transaction(self):  # type: ignore[no-untyped-def]
@@ -119,6 +121,14 @@ class ApprovalLedger:
 
     def _all(self) -> tuple[ApprovalBinding, ...]:
         return tuple(self._bindings.values())
+
+    def _read_reservation(self, approval_id: str) -> tuple[str, str, str | None] | None:
+        return self._reservations.get(approval_id)
+
+    def _write_reservation(
+        self, approval_id: str, job_id: str, fingerprint: str, finalized_at: str | None
+    ) -> None:
+        self._reservations[approval_id] = (job_id, fingerprint, finalized_at)
 
     def create(self, binding: ApprovalBinding) -> ApprovalBinding:
         """Register a PENDING binding. Re-creating the same id is refused."""
@@ -193,17 +203,33 @@ class ApprovalLedger:
             self._write(approved)
             return approved
 
-    def consume(self, approval_id: str, *, identity: ApprovalIdentity) -> ApprovalBinding:
-        """APPROVED → CONSUMED, exactly once.
+    def consume(
+        self, approval_id: str, *, identity: ApprovalIdentity, job_id: str | None = None
+    ) -> ApprovalBinding:
+        """Consume once, or reserve for recovery of the same identified job.
 
-        The whole read-check-transition runs under the ledger lock, so two
-        concurrent consumers cannot both win: the first transitions the state,
-        every later call sees CONSUMED and is a typed ``replay`` refusal.
+        The optional reservation is not an execution fence: the queue must
+        independently prevent overlapping attempts from publishing concurrently.
         """
+        if job_id is not None and (not isinstance(job_id, str) or not job_id.strip()):
+            raise ApprovalError("invalid_job_id", "job id must be a non-empty string")
         with self._transaction():
             binding = self._read(approval_id)
             if binding.state is ApprovalState.CONSUMED:
-                raise ApprovalError("replay", "approval already consumed — execution is single-use")
+                reservation = self._read_reservation(approval_id)
+                if (
+                    job_id is None
+                    or reservation is None
+                    or reservation[0] != job_id
+                    or reservation[2] is not None
+                    or reservation[1] != identity.identity_digest()
+                ):
+                    raise ApprovalError("replay", "approval already consumed")
+                try:
+                    self._check_identity(binding, identity)
+                except ApprovalError as exc:
+                    raise ApprovalError("replay", "reserved identity changed") from exc
+                return binding
             if binding.state is ApprovalState.REVOKED:
                 raise ApprovalError("revoked", "approval was revoked")
             if binding.state is not ApprovalState.APPROVED:
@@ -211,7 +237,23 @@ class ApprovalLedger:
             self._check_identity(binding, identity)
             consumed = binding.model_copy(update={"state": ApprovalState.CONSUMED})
             self._write(consumed)
+            if job_id is not None:
+                self._write_reservation(approval_id, job_id, identity.identity_digest(), None)
             return consumed
+
+    def finalize_consumption(self, approval_id: str, *, job_id: str) -> None:
+        """Close a reservation owned by this job, preventing future recovery."""
+        with self._transaction():
+            binding = self._read(approval_id)
+            reservation = self._read_reservation(approval_id)
+            if (
+                binding.state is not ApprovalState.CONSUMED
+                or reservation is None
+                or reservation[0] != job_id
+                or reservation[2] is not None
+            ):
+                raise ApprovalError("replay", "no open reservation for this job")
+            self._write_reservation(approval_id, job_id, reservation[1], self._now())
 
     def revoke(self, approval_id: str) -> ApprovalBinding:
         """REVOKED — terminal. Used on interrupt/cancel/stale turn."""
@@ -260,6 +302,30 @@ class DurableApprovalLedger(ApprovalLedger):
         self._connection.execute(
             "CREATE TABLE IF NOT EXISTS approvals ("
             "approval_id TEXT PRIMARY KEY, binding TEXT NOT NULL)"
+        )
+        self._connection.execute(
+            "CREATE TABLE IF NOT EXISTS approval_reservations ("
+            "approval_id TEXT PRIMARY KEY, job_id TEXT NOT NULL, "
+            "fingerprint TEXT NOT NULL, finalized_at TEXT)"
+        )
+
+    def _read_reservation(self, approval_id: str) -> tuple[str, str, str | None] | None:
+        row = self._connection.execute(
+            "SELECT job_id, fingerprint, finalized_at FROM approval_reservations "
+            "WHERE approval_id = ?",
+            (approval_id,),
+        ).fetchone()
+        return (row[0], row[1], row[2]) if row is not None else None
+
+    def _write_reservation(
+        self, approval_id: str, job_id: str, fingerprint: str, finalized_at: str | None
+    ) -> None:
+        self._connection.execute(
+            "INSERT INTO approval_reservations (approval_id, job_id, fingerprint, finalized_at) "
+            "VALUES (?, ?, ?, ?) ON CONFLICT(approval_id) DO UPDATE SET "
+            "job_id=excluded.job_id, fingerprint=excluded.fingerprint, "
+            "finalized_at=excluded.finalized_at",
+            (approval_id, job_id, fingerprint, finalized_at),
         )
 
     @contextmanager

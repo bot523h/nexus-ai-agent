@@ -258,3 +258,52 @@ def test_durable_cross_process_consume_has_one_winner(tmp_path) -> None:
             pytest.fail("worker timed out")
         assert worker.exitcode == 0
     assert sorted([results.get(timeout=5), results.get(timeout=5)]) == ["consumed", "replay"]
+
+
+@pytest.mark.parametrize("durable", [False, True])
+def test_job_reservation_recovers_only_same_identity_until_finalized(
+    tmp_path, durable: bool
+) -> None:
+    from nexus_ai_agent.nagar.ibpc.approval import DurableApprovalLedger
+
+    path = tmp_path / "reservations.sqlite3"
+    ledger = DurableApprovalLedger(path, now=NOW) if durable else ApprovalLedger(now=NOW)
+    approval = ledger.create(_binding()).approval_id
+    ledger.approve(approval, identity=IDENT, turn_is_active=lambda: True)
+    ledger.consume(approval, identity=IDENT, job_id="render-1")
+    if durable:
+        ledger.close()
+        ledger = DurableApprovalLedger(path, now=NOW)
+    assert (
+        ledger.consume(approval, identity=IDENT, job_id="render-1").state is ApprovalState.CONSUMED
+    )
+    for job, identity in [
+        ("render-2", IDENT),
+        (None, IDENT),
+        ("render-1", _identity(project_id="other")),
+    ]:
+        with pytest.raises(ApprovalError, match="replay"):
+            ledger.consume(approval, identity=identity, job_id=job)
+    with pytest.raises(ApprovalError, match="replay"):
+        ledger.finalize_consumption(approval, job_id="render-2")
+    ledger.finalize_consumption(approval, job_id="render-1")
+    if durable:
+        ledger.close()
+        ledger = DurableApprovalLedger(path, now=NOW)
+    with pytest.raises(ApprovalError, match="replay"):
+        ledger.consume(approval, identity=IDENT, job_id="render-1")
+    if durable:
+        ledger.close()
+
+
+def test_reserved_approval_identity_mismatch_does_not_consume(tmp_path) -> None:
+    from nexus_ai_agent.nagar.ibpc.approval import DurableApprovalLedger
+
+    ledger = DurableApprovalLedger(tmp_path / "identity.sqlite3", now=NOW)
+    approval = ledger.create(_binding()).approval_id
+    ledger.approve(approval, identity=IDENT, turn_is_active=lambda: True)
+    with pytest.raises(ApprovalError, match="identity_mismatch"):
+        ledger.consume(approval, identity=_identity(project_id="wrong"), job_id="render-1")
+    assert ledger.get(approval).state is ApprovalState.APPROVED
+    ledger.consume(approval, identity=IDENT, job_id="render-1")
+    ledger.close()
