@@ -7,6 +7,8 @@ import secrets
 import sqlite3
 import tempfile
 import time
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -24,6 +26,7 @@ from nexus_ai_agent.core.ssrf_guard import SafeAsyncTransport, SSRFBlockError, v
 from nexus_ai_agent.creative import image_post
 from nexus_ai_agent.creative.ffmpeg_executor import execute_ffmpeg_commands
 from nexus_ai_agent.creative.video_director import analyze_video_with_gemini
+from nexus_ai_agent.observability.logging import get_logger
 from nexus_ai_agent.product.queue_job_read import QueueJobReadAdapter
 from nexus_ai_agent.worker import default_job_handlers, job_queue_db_path
 
@@ -99,7 +102,52 @@ def get_creative_registry() -> QueueJobReadAdapter:
     return _creative_registry
 
 
-app = FastAPI(title="NEXUS AI Dashboard")
+logger = get_logger(__name__)
+
+
+@asynccontextmanager
+async def _api_lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    """Own the durable job queue for the lifetime of this API process.
+
+    Same contract as the bot's ``post_init``/``post_shutdown`` (task-283). The
+    queue is the very instance ``get_creative_registry`` hands to the routes,
+    so the HTTP surface and recovery share one sidecar and one owner — no
+    second queue or registry is built here.
+
+    Startup: exclusive ownership first, and a conflict is fatal. A process that
+    cannot prove it is the sole owner must not requeue rows that a live process
+    may be executing. Only then ``resume_pending`` runs, so work left unfinished
+    by a crashed run is picked up again.
+
+    Shutdown: ``InProcessJobQueue.shutdown`` stops local workers, reopens this
+    queue's own attempts and releases the lock last. It is idempotent, and a
+    failure there is logged rather than masking the exit path.
+    """
+    from nexus_ai_agent.adapters.in_process_job_queue import QueueOwnershipError
+
+    queue = get_creative_registry().queue
+    try:
+        await queue.acquire_ownership()
+    except QueueOwnershipError as exc:
+        logger.exception("api_queue_ownership_acquisition_failed")
+        raise RuntimeError(
+            "queue ownership could not be acquired; refusing to start the API"
+        ) from exc
+    try:
+        try:
+            await queue.resume_pending()
+        except Exception as exc:  # noqa: BLE001 — mandatory queue recovery
+            logger.exception("api_queue_recovery_failed")
+            raise RuntimeError("mandatory queue recovery failed") from exc
+        yield
+    finally:
+        try:
+            await queue.shutdown()
+        except Exception:  # noqa: BLE001 — shutdown must not mask the exit path
+            logger.exception("api_queue_shutdown_failed")
+
+
+app = FastAPI(title="NEXUS AI Dashboard", lifespan=_api_lifespan)
 
 
 def parse_cors_origins(raw: str) -> list[str]:

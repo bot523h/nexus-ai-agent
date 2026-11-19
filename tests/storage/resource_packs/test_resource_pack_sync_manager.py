@@ -1118,13 +1118,16 @@ def test_break_guard_ttl_and_finally_lifetime(
     real_replace = os.replace
     real_unlink = Path.unlink
 
+    trash_paths: list[str] = []
+
     def spy_replace(src: object, dst: object) -> None:
         if str(src) == str(lock.path):
             observed_during_replace.append(lock._break_path.exists())
+            trash_paths.append(str(dst))
         real_replace(src, dst)  # type: ignore[arg-type]
 
     def spy_unlink(self_path: Path, missing_ok: bool = False) -> None:
-        if self_path.name.startswith(f".{lock.path.name}.") and self_path.name.endswith(".stale"):
+        if str(self_path) in trash_paths:
             observed_during_unlink.append(lock._break_path.exists())
             raise OSError("simulated unlink failure")
         real_unlink(self_path, missing_ok=missing_ok)
@@ -2110,51 +2113,27 @@ def test_lock_closure_matrix_08_dead_and_expired_quarantine_cleanup_is_inode_saf
         lock.path, "vanishing", now=now[0], token="dead:vanish", live=False, mtime=now[0] - 10
     )
     moved = vanishing.with_suffix(".gone")
-    real_lstat = os.lstat
-    real_unlink = Path.unlink
-    lstat_calls = [0]
+    real_replace = os.replace
     vanished_once: list[bool] = []
 
-    def shifted_lstat(path: object, *args: object, **kwargs: object) -> os.stat_result:
-        state = real_lstat(path, *args, **kwargs)  # type: ignore[arg-type]
-        if str(path) == str(inode_raced):
-            lstat_calls[0] += 1
-            if lstat_calls[0] % 2 == 0:  # the re-check in _unlink_if_inode
-                return os.stat_result(
-                    (
-                        state.st_mode,
-                        state.st_ino + 1,
-                        state.st_dev,
-                        state.st_nlink,
-                        state.st_uid,
-                        state.st_gid,
-                        state.st_size,
-                        state.st_atime,
-                        state.st_mtime,
-                        state.st_ctime,
-                    )
-                )
-        return state
-
-    def unlink_with_vanish(self: Path, *args: object, **kwargs: object) -> None:
-        if self == vanishing and not vanished_once:
+    def vanish_on_move(src: object, dst: object, *args: object, **kwargs: object) -> None:
+        if str(src) == str(vanishing) and not vanished_once:
             vanished_once.append(True)
-            self.rename(moved)
-            real_unlink(self)  # FileNotFoundError: the exact inode has gone
-            return
-        real_unlink(self, *args, **kwargs)  # type: ignore[arg-type]
+            real_replace(vanishing, moved)  # the exact inode is renamed away mid-retire
+            raise FileNotFoundError(errno.ENOENT, "vanished", str(src))
+        return real_replace(src, dst, *args, **kwargs)  # type: ignore[arg-type]
 
     with monkeypatch.context() as sweep_patch:
-        sweep_patch.setattr(os, "lstat", shifted_lstat)
-        sweep_patch.setattr(Path, "unlink", unlink_with_vanish)
+        sweep_patch.setattr(os, "replace", vanish_on_move)
         assert lock._try_acquire() is True
     assert not dead_pid.exists()
     assert not expired.exists()
     assert not unreadable.exists()
-    assert inode_raced.exists() and lstat_calls[0] >= 2
+    # A dead record is retired by inode; the raced-inode case is covered precisely
+    # by test_unlink_if_inode_rival_swapped_in_the_race_is_restored_not_deleted.
+    assert not inode_raced.exists()
     assert not vanishing.exists() and moved.exists() and vanished_once
     lock.__exit__(None, None, None)
-    inode_raced.unlink()
     moved.unlink()
 
     # A target that vanishes before the post-creation fence is never treated as
@@ -2206,6 +2185,43 @@ def test_lock_closure_matrix_09_release_preserves_owner_token_and_inode(
     assert json.loads(lock_file.read_text())["owner_token"] == "rival:live"
     assert not fresh._break_path.exists()
     lock_file.unlink()
+
+
+def test_lock_closure_matrix_11_release_spares_a_foreign_quarantine_record(
+    mirror: PackMirror, tmp_path: Path
+) -> None:
+    """11: release retires only our own record and skips a rival's quarantine."""
+    manager, now = _closure_manager(tmp_path / "matrix11", mirror)
+    lock_file = manager._storage_lock().path
+    with manager._storage_lock() as held:
+        assert held._owner_token is not None
+        own_ino = os.lstat(lock_file).st_ino
+        foreign = lock_file.parent / f".{lock_file.name}.foreign.stale"
+        _live_claim(foreign, now[0], "foreign:token")
+        # A real, live quarantined record owned by somebody else: differing inode
+        # and token, so the release loop must neither restore nor unlink it.
+        assert os.lstat(foreign).st_ino != own_ino
+    assert not lock_file.exists()
+    assert foreign.exists()
+    assert json.loads(foreign.read_text())["owner_token"] == "foreign:token"
+    foreign.unlink()
+
+
+def test_guard_still_owned_is_false_when_the_record_vanished(tmp_path: Path) -> None:
+    """A break guard whose record disappeared is never considered still owned."""
+    lock = PackSyncManager(
+        tmp_path / "guard-vanished",
+        [],
+        LocalDirectoryPackSource(tmp_path / "mirror"),
+        allow_unsigned=True,
+        disk_free_probe=lambda _: PLENTY,
+        lock_backend="exclusive_file",
+    )._storage_lock()
+    lock.path.parent.mkdir(parents=True, exist_ok=True)
+    guard = lock._try_enter_break_guard()
+    assert guard is not None
+    lock._break_path.unlink()
+    assert lock._guard_still_owned(guard) is False
 
 
 _LOCK_CLOSURE_MP_CHILD = """
@@ -2300,3 +2316,168 @@ def test_lock_closure_matrix_10_multiprocess_never_enters_a_second_critical_sect
         )
         assert not list(root.glob(".*.stale"))
         active_flag.unlink()
+
+
+# -- atomic stale-record removal (_unlink_if_inode TOCTOU closure) ----------
+
+
+def _owner_record(path: Path, token: str) -> None:
+    path.write_text(json.dumps({"owner_token": token}))
+
+
+def _swap_on_first_move(monkeypatch: pytest.MonkeyPatch, target: Path, rival: Path) -> list[bool]:
+    """REAL-DISK race: the first move of *target* finds a rival lock already there."""
+    real_replace = os.replace
+    fired: list[bool] = []
+
+    def race(src: object, dst: object, *args: object, **kwargs: object) -> None:
+        if not fired and Path(str(src)) == target:
+            fired.append(True)
+            real_replace(rival, target)  # a live rival lands between lstat and move
+        return real_replace(src, dst, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(os, "replace", race)
+    return fired
+
+
+def test_unlink_if_inode_removes_only_the_inspected_record(tmp_path: Path) -> None:
+    target = tmp_path / ".pack.lock.stale"
+    _owner_record(target, "stale-owner")
+    psm._StorageLock._unlink_if_inode(target, os.lstat(target).st_ino, "stale-owner")
+    assert not target.exists()
+    assert not list(tmp_path.glob(".*.stale"))
+
+
+def test_unlink_if_inode_ignores_a_different_inode(tmp_path: Path) -> None:
+    target = tmp_path / "pack.lock"
+    _owner_record(target, "live")
+    psm._StorageLock._unlink_if_inode(target, os.lstat(target).st_ino + 1, "live")
+    assert json.loads(target.read_text())["owner_token"] == "live"
+
+
+def test_unlink_if_inode_tolerates_a_path_that_vanishes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    psm._StorageLock._unlink_if_inode(tmp_path / "never-there.lock", 1)  # lstat: ENOENT
+    target = tmp_path / "vanish.lock"
+    _owner_record(target, "stale")
+    ino = os.lstat(target).st_ino
+    real_replace = os.replace
+
+    def vanish(src: object, dst: object, *args: object, **kwargs: object) -> None:
+        if Path(str(src)) == target:
+            target.unlink()  # gone between lstat and move
+            raise FileNotFoundError(errno.ENOENT, "vanished", str(src))
+        return real_replace(src, dst, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(os, "replace", vanish)
+    psm._StorageLock._unlink_if_inode(target, ino, "stale")
+    assert not target.exists()
+
+
+def test_unlink_if_inode_rival_swapped_in_the_race_is_restored_not_deleted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A rival's live lock replaces the inspected stale file before the move.
+
+    The unlink must never destroy the rival: the moved inode is verified, found
+    to be the rival's, and restored at the live path with its owner token.
+    """
+    target = tmp_path / "pack.lock"
+    _owner_record(target, "stale-owner")
+    stale_ino = os.lstat(target).st_ino
+    rival = tmp_path / "rival.tmp"
+    _owner_record(rival, "live-rival")
+    rival_ino = os.lstat(rival).st_ino
+    fired = _swap_on_first_move(monkeypatch, target, rival)
+
+    psm._StorageLock._unlink_if_inode(target, stale_ino, "stale-owner")
+
+    assert fired == [True]
+    assert os.lstat(target).st_ino == rival_ino
+    assert json.loads(target.read_text())["owner_token"] == "live-rival"
+    assert not list(tmp_path.glob(".*.stale"))
+
+
+def test_unlink_if_inode_same_owner_refill_drops_the_staged_copy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = tmp_path / "pack.lock"
+    _owner_record(target, "stale-owner")
+    stale_ino = os.lstat(target).st_ino
+    rival = tmp_path / "rival.tmp"
+    _owner_record(rival, "same-owner")
+    fired = _swap_on_first_move(monkeypatch, target, rival)
+    real_link = os.link
+
+    def refill_then_link(src: object, dst: object, *args: object, **kwargs: object) -> None:
+        if Path(str(dst)) == target:
+            _owner_record(target, "same-owner")  # the same owner re-links first
+        return real_link(src, dst, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(os, "link", refill_then_link)
+    psm._StorageLock._unlink_if_inode(target, stale_ino, "stale-owner")
+
+    assert fired == [True]
+    assert json.loads(target.read_text())["owner_token"] == "same-owner"
+    assert not list(tmp_path.glob(".*.stale"))
+
+
+def test_unlink_if_inode_other_owner_refill_keeps_the_staged_evidence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = tmp_path / "pack.lock"
+    _owner_record(target, "stale-owner")
+    stale_ino = os.lstat(target).st_ino
+    rival = tmp_path / "rival.tmp"
+    _owner_record(rival, "live-rival")
+    fired = _swap_on_first_move(monkeypatch, target, rival)
+    real_link = os.link
+
+    def third_party_then_link(src: object, dst: object, *args: object, **kwargs: object) -> None:
+        if Path(str(dst)) == target:
+            _owner_record(target, "third-owner")
+        return real_link(src, dst, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(os, "link", third_party_then_link)
+    psm._StorageLock._unlink_if_inode(target, stale_ino, "stale-owner")
+
+    assert fired == [True]
+    assert json.loads(target.read_text())["owner_token"] == "third-owner"
+    evidence = list(tmp_path.glob(".*.stale"))
+    assert len(evidence) == 1
+    assert json.loads(evidence[0].read_text())["owner_token"] == "live-rival"
+
+
+def test_break_guard_quarantine_is_not_a_lock_quarantine(tmp_path: Path) -> None:
+    """A live break-guard record must never be restored as the storage lock."""
+    lock_path = tmp_path / ".sync_gc.lock.excl"
+    guard_stage = tmp_path / "..sync_gc.lock.excl.break.4242.abc.stale"
+    _owner_record(guard_stage, "guard-owner")
+    lock_stage = tmp_path / "..sync_gc.lock.excl.4242.def.stale"
+    _owner_record(lock_stage, "lock-owner")
+    candidates = psm._StorageLock._quarantine_paths(object.__new__(psm._StorageLock), lock_path)
+    assert lock_stage in candidates
+    assert guard_stage not in candidates
+
+
+def test_unlink_if_inode_link_error_keeps_the_staged_record(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = tmp_path / "pack.lock"
+    _owner_record(target, "stale-owner")
+    stale_ino = os.lstat(target).st_ino
+    rival = tmp_path / "rival.tmp"
+    _owner_record(rival, "live-rival")
+    _swap_on_first_move(monkeypatch, target, rival)
+
+    def refused(src: object, dst: object, *args: object, **kwargs: object) -> None:
+        raise PermissionError(errno.EPERM, "link refused", str(dst))
+
+    monkeypatch.setattr(os, "link", refused)
+    psm._StorageLock._unlink_if_inode(target, stale_ino, "stale-owner")
+
+    assert not target.exists()
+    evidence = list(tmp_path.glob(".*.stale"))
+    assert len(evidence) == 1
+    assert json.loads(evidence[0].read_text())["owner_token"] == "live-rival"
