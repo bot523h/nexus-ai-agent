@@ -35,6 +35,7 @@ closed-form signals.
 from __future__ import annotations
 
 import math
+import numbers
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -220,10 +221,31 @@ def _channel_weights(channels: int) -> np.ndarray:
     return np.ones(channels, dtype=np.float64)
 
 
+def _require_finite_scalar(name: str, value: object) -> float:
+    """Refuse a non-finite (or non-numeric, or boolean) scalar parameter.
+
+    ``nan`` defeats one-sided range checks (``nan <= 0`` is False) and ``inf``
+    defeats the other, so a bad window length or threshold does not fail where it
+    is given — it silently produces ``nan`` LUFS or ``nan`` LU, which is a
+    measurement-shaped value that no gate can reject afterwards. ``bool`` is
+    rejected too: it is an ``int`` in Python, and ``True`` where a rate or a
+    threshold belongs is a caller bug rather than ``1``.
+    """
+    if isinstance(value, bool) or not isinstance(value, numbers.Real):
+        raise ValueError(f"{name} must be a finite real number")
+    number = float(value)
+    if not math.isfinite(number):
+        raise ValueError(f"{name} must be a finite real number")
+    return number
+
+
 def _block_mean_squares(
     weighted: np.ndarray, *, sample_rate: int, block_seconds: float, hop_seconds: float
 ) -> np.ndarray:
     """Mean square per gating block, via a cumulative sum (no per-block copies)."""
+    _require_finite_scalar("sample_rate", sample_rate)
+    _require_finite_scalar("block_seconds", block_seconds)
+    _require_finite_scalar("hop_seconds", hop_seconds)
     block = int(round(block_seconds * sample_rate))
     hop = int(round(hop_seconds * sample_rate))
     if block <= 0 or hop <= 0 or weighted.shape[-1] < block:
@@ -302,6 +324,8 @@ def short_term_max(
     file has a 3 s maximum, a 2 s file does not, and returning the whole-file
     loudness instead would silently answer a different question.
     """
+    _require_finite_scalar("sample_rate", sample_rate)
+    _require_finite_scalar("hop_seconds", hop_seconds)
     series = _short_term_series(
         block_mean_squares, sample_rate=sample_rate, hop_seconds=hop_seconds
     )
@@ -336,6 +360,8 @@ def loudness_range(
     Returns ``None`` when the programme is too short to have a 3 s window; a
     1-block file has no range, and reporting 0.0 LU would claim it was measured.
     """
+    _require_finite_scalar("sample_rate", sample_rate)
+    _require_finite_scalar("hop_seconds", hop_seconds)
     series = _short_term_series(
         block_mean_squares, sample_rate=sample_rate, hop_seconds=hop_seconds
     )
@@ -427,6 +453,7 @@ def true_peak_dbtp(samples: np.ndarray, *, oversample: int = OVERSAMPLE_FACTOR) 
     Raises ``ValueError`` for non-finite input: see :func:`_require_finite_samples`
     for why a ``nan`` here is a security-relevant value and not a cosmetic one.
     """
+    _require_finite_scalar("oversample", oversample)
     data = _require_finite_samples(samples, where="samples")
     peak = _polyphase_true_peak(data, oversample)
     if not math.isfinite(peak):
@@ -457,6 +484,7 @@ def measure_bs1770_numpy(
     maximum, LRA and true peak come from the same weighted signal so they cannot
     disagree with each other.
     """
+    _require_finite_scalar("sample_rate", sample_rate)
     if sample_rate <= 0:
         raise ValueError("sample_rate must be positive")
     data = np.asarray(samples, dtype=np.float64)

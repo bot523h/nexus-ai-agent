@@ -31,6 +31,7 @@ from nexus_ai_agent.storage.personal_cloud_vault import (
     S3HttpResponse,
     S3SigV4Config,
     VaultRevisionConflictError,
+    VaultTransportError,
 )
 from nexus_ai_agent.storage.personal_cloud_vault.byos_drivers import VaultTamperDetectedError
 
@@ -48,24 +49,43 @@ class _LeaseRaceTransport:
     def __init__(self) -> None:
         self.objects: dict[str, bytes] = {}
         self.requests: list[tuple[str, str]] = []
+        self.meta: dict[str, dict[str, str]] = {}
+        self.version_ids: dict[str, str] = {}
+        self._writes = 0
+
+    def _stamp(self, key: str) -> None:
+        """Advance the object version: every write mints a new version id."""
+        self._writes += 1
+        self.version_ids[key] = f"v{self._writes}"
 
     def put_lease(self, expires_at_epoch: float) -> None:
+        self._stamp(LEASE_KEY)
         self.objects[LEASE_KEY] = json.dumps(
-            {"expires_at_epoch": expires_at_epoch, "chunk_ids": [CHUNK]}
+            {
+                "lease_token": "foreign-writer-token",
+                "expires_at_epoch": expires_at_epoch,
+                "chunk_ids": [CHUNK],
+            }
         ).encode()
 
     def _headers_for(self, key: str) -> dict[str, str]:
-        """ETag and Last-Modified for ``key`` — what a real bucket always returns.
+        """ETag, Last-Modified and version id for ``key`` — what a bucket returns.
 
         The fence protocol retires an object only with ``If-Match``, so a fake that
         omitted the ETag would silently test a driver that had downgraded to an
-        unconditional ``DELETE``. Modelling the header is part of modelling S3.
+        unconditional ``DELETE``. The version id is the same argument one level
+        further: chunk identity is ``(version, generation, ETag)``, and a fake that
+        reported none of them would make the ABA proof unreachable rather than
+        tested. Modelling the headers is part of modelling S3.
         """
         body = self.objects[key]
-        return {
+        headers = {
             "ETag": '"' + hashlib.sha256(body).hexdigest()[:32] + '"',
             "Last-Modified": email.utils.formatdate(time.time(), usegmt=True),
+            "x-amz-version-id": self.version_ids.get(key, ""),
         }
+        headers.update(self.meta.get(key, {}))
+        return headers
 
     def __call__(self, request: S3HttpRequest) -> S3HttpResponse:
         parsed = urllib.parse.urlsplit(request.url)
@@ -91,6 +111,12 @@ class _LeaseRaceTransport:
             return S3HttpResponse(status_code=200, headers=self._headers_for(key))
         if request.method == "PUT":
             self.objects[key] = request.body
+            self._stamp(key)
+            self.meta[key] = {
+                k.lower(): v
+                for k, v in request.headers.items()
+                if k.lower().startswith("x-amz-meta-")
+            }
             return S3HttpResponse(status_code=200, headers=self._headers_for(key))
         if request.method == "GET":
             if key not in self.objects:
@@ -208,6 +234,12 @@ class _VersionedBucketTransport:
     def __init__(self) -> None:
         self.objects: dict[str, bytes] = {}
         self.etags: dict[str, str] = {}
+        #: ``x-amz-version-id`` per key: the bucket's own object version. It advances
+        #: on *every* write, including a rewrite of identical bytes — which is exactly
+        #: the ABA replacement a content-addressed ETag cannot see on its own.
+        self.version_ids: dict[str, str] = {}
+        self.meta: dict[str, dict[str, str]] = {}
+        self._writes = 0
         #: The bucket's own clock per object. Real S3 always reports
         #: ``Last-Modified``, and it is what makes a lease's lifetime independent of
         #: the writer's (possibly wrong) clock.
@@ -216,28 +248,40 @@ class _VersionedBucketTransport:
         self.requests: list[tuple[str, str]] = []
 
     def _etag(self, key: str, body: bytes) -> str:
-        """Version-bearing ETag: the content hash *plus* the write generation.
+        """The ETag S3 actually computes: a hash of the bytes, nothing else.
 
-        A versioned bucket mints a new ETag for every write even when the bytes are
-        identical, and the fence's conditional delete is only meaningful under that
-        model — a pure content hash would make "rewritten by another collector" and
-        "untouched" indistinguishable.
+        Deliberately *not* version-bearing. Real buckets reproduce the same ETag when
+        identical bytes are rewritten, and that is the model the driver has to survive:
+        the version id and the generation stamp are what make the rewrite visible.
         """
-        self.versions[key] = self.versions.get(key, 0) + 1
-        digest = hashlib.sha256(body).hexdigest()[:24]
-        return f'"v{self.versions[key]}-{digest}"'
+        del key
+        return '"' + hashlib.sha256(body).hexdigest()[:32] + '"'
 
-    def write(self, key: str, body: bytes, *, modified_at: float | None = None) -> None:
+    def write(
+        self,
+        key: str,
+        body: bytes,
+        *,
+        modified_at: float | None = None,
+        meta: dict[str, str] | None = None,
+    ) -> None:
         """Out-of-band (unconditional) write, for seeding the bucket in a test."""
+        self._writes += 1
         self.objects[key] = body
         self.etags[key] = self._etag(key, body)
+        self.version_ids[key] = f"v{self._writes}"
+        if meta is not None:
+            self.meta[key] = dict(meta)
         self.modified[key] = time.time() if modified_at is None else modified_at
 
     def _meta_headers(self, key: str) -> dict[str, str]:
-        return {
+        headers = {
             "ETag": self.etags[key],
             "Last-Modified": email.utils.formatdate(self.modified[key], usegmt=True),
+            "x-amz-version-id": self.version_ids.get(key, ""),
         }
+        headers.update(self.meta.get(key, {}))
+        return headers
 
     def __call__(self, request: S3HttpRequest) -> S3HttpResponse:
         parsed = urllib.parse.urlsplit(request.url)
@@ -274,7 +318,11 @@ class _VersionedBucketTransport:
             required = headers.get("if-match")
             if required is not None and (key not in self.objects or self.etags[key] != required):
                 return S3HttpResponse(status_code=412)
-            self.write(key, request.body)
+            self.write(
+                key,
+                request.body,
+                meta={k: v for k, v in headers.items() if k.startswith("x-amz-meta-")},
+            )
             return S3HttpResponse(status_code=200, headers=self._meta_headers(key))
         if request.method == "DELETE":
             required = headers.get("if-match")
@@ -289,6 +337,8 @@ class _VersionedBucketTransport:
             self.objects.pop(key, None)
             self.etags.pop(key, None)
             self.modified.pop(key, None)
+            self.version_ids.pop(key, None)
+            self.meta.pop(key, None)
             return S3HttpResponse(status_code=204)
         return S3HttpResponse(status_code=405)
 
@@ -749,3 +799,251 @@ def test_a_fence_replaced_between_read_and_delete_is_never_removed() -> None:
     assert current is not None
     assert gc_driver._delete_gc_fence_if_unchanged(CHUNK, current) is True
     assert FENCE_KEY not in transport.objects
+
+
+class _NoLeaseEtagTransport(_VersionedBucketTransport):
+    """A backend that reports no ``ETag`` for *lease* objects.
+
+    Chunks are answered normally — this models the one shape that matters for the
+    reaper: a lease whose identity the backend refuses to state.
+    """
+
+    def __call__(self, request: S3HttpRequest) -> S3HttpResponse:
+        response = super().__call__(request)
+        if "leases/" not in request.url:
+            return response
+        stripped = {k: v for k, v in response.headers.items() if k.lower() != "etag"}
+        return S3HttpResponse(
+            status_code=response.status_code, headers=stripped, body=response.body
+        )
+
+
+class _NoIdentityTransport(_VersionedBucketTransport):
+    """A backend that reports neither a version id nor our generation stamp.
+
+    The ETag survives (buckets do report one), which is exactly the trap: an ETag is
+    a hash of the *bytes*, so trusting it alone makes a delete-and-reupload look
+    harmless. With no version and no generation the identity is unknowable.
+    """
+
+    def __call__(self, request: S3HttpRequest) -> S3HttpResponse:
+        response = super().__call__(request)
+        if "chunks/" not in request.url:
+            return response
+        stripped = {
+            k: v
+            for k, v in response.headers.items()
+            if k.lower() != "x-amz-version-id" and not k.lower().startswith("x-amz-meta-")
+        }
+        return S3HttpResponse(
+            status_code=response.status_code, headers=stripped, body=response.body
+        )
+
+
+def test_stale_lease_cleanup_cannot_delete_a_concurrently_refreshed_lease() -> None:
+    """A refresh that lands between the listing read and the reap keeps its chunk.
+
+    ``read_active_leased_chunks`` used to reap an expired lease with an
+    unconditional ``DELETE``. The lease it deleted was the one it had read one round
+    trip earlier — and a writer that refreshes its lease in that gap is *by
+    definition* re-extending the deadline, so the delete destroyed a live claim and
+    the chunk it protected was deleted in the same pass.
+    """
+    transport = _VersionedBucketTransport()
+    gc_driver = _driver(transport)
+    writer_driver = _driver(transport)
+    gc_driver.put_chunk(CHUNK, b"precious-bytes")
+
+    lease_id = writer_driver.acquire_push_lease(
+        [CHUNK], project_id="project-1", ttl_seconds=60.0, lease_id="w-1"
+    )
+    lease_key = f"{PREFIX}/leases/{lease_id}.json"
+    refreshed = json.dumps(
+        {
+            "lease_id": lease_id,
+            "pid": 4242,
+            "project_id": "project-1",
+            "lease_token": "refreshed-token",
+            "created_at_epoch": time.time(),
+            "expires_at_epoch": time.time() + 3600.0,
+            "ttl_seconds": 3600.0,
+            "chunk_ids": [CHUNK],
+        }
+    ).encode()
+
+    state = {"refreshed": False}
+
+    def _refresh_lands_mid_pass(request: S3HttpRequest) -> S3HttpResponse:
+        response = transport(request)
+        if (
+            not state["refreshed"]
+            and request.method == "GET"
+            and request.url.endswith(f"/{lease_id}.json")
+        ):
+            # The writer's refresh commits after our listing read returned.
+            state["refreshed"] = True
+            transport.write(lease_key, refreshed)
+        return response
+
+    driver = _driver(_refresh_lands_mid_pass)
+    far_future = time.time() + 7200.0
+
+    assert driver.read_active_leased_chunks(now_epoch=far_future) == {CHUNK}
+    assert lease_key in transport.objects
+    assert transport.objects[lease_key] == refreshed
+    assert gc_driver.delete_chunk_if_unleased(CHUNK) is False
+    assert gc_driver.has_chunk(CHUNK) is True
+
+
+def test_failed_rollback_never_deletes_a_third_writers_newer_lease() -> None:
+    """A refused refresh rolls back its *own* write, never a successor's lease.
+
+    The rollback used to run ``self._send("DELETE", object_key=obj_key)`` whenever it
+    could not restore the prior body. Here the refresh is refused by a live fence
+    (so it *must* roll back) while a third writer has already replaced the lease
+    object; the rollback must observe the replacement and leave it alone.
+    """
+    transport = _VersionedBucketTransport()
+    writer = _driver(transport)
+    writer.put_chunk(CHUNK, b"precious-bytes")
+    lease_id = writer.acquire_push_lease(
+        [CHUNK], project_id="project-1", ttl_seconds=600.0, lease_id="shared-1"
+    )
+    lease_key = f"{PREFIX}/leases/{lease_id}.json"
+
+    third_writer = json.dumps(
+        {
+            "lease_id": lease_id,
+            "pid": 999,
+            "project_id": "project-9",
+            "lease_token": "third-writer-token",
+            "created_at_epoch": time.time(),
+            "expires_at_epoch": time.time() + 900.0,
+            "ttl_seconds": 900.0,
+            "chunk_ids": [CHUNK],
+        }
+    ).encode()
+
+    state = {"replaced": False}
+
+    def _third_writer_lands_after_our_put(request: S3HttpRequest) -> S3HttpResponse:
+        response = transport(request)
+        if (
+            not state["replaced"]
+            and request.method == "PUT"
+            and request.url.endswith(f"/{lease_id}.json")
+        ):
+            state["replaced"] = True
+            transport.write(lease_key, third_writer)
+        return response
+
+    racer = _driver(_third_writer_lands_after_our_put)
+
+    def _collector_claims_the_chunk() -> None:
+        # A live fence makes the post-write check refuse, which is what triggers the
+        # rollback this test is about.
+        assert racer._create_gc_fence(CHUNK, now_epoch=time.time()) is not None
+
+    racer._pre_lease_put_race_probe = _collector_claims_the_chunk
+
+    with pytest.raises(VaultRevisionConflictError):
+        racer.update_push_lease(lease_id, [CHUNK], project_id="project-1", ttl_seconds=600.0)
+
+    assert state["replaced"] is True
+    assert lease_key in transport.objects
+    assert transport.objects[lease_key] == third_writer
+    assert racer.has_chunk(CHUNK) is True
+
+
+def test_absent_lease_etag_never_causes_unconditional_lease_deletion() -> None:
+    """No ETag means no delete: the lease stays and its chunk stays protected.
+
+    A lease object whose identity the backend does not state cannot be proven to be
+    the one that was just read, so it cannot be reaped. Fail-closed here costs one
+    GC pass; the alternative is deleting a claim that a writer refreshed (or a
+    different writer created) one round trip ago.
+    """
+    transport = _NoLeaseEtagTransport()
+    driver = _driver(transport)
+    gc_driver = _driver(transport)
+    gc_driver.put_chunk(CHUNK, b"precious-bytes")
+
+    lease_id = "stale-1"
+    lease_key = f"{PREFIX}/leases/{lease_id}.json"
+    transport.write(
+        lease_key,
+        json.dumps(
+            {
+                "lease_id": lease_id,
+                "pid": 7,
+                "project_id": "project-1",
+                "lease_token": "stale-token",
+                "created_at_epoch": 1.0,
+                "expires_at_epoch": 2.0,
+                "ttl_seconds": 1.0,
+                "chunk_ids": [CHUNK],
+            }
+        ).encode(),
+        modified_at=1.0,
+    )
+
+    # Long expired, but with no ETag to condition the delete on: not reaped.
+    assert driver.read_active_leased_chunks(now_epoch=time.time() + 10_000.0) == {CHUNK}
+    assert lease_key in transport.objects
+
+    # And asking to release it with an empty ETag is refused outright — the empty
+    # string is "unknown identity", not a licence for an unconditional DELETE.
+    with pytest.raises(VaultTransportError):
+        driver.release_push_lease(lease_id, expected_etag="")
+    assert lease_key in transport.objects
+    assert gc_driver.has_chunk(CHUNK) is True
+
+
+def test_identical_bytes_reupload_with_same_etag_is_detected_as_aba_replacement() -> None:
+    """Delete-and-reupload of identical bytes is a *new* object, not the same one.
+
+    Chunk ids are content-addressed, so the ETag is a function of the bytes alone.
+    The collector below removes the chunk and a writer republishes the same bytes:
+    same length, same ETag, same content — and a different object. If identity were
+    the ETag, the lease would be published over a chunk the collector had already
+    deleted; the generation stamp and the version id are what make it visible.
+    """
+    transport = _VersionedBucketTransport()
+    writer = _driver(transport)
+    writer.put_chunk(CHUNK, b"precious-bytes")
+    etag_before = transport.etags[CHUNK_KEY]
+
+    def _aba_replacement() -> None:
+        transport.objects.pop(CHUNK_KEY, None)
+        transport.write(CHUNK_KEY, b"precious-bytes")
+
+    # The proof is only meaningful if the ETag really is unchanged by the rewrite.
+    assert transport.etags[CHUNK_KEY] == etag_before
+    writer._pre_lease_put_race_probe = _aba_replacement
+
+    with pytest.raises(VaultRevisionConflictError, match="disappeared or changed generation"):
+        writer.acquire_push_lease([CHUNK], project_id="project-1", ttl_seconds=600.0)
+
+    assert transport.etags[CHUNK_KEY] == etag_before
+    assert [k for k in transport.objects if "/leases/" in k] == []
+
+
+def test_missing_version_and_generation_metadata_fails_closed() -> None:
+    """An object the bucket cannot identify is a conflict, not "unchanged".
+
+    The pre-fix identity was the ETag alone. A backend that reports an ETag but no
+    version id and no generation stamp gives a value that cannot distinguish two
+    different objects with the same bytes, so "equal" there is not a proof of
+    anything. Refusing is the only answer that does not guess.
+    """
+    transport = _NoIdentityTransport()
+    writer = _driver(transport)
+    writer.put_chunk(CHUNK, b"precious-bytes")
+
+    assert writer._chunk_generation(CHUNK) == "UNKNOWN_GENERATION"
+
+    with pytest.raises(VaultRevisionConflictError, match="disappeared or changed generation"):
+        writer.acquire_push_lease([CHUNK], project_id="project-1", ttl_seconds=600.0)
+
+    assert [k for k in transport.objects if "/leases/" in k] == []
+    assert writer.has_chunk(CHUNK) is True

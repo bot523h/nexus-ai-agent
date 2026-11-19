@@ -111,6 +111,7 @@ def _build_lease_json_bytes(
     now_epoch: float,
     ttl_seconds: float,
     chunk_ids: Iterable[str],
+    lease_token: str,
 ) -> bytes:
     validated_chunks = sorted({_validate_chunk_id(cid) for cid in chunk_ids})
     # ``ttl_seconds`` is validated finite/positive by every caller, so the computed
@@ -121,6 +122,9 @@ def _build_lease_json_bytes(
             "lease_id": lease_id,
             "pid": os.getpid(),
             "project_id": project_id,
+            # Identity of *this write*: a refresher mints a new token, so a rollback
+            # or a reap can prove it is undoing its own write and not a newer one.
+            "lease_token": lease_token,
             "created_at_epoch": now_epoch,
             "expires_at_epoch": expires_at,
             "ttl_seconds": ttl_seconds,
@@ -409,6 +413,70 @@ def _lease_deadline_epoch(
     if ttl is not None and observed is not None:
         deadline = max(deadline, observed + ttl)
     return deadline
+
+
+#: Object-metadata header that carries a unique generation stamp per chunk upload.
+#:
+#: Chunk ids are content-addressed, so the *ETag* of a chunk is a function of its
+#: bytes and nothing else: delete the object and re-upload the same bytes and the
+#: ETag comes back identical. A lease that compares ETags alone therefore cannot see
+#: the difference between "the chunk I preflighted" and "a different object with the
+#: same contents", which is exactly the ABA replacement a collector can produce. Every
+#: upload therefore stamps its own generation, so identity is
+#: ``(version-id, generation stamp, ETag)`` rather than a content hash.
+CHUNK_GENERATION_META_HEADER = "x-amz-meta-nexus-chunk-gen"
+
+#: Returned by :meth:`S3CompatibleSigV4Driver._chunk_generation` when the bucket
+#: reports neither a version id nor our generation stamp. It is deliberately not
+#: ``""``: a caller must be able to distinguish "unknown identity" from "no ETag",
+#: and both are fail-closed.
+UNKNOWN_CHUNK_GENERATION = "UNKNOWN_GENERATION"
+
+
+def _new_chunk_generation() -> str:
+    """Mint the generation stamp for one chunk upload (metadata header value)."""
+    return uuid.uuid4().hex
+
+
+def _parse_lease_token(raw: bytes) -> str:
+    """Owner token of a lease document, or ``""`` when absent/unparsable.
+
+    Lenient by design: this runs on objects written by *other* writers (including
+    older ones that predate the token), and a lease that cannot prove it is ours is
+    simply not ours to roll back or delete.
+    """
+    try:
+        parsed = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        return ""
+    if not isinstance(parsed, dict):
+        return ""
+    token = parsed.get("lease_token")
+    return token if isinstance(token, str) else ""
+
+
+@dataclass(frozen=True)
+class _LeaseObjectState:
+    """One observation of a lease object: its identity and its absolute deadline.
+
+    ``etag`` is the object version the backend reports; ``lease_token`` is the writer
+    token carried inside the body. Both are needed: the ETag says "this is the object
+    I wrote", the token says "this is the write I made", and a rollback or a reap is
+    only legitimate when *both* still match.
+    """
+
+    raw: bytes
+    etag: str
+    lease_token: str
+    deadline_epoch: float | None
+
+    def is_ours(self, *, etag: str, lease_token: str) -> bool:
+        """True only when this observation is byte-for-byte the write we are undoing."""
+        if not etag or not self.etag or self.etag != etag:
+            return False
+        if not lease_token or not self.lease_token:
+            return False
+        return hmac.compare_digest(self.lease_token, lease_token)
 
 
 def _pid_is_alive(pid: int) -> bool:
@@ -1017,6 +1085,7 @@ class LocalDeviceVaultDriver:
             now_epoch=now,
             ttl_seconds=finite_ttl,
             chunk_ids=chunk_ids,
+            lease_token=uuid.uuid4().hex,
         )
         flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
         with self._coordination_lock():
@@ -1056,16 +1125,36 @@ class LocalDeviceVaultDriver:
             now_epoch=now,
             ttl_seconds=finite_ttl,
             chunk_ids=chunk_ids,
+            lease_token=uuid.uuid4().hex,
         )
         with self._coordination_lock():
             if lease_path.is_symlink() or not lease_path.is_file():
                 raise VaultTransportError(f"Active push lease not found: {lease_id}")
             _atomic_write_file(lease_path, payload)
 
-    def release_push_lease(self, lease_id: str) -> None:
-        """Release and unlink a cross-process push lease file."""
+    def release_push_lease(self, lease_id: str, *, expected_etag: str | None = None) -> None:
+        """Release and unlink a cross-process push lease file.
+
+        ``expected_etag`` makes the delete conditional: when supplied it must match the
+        sha256 of the lease file that is about to be removed, and an empty value is
+        refused outright rather than silently degrading to an unconditional unlink.
+        """
         lease_path = self._lease_path(lease_id)
         with self._coordination_lock(), contextlib.suppress(OSError):
+            if expected_etag is not None:
+                if not expected_etag.strip():
+                    raise VaultTransportError(
+                        "Refusing to release a push lease without a known ETag: an "
+                        "unconditional unlink could remove a lease another writer just "
+                        "took over"
+                    )
+                current = lease_path.read_bytes() if lease_path.is_file() else b""
+                current_etag = hashlib.sha256(current).hexdigest() if current else ""
+                if current_etag != expected_etag.strip():
+                    raise VaultRevisionConflictError(
+                        f"Push lease {lease_id!r} changed since it was observed; refusing "
+                        "to release a lease this caller no longer owns"
+                    )
             lease_path.unlink(missing_ok=True)
 
     def _read_active_leased_chunks_unlocked(self, *, effective_now: float) -> set[str]:
@@ -1568,6 +1657,10 @@ class S3CompatibleSigV4Driver:
             object_key=self._object_key("chunks", f"{valid}.chk"),
             body=body,
             content_type="application/octet-stream",
+            # Content-addressed ids make the ETag a function of the bytes alone, so
+            # every upload carries its own generation: a re-upload of identical bytes
+            # is a *new* object, and the lease proof must be able to see that.
+            extra_headers={CHUNK_GENERATION_META_HEADER: _new_chunk_generation()},
         )
         if resp.status_code not in (200, 201, 204):
             raise VaultTransportError(f"S3 put_chunk failed with HTTP {resp.status_code}")
@@ -1711,11 +1804,23 @@ class S3CompatibleSigV4Driver:
             self._delete_gc_fence_if_unchanged(cid, fence)
 
     def _chunk_generation(self, chunk_id: str) -> str | None:
-        """Bucket generation of ``chunk_id``: ETag, ``""`` if unreported, ``None`` if absent.
+        """Identity of the object currently stored under ``chunk_id``.
 
-        The three states matter downstream: ``None`` means "not on the bucket", ``""``
-        means "present but the backend did not say which version", anything else is a
-        version. Only the first can be a *disappearance*.
+        Identity is the tuple ``(version-id, generation stamp, ETag)`` rendered as one
+        string, because any single component is forgeable by a rewrite:
+
+        * the **ETag** is a hash of the bytes, so deleting a chunk and re-uploading the
+          same bytes reproduces it exactly (the ABA replacement a collector can leave);
+        * the **generation stamp** is the metadata header every upload mints, so a
+          rewrite is visible even when the bytes are identical;
+        * the **version-id** is the bucket's own object version, and advances on *every*
+          write when versioning is on.
+
+        Return values keep three distinct states: ``None`` = "not on the bucket",
+        ``UNKNOWN_GENERATION`` = "present but the bucket identifies neither the version
+        nor the upload", anything else = a comparable identity. The middle state is
+        fail-closed: an object whose identity cannot be proven cannot be silently
+        treated as unchanged.
         """
         resp = self._send("HEAD", object_key=self._object_key("chunks", f"{chunk_id}.chk"))
         if resp.status_code == 404:
@@ -1725,7 +1830,12 @@ class S3CompatibleSigV4Driver:
                 f"S3 chunk generation probe failed for {chunk_id} with HTTP {resp.status_code}"
             )
         lowered = {k.lower(): v for k, v in resp.headers.items()}
-        return lowered.get("etag", "")
+        version_id = lowered.get("x-amz-version-id", "").strip()
+        generation = lowered.get(CHUNK_GENERATION_META_HEADER, "").strip()
+        etag = lowered.get("etag", "").strip()
+        if not version_id and not generation:
+            return UNKNOWN_CHUNK_GENERATION
+        return f"{version_id}|{generation}|{etag}"
 
     def _chunk_generations(self, chunk_ids: Iterable[str]) -> dict[str, str | None]:
         """Snapshot every chunk's generation *before* the lease object is written."""
@@ -1752,7 +1862,11 @@ class S3CompatibleSigV4Driver:
             current = self._chunk_generation(cid)
             if current is None:
                 lost.append(cid)
-            elif before and current and current != before:
+            elif UNKNOWN_CHUNK_GENERATION in (before, current):
+                # The bucket cannot say which object this is, before or after. Claiming
+                # "unchanged" would be a guess about the one thing the proof exists for.
+                lost.append(cid)
+            elif current != before:
                 lost.append(cid)
         return tuple(sorted(lost))
 
@@ -1827,12 +1941,14 @@ class S3CompatibleSigV4Driver:
             raise VaultTransportError(
                 f"S3 lease probe failed for {effective_id} with HTTP {head_resp.status_code}"
             )
+        our_lease_token = uuid.uuid4().hex
         payload = _build_lease_json_bytes(
             lease_id=effective_id,
             project_id=project_id,
             now_epoch=now,
             ttl_seconds=finite_ttl,
             chunk_ids=materialised_chunks,
+            lease_token=our_lease_token,
         )
         put_resp = self._send(
             "PUT",
@@ -1847,25 +1963,40 @@ class S3CompatibleSigV4Driver:
             raise VaultTransportError(
                 f"S3 acquire_push_lease failed with HTTP {put_resp.status_code}"
             )
+        # Identity of *our* write. Without it nothing downstream can tell our lease
+        # from a successor's, so a backend that reports no ETag is a hard failure.
+        our_write_etag = self._lease_write_etag(obj_key, put_resp, our_lease_token)
+        if not our_write_etag:
+            raise VaultTransportError(
+                f"S3 acquire_push_lease could not establish an ETag for lease {effective_id!r}; "
+                "refusing to continue without a way to undo this write conditionally"
+            )
         try:
             self._assert_no_live_gc_fence(
                 materialised_chunks, now_epoch=now, when="after the lease write"
             )
         except VaultRevisionConflictError:
             # Roll our own object back before propagating: a lease that outlived the
-            # refusal would protect a chunk the collector is already deleting.
-            self._send("DELETE", object_key=obj_key)
+            # refusal would protect a chunk the collector is already deleting. The
+            # rollback is ownership-bound and conditional — see _rollback_lease_acquire.
+            self._rollback_lease_acquire(
+                obj_key, our_write_etag=our_write_etag, our_lease_token=our_lease_token
+            )
             raise
         lost = self._lost_materialised_chunks(preflight)
         if lost:
-            self._send("DELETE", object_key=obj_key)
+            self._rollback_lease_acquire(
+                obj_key, our_write_etag=our_write_etag, our_lease_token=our_lease_token
+            )
             raise self._lost_chunk_error(lost, "after the lease write")
         try:
             self._assert_no_live_gc_fence(
                 materialised_chunks, now_epoch=now, when="after the chunk existence proof"
             )
         except VaultRevisionConflictError:
-            self._send("DELETE", object_key=obj_key)
+            self._rollback_lease_acquire(
+                obj_key, our_write_etag=our_write_etag, our_lease_token=our_lease_token
+            )
             raise
         self._reclaim_dead_gc_fences(materialised_chunks, now_epoch=now)
         return effective_id
@@ -1873,34 +2004,63 @@ class S3CompatibleSigV4Driver:
     def _rollback_lease_refresh(
         self,
         obj_key: str,
-        prior_body: bytes | None,
-        put_resp: S3HttpResponse,
         *,
-        lost_chunks: Iterable[str],
+        prior_body: bytes | None,
+        prior_etag: str,
+        our_write_etag: str,
+        our_lease_token: str,
     ) -> None:
-        """Undo a refresh that raced a collector, without ever leaving a lie behind.
+        """Undo a refresh that raced a collector — only while it is still *our* write.
 
-        The prior body is restored conditionally (see :meth:`_restore_prior_lease_body`).
-        If that is impossible — no prior body, no ETag to condition on, or the *prior*
-        body already promised one of the chunks that just disappeared — the lease
-        object is deleted outright. Fail-closed beats tidy: the caller is told to
-        retry, and no lease on the bucket names a chunk that is not there.
+        Every step is a proof rather than an assumption:
+
+        1. no ``our_write_etag`` means the bucket never told us which object our own
+           ``PUT`` created; an unconditional ``DELETE``/``PUT`` here would be exactly
+           the bug this method exists to prevent, so nothing happens at all;
+        2. the object is read back, and the rollback aborts unless the current ETag is
+           still the one our write returned *and* the body still carries our
+           ``lease_token``. A refresher or a third writer that replaced the object in
+           between wins by definition;
+        3. the ``PUT`` (restore) or ``DELETE`` (no prior body) is sent with
+           ``If-Match: our_write_etag``, so the check in step 2 and the write are one
+           atomic decision at the store. A 409/412 there means the state moved again
+           and the rollback simply stops — never retried, never forced.
+
+        A ``prior_body`` that itself names a chunk which just disappeared is still
+        restored: deleting it would remove a lease this caller no longer owns. The
+        caller raises the conflict either way, and the lease expires on its own TTL.
         """
-        lost = set(lost_chunks)
-        restored = False
+        if not our_write_etag:
+            return
+        try:
+            state = self._read_lease_state(obj_key)
+        except VaultTransportError:
+            return
+        if state is None:
+            return
+        if not state.is_ours(etag=our_write_etag, lease_token=our_lease_token):
+            return
+        if prior_body is not None and prior_etag and state.etag == prior_etag:
+            return
         if prior_body is not None:
-            restored = self._restore_prior_lease_body(obj_key, prior_body, put_resp)
-        if not restored:
-            self._send("DELETE", object_key=obj_key)
+            resp = self._send(
+                "PUT",
+                object_key=obj_key,
+                body=prior_body,
+                content_type="application/json",
+                extra_headers={"if-match": our_write_etag},
+            )
+        else:
+            resp = self._send(
+                "DELETE",
+                object_key=obj_key,
+                extra_headers={"if-match": our_write_etag},
+            )
+        if resp.status_code in (200, 201, 202, 204, 404, 409, 412):
             return
-        check = self._send("GET", object_key=obj_key)
-        if check.status_code != 200:
-            self._send("DELETE", object_key=obj_key)
-            return
-        with contextlib.suppress(VaultTransportError):
-            _expires_at, names = _parse_and_validate_lease_payload(check.body, source_label=obj_key)
-            if lost & names:
-                self._send("DELETE", object_key=obj_key)
+        raise VaultTransportError(
+            f"S3 lease rollback failed for {obj_key} with HTTP {resp.status_code}"
+        )
 
     def update_push_lease(
         self,
@@ -1942,12 +2102,14 @@ class S3CompatibleSigV4Driver:
         prior = self._send("GET", object_key=obj_key)
         prior_body = prior.body if prior.status_code == 200 else None
 
+        our_lease_token = uuid.uuid4().hex
         payload = _build_lease_json_bytes(
             lease_id=valid_id,
             project_id=project_id,
             now_epoch=now,
             ttl_seconds=finite_ttl,
             chunk_ids=materialised_chunks,
+            lease_token=our_lease_token,
         )
         conditional: dict[str, str] = {}
         if prior_etag:
@@ -1970,58 +2132,72 @@ class S3CompatibleSigV4Driver:
             raise VaultTransportError(
                 f"S3 update_push_lease failed with HTTP {put_resp.status_code}"
             )
+        our_write_etag = self._lease_write_etag(obj_key, put_resp, our_lease_token)
+        if not our_write_etag:
+            raise VaultTransportError(
+                f"S3 update_push_lease could not establish an ETag for lease {valid_id!r}; "
+                "refusing to continue without a way to undo this refresh conditionally"
+            )
         try:
             self._assert_no_live_gc_fence(
                 materialised_chunks, now_epoch=now, when="after the lease refresh"
             )
         except VaultRevisionConflictError:
-            self._rollback_lease_refresh(obj_key, prior_body, put_resp, lost_chunks=())
+            self._rollback_lease_refresh(
+                obj_key,
+                prior_body=prior_body,
+                prior_etag=prior_etag or "",
+                our_write_etag=our_write_etag,
+                our_lease_token=our_lease_token,
+            )
             raise
         lost = self._lost_materialised_chunks(preflight)
         if lost:
-            self._rollback_lease_refresh(obj_key, prior_body, put_resp, lost_chunks=lost)
+            self._rollback_lease_refresh(
+                obj_key,
+                prior_body=prior_body,
+                prior_etag=prior_etag or "",
+                our_write_etag=our_write_etag,
+                our_lease_token=our_lease_token,
+            )
             raise self._lost_chunk_error(lost, "after the lease refresh")
         try:
             self._assert_no_live_gc_fence(
                 materialised_chunks, now_epoch=now, when="after the chunk existence proof"
             )
         except VaultRevisionConflictError:
-            self._rollback_lease_refresh(obj_key, prior_body, put_resp, lost_chunks=())
+            self._rollback_lease_refresh(
+                obj_key,
+                prior_body=prior_body,
+                prior_etag=prior_etag or "",
+                our_write_etag=our_write_etag,
+                our_lease_token=our_lease_token,
+            )
             raise
 
-    def _restore_prior_lease_body(
-        self,
-        obj_key: str,
-        prior_body: bytes | None,
-        put_resp: S3HttpResponse,
-    ) -> bool:
-        """Best-effort rollback of a lease refresh that raced a collector.
+    def release_push_lease(self, lease_id: str, *, expected_etag: str | None = None) -> None:
+        """Delete ``leases/<lease_id>.json`` from the S3 bucket.
 
-        Conditional on the ``ETag`` our own write returned, so a *newer* concurrent
-        refresh is never clobbered. When the bucket does not report that ETag the
-        rollback is skipped deliberately: the collector's post-retirement lease read
-        (:meth:`delete_chunk_if_unleased`, step 3) restores the chunk anyway, and an
-        unconditional overwrite could destroy a third party's lease state — a worse
-        outcome than leaving ours in place for its TTL.
+        With ``expected_etag`` the delete is conditional (``If-Match``) and an empty
+        value is refused: an unconditional delete of a lease id is only safe for the
+        writer that still owns it, and even then the id alone does not prove ownership.
         """
-        lowered = {k.lower(): v for k, v in put_resp.headers.items()}
-        our_etag = lowered.get("etag")
-        if prior_body is None or not our_etag:
-            return False
-        resp = self._send(
-            "PUT",
-            object_key=obj_key,
-            body=prior_body,
-            content_type="application/json",
-            extra_headers={"if-match": our_etag},
-        )
-        return resp.status_code in (200, 201, 204)
-
-    def release_push_lease(self, lease_id: str) -> None:
-        """Delete ``leases/<lease_id>.json`` from the S3 bucket."""
         valid_id = _validate_snapshot_id(lease_id)
         obj_key = self._object_key("leases", f"{valid_id}.json")
-        resp = self._send("DELETE", object_key=obj_key)
+        headers: dict[str, str] = {}
+        if expected_etag is not None:
+            if not expected_etag.strip():
+                raise VaultTransportError(
+                    f"Refusing to release S3 push lease {valid_id!r} without a known ETag: "
+                    "an unconditional DELETE could remove a lease another writer just took over"
+                )
+            headers["if-match"] = expected_etag.strip()
+        resp = self._send("DELETE", object_key=obj_key, extra_headers=headers)
+        if expected_etag is not None and resp.status_code in (409, 412):
+            raise VaultRevisionConflictError(
+                f"S3 push lease {valid_id!r} changed since it was observed (HTTP "
+                f"{resp.status_code}); refusing to release a lease this caller no longer owns"
+            )
         if resp.status_code not in (200, 202, 204, 404):
             raise VaultTransportError(
                 f"S3 release_push_lease failed for {valid_id} with HTTP {resp.status_code}"
@@ -2051,11 +2227,156 @@ class S3CompatibleSigV4Driver:
             # the fence ABA race, arriving through the clock instead of the network.
             deadline = _lease_deadline_epoch(resp.body, resp.headers, expires_at)
             if deadline + self._clock_skew_margin <= effective_now:
-                with contextlib.suppress(VaultTransportError):
-                    self.release_push_lease(stem)
+                lowered = {k.lower(): v for k, v in resp.headers.items()}
+                # Reaping expired debris must never be an unconditional DELETE: the
+                # writer may have refreshed (or another writer taken over) the object
+                # between the listing GET and the delete. Only a lease that is still
+                # byte-identical to what was just read — and still expired — is debris.
+                reaped = self._reap_expired_lease_if_unchanged(
+                    obj_key,
+                    expected_etag=lowered.get("etag", "").strip(),
+                    expected_lease_token=_parse_lease_token(resp.body),
+                    effective_now=effective_now,
+                )
+                if not reaped:
+                    # Unproven state: keep its chunks protected for this pass.
+                    active_chunks.update(chunk_set)
                 continue
             active_chunks.update(chunk_set)
         return active_chunks
+
+    def _read_lease_state(self, obj_key: str) -> _LeaseObjectState | None:
+        """Read one lease object, carrying its ETag, owner token and absolute deadline.
+
+        ``deadline_epoch`` is ``None`` when the document cannot be parsed; every caller
+        treats that as "not provably expired" / "not provably ours" and leaves the
+        object alone.
+        """
+        resp = self._send("GET", object_key=obj_key)
+        if resp.status_code == 404:
+            return None
+        if resp.status_code != 200:
+            raise VaultTransportError(
+                f"S3 lease state read failed for {obj_key} with HTTP {resp.status_code}"
+            )
+        lowered = {k.lower(): v for k, v in resp.headers.items()}
+        deadline: float | None = None
+        with contextlib.suppress(VaultTransportError):
+            expires_at, _names = _parse_and_validate_lease_payload(resp.body, source_label=obj_key)
+            deadline = _lease_deadline_epoch(resp.body, resp.headers, expires_at)
+        return _LeaseObjectState(
+            raw=resp.body,
+            etag=lowered.get("etag", "").strip(),
+            lease_token=_parse_lease_token(resp.body),
+            deadline_epoch=deadline,
+        )
+
+    def _lease_write_etag(
+        self,
+        obj_key: str,
+        put_resp: S3HttpResponse,
+        lease_token: str,
+    ) -> str:
+        """ETag of the lease object our own ``PUT`` created, or ``""`` (fail-closed).
+
+        Prefers the ``ETag`` on the write response. Backends that do not echo it get
+        one read-back, accepted only when the body carries *our* token — an object
+        that is not provably our write must never be treated as one, because every
+        rollback and every reap is conditioned on this value.
+        """
+        lowered = {k.lower(): v for k, v in put_resp.headers.items()}
+        etag = lowered.get("etag", "").strip()
+        if etag:
+            return etag
+        state = self._read_lease_state(obj_key)
+        if state is None or not state.etag or not state.lease_token:
+            return ""
+        if not lease_token or not hmac.compare_digest(state.lease_token, lease_token):
+            return ""
+        return state.etag
+
+    def _reap_expired_lease_if_unchanged(
+        self,
+        obj_key: str,
+        *,
+        expected_etag: str,
+        expected_lease_token: str,
+        effective_now: float,
+    ) -> bool:
+        """Delete an expired lease only while it is provably still the one we read.
+
+        Returns ``True`` exactly when the object is gone and was ours to remove.
+        ``False`` means "the state moved or cannot be proven" — a refresher renewed the
+        deadline, a third writer replaced the object, the bucket refused the
+        precondition, or no ETag was ever observed. The caller must then keep that
+        lease's chunks in its active set: a chunk deleted on an ambiguous lease state
+        is not recoverable, while a chunk kept alive costs one GC pass.
+        """
+        if not expected_etag:
+            return False
+        try:
+            state = self._read_lease_state(obj_key)
+        except VaultTransportError:
+            return False
+        if state is None:
+            return True
+        if state.deadline_epoch is None:
+            return False
+        if not state.is_ours(etag=expected_etag, lease_token=expected_lease_token):
+            return False
+        if state.deadline_epoch + self._clock_skew_margin > effective_now:
+            return False
+        try:
+            resp = self._send(
+                "DELETE",
+                object_key=obj_key,
+                extra_headers={"if-match": expected_etag},
+            )
+        except VaultTransportError:
+            return False
+        if resp.status_code in (200, 202, 204):
+            return True
+        if resp.status_code == 404:
+            return True
+        if resp.status_code in (409, 412):
+            return False
+        raise VaultTransportError(
+            f"S3 expired-lease reap failed for {obj_key} with HTTP {resp.status_code}"
+        )
+
+    def _rollback_lease_acquire(
+        self,
+        obj_key: str,
+        *,
+        our_write_etag: str,
+        our_lease_token: str,
+    ) -> None:
+        """Remove the lease object this acquire just created — and nothing else.
+
+        Same rule as :meth:`_rollback_lease_refresh`: no ETag means no delete, the
+        observation must still be our own write (ETag *and* token), and the ``DELETE``
+        is sent with ``If-Match`` so a lease another writer took over is never removed.
+        """
+        if not our_write_etag:
+            return
+        try:
+            state = self._read_lease_state(obj_key)
+        except VaultTransportError:
+            return
+        if state is None:
+            return
+        if not state.is_ours(etag=our_write_etag, lease_token=our_lease_token):
+            return
+        resp = self._send(
+            "DELETE",
+            object_key=obj_key,
+            extra_headers={"if-match": our_write_etag},
+        )
+        if resp.status_code in (200, 202, 204, 404, 409, 412):
+            return
+        raise VaultTransportError(
+            f"S3 lease rollback failed for {obj_key} with HTTP {resp.status_code}"
+        )
 
     def _lease_state_token(self) -> tuple[tuple[str, str], ...]:
         """Return a comparable ``(stem, ETag|LastModified)`` snapshot of lease objects."""
@@ -2240,7 +2561,10 @@ class S3CompatibleSigV4Driver:
             object_key=self._object_key("chunks", f"{chunk_id}.chk"),
             body=staged_payload,
             content_type="application/octet-stream",
-            extra_headers={"if-none-match": "*"},
+            extra_headers={
+                "if-none-match": "*",
+                CHUNK_GENERATION_META_HEADER: _new_chunk_generation(),
+            },
         )
         if resp.status_code in (409, 412):
             # Somebody republished this chunk while we were rolling back. Their object
@@ -2991,6 +3315,7 @@ class PortableBundleVaultDriver:
             now_epoch=now,
             ttl_seconds=finite_ttl,
             chunk_ids=leased_ids,
+            lease_token=uuid.uuid4().hex,
         )
 
         def _apply(
@@ -3026,6 +3351,7 @@ class PortableBundleVaultDriver:
             now_epoch=time.time(),
             ttl_seconds=finite_ttl,
             chunk_ids=leased_ids,
+            lease_token=uuid.uuid4().hex,
         )
 
         def _apply(
@@ -3040,9 +3366,16 @@ class PortableBundleVaultDriver:
 
         self._mutate(_apply)
 
-    def release_push_lease(self, lease_id: str) -> None:
-        """Remove a ``leases/<lease_id>.json`` entry from this bundle."""
+    def release_push_lease(self, lease_id: str, *, expected_etag: str | None = None) -> None:
+        """Remove a ``leases/<lease_id>.json`` entry from this bundle.
+
+        ``expected_etag`` is the sha256 of the lease body that was observed; supplying
+        it makes the removal conditional, so a bundle whose lease was refreshed in the
+        meantime is left alone.
+        """
         valid_id = _validate_snapshot_id(lease_id)
+        if expected_etag is not None and not expected_etag.strip():
+            raise VaultTransportError("Refusing to release a bundle lease without a known ETag")
 
         def _apply(
             chunks: dict[str, bytes],
@@ -3050,6 +3383,13 @@ class PortableBundleVaultDriver:
             leases: dict[str, bytes],
         ) -> None:
             del chunks, manifests
+            if expected_etag is not None:
+                current = self._leases.get(valid_id)
+                current_etag = hashlib.sha256(current).hexdigest() if current else ""
+                if current_etag != expected_etag.strip():
+                    raise VaultRevisionConflictError(
+                        f"Bundle lease {valid_id!r} changed since it was observed"
+                    )
             leases.pop(valid_id, None)
 
         self._mutate(_apply)

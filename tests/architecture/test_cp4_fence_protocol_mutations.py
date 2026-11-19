@@ -24,6 +24,15 @@ to be enough:
   anchor that makes lease expiry immune to a lagging writer (M13), the mandatory
   ``ETag`` precondition before a fence is retired (M14), and the two non-finite guards
   in the loudness core (M15, M16).
+* the CP6 closure of the lease state machine and the chunk identity: an expired-lease
+  reap that trusts the read it took one round trip ago (M17), a rollback that writes
+  without proving the object is still its own write (M18), a reap that degrades to an
+  unconditional ``DELETE`` when the backend reports no ``ETag`` (M19), a release path
+  that accepts an empty ``ETag`` as a licence to delete (M20), a chunk identity
+  reduced to the content-hash ``ETag`` and therefore blind to a delete-and-reupload of
+  identical bytes (M21), an unknown-identity object treated as unchanged (M22), and
+  the two audio contracts that refuse a non-finite scalar parameter and a non-finite
+  ``clean_reference`` (M23, M24).
 
 Every mutant also names the test that must be the one to kill it, and the campaign
 fails if that node does not appear among the reported failures — a mutant killed by
@@ -58,6 +67,7 @@ ANCHOR = "nexus_ai_agent/creative/storyboard_compiler/editorial_cut_solver.py"
 FENCE_TESTS = "tests/unit/test_personal_cloud_vault_lease_fence.py"
 ANCHOR_TESTS = "tests/creative/storyboard_compiler/test_editorial_cut_solver.py"
 AUDIO = "nexus_ai_agent/creative/audio_engine/loudness_bs1770.py"
+WIENER = "nexus_ai_agent/creative/audio_engine/wiener_denoise.py"
 AUDIO_TESTS = "tests/creative/audio_engine/test_finite_input_guards.py"
 
 #: ``(mutant id, source path, original text, mutated text, target test file, expected kill)``.
@@ -83,10 +93,16 @@ MUTANTS: tuple[tuple[str, str, str, str, str, str], ...] = (
         """            object_key=self._object_key("chunks", f"{chunk_id}.chk"),
             body=staged_payload,
             content_type="application/octet-stream",
-            extra_headers={"if-none-match": "*"},""",
+            extra_headers={
+                "if-none-match": "*",
+                CHUNK_GENERATION_META_HEADER: _new_chunk_generation(),
+            },""",
         """            object_key=self._object_key("chunks", f"{chunk_id}.chk"),
             body=staged_payload,
-            content_type="application/octet-stream",""",
+            content_type="application/octet-stream",
+            extra_headers={
+                CHUNK_GENERATION_META_HEADER: _new_chunk_generation(),
+            },""",
         FENCE_TESTS,
         "test_conditional_restore_never_overwrites_a_newer_chunk_object",
     ),
@@ -161,8 +177,8 @@ MUTANTS: tuple[tuple[str, str, str, str, str, str], ...] = (
     (
         "M10 parser normalization skipped",
         ANCHOR,
-        "        normalized = normalize_script_text(text)",
-        "        normalized = text",
+        "    normalized = normalize_script_text(text)",
+        "    normalized = text",
         ANCHOR_TESTS,
         "test_wave8_trusted_source_text_closes_the_self_attestation_hole",
     ),
@@ -179,9 +195,13 @@ MUTANTS: tuple[tuple[str, str, str, str, str, str], ...] = (
         DRIVERS,
         """        lost = self._lost_materialised_chunks(preflight)
         if lost:
-            self._send("DELETE", object_key=obj_key)
+            self._rollback_lease_acquire(
+                obj_key, our_write_etag=our_write_etag, our_lease_token=our_lease_token
+            )
             raise self._lost_chunk_error(lost, "after the lease write")""",
-        "        lost: tuple[str, ...] = ()",
+        """        lost: tuple[str, ...] = ()
+        if lost:
+            raise self._lost_chunk_error(lost, "after the lease write")""",
         FENCE_TESTS,
         "test_aba_collector_finishing_before_the_lease_write_forces_a_rollback",
     ),
@@ -235,6 +255,133 @@ MUTANTS: tuple[tuple[str, str, str, str, str, str], ...] = (
         "    if False:",
         AUDIO_TESTS,
         "test_measure_bs1770_refuses_non_finite_samples",
+    ),
+    (
+        "M17 expired-lease reap trusts a stale read",
+        DRIVERS,
+        """        if not state.is_ours(etag=expected_etag, lease_token=expected_lease_token):
+            return False
+        if state.deadline_epoch + self._clock_skew_margin > effective_now:
+            return False
+        try:
+            resp = self._send(
+                "DELETE",
+                object_key=obj_key,
+                extra_headers={"if-match": expected_etag},
+            )
+        except VaultTransportError:
+            return False
+        if resp.status_code in (200, 202, 204):
+            return True""",
+        """        return (
+            self._send("DELETE", object_key=obj_key).status_code in (200, 202, 204, 404)
+        )""",
+        FENCE_TESTS,
+        "test_stale_lease_cleanup_cannot_delete_a_concurrently_refreshed_lease",
+    ),
+    (
+        "M18 rollback loses its ownership precondition",
+        DRIVERS,
+        """        if not state.is_ours(etag=our_write_etag, lease_token=our_lease_token):
+            return
+        if prior_body is not None and prior_etag and state.etag == prior_etag:
+            return
+        if prior_body is not None:
+            resp = self._send(
+                "PUT",
+                object_key=obj_key,
+                body=prior_body,
+                content_type="application/json",
+                extra_headers={"if-match": our_write_etag},
+            )
+        else:
+            resp = self._send(
+                "DELETE",
+                object_key=obj_key,
+                extra_headers={"if-match": our_write_etag},
+            )""",
+        """        if prior_body is not None:
+            self._send(
+                "PUT",
+                object_key=obj_key,
+                body=prior_body,
+                content_type="application/json",
+            )
+            return
+        self._send("DELETE", object_key=obj_key)
+        return""",
+        FENCE_TESTS,
+        "test_failed_rollback_never_deletes_a_third_writers_newer_lease",
+    ),
+    (
+        "M19 reap degrades to an unconditional delete without an ETag",
+        DRIVERS,
+        """        if not expected_etag:
+            return False
+        try:
+            state = self._read_lease_state(obj_key)""",
+        """        if not expected_etag:
+            self._send("DELETE", object_key=obj_key)
+            return True
+        try:
+            state = self._read_lease_state(obj_key)""",
+        FENCE_TESTS,
+        "test_absent_lease_etag_never_causes_unconditional_lease_deletion",
+    ),
+    (
+        "M20 release accepts an empty ETag",
+        DRIVERS,
+        """            if not expected_etag.strip():
+                raise VaultTransportError(
+                    f"Refusing to release S3 push lease {valid_id!r} without a known ETag: "
+                    "an unconditional DELETE could remove a lease another writer just took over"
+                )""",
+        """            if False:
+                raise VaultTransportError("unreachable")""",
+        FENCE_TESTS,
+        "test_absent_lease_etag_never_causes_unconditional_lease_deletion",
+    ),
+    (
+        "M21 chunk identity reduced to the content ETag",
+        DRIVERS,
+        '''        if not version_id and not generation:
+            return UNKNOWN_CHUNK_GENERATION
+        return f"{version_id}|{generation}|{etag}"''',
+        """        if not version_id and not generation:
+            return UNKNOWN_CHUNK_GENERATION
+        return etag""",
+        FENCE_TESTS,
+        "test_identical_bytes_reupload_with_same_etag_is_detected_as_aba_replacement",
+    ),
+    (
+        "M22 unknown chunk identity treated as unchanged",
+        DRIVERS,
+        """        if not version_id and not generation:
+            return UNKNOWN_CHUNK_GENERATION""",
+        """        if False:
+            return UNKNOWN_CHUNK_GENERATION""",
+        FENCE_TESTS,
+        "test_missing_version_and_generation_metadata_fails_closed",
+    ),
+    (
+        "M23 non-finite scalar parameter accepted",
+        WIENER,
+        """    if not math.isfinite(number):
+        raise ValueError(f"{name} must be a finite real number")""",
+        """    if False:
+        raise ValueError(f"{name} must be a finite real number")""",
+        AUDIO_TESTS,
+        "test_wiener_rejects_nan_and_inf_scalar_parameters",
+    ),
+    (
+        "M24 non-finite clean_reference silently ignored",
+        WIENER,
+        """        reference = _require_finite("clean_reference", clean_reference).reshape(-1)""",
+        """        reference = np.asarray(clean_reference, dtype=np.float64).reshape(-1)[
+            : output.size
+        ]""",
+        AUDIO_TESTS,
+        "test_wiener_rejects_non_finite_clean_reference",
     ),
 )
 
@@ -292,8 +439,8 @@ def _failed_node_ids(stdout: str) -> list[str]:
 
 
 def test_campaign_has_the_expected_mutants() -> None:
-    assert len(MUTANTS) == 16
-    assert len({m[0] for m in MUTANTS}) == 16
+    assert len(MUTANTS) == 24
+    assert len({m[0] for m in MUTANTS}) == 24
 
 
 def test_every_mutation_anchor_is_unique() -> None:

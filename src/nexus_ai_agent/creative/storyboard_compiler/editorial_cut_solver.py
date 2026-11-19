@@ -2004,7 +2004,7 @@ def verify_manifest_integrity(
     )
 
 
-def _trusted_source_digest(trusted_source_text: str | bytes) -> str | None:
+def _trusted_source_digest(trusted_source_text: object) -> str | None:
     """SHA-256 of the *normalized* form of an independently supplied screenplay.
 
     The digest is computed here, from bytes the caller handed us, and in the same
@@ -2021,13 +2021,18 @@ def _trusted_source_digest(trusted_source_text: str | bytes) -> str | None:
     elif isinstance(trusted_source_text, str):
         text = trusted_source_text
     else:
+        # Annotated ``object``, not ``str | bytes``: this is the untrusted boundary, so
+        # the runtime refusal is the contract — a typing-only union would let mypy
+        # delete the branch that actually rejects the bad value.
         return None
     if not text:
         return None
-    try:
-        normalized = normalize_script_text(text)
-    except Exception:  # normalize_script_text rejects non-str; never propagate
-        return None
+    # No ``try/except`` here on purpose: ``text`` is a non-empty ``str`` by the two
+    # branches above, which is exactly what ``normalize_script_text`` accepts, so a
+    # handler would be dead code that hides a real contract break instead of one
+    # more refusal. Unusable *input* is already refused above, and ``str`` cannot
+    # fail to normalise.
+    normalized = normalize_script_text(text)
     if not normalized.strip():
         return None
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()

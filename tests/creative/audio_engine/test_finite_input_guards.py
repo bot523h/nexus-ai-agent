@@ -134,3 +134,81 @@ def test_empty_input_is_still_a_measurement_not_an_error() -> None:
 def test_dbfs_of_a_non_finite_value_is_none(bad: float) -> None:
     """``nan <= 0.0`` is False, so the old guard fell through to ``20*log10(nan)``."""
     assert loudness_bs1770._dbfs(bad) is None
+
+
+# --------------------------------------------------------------------------- #
+# wiener_denoise: scalar parameters, and the clean reference
+# --------------------------------------------------------------------------- #
+
+# ``nan`` defeats one-sided range checks (``nan < 0`` is False) and ``inf`` defeats
+# the other, so a scalar that never reaches a range check still reaches the FFT.
+_SCALAR_CASES: tuple[tuple[str, float], ...] = (
+    ("floor-nan", math.nan),
+    ("floor-inf", math.inf),
+    ("strength-nan", math.nan),
+    ("smoothing-nan", math.nan),
+    ("smoothing-inf", math.inf),
+    ("overlap-nan", math.nan),
+    ("noise_percentile-nan", math.nan),
+)
+
+
+@pytest.mark.parametrize(("label", "bad"), _SCALAR_CASES, ids=[c[0] for c in _SCALAR_CASES])
+def test_wiener_rejects_nan_and_inf_scalar_parameters(label: str, bad: float) -> None:
+    """A non-finite *parameter* is refused before any audio is transformed."""
+    samples = _noisy()
+    kwargs: dict[str, float] = {"floor": 0.05, "strength": 1.0, "smoothing": 0.98}
+    name = label.split("-", 1)[0]
+    if name == "overlap":
+        kwargs["overlap"] = bad
+    elif name == "noise_percentile":
+        kwargs["noise_percentile"] = bad
+    else:
+        kwargs[name] = bad
+
+    with pytest.raises(ValueError, match="must be a finite real number"):
+        wiener_denoise.wiener_denoise(samples, sample_rate=RATE, **kwargs)
+
+    # The same contract holds at each primitive, independently of the facade.
+    with pytest.raises(ValueError, match="must be a finite real number"):
+        wiener_denoise.wiener_gain(np.ones((2, 3)), np.ones((2, 3)), floor=bad)
+    with pytest.raises(ValueError, match="must be a finite real number"):
+        wiener_denoise.estimate_noise_psd(np.ones((4, 3)), percentile=bad)
+
+
+def test_wiener_rejects_boolean_scalars() -> None:
+    """``True`` is an ``int``: a boolean where a gain belongs is a bug, not ``1.0``."""
+    with pytest.raises(ValueError, match="must be a finite real number"):
+        wiener_denoise.wiener_denoise(_noisy(), sample_rate=RATE, strength=True)  # type: ignore[arg-type]
+
+
+def test_wiener_rejects_non_finite_clean_reference() -> None:
+    """A broken reference must not silently turn into ``snr_gain_db=None``.
+
+    The reference used to be truncated to the shorter of the two signals and, when it
+    carried ``nan``, the SNR simply came back ``None`` — indistinguishable from "the
+    measurement did not apply". A non-finite reference and a length mismatch are both
+    caller errors, and both are now typed refusals.
+    """
+    samples = _noisy()
+    reference = samples.copy()
+    reference[42] = math.nan
+    with pytest.raises(ValueError, match="clean_reference contains 1 non-finite value"):
+        wiener_denoise.wiener_denoise(samples, sample_rate=RATE, clean_reference=reference)
+
+    infinite = samples.copy()
+    infinite[7] = math.inf
+    with pytest.raises(ValueError, match="clean_reference contains 1 non-finite value"):
+        wiener_denoise.wiener_denoise(samples, sample_rate=RATE, clean_reference=infinite)
+
+    with pytest.raises(ValueError, match="clean_reference has .* but samples has"):
+        wiener_denoise.wiener_denoise(samples, sample_rate=RATE, clean_reference=samples[:-400])
+
+    # A matching, finite reference is still measured rather than merely accepted.
+    # (The reference is the underlying tone, not the noisy signal itself: an identical
+    # reference has zero error, i.e. an infinite "before" SNR, which reports ``None``.)
+    time = np.arange(samples.size) / RATE
+    clean = 0.3 * np.sin(2.0 * np.pi * 220.0 * time)
+    result = wiener_denoise.wiener_denoise(samples, sample_rate=RATE, clean_reference=clean)
+    assert result.snr_gain_db is not None
+    assert math.isfinite(result.snr_gain_db)

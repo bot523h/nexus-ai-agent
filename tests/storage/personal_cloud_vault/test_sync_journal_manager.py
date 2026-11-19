@@ -2163,6 +2163,28 @@ from nexus_ai_agent.storage.personal_cloud_vault.sync_journal_manager import (
     PersonalCloudVaultManager,
 )
 
+import hashlib
+
+_BENCH_PUTS: list[str] = []
+
+
+def _identity_headers(key: str) -> dict[str, str]:
+    """Chunk identity for the S3 fake, derived instead of stored.
+
+    The driver now proves an object is the one it preflighted from
+    ``(version-id, generation stamp, ETag)``, so the fake has to answer with an
+    identity. Storing one dict per object would put *fake* memory into the very RSS
+    number this harness measures, so the identity is derived from the key instead:
+    stable across HEAD/GET for the same object, which is all this harness needs (no
+    object here is ever rewritten, so a per-write version would say the same thing).
+    """
+    digest = hashlib.sha256(key.encode()).hexdigest()
+    return {
+        "etag": f'"bench-{digest[:16]}"',
+        "x-amz-version-id": f"v-{digest[:16]}",
+        "x-amz-meta-nexus-chunk-gen": digest[:32],
+    }
+
 
 def _hwm_rss_bytes() -> int:
     """Kernel high-water-mark RSS (true peak, not the value at sampling time).
@@ -2219,11 +2241,12 @@ with tempfile.TemporaryDirectory() as td:
                 # Chunk bodies are recorded as a marker only: keeping them would make the
                 # harness — not the driver — the memory bottleneck being measured.
                 objects[key] = b"" if key.endswith(".chk") else request.body
-                return S3HttpResponse(status_code=200, headers={"etag": '"bench-etag"'})
+                _BENCH_PUTS.append(key)
+                return S3HttpResponse(status_code=200, headers=_identity_headers(key))
             if request.method == "HEAD":
                 if key not in objects:
                     return S3HttpResponse(status_code=404)
-                return S3HttpResponse(status_code=200, headers={"etag": '"bench-etag"'})
+                return S3HttpResponse(status_code=200, headers=_identity_headers(key))
             if request.method == "GET":
                 if key not in objects:
                     return S3HttpResponse(status_code=404)
