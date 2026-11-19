@@ -1,8 +1,20 @@
-# ROADMAP_STATUS — NEXUS AI agent (as of 2026-09-21, v3.12.0 housekeeping, Phase 6)
+# ROADMAP_STATUS — NEXUS AI agent (as of 2026-11-19, v3.13.0, Phase 6)
 
 Header: **No hidden migration. No hidden mutation. No implicit repair.**
 Phase 6 adds: **packs are data; commands carry evidence; only the last step
 of a lane is impure.**
+
+> **Current base.** `main` @ `d6876ab378b88b2ccca1187b1f3c51be5bf52657`
+> (2026-11-19, merge of PR #350). The released version is **v3.13.0**
+> (`VERSION`, `pyproject.toml` and the `CHANGELOG` heading are in lockstep;
+> `python scripts/check_version_lockstep.py` proves it). `main` has moved well
+> past that release cut through PR #335–#350 — notably #344 (Waves 1–7
+> closeout: bounded CI parity, median benchmarks, traced history) and #350
+> (v1 module consolidation: `resource_packs`, `hyper_compiler`,
+> `personal_cloud_vault`, `storyboard_compiler`, API lifespan). Nothing in
+> the tables below is promoted on the strength of a merge title alone; the
+> per-stage evidence lives in
+> [`docs/engineering/NAGAR_ONE_TRUTH_MATRIX.md`](docs/engineering/NAGAR_ONE_TRUTH_MATRIX.md).
 
 The seven-phase roadmap (`docs/DECISION_LOG.md`): Phase 0 (control plane /
 security) → 1 (core product) → 2 (local-LLM direction) → 3 (multi-provider
@@ -22,7 +34,8 @@ Phases 0–5 are complete on `main`.
 | Release 3.11.0 | Housekeeping cut after Waves 2a–2c | **MERGED** | PR#24 `8b27625` |
 | **Wave 2.5** | Telegram `/slideshow` surface → `JobQueuePort` → existing render lane → completion delivery; five-image/30-second limits and typed failures | **MERGED** | PR#25 `316ed33` |
 | Wave 3 — image generation | Isolated `ImageGenProvider`, Pollinations default and fail-closed paid Gemini; bounded retry/cache, `/imagine`, opt-in slideshow autofill, cost/consent/cleanup tests and import-boundary checks | **MERGED** | PR#26 `52329e6` |
-| Release 3.12.0 | Version lock-step and release notes for Wave 2.5 + Wave 3 image generation; refresh README, roadmap, continuum and decision log | **THIS PR** — separate release commit, pending merge | base `52329e6` |
+| Release 3.12.0 | Version lock-step and release notes for Wave 2.5 + Wave 3 image generation; refresh README, roadmap, continuum and decision log | **MERGED & RELEASED** — superseded as the live cut by v3.13.0 | base `52329e6` |
+| Release 3.13.0 | P0 Week-1 security batch (global deny-by-default guard, dashboard PII removal + bearer gate, path-traversal fixes, LLM-egress consent gate) plus wiring of the previously dead feature engines to the live Telegram surface | **RELEASED** — the version `VERSION`/`pyproject.toml`/`CHANGELOG` declare on 2026-11-19 | `CHANGELOG` §3.13.0 (2026-09-21) |
 | Wave 3 — local upscale | Optional local stage, not the main render path; contract and owner approval required before implementation | **DEFERRED / NOT IMPLEMENTED** | decision log r6 and release-scope decision 2026-09-21 |
 | Other 60 TDD operations | Each still needs its own contract, ownership boundary and decision entry | NOT STARTED | — |
 
@@ -86,7 +99,7 @@ reports it (`committed_snapshot`, `blocking: false`) instead of gating on it. It
 republished with `nexus continuum publish` from a clean checkout; `nexus continuum
 verify` reports STALE as soon as a later commit changes an evidence root.
 
-## Quality gates (reverified 2026-09-21 on PR#26 head `471803c`)
+## Quality gates (historical: 2026-09-21, PR#26 head `471803c`)
 
 The working tree was verified byte-for-byte against the requested commit, with
 a fresh local virtualenv and disabled Ruff/mypy/pytest caches before merging.
@@ -109,6 +122,41 @@ were added. Local verification did not install the two heavy inference stacks
 or exercise paid image APIs. Hosted CI installs the complete `.[dev]` set. The
 PostgreSQL job checks idempotent migrations through `f4a9c2e71b08`, the create-all
 race and the adapter/lifecycle contracts on PostgreSQL.
+
+## Current verification state (2026-11-19, `main` @ `d6876ab3`)
+
+Measured on this base, in a clean local virtualenv rebuilt from the tree under
+test (no editable install, `PYTHONPATH=src` unless stated):
+
+| Gate | Command | Result |
+|------|---------|--------|
+| Version lock-step | `python scripts/check_version_lockstep.py` | green — `VERSION` == `pyproject` == `CHANGELOG` == `3.13.0` |
+| Board integrity | `python scripts/check_board_integrity.py` | green — `.agents/board.json` consistent |
+| Operation truth | `python -m nexus_ai_agent.nagar --check` | green — projection and generated docs match the sources |
+| Repository truth doctor | `python -m nexus_ai_agent.diagnostics.truth --root .` | green — no findings (`tests/architecture/test_repo_truth_consistency.py` enforces it) |
+| Lint / format | `ruff check .` · `ruff format --check .` | green |
+| Types | `mypy` (targeted) | green on the packages this cut touched (`storage/personal_cloud_vault`, `creative/storyboard_compiler`); the full `mypy src` gate is the one CI runs |
+| Test inventory | static scan of `tests/` | 598 test files, 10 061 test functions, ≈207 300 lines; the full collection on this base reports **13 068** tests |
+
+The 2026-11-19 audit of this base found exactly **three** local failures, all
+environment sensitivities rather than defects, and all closed in the same cut:
+two `selfhood` tests whose `python -I` child could not import a non-installed
+`nexus_ai_agent`, and one botanical-wind micro-benchmark whose median tripped a
+hard 2000 ms cap by 2.7 % under load. The fixes are recorded in
+`docs/architecture/TESTING.md` §5 (benchmark standard and the `-I` rule).
+
+### NAGAR-ONE stage state (product contract §6)
+
+| Stage | State | Evidence |
+|-------|-------|----------|
+| 0 — contract, truth matrix, architecture freeze | **CLOSED** | `docs/product/NAGAR_ONE_PRODUCT_CONTRACT.md`, `docs/engineering/NAGAR_ONE_TRUTH_MATRIX.md` |
+| 1 — durable Project ↔ Revision ↔ AssetVersion | **IMPLEMENTED** (slice-2, PR #319) | `tests/integration/test_durable_project_revision_pinning.py`, `tests/integration/test_artifact_binding_postgres_concurrency.py` |
+| 2 — Creative Graph & Passport closure | **BLOCKED** on PR #294 (not in this tree) | truth-matrix rows stay `PARTIAL` |
+| 3 — production-grade Live Editing | **NOT STARTED** (no board claim) | `nagar/ibpc/*` is in-memory and labelled as such |
+
+The live execution queue is execution-core hardening, not Stage 2/3 product
+work: `task-255`, `task-256`, `task-259`, `task-260`, `task-263`, `task-269`
+(`.agents/board.json` → `next_work`, board updated 2026-11-12).
 
 ## Dependencies
 

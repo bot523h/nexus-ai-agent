@@ -2,7 +2,7 @@
 
 **Status:** Living document
 **Scope:** test taxonomy, the four gates, determinism rules, local reproduction, honest gaps
-**Verified against:** `main` @ `7573249` — the baseline numbers in §5 were produced locally on 2026-09-21
+**Verified against:** `main` @ `d6876ab378b88b2ccca1187b1f3c51be5bf52657` (2026-11-19). The numbers in §5 are the 2026-11-19 inventory of this base; the 2026-09-21 baseline they replaced is kept beside it, labelled, because a number without its date and commit is a rumour.
 
 ---
 
@@ -81,23 +81,111 @@ All source anchors must match exactly once and differ from their replacements, p
 
 Documentation linting beyond this (Vale prose linting, `markdownlint-cli2`, Mermaid's own parser via [`mermaid-lint`](https://github.com/jasonworden/mermaid-lint), link checkers such as Lychee — the toolchain GitLab documents in its [docs testing](https://docs.gitlab.com/development/documentation/testing/)) is deliberately **not** wired in yet: it would add a Node/Chromium toolchain to a Python-only CI for a documentation set that is currently < 20 files. The trade-off is recorded in [`adr/0002-docs-as-code-enforcement.md`](adr/0002-docs-as-code-enforcement.md).
 
-## 5. Baseline (2026-09-21, local)
+## 5. Baseline and measurement standards
+
+### 5.1 Inventory of this base (2026-11-19, `main` @ `d6876ab3`)
 
 ```bash
-python -m venv .venv && . .venv/bin/activate
-pip install -e ".[dev]"        # editable install matters — see below
-pytest -q -m "not slow"
-# 1106 passed, 23 skipped, 4 warnings in ~61s
+find tests -name 'test_*.py' | wc -l          # 598 test files
+# the collected-case count (13 068) is the number the 2026-11-19 audit of this base
+# reported for the full suite: python -m pytest --collect-only -q
 ```
 
 | Metric | Value |
 |---|---:|
-| Test files | 111 (83 unit · 13 integration · 15 architecture) |
-| Test lines | ~19 300 |
-| Passed / skipped (this machine) | 1106 / 23 |
-| Skips | PostgreSQL-dependent suites (`NEXUS_DATABASE_URL` unset) + optional heavy extras |
+| Test files | 598 (327 `tests/unit` · 56 `tests/integration` · 57 `tests/architecture` · 157 creative/storage/pack suites · 1 bench) |
+| Test functions | 10 061 (static AST count; parametrisation expands them to 13 068 collected cases) |
+| Test lines | ≈207 300 |
+| Source lines | ≈186 300 across 590 modules under `src/` |
 
-**The editable-install gotcha (worth knowing):** running `pytest` with only `PYTHONPATH=src` fails 5 tests for purely environmental reasons — 4 race-condition tests spawn `python -m nexus_ai_agent.cli` subprocesses that cannot import a non-installed package, and `test_version_command::test_running_version_matches_installed_distribution` needs distribution metadata. `pip install -e . --no-deps` fixes all five. CI installs the package properly, so it never sees this; a contributor with a bare `PYTHONPATH` will. This is a documentation fix, not a code bug.
+The 2026-09-21 baseline for comparison (same command, older tree): **1106
+passed, 23 skipped** in ~61 s with 111 test files. The suite grew roughly
+elevenfold in case count since; the *shape* did not change, which is why the
+layer rules in §2 still hold.
+
+### 5.2 Benchmark standard (`N = 3`, warm-up, jitter tolerance)
+
+Wall-clock micro-benchmarks live in `tests/creative/atlas/test_wave21_30_benchmarks.py`
+and are contracts, not marketing: each operator runs a small / medium / large
+synthetic workload and asserts a median budget. Three rules make them honest:
+
+1. **`N = 3` timed samples, median reported.** `max` is printed alongside the
+   median but never asserted — a single outlier is information, not a verdict.
+2. **One untimed warm-up run precedes the sample loop.** The first call of an
+   operator pays first-touch page faults, allocator growth and lazily imported
+   `numpy` kernels. Excluding it is the difference between measuring the
+   operator and measuring process start-up.
+3. **Every budget carries the shared `JITTER_TOLERANCE` of 1.25.** A median of
+   three samples legitimately moves by a few percent on a shared runner: the
+   audit of this base measured `modal_wind n=1024` at 2053.85 ms against a hard
+   2000 ms cap (2.7 % over) with no code change at all. A real regression in
+   these operators is a multiple of the budget, not a percent, so the widened
+   bar (2000 → 2500 ms, 3000 → 3750 ms, ...) still bites.
+
+Benchmarks never assert on memory measured process-wide (`ru_maxrss`); where
+peak allocation matters the assertion is `tracemalloc`-scoped around the single
+operation, and such a ceiling is environment-sensitive outside the CI image (see
+§7).
+
+### 5.3 Coverage standard
+
+* **Per-pack bar: 95 %, enforced by `scripts/pack_coverage.py`.** The run is
+  accepted only when it is canonical (27 targets derived from
+  `PACK_TEST_TARGETS`, all 7 units, default root, bar 95.0), the measurement is
+  verified (child exit 0, zero failed / errored / deselected, nonce-bound trace
+  artifact, no orphaned or stale mapping) and every pack is ≥ 95 %. A lowered
+  `--threshold` is diagnostic evidence and is never accepted.
+* The harness is stdlib-only (`trace` / `dis`), so the coverage verdict does not
+  depend on a third-party `coverage.py` version.
+* Coverage is a floor on the *pack surface*, not a proxy for behaviour: a line
+  that runs without an assertion is not tested. That is what §5.4 exists for.
+
+### 5.4 Mutation standard (adversarial proof, not a percentage)
+
+Every trust plane carries a mutation campaign under `scripts/` — `pack_trust_mutations.py`,
+`security_mutations_remote_key.py`, `api_gate_mutations.py`, `execution_core_mutations.py`,
+`durable_project_state_mutations.py`, `queue_ownership_mutations.py`,
+`creative_redelivery_mutations.py`, `temporal_mutations.py`, `continuum_mutations.py`
+and the per-module probes (`task255_mutation_probes.py`, `gate5_mutation_probes.py`, ...).
+A campaign is only green when:
+
+* **every mutant is killed** — the pinned pytest node fails, the declared
+  failure-oracle marker is present, and no unrelated failure appears; a survivor
+  fails the run, and a mutation that could not be applied (`invalid`) is not
+  counted as a kill;
+* **every source anchor matches exactly once** and differs from its replacement
+  (a duplicated anchor would silently mutate only the first occurrence, so
+  `tests/unit/test_mutation_harness_anchors.py` ratchets uniqueness);
+* **the restored bytes are verified** by hash, and the baseline is re-run green
+  afterwards, so the campaign cannot pass by leaving the tree weakened;
+* AST-level checks are used where a text edit would be ambiguous: the campaigns
+  parse the mutated module with `ast.parse` before running, so an edit that
+  produces a syntactically different program is rejected as an invalid mutant
+  instead of being scored as a kill.
+
+Campaigns run in their own CI jobs (they are slow and they write to `src/`
+transiently); the report is deterministic JSON bound to `git rev-parse HEAD`.
+
+### 5.5 Subprocess isolation rule (`python -I`)
+
+Tests that must prove something across a *process* boundary spawn the child with
+`python -I` — isolated mode is the point: no `PYTHONPATH`, no CWD, no user
+site-dir, so the parent cannot leak an import into the child. The cost is that a
+source checkout is invisible to the child (`-I` also hides `src/layout`), and it
+dies with `ModuleNotFoundError` before running a line — which is exactly what
+happened to the two `selfhood` tests at this base. **The flag is never the
+thing to remove.** Inject the absolute `src` path of the tree under test into the
+child's `sys.path` from inside the child script (`tests/unit/test_selfhood_ledger.py`
+has the canonical `_child()` helper), so the child still loads the code under
+test and the isolation stays intact.
+
+**The editable-install gotcha (historical, still worth knowing):** running
+`pytest` with only `PYTHONPATH=src` used to fail a handful of tests for purely
+environmental reasons — subprocess tests that cannot import a non-installed
+package, and `test_version_command::test_running_version_matches_installed_distribution`,
+which needs distribution metadata. `pip install -e . --no-deps` fixes those.
+The subprocess ones are now fixed at the source (§5.5) rather than by the
+installer, and CI installs the package properly either way.
 
 ## 6. Reproducing the numbers in these documents
 
@@ -116,6 +204,12 @@ pytest -q tests/unit/test_i18n_parity.py
 
 # docs gates
 pytest -q tests/unit/test_docs_integrity.py
+
+# repository truth gates (all four must be green before a push)
+python -m nexus_ai_agent.nagar --check
+python scripts/check_board_integrity.py
+python scripts/check_version_lockstep.py
+python -m nexus_ai_agent.diagnostics.truth --root .
 ```
 
 ## 7. Known gaps (stated, not hidden)
@@ -127,6 +221,8 @@ pytest -q tests/unit/test_docs_integrity.py
 | PostgreSQL suites skip locally without `NEXUS_DATABASE_URL` | local confidence is lower than CI confidence | CI `migrate-postgres` job |
 | No browser/E2E UI test | the dashboard is HTML-by-render, not a UI framework | deliberate: see [`OVERVIEW.md`](OVERVIEW.md) §7 (dashboard is read-only by design) |
 | P0-8/P0-9 have no guard test yet | engine double-wiring and empty graph memory can return unnoticed | board **task-124** [`SECURITY.md`](SECURITY.md) §3 |
+| `tracemalloc` ceilings are sensitive to what the local interpreter has already imported | a streaming-residency assertion can fail on one machine and pass on another with identical code (observed at this base: `test_n1_streaming_push_o1_tracemalloc_ceiling_and_disk_locator_healing` fails in a minimal local virtualenv, passes in the CI image) | §5.2; treat it as a CI-image contract and reproduce there before calling it a regression |
+| Some mutation campaigns are still manual (`make mutations` covers only two of them) | a trust plane can lose its adversarial proof without anything turning red | board **task-260** (execution-core campaign as a CI job) |
 
 ## 8. Adding a test
 
