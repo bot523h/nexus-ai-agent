@@ -19,6 +19,15 @@ to be enough:
   ``verify_manifest_integrity_strict``. The mutants restore the self-attestation hole
   in its several shapes: no anchor required, the text route ignored, an agreement
   mismatch tolerated, the parser's normalization skipped.
+* the CP5 hardening, each mutant undoing exactly one of its guarantees: the
+  post-write chunk-generation proof that closes the ABA race (M12), the bucket-clock
+  anchor that makes lease expiry immune to a lagging writer (M13), the mandatory
+  ``ETag`` precondition before a fence is retired (M14), and the two non-finite guards
+  in the loudness core (M15, M16).
+
+Every mutant also names the test that must be the one to kill it, and the campaign
+fails if that node does not appear among the reported failures — a mutant killed by
+an unrelated test would otherwise count as proof of a guard nobody exercised.
 
 Isolation is by hardlink: the copy is instant and costs no disk, and every mutated
 file is unlinked *before* it is written, so a hardlink can never write through to the
@@ -48,11 +57,13 @@ DRIVERS = "nexus_ai_agent/storage/personal_cloud_vault/byos_drivers.py"
 ANCHOR = "nexus_ai_agent/creative/storyboard_compiler/editorial_cut_solver.py"
 FENCE_TESTS = "tests/unit/test_personal_cloud_vault_lease_fence.py"
 ANCHOR_TESTS = "tests/creative/storyboard_compiler/test_editorial_cut_solver.py"
+AUDIO = "nexus_ai_agent/creative/audio_engine/loudness_bs1770.py"
+AUDIO_TESTS = "tests/creative/audio_engine/test_finite_input_guards.py"
 
-#: ``(mutant id, relative source path, original text, mutated text, targeted test file)``.
+#: ``(mutant id, source path, original text, mutated text, target test file, expected kill)``.
 #: Every ``original`` must occur exactly once in the real tree, which
 #: ``test_every_mutation_anchor_is_unique`` enforces.
-MUTANTS: tuple[tuple[str, str, str, str, str], ...] = (
+MUTANTS: tuple[tuple[str, str, str, str, str, str], ...] = (
     (
         "M01 post-retirement lease read removed",
         DRIVERS,
@@ -64,6 +75,7 @@ MUTANTS: tuple[tuple[str, str, str, str, str], ...] = (
                 return True""",
         "                return True",
         FENCE_TESTS,
+        "test_lease_registered_while_the_fence_is_being_retired_is_still_seen",
     ),
     (
         "M02 rollback loses create-if-absent",
@@ -76,6 +88,7 @@ MUTANTS: tuple[tuple[str, str, str, str, str], ...] = (
             body=staged_payload,
             content_type="application/octet-stream",""",
         FENCE_TESTS,
+        "test_conditional_restore_never_overwrites_a_newer_chunk_object",
     ),
     (
         "M03 fence claim loses if-none-match",
@@ -88,6 +101,7 @@ MUTANTS: tuple[tuple[str, str, str, str, str], ...] = (
             body=body,
             content_type="application/json",""",
         FENCE_TESTS,
+        "test_writer_refuses_a_chunk_a_collector_is_currently_fenced_for",
     ),
     (
         "M04 envelope identity guard disabled",
@@ -95,6 +109,7 @@ MUTANTS: tuple[tuple[str, str, str, str, str], ...] = (
         "        if embedded is not None and embedded != chunk_id:",
         "        if False:",
         FENCE_TESTS,
+        "test_restore_refuses_bytes_whose_envelope_names_another_chunk",
     ),
     (
         "M05 retire ignores the owner token",
@@ -102,6 +117,7 @@ MUTANTS: tuple[tuple[str, str, str, str, str], ...] = (
         "        if not fence.token or not hmac.compare_digest(fence.token, token):",
         "        if False:",
         FENCE_TESTS,
+        "test_fence_retirement_refuses_a_claim_that_now_belongs_to_another_collector",
     ),
     (
         "M06 live-fence refusal disabled",
@@ -111,6 +127,7 @@ MUTANTS: tuple[tuple[str, str, str, str, str], ...] = (
         "        fenced = self._live_gc_fenced_chunks(chunk_ids, now_epoch=now_epoch)\n"
         "        if False:",
         FENCE_TESTS,
+        "test_writer_refuses_a_chunk_a_collector_is_currently_fenced_for",
     ),
     (
         "M07 trusted text route ignored",
@@ -120,6 +137,7 @@ MUTANTS: tuple[tuple[str, str, str, str, str], ...] = (
         """    digest: str | None = None
     if False:""",
         ANCHOR_TESTS,
+        "test_wave8_trusted_source_text_closes_the_self_attestation_hole",
     ),
     (
         "M08 text/digest disagreement tolerated",
@@ -130,6 +148,7 @@ MUTANTS: tuple[tuple[str, str, str, str, str], ...] = (
             return False""",
         "        pass",
         ANCHOR_TESTS,
+        "test_wave8_trusted_source_text_closes_the_self_attestation_hole",
     ),
     (
         "M09 anchor requirement dropped",
@@ -137,6 +156,7 @@ MUTANTS: tuple[tuple[str, str, str, str, str], ...] = (
         "        require_trusted_anchor=True,",
         "        require_trusted_anchor=False,",
         ANCHOR_TESTS,
+        "test_wave8_strict_verifier_makes_the_trust_anchor_mandatory",
     ),
     (
         "M10 parser normalization skipped",
@@ -144,6 +164,7 @@ MUTANTS: tuple[tuple[str, str, str, str, str], ...] = (
         "        normalized = normalize_script_text(text)",
         "        normalized = text",
         ANCHOR_TESTS,
+        "test_wave8_trusted_source_text_closes_the_self_attestation_hole",
     ),
     (
         "M11 byte input refused",
@@ -151,6 +172,69 @@ MUTANTS: tuple[tuple[str, str, str, str, str], ...] = (
         "    if isinstance(trusted_source_text, bytes):",
         "    if False:",
         ANCHOR_TESTS,
+        "test_wave8_trusted_source_text_closes_the_self_attestation_hole",
+    ),
+    (
+        "M12 ABA chunk-generation proof disabled",
+        DRIVERS,
+        """        lost = self._lost_materialised_chunks(preflight)
+        if lost:
+            self._send("DELETE", object_key=obj_key)
+            raise self._lost_chunk_error(lost, "after the lease write")""",
+        "        lost: tuple[str, ...] = ()",
+        FENCE_TESTS,
+        "test_aba_collector_finishing_before_the_lease_write_forces_a_rollback",
+    ),
+    (
+        "M13 bucket-clock anchor dropped",
+        DRIVERS,
+        """    deadline = expires_at_epoch
+    ttl = _lease_ttl_seconds(raw)
+    observed = _server_object_epoch(headers)
+    if ttl is not None and observed is not None:
+        deadline = max(deadline, observed + ttl)
+    return deadline""",
+        "    return expires_at_epoch",
+        FENCE_TESTS,
+        "test_a_lagging_writer_clock_never_makes_its_fresh_lease_look_expired",
+    ),
+    (
+        "M14 fence retirement loses the mandatory precondition",
+        DRIVERS,
+        """        if not fence.etag:
+            # No ETag means no conditional DELETE is possible, and an unconditional
+            # DELETE could destroy a *newer* owner's claim that landed one round trip
+            # ago. Leaving the fence in place costs a writer a retry until the TTL
+            # expires; deleting the wrong fence costs data. Fail closed.
+            return False
+        resp = self._send(
+            "DELETE",
+            object_key=self._gc_fence_key(chunk_id),
+            extra_headers={"if-match": fence.etag},
+        )""",
+        """        resp = self._send(
+            "DELETE",
+            object_key=self._gc_fence_key(chunk_id),
+            extra_headers={"if-match": fence.etag} if fence.etag else {},
+        )""",
+        FENCE_TESTS,
+        "test_fence_retirement_never_degrades_to_an_unconditional_delete",
+    ),
+    (
+        "M15 dBFS of a non-finite value is published",
+        AUDIO,
+        "    if not math.isfinite(value) or value <= 0.0:",
+        "    if value <= 0.0:",
+        AUDIO_TESTS,
+        "test_dbfs_of_a_non_finite_value_is_none",
+    ),
+    (
+        "M16 non-finite input guard disabled",
+        AUDIO,
+        "    if array.size and not np.all(np.isfinite(array)):",
+        "    if False:",
+        AUDIO_TESTS,
+        "test_measure_bs1770_refuses_non_finite_samples",
     ),
 )
 
@@ -208,29 +292,30 @@ def _failed_node_ids(stdout: str) -> list[str]:
 
 
 def test_campaign_has_the_expected_mutants() -> None:
-    assert len(MUTANTS) == 11
-    assert len({m[0] for m in MUTANTS}) == 11
+    assert len(MUTANTS) == 16
+    assert len({m[0] for m in MUTANTS}) == 16
 
 
 def test_every_mutation_anchor_is_unique() -> None:
     """Each ``original`` must appear exactly once, or the campaign is meaningless."""
-    for mutant_id, rel, old, _new, _target in MUTANTS:
+    for mutant_id, rel, old, _new, _target, _expected in MUTANTS:
         text = (SRC / rel).read_text(encoding="utf-8")
         assert text.count(old) == 1, f"{mutant_id}: anchor count {text.count(old)} in {rel}"
 
 
 def test_every_target_test_file_exists() -> None:
-    for _mid, _rel, _old, _new, target in MUTANTS:
+    for _mid, _rel, _old, _new, target, _expected in MUTANTS:
         assert (REPO_ROOT / target).is_file(), f"missing target test {target}"
 
 
-@pytest.mark.parametrize(("mutant_id", "rel", "old", "new", "target"), MUTANTS)
+@pytest.mark.parametrize(("mutant_id", "rel", "old", "new", "target", "expected"), MUTANTS)
 def test_mutant_is_killed(
     mutant_id: str,
     rel: str,
     old: str,
     new: str,
     target: str,
+    expected: str,
     tmp_path: Path,
 ) -> None:
     """Inject one real defect and require a real assertion kill for it.
@@ -269,5 +354,11 @@ def test_mutant_is_killed(
     for marker in _COLLECTION_CRASH_MARKERS:
         assert marker not in combined, f"{mutant_id}: infra crash {marker!r}\n{combined[-2000:]}"
     assert node_ids, f"{mutant_id}: exit 1 without a FAILED node id\n{result.stdout[-2000:]}"
-    print(f"MUTANT KILLED {mutant_id} -> {node_ids[0]}")
-    assert KillReceipt(mutant_id, result.returncode, node_ids[0]).exit_code == _PYTEST_TESTS_FAILED
+    # The kill must come from the test that actually exercises the guard being
+    # removed; a mutant killed by an unrelated test would prove nothing about it.
+    assert any(expected in node for node in node_ids), (
+        f"{mutant_id}: killed by {node_ids}, but the guard is only exercised by "
+        f"{expected!r} — the mutant was not detected by the test that owns it"
+    )
+    print(f"MUTANT KILLED {mutant_id} -> {expected}")
+    assert KillReceipt(mutant_id, result.returncode, expected).exit_code == _PYTEST_TESTS_FAILED

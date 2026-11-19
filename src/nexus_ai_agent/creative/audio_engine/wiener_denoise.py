@@ -221,6 +221,24 @@ def estimate_noise_psd(
     return np.asarray(np.maximum(estimate, NOISE_FLOOR_POWER), dtype=np.float64)
 
 
+def _require_finite(label: str, values: np.ndarray) -> np.ndarray:
+    """Refuse non-finite audio or spectra instead of propagating ``NaN``/``Inf``.
+
+    A single ``NaN`` sample is viral: it survives every ``np.maximum``, the FFT, the
+    gain curve and the overlap-add, so the module would hand back a fully-``NaN``
+    signal while reporting a plausible-looking frame count. ``Inf`` is worse than
+    silent: it poisons a noise estimate into ``0 * inf`` and every downstream
+    measurement becomes meaningless. Both are refused at the boundary, which makes
+    the failure a typed error at the caller's line rather than a mystery three
+    stages later.
+    """
+    array = np.asarray(values, dtype=np.float64)
+    if not np.all(np.isfinite(array)):
+        bad = int(np.size(array) - np.count_nonzero(np.isfinite(array)))
+        raise ValueError(f"{label} contains {bad} non-finite value(s) (NaN or Inf)")
+    return array
+
+
 def wiener_gain(
     frame_power: np.ndarray, noise_psd: np.ndarray, *, floor: float = 0.05
 ) -> np.ndarray:
@@ -228,11 +246,25 @@ def wiener_gain(
 
     A pure per-frame Wiener gain without the decision-directed smoothing in
     :func:`wiener_denoise` is what produces musical noise; this function is the
-    primitive, not the whole algorithm.
+    primitive, not the whole algorithm. Non-finite or negative powers are refused
+    (``ValueError``): the ratio of a ``NaN`` power to a positive PSD is ``NaN``, and
+    ``NaN`` is what the caller would otherwise get back as a "gain".
     """
     if floor <= 0.0 or floor >= 1.0:
         raise ValueError("floor must be within (0, 1)")
-    posteriori = np.maximum(frame_power / noise_psd - 1.0, 0.0)
+    power = _require_finite("frame_power", frame_power)
+    psd = _require_finite("noise_psd", noise_psd)
+    if power.shape != psd.shape:
+        raise ValueError(
+            f"frame_power shape {power.shape} does not match noise_psd shape {psd.shape}"
+        )
+    if power.size == 0:
+        raise ValueError("frame_power and noise_psd must be non-empty")
+    if float(np.min(power)) < 0.0:
+        raise ValueError("frame_power must be non-negative")
+    if float(np.min(psd)) <= 0.0:
+        raise ValueError("noise_psd must be strictly positive")
+    posteriori = np.maximum(power / psd - 1.0, 0.0)
     gain = posteriori / (1.0 + posteriori)
     return np.asarray(np.maximum(gain, floor), dtype=np.float64)
 
@@ -282,7 +314,7 @@ def wiener_denoise(
         raise ValueError("strength must be within [0, 1]")
     if not 0.0 < smoothing < 1.0:
         raise ValueError("smoothing must be within (0, 1)")
-    data = np.asarray(samples, dtype=np.float64).reshape(-1)
+    data = _require_finite("samples", samples).reshape(-1)
     if data.size == 0:
         return DenoiseResult(
             samples=data,
@@ -362,6 +394,17 @@ def wiener_denoise(
             after = _instrumental_snr(reference, output, frame_length=frame_length, hop=hop)
             if math.isfinite(before) and math.isfinite(after):
                 snr_gain = after - before
+
+    # Belt and braces: the guards above make a non-finite output unreachable, and
+    # this makes it *unpublishable*. A denoiser that returns NaN must fail loudly
+    # here rather than silently hand the caller a destroyed programme.
+    if not np.all(np.isfinite(output)):
+        raise ValueError("wiener_denoise produced non-finite output; refusing to return it")
+    if not math.isfinite(reconstruction_error):
+        raise ValueError(
+            "wiener_denoise could not measure its reconstruction error "
+            "(non-finite); refusing to report an unverifiable result"
+        )
 
     return DenoiseResult(
         samples=output,

@@ -15,6 +15,7 @@ fail-closed outcome: ``False``, bytes restored, fence retired, lease honoured.
 
 from __future__ import annotations
 
+import email.utils
 import hashlib
 import json
 import time
@@ -53,6 +54,19 @@ class _LeaseRaceTransport:
             {"expires_at_epoch": expires_at_epoch, "chunk_ids": [CHUNK]}
         ).encode()
 
+    def _headers_for(self, key: str) -> dict[str, str]:
+        """ETag and Last-Modified for ``key`` — what a real bucket always returns.
+
+        The fence protocol retires an object only with ``If-Match``, so a fake that
+        omitted the ETag would silently test a driver that had downgraded to an
+        unconditional ``DELETE``. Modelling the header is part of modelling S3.
+        """
+        body = self.objects[key]
+        return {
+            "ETag": '"' + hashlib.sha256(body).hexdigest()[:32] + '"',
+            "Last-Modified": email.utils.formatdate(time.time(), usegmt=True),
+        }
+
     def __call__(self, request: S3HttpRequest) -> S3HttpResponse:
         parsed = urllib.parse.urlsplit(request.url)
         query = dict(urllib.parse.parse_qsl(parsed.query))
@@ -72,14 +86,18 @@ class _LeaseRaceTransport:
             ).encode()
             return S3HttpResponse(status_code=200, body=body)
         if request.method == "HEAD":
-            return S3HttpResponse(status_code=200 if key in self.objects else 404)
+            if key not in self.objects:
+                return S3HttpResponse(status_code=404)
+            return S3HttpResponse(status_code=200, headers=self._headers_for(key))
         if request.method == "PUT":
             self.objects[key] = request.body
-            return S3HttpResponse(status_code=200)
+            return S3HttpResponse(status_code=200, headers=self._headers_for(key))
         if request.method == "GET":
             if key not in self.objects:
                 return S3HttpResponse(status_code=404)
-            return S3HttpResponse(status_code=200, body=self.objects[key])
+            return S3HttpResponse(
+                status_code=200, headers=self._headers_for(key), body=self.objects[key]
+            )
         if request.method == "DELETE":
             self.objects.pop(key, None)
             return S3HttpResponse(status_code=204)
@@ -190,16 +208,36 @@ class _VersionedBucketTransport:
     def __init__(self) -> None:
         self.objects: dict[str, bytes] = {}
         self.etags: dict[str, str] = {}
+        #: The bucket's own clock per object. Real S3 always reports
+        #: ``Last-Modified``, and it is what makes a lease's lifetime independent of
+        #: the writer's (possibly wrong) clock.
+        self.modified: dict[str, float] = {}
+        self.versions: dict[str, int] = {}
         self.requests: list[tuple[str, str]] = []
 
-    @staticmethod
-    def _etag(body: bytes) -> str:
-        return '"' + hashlib.sha256(body).hexdigest()[:32] + '"'
+    def _etag(self, key: str, body: bytes) -> str:
+        """Version-bearing ETag: the content hash *plus* the write generation.
 
-    def write(self, key: str, body: bytes) -> None:
+        A versioned bucket mints a new ETag for every write even when the bytes are
+        identical, and the fence's conditional delete is only meaningful under that
+        model — a pure content hash would make "rewritten by another collector" and
+        "untouched" indistinguishable.
+        """
+        self.versions[key] = self.versions.get(key, 0) + 1
+        digest = hashlib.sha256(body).hexdigest()[:24]
+        return f'"v{self.versions[key]}-{digest}"'
+
+    def write(self, key: str, body: bytes, *, modified_at: float | None = None) -> None:
         """Out-of-band (unconditional) write, for seeding the bucket in a test."""
         self.objects[key] = body
-        self.etags[key] = self._etag(body)
+        self.etags[key] = self._etag(key, body)
+        self.modified[key] = time.time() if modified_at is None else modified_at
+
+    def _meta_headers(self, key: str) -> dict[str, str]:
+        return {
+            "ETag": self.etags[key],
+            "Last-Modified": email.utils.formatdate(self.modified[key], usegmt=True),
+        }
 
     def __call__(self, request: S3HttpRequest) -> S3HttpResponse:
         parsed = urllib.parse.urlsplit(request.url)
@@ -223,12 +261,12 @@ class _VersionedBucketTransport:
         if request.method == "HEAD":
             if key not in self.objects:
                 return S3HttpResponse(status_code=404)
-            return S3HttpResponse(status_code=200, headers={"ETag": self.etags[key]})
+            return S3HttpResponse(status_code=200, headers=self._meta_headers(key))
         if request.method == "GET":
             if key not in self.objects:
                 return S3HttpResponse(status_code=404)
             return S3HttpResponse(
-                status_code=200, headers={"ETag": self.etags[key]}, body=self.objects[key]
+                status_code=200, headers=self._meta_headers(key), body=self.objects[key]
             )
         if request.method == "PUT":
             if headers.get("if-none-match") == "*" and key in self.objects:
@@ -237,13 +275,20 @@ class _VersionedBucketTransport:
             if required is not None and (key not in self.objects or self.etags[key] != required):
                 return S3HttpResponse(status_code=412)
             self.write(key, request.body)
-            return S3HttpResponse(status_code=200, headers={"ETag": self.etags[key]})
+            return S3HttpResponse(status_code=200, headers=self._meta_headers(key))
         if request.method == "DELETE":
             required = headers.get("if-match")
+            if "gc-fences" in key and required is None:
+                # Structural guard for the whole file: a fence is never deleted without
+                # a precondition. If the driver ever downgrades to an unconditional
+                # DELETE, every test using this transport fails here instead of passing
+                # on a permissive fake.
+                return S3HttpResponse(status_code=428)
             if required is not None and (key not in self.objects or self.etags[key] != required):
                 return S3HttpResponse(status_code=412)
             self.objects.pop(key, None)
             self.etags.pop(key, None)
+            self.modified.pop(key, None)
             return S3HttpResponse(status_code=204)
         return S3HttpResponse(status_code=405)
 
@@ -511,3 +556,196 @@ def test_fence_retirement_refuses_a_claim_that_now_belongs_to_another_collector(
 
     assert gc_driver._retire_gc_fence(CHUNK, our_token) is False
     assert transport.objects[FENCE_KEY] == successor_body
+
+
+class _NoEtagTransport(_VersionedBucketTransport):
+    """A backend that answers fence reads without an ``ETag`` (no conditional delete).
+
+    Real S3 always reports one, but "the backend told us nothing" must never be read
+    as "unconditional delete is fine": that is exactly the downgrade that lets a
+    retiring collector destroy a newer owner's claim.
+    """
+
+    def __call__(self, request: S3HttpRequest) -> S3HttpResponse:
+        response = super().__call__(request)
+        if "gc-fences" not in request.url:
+            return response
+        stripped = {k: v for k, v in response.headers.items() if k.lower() != "etag"}
+        return S3HttpResponse(
+            status_code=response.status_code, headers=stripped, body=response.body
+        )
+
+
+def test_aba_collector_finishing_before_the_lease_write_forces_a_rollback() -> None:
+    """The ABA race: a full collector cycle completes between preflight and PUT.
+
+    The writer checks for a live fence, then is stopped. The collector claims the
+    chunk, deletes it, retires its fence and returns ``True``. The writer wakes up,
+    writes its lease, looks for a live fence again and finds none — because the
+    collector already cleaned up after itself. A fence-only protocol publishes a
+    lease over a chunk that no longer exists.
+
+    The generation proof closes it: the chunk existed when the lease was preflighted
+    (so its ETag was recorded), it is gone now, and the lease is deleted again before
+    the error leaves this method. Nothing valid is left on the bucket.
+    """
+    transport = _VersionedBucketTransport()
+    gc_driver = _driver(transport)
+    writer_driver = _driver(transport)
+    assert gc_driver._coord_lock is not writer_driver._coord_lock
+    gc_driver.put_chunk(CHUNK, b"precious-bytes")
+
+    observed: dict[str, object] = {}
+
+    def _collector_runs_to_completion() -> None:
+        observed["collected"] = gc_driver.delete_chunk_if_unleased(CHUNK)
+        observed["present_after_gc"] = gc_driver.has_chunk(CHUNK)
+        observed["fence_left"] = FENCE_KEY in transport.objects
+
+    writer_driver._pre_lease_put_race_probe = _collector_runs_to_completion
+
+    with pytest.raises(VaultRevisionConflictError, match="disappeared or changed generation"):
+        writer_driver.acquire_push_lease([CHUNK], project_id="project-1", ttl_seconds=600.0)
+
+    # The interleaving really was the ABA one: GC finished, returned True, and left
+    # no fence behind for a second-look check to notice.
+    assert observed == {"collected": True, "present_after_gc": False, "fence_left": False}
+    # Fail-closed: no lease object survived, and the chunk is genuinely gone.
+    assert [k for k in transport.objects if k.startswith(f"{PREFIX}/leases/")] == []
+    assert _covering_leases(transport) == []
+    assert gc_driver.has_chunk(CHUNK) is False
+
+
+def test_aba_refreshing_a_lease_after_the_chunk_was_collected_rolls_back() -> None:
+    """Same ABA race on the refresh path, which is where chunks are actually added.
+
+    ``_acquire_driver_lease`` takes an *empty* lease and every chunk is added by a
+    refresh before it is uploaded, so a refresh that promises a chunk the collector
+    has just deleted is the production shape of this bug.
+    """
+    transport = _VersionedBucketTransport()
+    gc_driver = _driver(transport)
+    writer_driver = _driver(transport)
+    gc_driver.put_chunk(CHUNK, b"precious-bytes")
+    lease_id = writer_driver.acquire_push_lease([], project_id="project-1")
+
+    def _collector_runs_to_completion() -> None:
+        assert gc_driver.delete_chunk_if_unleased(CHUNK) is True
+
+    writer_driver._pre_lease_put_race_probe = _collector_runs_to_completion
+    with pytest.raises(VaultRevisionConflictError, match="disappeared or changed generation"):
+        writer_driver.update_push_lease(lease_id, [CHUNK], project_id="project-1")
+
+    assert _covering_leases(transport) == []
+    assert gc_driver.has_chunk(CHUNK) is False
+
+
+def test_a_lagging_writer_clock_never_makes_its_fresh_lease_look_expired() -> None:
+    """Negative skew: the writer's clock is two hours behind the collector's.
+
+    ``expires_at_epoch`` is written by the writer, so it lands two hours in the
+    collector's past and a naive reader reaps a lease that is a second old — then
+    deletes the chunk it protects. The bucket's own ``Last-Modified`` plus the lease's
+    ``ttl_seconds`` re-derive the same lifetime on a clock neither side controls.
+    """
+    transport = _VersionedBucketTransport()
+    gc_driver = _driver(transport)
+    writer_driver = _driver(transport)
+    gc_driver.put_chunk(CHUNK, b"precious-bytes")
+
+    lagging = datetime.now(timezone.utc) - timedelta(hours=2)
+    writer_driver._clock = lambda: lagging  # type: ignore[method-assign]
+    lease_id = writer_driver.acquire_push_lease([CHUNK], project_id="project-1", ttl_seconds=600.0)
+
+    written = json.loads(transport.objects[f"{PREFIX}/leases/{lease_id}.json"])
+    # The lease itself claims it expired almost two hours ago...
+    assert written["expires_at_epoch"] < time.time() - 3600.0
+    # ...and the collector must still honour it.
+    assert gc_driver.read_active_leased_chunks() == {CHUNK}
+    assert gc_driver.delete_chunk_if_unleased(CHUNK) is False
+    assert gc_driver.has_chunk(CHUNK) is True
+    assert f"{PREFIX}/leases/{lease_id}.json" in transport.objects
+
+
+def test_a_leading_writer_clock_never_shortens_the_lease_it_wrote() -> None:
+    """Positive skew: an hour ahead is still an active lease, never a stale one."""
+    transport = _VersionedBucketTransport()
+    gc_driver = _driver(transport)
+    writer_driver = _driver(transport)
+    gc_driver.put_chunk(CHUNK, b"precious-bytes")
+
+    leading = datetime.now(timezone.utc) + timedelta(hours=1)
+    writer_driver._clock = lambda: leading  # type: ignore[method-assign]
+    writer_driver.acquire_push_lease([CHUNK], project_id="project-1", ttl_seconds=600.0)
+
+    assert gc_driver.read_active_leased_chunks() == {CHUNK}
+    assert gc_driver.delete_chunk_if_unleased(CHUNK) is False
+    assert gc_driver.has_chunk(CHUNK) is True
+
+
+def test_fence_retirement_never_degrades_to_an_unconditional_delete() -> None:
+    """No ETag means no conditional DELETE, and no DELETE means no data loss.
+
+    The pre-fix code fell back to ``DELETE`` without headers when the backend reported
+    no ETag, which can erase a *newer* owner's claim that landed one round trip
+    earlier. Refusing costs a retry until the TTL; deleting the wrong fence costs a
+    chunk.
+    """
+    transport = _NoEtagTransport()
+    gc_driver = _driver(transport)
+    gc_driver.put_chunk(CHUNK, b"precious-bytes")
+
+    claim = gc_driver._create_gc_fence(CHUNK, now_epoch=time.time())
+    assert claim is not None
+    token, _ = claim
+    observed = gc_driver._read_gc_fence(CHUNK)
+    assert observed is not None and observed.etag is None
+
+    assert gc_driver._retire_gc_fence(CHUNK, token) is False
+    assert gc_driver._delete_gc_fence_if_unchanged(CHUNK, observed) is False
+    assert transport.objects[FENCE_KEY] == observed.raw
+    # End to end the collector cannot retire its claim, so it must not publish the
+    # deletion either: fail-closed, chunk intact.
+    assert gc_driver.delete_chunk_if_unleased(CHUNK) is False
+    assert gc_driver.get_chunk(CHUNK) == b"precious-bytes"
+
+
+def test_a_fence_replaced_between_read_and_delete_is_never_removed() -> None:
+    """Both halves of the guard: changed bytes, and unchanged bytes with a new ETag."""
+    transport = _VersionedBucketTransport()
+    gc_driver = _driver(transport)
+    gc_driver.put_chunk(CHUNK, b"precious-bytes")
+    assert gc_driver._create_gc_fence(CHUNK, now_epoch=time.time()) is not None
+    observed = gc_driver._read_gc_fence(CHUNK)
+    assert observed is not None
+
+    successor = json.dumps(
+        {
+            "fence_token": "successor-token",
+            "chunk_id": CHUNK,
+            "created_at_epoch": time.time(),
+            "expires_at_epoch": time.time() + 300.0,
+            "ttl_seconds": 300.0,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+    transport.write(FENCE_KEY, successor)
+    assert gc_driver._delete_gc_fence_if_unchanged(CHUNK, observed) is False
+    assert transport.objects[FENCE_KEY] == successor
+
+    # Identical bytes rewritten by another collector: a content check cannot see it,
+    # so this is exactly what the conditional DELETE has to cover. The transport
+    # refuses any unconditional fence delete outright (HTTP 428), so a downgrade can
+    # never pass silently; this delete is re-issued against the fresh ETag and
+    # therefore succeeds legitimately.
+    transport.write(FENCE_KEY, observed.raw)
+    assert gc_driver._delete_gc_fence_if_unchanged(CHUNK, observed) is True
+    assert FENCE_KEY not in transport.objects
+
+    # And the owner can still retire its own claim when nothing moved under it.
+    assert gc_driver._create_gc_fence(CHUNK, now_epoch=time.time()) is not None
+    current = gc_driver._read_gc_fence(CHUNK)
+    assert current is not None
+    assert gc_driver._delete_gc_fence_if_unchanged(CHUNK, current) is True
+    assert FENCE_KEY not in transport.objects

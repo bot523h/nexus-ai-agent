@@ -376,7 +376,7 @@ def _polyphase_true_peak(samples: np.ndarray, factor: int) -> float:
     result.  Verified: 0.95, 0.99, 1.0 and 0.9 for four test tones with peaks the
     sampling grid misses, exact to 1e-9.
     """
-    data = np.asarray(samples, dtype=np.float64).reshape(-1)
+    data = _require_finite_samples(samples, where="samples").reshape(-1)
     if data.size == 0:
         return 0.0
     peak = float(np.max(np.abs(data)))
@@ -404,16 +404,42 @@ def _polyphase_true_peak(samples: np.ndarray, factor: int) -> float:
     return peak
 
 
+def _require_finite_samples(samples: np.ndarray, *, where: str) -> np.ndarray:
+    """Refuse non-finite samples at the measurement boundary (typed ``ValueError``).
+
+    ``NaN``/``Inf`` used to travel all the way into the *published measurement*: the
+    gated loudness came back ``None`` (correctly) while the true peak came back
+    ``float("nan")``, and every downstream gate is written as ``peak > ceiling`` —
+    which is ``False`` for ``nan``. A non-finite input therefore *passed* a true-peak
+    ceiling by being unmeasurable. Refusing the input is the only answer that cannot
+    be turned into a pass.
+    """
+    array = np.asarray(samples, dtype=np.float64)
+    if array.size and not np.all(np.isfinite(array)):
+        bad = int(np.size(array) - np.count_nonzero(np.isfinite(array)))
+        raise ValueError(f"{where} contains {bad} non-finite sample(s) (NaN or Inf)")
+    return array
+
+
 def true_peak_dbtp(samples: np.ndarray, *, oversample: int = OVERSAMPLE_FACTOR) -> float | None:
-    """True peak in dBTP (BS.1770-5 Annex 2), ``None`` for digital silence."""
-    peak = _polyphase_true_peak(samples, oversample)
+    """True peak in dBTP (BS.1770-5 Annex 2), ``None`` for digital silence.
+
+    Raises ``ValueError`` for non-finite input: see :func:`_require_finite_samples`
+    for why a ``nan`` here is a security-relevant value and not a cosmetic one.
+    """
+    data = _require_finite_samples(samples, where="samples")
+    peak = _polyphase_true_peak(data, oversample)
+    if not math.isfinite(peak):
+        raise ValueError("true peak is not finite; refusing to report it")
     if peak <= 0.0:
         return None
     return 20.0 * math.log10(peak)
 
 
 def _dbfs(value: float) -> float | None:
-    if value <= 0.0:
+    # ``nan <= 0.0`` is False, so a non-finite value would fall through to
+    # ``20*log10(nan) == nan`` and be published as a measurement. It is not one.
+    if not math.isfinite(value) or value <= 0.0:
         return None
     return 20.0 * math.log10(value)
 
@@ -438,6 +464,11 @@ def measure_bs1770_numpy(
         data = data.reshape(1, -1)
     if data.ndim != 2:
         raise ValueError("samples must be 1-D (mono) or 2-D (channels, frames)")
+    # One guard at the boundary, because *every* quantity below is derived from it:
+    # gated loudness, short-term max, LRA and true peak. Previously the loudness came
+    # back ``None`` while ``true_peak_dbtp`` came back ``nan`` — an unmeasurable value
+    # that silently satisfies ``tp > limit``. Refuse the input instead.
+    data = _require_finite_samples(data, where="samples")
     frames = int(data.shape[1])
     channel_count = int(data.shape[0]) if channels is None else int(channels)
     if channel_count != data.shape[0]:

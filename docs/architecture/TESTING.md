@@ -183,14 +183,18 @@ A campaign is only green when:
 * **the restored bytes are verified** by hash, and the baseline is re-run green
   afterwards, so the campaign cannot pass by leaving the tree weakened;
 * **the campaign may also live beside the tests it mutates.** `tests/architecture/test_cp4_fence_protocol_mutations.py`
-  is an in-tree campaign (11 mutants) for the two CP4 guarantees that "looks
-  correct" used to satisfy: the two-phase S3 GC fence in
-  `storage/personal_cloud_vault/byos_drivers.py` and the mandatory anchor of
-  `verify_manifest_integrity_strict`. Each mutant is applied to a hardlink copy
-  of `src/` and `tests/`, parsed with `ast.parse` before it is scored, and run in
-  its own subprocess — so no C extension (`numpy`, `scipy`, `PIL`, `sqlalchemy`)
-  is ever reloaded in-process — and a kill counts only on pytest exit code 1
-  with a named `FAILED test_...` node.
+  is an in-tree campaign (16 mutants) for the guarantees that "looks correct" used
+  to satisfy: the two-phase S3 GC fence and its CP5 hardening in
+  `storage/personal_cloud_vault/byos_drivers.py` — the ABA chunk-generation proof,
+  the bucket-clock anchor that makes lease expiry immune to a lagging writer, and
+  the mandatory `ETag` precondition before a fence is retired — the mandatory
+  anchor of `verify_manifest_integrity_strict`, and the non-finite guards in the
+  loudness core. Each mutant is applied to a hardlink copy of `src/` and `tests/`,
+  parsed with `ast.parse` before it is scored, and run in its own subprocess — so
+  no C extension (`numpy`, `scipy`, `PIL`, `sqlalchemy`) is ever reloaded
+  in-process — and a kill counts only on pytest exit code 1 with a named
+  `FAILED test_...` node that *is* the test owning that guard; a mutant killed by
+  an unrelated test fails the campaign.
 * AST-level checks are used where a text edit would be ambiguous: the campaigns
   parse the mutated module with `ast.parse` before running, so an edit that
   produces a syntactically different program is rejected as an invalid mutant

@@ -141,6 +141,20 @@ def _build_lease_json_bytes(
 #: under a push), while the cost of reclaiming a dead one too late is a retry.
 GC_FENCE_TTL_SECONDS: float = 300.0
 
+#: Leeway (seconds) applied on the *dead* side of every distributed expiry decision.
+#:
+#: Two hosts sharing one bucket do not share a clock. A writer whose clock lags by a
+#: few minutes computes an earlier ``expires_at_epoch`` than the collector's ``now``,
+#: and without a leeway the collector would reap a lease that is seconds old — then
+#: delete the chunk it protects. The margin is added to *every* expiry before it is
+#: believed, which is the conservative direction: a lease or fence is honoured for up
+#: to this long after it nominally expired, and only a claim that is provably older
+#: than ``deadline + margin`` is ever treated as debris. Combined with the bucket's
+#: own ``Last-Modified``/``Date`` anchor (see :func:`_lease_deadline_epoch`) this
+#: covers skew in both directions: a lagging writer cannot make its own fresh lease
+#: look expired, and a leading writer cannot make its lease look older than it is.
+CLOCK_SKEW_SAFETY_MARGIN_SECONDS: float = 300.0
+
 #: The exact prefix an AEAD wire envelope starts with (``>H`` length + magic).
 _WIRE_ENVELOPE_HEADER_BYTES = 2 + len(ENVELOPE_MAGIC) + 2 + 32
 
@@ -179,6 +193,9 @@ def _build_gc_fence_body(
             "chunk_id": chunk_id,
             "created_at_epoch": now_epoch,
             "expires_at_epoch": now_epoch + ttl_seconds,
+            # Carried explicitly so a *reader* on another host can re-derive the
+            # deadline from the bucket's own clock instead of trusting ours.
+            "ttl_seconds": ttl_seconds,
         },
         sort_keys=True,
         separators=(",", ":"),
@@ -193,19 +210,54 @@ class _GcFence:
     token: str
     expires_at_epoch: float | None
     etag: str | None
+    #: ``ttl_seconds`` from the body, when it parses, and the bucket's own clock at
+    #: the moment of observation. Both are optional because an older collector may
+    #: have written a fence without them, and because a transport may not report
+    #: ``Last-Modified``; in that case only ``expires_at_epoch`` is available.
+    ttl_seconds: float | None = None
+    observed_at_epoch: float | None = None
 
-    def is_live(self, now_epoch: float) -> bool:
-        """True unless the claim has *provably* expired.
+    def deadline_epoch(self) -> float | None:
+        """Latest instant the claim may still be honoured, or ``None`` if unknown.
+
+        Two independent estimates are combined, and the *later* one wins:
+
+        * ``expires_at_epoch`` — written by the collector's clock;
+        * ``observed_at_epoch + ttl_seconds`` — the same lifetime measured from the
+          bucket's clock (``Last-Modified``/``Date``), which is immune to the
+          collector's clock being wrong. A collector whose clock lags writes an
+          ``expires_at_epoch`` in the past while its claim is seconds old; the server
+          anchor keeps that claim alive for its full TTL.
+        """
+        candidates: list[float] = []
+        if self.expires_at_epoch is not None:
+            candidates.append(self.expires_at_epoch)
+        if self.ttl_seconds is not None and self.observed_at_epoch is not None:
+            candidates.append(self.observed_at_epoch + self.ttl_seconds)
+        if not candidates:
+            return None
+        return max(candidates)
+
+    def is_live(self, now_epoch: float, *, margin_seconds: float = 0.0) -> bool:
+        """True unless the claim has *provably* expired, leeway included.
 
         An unparsable fence, or one with no usable expiry, counts as live: a fence
-        we cannot read is not evidence that no collector is running.
+        we cannot read is not evidence that no collector is running. ``margin_seconds``
+        widens the live side, because the two clocks that matter here are on different
+        machines (see :data:`CLOCK_SKEW_SAFETY_MARGIN_SECONDS`).
         """
-        if self.expires_at_epoch is None:
+        deadline = self.deadline_epoch()
+        if deadline is None:
             return True
-        return self.expires_at_epoch > now_epoch
+        return deadline + margin_seconds > now_epoch
 
 
-def _parse_gc_fence(raw: bytes, etag: str | None) -> _GcFence:
+def _parse_gc_fence(
+    raw: bytes,
+    etag: str | None,
+    *,
+    observed_at_epoch: float | None = None,
+) -> _GcFence:
     """Parse a fence body without ever raising (untrusted input, fail-closed)."""
     try:
         parsed = json.loads(raw.decode("utf-8"))
@@ -221,11 +273,20 @@ def _parse_gc_fence(raw: bytes, etag: str | None) -> _GcFence:
             candidate = float(raw_expiry)
             if math.isfinite(candidate):
                 expiry = candidate
+    raw_ttl = parsed.get("ttl_seconds")
+    ttl: float | None = None
+    if isinstance(raw_ttl, (int, float)) and not isinstance(raw_ttl, bool):
+        with contextlib.suppress(OverflowError, ValueError):
+            candidate_ttl = float(raw_ttl)
+            if math.isfinite(candidate_ttl) and candidate_ttl > 0.0:
+                ttl = candidate_ttl
     return _GcFence(
         raw=raw,
         token=token if isinstance(token, str) else "",
         expires_at_epoch=expiry,
         etag=etag,
+        ttl_seconds=ttl,
+        observed_at_epoch=observed_at_epoch,
     )
 
 
@@ -286,6 +347,68 @@ def _parse_http_or_iso_timestamp(raw_ts: str) -> float | None:
             dt_http = dt_http.replace(tzinfo=timezone.utc)
         return dt_http.timestamp()
     return None
+
+
+def _server_object_epoch(headers: Mapping[str, str] | None) -> float | None:
+    """The bucket's own clock for one object observation, or ``None``.
+
+    ``Last-Modified`` is the authoritative "when did this object come into being"
+    stamp and is what makes a lease's lifetime independent of the writer's clock;
+    ``Date`` is the fallback for backends that omit it on ``HEAD``/``GET``. Both are
+    only ever used to *extend* a deadline, never to shorten one.
+    """
+    if not headers:
+        return None
+    lowered = {str(key).lower(): str(value) for key, value in headers.items()}
+    for name in ("last-modified", "date"):
+        raw = lowered.get(name)
+        if raw is None:
+            continue
+        parsed = _parse_http_or_iso_timestamp(raw)
+        if parsed is not None:
+            return parsed
+    return None
+
+
+def _lease_ttl_seconds(raw: bytes) -> float | None:
+    """Leniently read ``ttl_seconds`` out of a lease document (``None`` if unusable)."""
+    try:
+        parsed = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    raw_ttl = parsed.get("ttl_seconds")
+    if isinstance(raw_ttl, bool) or not isinstance(raw_ttl, (int, float)):
+        return None
+    try:
+        ttl = float(raw_ttl)
+    except OverflowError:
+        return None
+    if not math.isfinite(ttl) or ttl <= 0.0:
+        return None
+    return ttl
+
+
+def _lease_deadline_epoch(
+    raw: bytes,
+    headers: Mapping[str, str] | None,
+    expires_at_epoch: float,
+) -> float:
+    """Latest instant a lease may still be honoured, robust to the writer's clock.
+
+    ``expires_at_epoch`` is computed by the *writer*; a writer whose clock lags two
+    hours writes a deadline two hours in the collector's past and its brand-new lease
+    would be reaped instantly. The bucket's ``Last-Modified`` plus the lease's own
+    ``ttl_seconds`` re-derives the same lifetime on a clock neither side controls, and
+    the later of the two estimates wins — the conservative direction for a lease.
+    """
+    deadline = expires_at_epoch
+    ttl = _lease_ttl_seconds(raw)
+    observed = _server_object_epoch(headers)
+    if ttl is not None and observed is not None:
+        deadline = max(deadline, observed + ttl)
+    return deadline
 
 
 def _pid_is_alive(pid: int) -> bool:
@@ -1349,6 +1472,15 @@ class S3CompatibleSigV4Driver:
         #     the audited race. See tests/unit/test_personal_cloud_vault_lease_fence.py.
         self._fence_race_probe: Callable[[], None] | None = None
         self._post_final_check_race_probe: Callable[[], None] | None = None
+        #   * ``_pre_lease_put_race_probe`` — on the *writer* side, after the preflight
+        #     fence/existence checks and immediately before the lease object is
+        #     written. A collector that runs to completion here is the ABA race: the
+        #     fence it leaves behind is gone by the time the writer looks again.
+        self._pre_lease_put_race_probe: Callable[[], None] | None = None
+        # Leeway applied whenever this driver has to decide that *another* host's
+        # claim is dead. Conservative by construction: it can only extend a claim's
+        # life, never shorten it.
+        self._clock_skew_margin: float = CLOCK_SKEW_SAFETY_MARGIN_SECONDS
 
     @property
     def config(self) -> S3SigV4Config:
@@ -1572,11 +1704,66 @@ class S3CompatibleSigV4Driver:
         """
         for cid in chunk_ids:
             fence = self._read_gc_fence(cid)
-            if fence is None or fence.is_live(now_epoch):
+            if fence is None or fence.is_live(now_epoch, margin_seconds=self._clock_skew_margin):
                 continue
             if not self.has_chunk(cid):
                 continue
             self._delete_gc_fence_if_unchanged(cid, fence)
+
+    def _chunk_generation(self, chunk_id: str) -> str | None:
+        """Bucket generation of ``chunk_id``: ETag, ``""`` if unreported, ``None`` if absent.
+
+        The three states matter downstream: ``None`` means "not on the bucket", ``""``
+        means "present but the backend did not say which version", anything else is a
+        version. Only the first can be a *disappearance*.
+        """
+        resp = self._send("HEAD", object_key=self._object_key("chunks", f"{chunk_id}.chk"))
+        if resp.status_code == 404:
+            return None
+        if resp.status_code != 200:
+            raise VaultTransportError(
+                f"S3 chunk generation probe failed for {chunk_id} with HTTP {resp.status_code}"
+            )
+        lowered = {k.lower(): v for k, v in resp.headers.items()}
+        return lowered.get("etag", "")
+
+    def _chunk_generations(self, chunk_ids: Iterable[str]) -> dict[str, str | None]:
+        """Snapshot every chunk's generation *before* the lease object is written."""
+        return {cid: self._chunk_generation(cid) for cid in chunk_ids}
+
+    def _lost_materialised_chunks(self, preflight: Mapping[str, str | None]) -> tuple[str, ...]:
+        """Chunks that existed at preflight and no longer do after the lease write.
+
+        A chunk that was *absent* at preflight is skipped on purpose: the push path
+        takes its lease first and uploads the chunk immediately afterwards, so
+        "absent" there means "the caller is about to write it". A collector cannot
+        delete what did not exist, so there is nothing to prove and nothing to break.
+
+        This is the topological half of the ABA fix. By the time this returns, the
+        writer's lease object is already on the bucket, so both orders are safe: a
+        collector that finished before the lease was written left no chunk behind
+        (detected here), and a collector that starts after it sees the lease (and
+        refuses in ``delete_chunk_if_unleased``).
+        """
+        lost: list[str] = []
+        for cid, before in preflight.items():
+            if before is None:
+                continue
+            current = self._chunk_generation(cid)
+            if current is None:
+                lost.append(cid)
+            elif before and current and current != before:
+                lost.append(cid)
+        return tuple(sorted(lost))
+
+    @staticmethod
+    def _lost_chunk_error(lost: tuple[str, ...], when: str) -> VaultRevisionConflictError:
+        return VaultRevisionConflictError(
+            f"S3 chunk(s) {list(lost)} disappeared or changed generation {when}: a "
+            "collector completed a full pass between this lease's preflight and its "
+            "write. The lease was rolled back instead of promising a chunk that is no "
+            "longer on the bucket. Retry the push."
+        )
 
     def acquire_push_lease(
         self,
@@ -1596,17 +1783,24 @@ class S3CompatibleSigV4Driver:
         * **before** the lease is written, every chunk is checked for a *live* GC
           fence. A live fence means a collector is mid-pass on that chunk, so the
           acquisition is refused (:class:`VaultRevisionConflictError`) rather than
-          raced;
+          raced; the same pass records each chunk's *generation* (its ETag);
         * the lease is written with ``If-None-Match: *`` on a fresh id;
         * **after** the lease is written, fences are read again (write-then-read, the
-          Dekker half that makes "both sides miss" impossible). A fence that appeared
-          in between means the collector started while we were registering: the lease
-          object is deleted again — it must never survive over a chunk a collector
-          is deleting — and the acquisition is refused.
+          Dekker half that makes "both sides miss" impossible), every chunk that
+          existed at preflight must still exist with the same generation, and fences
+          are checked once more after that proof.
 
-        A previously blind ``DELETE`` of every fence for the leased chunks is gone:
-        a writer must never erase a live collector's claim (it would let the
-        collector's own guard be removed by the party it was guarding against).
+        The generation re-check is what closes the *ABA* window. A collector that runs
+        entirely inside the gap between the preflight and the write leaves no fence
+        behind — it created one, deleted the chunk, retired the fence and returned
+        ``True`` — so "is there a live fence now?" answers "no" on the second look, and
+        a fence-only protocol would happily publish a lease over a chunk that no
+        longer exists. Existence-after-write has no such blind spot: the lease is
+        already on the bucket when the chunk is looked for, so exactly one of the two
+        orders holds, and both are safe.
+
+        Any refusal rolls the just-written lease back before propagating: a lease that
+        outlived the refusal would protect a chunk the collector is already deleting.
         """
         finite_ttl = _validate_positive_finite_seconds(ttl_seconds, name="ttl_seconds")
         materialised_chunks = [_validate_chunk_id(cid) for cid in chunk_ids]
@@ -1621,6 +1815,11 @@ class S3CompatibleSigV4Driver:
         self._assert_no_live_gc_fence(
             materialised_chunks, now_epoch=now, when="before the lease write"
         )
+        preflight = self._chunk_generations(materialised_chunks)
+
+        if self._pre_lease_put_race_probe is not None:  # test seam, see __init__
+            self._pre_lease_put_race_probe()
+
         head_resp = self._send("HEAD", object_key=obj_key)
         if head_resp.status_code == 200:
             raise VaultRevisionConflictError(f"S3 push lease {effective_id!r} already exists")
@@ -1657,8 +1856,51 @@ class S3CompatibleSigV4Driver:
             # refusal would protect a chunk the collector is already deleting.
             self._send("DELETE", object_key=obj_key)
             raise
+        lost = self._lost_materialised_chunks(preflight)
+        if lost:
+            self._send("DELETE", object_key=obj_key)
+            raise self._lost_chunk_error(lost, "after the lease write")
+        try:
+            self._assert_no_live_gc_fence(
+                materialised_chunks, now_epoch=now, when="after the chunk existence proof"
+            )
+        except VaultRevisionConflictError:
+            self._send("DELETE", object_key=obj_key)
+            raise
         self._reclaim_dead_gc_fences(materialised_chunks, now_epoch=now)
         return effective_id
+
+    def _rollback_lease_refresh(
+        self,
+        obj_key: str,
+        prior_body: bytes | None,
+        put_resp: S3HttpResponse,
+        *,
+        lost_chunks: Iterable[str],
+    ) -> None:
+        """Undo a refresh that raced a collector, without ever leaving a lie behind.
+
+        The prior body is restored conditionally (see :meth:`_restore_prior_lease_body`).
+        If that is impossible — no prior body, no ETag to condition on, or the *prior*
+        body already promised one of the chunks that just disappeared — the lease
+        object is deleted outright. Fail-closed beats tidy: the caller is told to
+        retry, and no lease on the bucket names a chunk that is not there.
+        """
+        lost = set(lost_chunks)
+        restored = False
+        if prior_body is not None:
+            restored = self._restore_prior_lease_body(obj_key, prior_body, put_resp)
+        if not restored:
+            self._send("DELETE", object_key=obj_key)
+            return
+        check = self._send("GET", object_key=obj_key)
+        if check.status_code != 200:
+            self._send("DELETE", object_key=obj_key)
+            return
+        with contextlib.suppress(VaultTransportError):
+            _expires_at, names = _parse_and_validate_lease_payload(check.body, source_label=obj_key)
+            if lost & names:
+                self._send("DELETE", object_key=obj_key)
 
     def update_push_lease(
         self,
@@ -1670,13 +1912,13 @@ class S3CompatibleSigV4Driver:
     ) -> None:
         """Refresh ``leases/<lease_id>.json`` on the S3 bucket.
 
-        The same fence handshake as :meth:`acquire_push_lease`, because this is the
-        call that actually adds chunks to a live lease in the real push path
-        (``_acquire_driver_lease()`` takes an empty lease, then every chunk is added
-        here before it is uploaded). A chunk whose fence is live is *not* added: the
-        refresh refuses, and when the conditional write already happened the previous
-        lease body is restored so the lease never silently covers a chunk a collector
-        is deleting.
+        The same fence handshake and the same generation proof as
+        :meth:`acquire_push_lease`, because this is the call that actually adds chunks
+        to a live lease in the real push path (``_acquire_driver_lease()`` takes an
+        empty lease, then every chunk is added here before it is uploaded). A chunk
+        whose fence is live is *not* added, and a chunk that existed at the preflight
+        but vanished before the refresh landed is not added either: the refresh is
+        rolled back so the lease never silently covers a chunk a collector deleted.
         """
         finite_ttl = _validate_positive_finite_seconds(ttl_seconds, name="ttl_seconds")
         valid_id = _validate_snapshot_id(lease_id)
@@ -1687,6 +1929,11 @@ class S3CompatibleSigV4Driver:
         self._assert_no_live_gc_fence(
             materialised_chunks, now_epoch=now, when="before the lease refresh"
         )
+        preflight = self._chunk_generations(materialised_chunks)
+
+        if self._pre_lease_put_race_probe is not None:  # test seam, see __init__
+            self._pre_lease_put_race_probe()
+
         head_resp = self._send("HEAD", object_key=obj_key)
         if head_resp.status_code != 200:
             raise VaultTransportError(f"Active S3 push lease not found: {valid_id}")
@@ -1728,7 +1975,18 @@ class S3CompatibleSigV4Driver:
                 materialised_chunks, now_epoch=now, when="after the lease refresh"
             )
         except VaultRevisionConflictError:
-            self._restore_prior_lease_body(obj_key, prior_body, put_resp)
+            self._rollback_lease_refresh(obj_key, prior_body, put_resp, lost_chunks=())
+            raise
+        lost = self._lost_materialised_chunks(preflight)
+        if lost:
+            self._rollback_lease_refresh(obj_key, prior_body, put_resp, lost_chunks=lost)
+            raise self._lost_chunk_error(lost, "after the lease refresh")
+        try:
+            self._assert_no_live_gc_fence(
+                materialised_chunks, now_epoch=now, when="after the chunk existence proof"
+            )
+        except VaultRevisionConflictError:
+            self._rollback_lease_refresh(obj_key, prior_body, put_resp, lost_chunks=())
             raise
 
     def _restore_prior_lease_body(
@@ -1786,7 +2044,13 @@ class S3CompatibleSigV4Driver:
                 resp.body,
                 source_label=obj_key,
             )
-            if expires_at <= effective_now:
+            # A lease is only debris when it is provably older than its own deadline
+            # *plus* the leeway, measured on the later of the writer's clock estimate
+            # and the bucket's Last-Modified + ttl. A writer whose clock lags must not
+            # be able to have its brand-new lease reaped — that is the same window as
+            # the fence ABA race, arriving through the clock instead of the network.
+            deadline = _lease_deadline_epoch(resp.body, resp.headers, expires_at)
+            if deadline + self._clock_skew_margin <= effective_now:
                 with contextlib.suppress(VaultTransportError):
                     self.release_push_lease(stem)
                 continue
@@ -1819,7 +2083,11 @@ class S3CompatibleSigV4Driver:
                 f"S3 GC fence probe failed for {chunk_id} with HTTP {resp.status_code}"
             )
         lowered = {k.lower(): v for k, v in resp.headers.items()}
-        return _parse_gc_fence(resp.body, lowered.get("etag"))
+        return _parse_gc_fence(
+            resp.body,
+            lowered.get("etag"),
+            observed_at_epoch=_server_object_epoch(resp.headers),
+        )
 
     def _live_gc_fenced_chunks(
         self, chunk_ids: Iterable[str], *, now_epoch: float
@@ -1828,7 +2096,9 @@ class S3CompatibleSigV4Driver:
         fenced: list[str] = []
         for cid in chunk_ids:
             fence = self._read_gc_fence(cid)
-            if fence is not None and fence.is_live(now_epoch):
+            if fence is not None and fence.is_live(
+                now_epoch, margin_seconds=self._clock_skew_margin
+            ):
                 fenced.append(cid)
         return tuple(fenced)
 
@@ -1853,7 +2123,11 @@ class S3CompatibleSigV4Driver:
         )
         if resp.status_code in (409, 412):
             existing = self._read_gc_fence(chunk_id)
-            if existing is None or existing.is_live(now_epoch) or not existing.etag:
+            if (
+                existing is None
+                or existing.is_live(now_epoch, margin_seconds=self._clock_skew_margin)
+                or not existing.etag
+            ):
                 return None
             reclaimed = self._send(
                 "PUT",
@@ -1895,8 +2169,17 @@ class S3CompatibleSigV4Driver:
             return True
         if not fence.token or not hmac.compare_digest(fence.token, token):
             return False
-        headers = {"if-match": fence.etag} if fence.etag else {}
-        resp = self._send("DELETE", object_key=self._gc_fence_key(chunk_id), extra_headers=headers)
+        if not fence.etag:
+            # No ETag means no conditional DELETE is possible, and an unconditional
+            # DELETE could destroy a *newer* owner's claim that landed one round trip
+            # ago. Leaving the fence in place costs a writer a retry until the TTL
+            # expires; deleting the wrong fence costs data. Fail closed.
+            return False
+        resp = self._send(
+            "DELETE",
+            object_key=self._gc_fence_key(chunk_id),
+            extra_headers={"if-match": fence.etag},
+        )
         if resp.status_code in (409, 412):
             return False
         if resp.status_code not in (200, 202, 204, 404):
@@ -1912,8 +2195,16 @@ class S3CompatibleSigV4Driver:
             return True
         if current.raw != observed.raw:
             return False
-        headers = {"if-match": current.etag} if current.etag else {}
-        resp = self._send("DELETE", object_key=self._gc_fence_key(chunk_id), extra_headers=headers)
+        if not current.etag:
+            # Same rule as :meth:`_retire_gc_fence`: byte equality in this process is
+            # not an ETag, and a backend that cannot answer conditionally cannot
+            # prove the object is still the one we inspected. Refuse the delete.
+            return False
+        resp = self._send(
+            "DELETE",
+            object_key=self._gc_fence_key(chunk_id),
+            extra_headers={"if-match": current.etag},
+        )
         if resp.status_code in (409, 412):
             return False
         if resp.status_code not in (200, 202, 204, 404):

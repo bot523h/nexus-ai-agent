@@ -892,7 +892,12 @@ def test_p1_3_multi_backend_s3_and_bundle_leases_and_chunk_mtime(tmp_path: Path)
             if force_412_once["active"] and req.headers.get("if-none-match") == "*":
                 force_412_once["active"] = False
                 return S3HttpResponse(status_code=412)
-            hdrs = {"last-modified": "Mon, 16 Nov 2026 12:00:00 GMT"}
+            hdrs = {
+                "last-modified": "Mon, 16 Nov 2026 12:00:00 GMT",
+                # A real bucket always answers with an ETag, and the fence protocol
+                # retires objects only conditionally, so the fake must provide one.
+                "etag": '"' + hashlib.sha256(req.body).hexdigest()[:32] + '"',
+            }
             objects[obj_key] = (req.body, hdrs)
             return S3HttpResponse(status_code=200)
         if req.method == "GET":
@@ -1138,9 +1143,12 @@ def test_edge_branches_local_s3_and_bundle_fail_closed_paths(
     )
     assert s3.list_chunks() == [cid]
 
-    # S3 lease probe (HEAD) 500 -> acquire_push_lease fails closed
+    # S3 probe (HEAD) 500 -> acquire_push_lease fails closed. The first HEAD it
+    # issues is now the chunk-generation preflight, which is deliberately ahead of
+    # the lease-object probe: a chunk that vanishes before the lease exists must be
+    # seen *before* the lease is written, not after.
     state["head_status"] = 500
-    with pytest.raises(VaultTransportError, match="lease probe"):
+    with pytest.raises(VaultTransportError, match="probe failed"):
         s3.acquire_push_lease([cid], lease_id="s3-edge")
     state["head_status"] = None
 
