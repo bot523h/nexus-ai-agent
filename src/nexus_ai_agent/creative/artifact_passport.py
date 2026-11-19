@@ -49,7 +49,6 @@ from nexus_ai_agent.creative.materializer import (
     merkle_inclusion_proof_record,
     merkle_root_sha256,
     shot_leaf_payloads,
-    stream_sha256,
     verify_shot_inclusion_proofs,
 )
 
@@ -58,7 +57,14 @@ PASSPORT_VERSION = 2
 #: Versions :func:`verify_artifact_passport` can still verify.
 SUPPORTED_PASSPORT_VERSIONS = (1, 2)
 PASSPORT_SUFFIX = ".passport.json"
-MAX_PASSPORT_BYTES = 65_536
+#: Hard ceiling on a serialized passport document: a passport is a single JSON
+#: document that is read whole into memory before it is verified, so its size
+#: is bounded to keep verification memory-flat and to refuse a padded or
+#: bloated document outright.  A full 96-shot storyboard (and every board up
+#: to 128 shots) seals one RFC 6962 audit path per shot — measured at ~87 KiB
+#: for 96 shots — so the ceiling is 256 KiB: deterministic headroom for the
+#: sealed tree while staying memory-flat.
+MAX_PASSPORT_BYTES = 262_144
 _HEX64 = re.compile(r"^[0-9a-f]{64}$")
 _UNSIGNED_FIELDS = ("hmac_sha256",)
 #: The fields every passport carried before the per-shot tree existed.
@@ -241,12 +247,35 @@ def write_passport(path: Path, passport: dict[str, Any]) -> None:
     atomic_write(path, _write)
 
 
+def _fd_sha256(fd: int, *, chunk_bytes: int = 1_048_576) -> tuple[str, int]:
+    """SHA-256 and byte count read from exactly this descriptor.
+
+    :func:`os.pread` never moves the descriptor's offset, so the hash is a
+    pure function of the open file description it runs against — a concurrent
+    writer appends *after* the hashed region or changes bytes we already read
+    only at its own peril: the byte count is compared against the ``fstat``
+    size taken before hashing, and any drift is a typed refusal.
+    """
+    digest = hashlib.sha256()
+    size = 0
+    offset = 0
+    while True:
+        block = os.pread(fd, chunk_bytes, offset)
+        if not block:
+            break
+        digest.update(block)
+        size += len(block)
+        offset += len(block)
+    return digest.hexdigest(), size
+
+
 def verify_artifact_passport(
     passport_path: Path,
     mp4_path: Path,
     secret_key: object,
     *,
     min_version: int = 1,
+    mp4_fd: int | None = None,
 ) -> PassportCheck:
     """Verify seal, verdict and the exact MP4 bytes on disk. Raises on any mismatch.
 
@@ -255,6 +284,14 @@ def verify_artifact_passport(
     a caller that only trusts evidence sealed with the per-shot Merkle tree asks
     for ``min_version=2`` and legacy passports are refused as
     ``passport_version_unsupported``.
+
+    The artifact is opened **exactly once** — ``O_RDONLY | O_NOFOLLOW`` — and
+    every check (regular file, size, SHA-256) runs against that same
+    descriptor, closing the stat-then-open TOCTOU window: what is hashed is
+    byte-for-byte what a caller holding the descriptor streams. A caller that
+    already owns a verified-open descriptor (the download gate) passes it as
+    ``mp4_fd``; the caller keeps ownership and the descriptor is left open,
+    rewound to offset 0 by the caller after the checks pass.
     """
     if isinstance(min_version, bool) or not isinstance(min_version, int) or min_version < 1:
         raise PassportError("invalid_min_version", repr(min_version))
@@ -269,6 +306,10 @@ def verify_artifact_passport(
             opened = os.fstat(handle.fileno())
             if not stat.S_ISREG(opened.st_mode):
                 raise PassportError("passport_not_regular", str(passport_path))
+            if (opened.st_ino, opened.st_dev) != (pst.st_ino, pst.st_dev):
+                # The path was swapped for a different inode between the stat
+                # and the single open: refuse rather than read a different file.
+                raise PassportError("passport_unreadable", "inode changed between stat and open")
             if opened.st_size <= 0 or opened.st_size > MAX_PASSPORT_BYTES:
                 raise PassportError("passport_size", str(opened.st_size))
             raw = handle.read(MAX_PASSPORT_BYTES + 1)
@@ -308,13 +349,45 @@ def verify_artifact_passport(
         if proof_violations:
             raise PassportError(proof_violations[0], ", ".join(proof_violations))
 
-    mst = _lstat_regular(mp4_path, "artifact")
-    if mst.st_size != passport["output_size_bytes"]:
-        raise PassportError("artifact_mismatch", "size differs from passport")
+    # The artifact side: one single open descriptor is the only thing that is
+    # ever hashed. When the caller did not supply one it is opened here (and
+    # closed here); the lstat above it only preserves the typed refusal codes.
+    owns_fd = mp4_fd is None
+    mst: os.stat_result | None = None
+    artifact_fd: int | None = mp4_fd
+    if owns_fd:
+        mst = _lstat_regular(mp4_path, "artifact")
+        if mst.st_size != passport["output_size_bytes"]:
+            raise PassportError("artifact_mismatch", "size differs from passport")
+        try:
+            artifact_fd = os.open(
+                mp4_path,
+                os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0),
+            )
+        except OSError as exc:
+            raise PassportError(
+                "artifact_mismatch", "artifact changed during verification"
+            ) from exc
     try:
-        digest, _, _ = stream_sha256(Path(mp4_path))
-    except (OSError, MaterializationError) as exc:
-        raise PassportError("artifact_mismatch", "artifact changed during verification") from exc
+        assert artifact_fd is not None
+        opened = os.fstat(artifact_fd)
+        if not stat.S_ISREG(opened.st_mode):
+            raise PassportError("artifact_not_regular", str(mp4_path))
+        if mst is not None and (opened.st_ino, opened.st_dev) != (mst.st_ino, mst.st_dev):
+            raise PassportError("artifact_mismatch", "artifact inode changed during verification")
+        if opened.st_size != passport["output_size_bytes"]:
+            raise PassportError("artifact_mismatch", "size differs from passport")
+        try:
+            digest, hashed_bytes = _fd_sha256(artifact_fd)
+        except OSError as exc:
+            raise PassportError(
+                "artifact_mismatch", "artifact changed during verification"
+            ) from exc
+        if hashed_bytes != opened.st_size:
+            raise PassportError("artifact_mismatch", "artifact changed during verification")
+    finally:
+        if owns_fd and artifact_fd is not None:
+            os.close(artifact_fd)
     if not hmac.compare_digest(digest, str(passport["output_sha256"])):
         raise PassportError("artifact_mismatch", "sha256 differs from passport")
     return PassportCheck(passport=passport, output_path=Path(mp4_path))

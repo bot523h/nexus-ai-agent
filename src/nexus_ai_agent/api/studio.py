@@ -125,10 +125,13 @@ def _require_completed_and_verified(row: Mapping[str, object] | None) -> None:
     if not isinstance(block, Mapping):
         raise DownloadRefused(409, "artifact_not_verified")
     media_verdict = block.get("media_verdict")
-    if media_verdict is not None:
-        if media_verdict != "PASS":
-            raise DownloadRefused(409, "artifact_not_verified")
-    elif block.get("status") != "verified":
+    # The single verification gate: the queue's independent block must record
+    # ``PASS`` — a ``media_verdict`` when it carries one, otherwise the block's
+    # own ``verified`` status. Anything else (VIOLATED, UNOBSERVED, missing)
+    # is refused: an unverified artifact is never downloadable.
+    if (media_verdict is not None and media_verdict != "PASS") or (
+        media_verdict is None and block.get("status") != "verified"
+    ):
         raise DownloadRefused(409, "artifact_not_verified")
 
 
@@ -163,7 +166,11 @@ async def download_studio_artifact(project_id: str, job_id: str) -> StreamingRes
     except StoryboardJobConfigError:
         raise HTTPException(status_code=503, detail="studio not configured") from None
     return StreamingResponse(
-        iter_authorized_chunks(authorized.path),
+        # The stream reads from the descriptor that was verified — the same
+        # inode and bytes (BytesVerified == BytesStreamed), never a second
+        # path-based open. The generator closes the descriptor when the
+        # response finishes or the client disconnects.
+        iter_authorized_chunks(authorized),
         media_type="video/mp4",
         headers={
             "Content-Length": str(authorized.size_bytes),

@@ -516,6 +516,10 @@ def render_storyboard_sync(
             render_profile_hash=profile_hash,
             asset_merkle_root=bundle.asset_merkle_root,
             total_asset_leaves=bundle.total_asset_leaves,
+            # The per-shot tree is part of the sealed evidence: every shot the
+            # manifest rendered gets its RFC 6962 leaf and audit path, so a
+            # passport with an empty tree can never speak for a real board.
+            shot_hashes=bundle.shot_hashes,
             # The passport always seals the FINAL path: after the queue's
             # verifier promotes the quarantined bytes, this is where they live
             # and what the download gate compares against.

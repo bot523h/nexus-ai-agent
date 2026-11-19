@@ -2511,12 +2511,78 @@ def test_verify_passport_detects_a_passport_that_shrank_after_lstat(
         ap.verify_artifact_passport(passport_path, copied_mp4, KEY)
 
 
+def test_full_96_shot_storyboard_passport_seals_and_verifies_every_leaf(
+    real_mp4: Path, tmp_path: Path
+) -> None:
+    """A 96-shot v2 passport survives the disk round-trip whole.
+
+    Every one of the 96 shots seals its own RFC 6962 leaf and audit path, so
+    the document is far bigger than the old 64 KiB ceiling (~87 KiB measured):
+    the raised ``MAX_PASSPORT_BYTES`` must admit it, all 96 inclusion proofs
+    must replay against the sealed root, and the HMAC (plus the artifact's own
+    bytes) must verify after the passport is re-read from disk.
+    """
+    shot_hashes = [hashlib.sha256(f"shot-{index}".encode()).hexdigest() for index in range(96)]
+    leaves = mz.shot_leaf_payloads(shot_hashes)
+    passport = ap.build_passport(
+        job_id="job-96",
+        project_id="proj-96",
+        source_sha256=hashlib.sha256(b"source").hexdigest(),
+        manifest_sha256=hashlib.sha256(b"manifest").hexdigest(),
+        render_profile_hash=hashlib.sha256(b"profile").hexdigest(),
+        asset_merkle_root=hashlib.sha256(b"assets").hexdigest(),
+        total_asset_leaves=4,
+        output_rel_path="projects/proj-96/renders/job-96/storyboard.mp4",
+        output_size_bytes=real_mp4.stat().st_size,
+        output_sha256=hashlib.sha256(real_mp4.read_bytes()).hexdigest(),
+        probed_duration_s=1.0,
+        verifier_status="PASS",
+        created_at_unix_s=1_000,
+        shot_hashes=shot_hashes,
+        signing_key=KEY,
+    )
+    assert len(passport["shot_hashes"]) == 96
+    assert len(passport["shot_inclusion_proofs"]) == 96
+
+    # Disk round-trip: the sealed document is stored and re-read whole.
+    passport_path = tmp_path / "storyboard.passport.json"
+    ap.write_passport(passport_path, passport)
+    on_disk = passport_path.stat().st_size
+    assert 65_536 < on_disk <= ap.MAX_PASSPORT_BYTES, (
+        "a full 96-shot board with every audit path must exceed the old 64 KiB "
+        "ceiling yet fit the raised one"
+    )
+    artifact = tmp_path / "storyboard.mp4"
+    artifact.write_bytes(real_mp4.read_bytes())
+    reread = json.loads(passport_path.read_text(encoding="utf-8"))
+
+    # N passport leaves == 96, and every leaf's audit path replays to the root.
+    assert len(reread["shot_hashes"]) == 96
+    root = reread["shot_merkle_root"]
+    for index, proof in enumerate(reread["shot_inclusion_proofs"]):
+        assert proof["leaf_index"] == index
+        assert proof["leaf_hash"] == shot_hashes[index]
+        assert proof["total_leaves"] == 96
+        assert proof["root_hash"] == root
+        assert mz.verify_merkle_inclusion_proof(
+            leaves[index],
+            index=index,
+            total_leaves=96,
+            proof=proof["sibling_hashes"],
+            expected_root=root,
+        )
+    # The whole passport (HMAC included) verifies against the artifact bytes.
+    check = ap.verify_artifact_passport(passport_path, artifact, KEY, min_version=2)
+    assert check.passport["shot_merkle_root"] == root
+    assert ap.passport_shot_proof_violations(check.passport) == ()
+
+
 def test_verify_passport_refuses_a_read_that_exceeds_the_cap(
     tmp_path: Path, copied_mp4: Path, monkeypatch: Any
 ) -> None:
     """TOCTOU: the file grew between the stat and the read, so the read is capped."""
     passport_path = tmp_path / "storyboard.passport.json"
-    passport_path.write_bytes(json.dumps(_passport(copied_mp4)).encode() + b" " * 70_000)
+    passport_path.write_bytes(json.dumps(_passport(copied_mp4)).encode() + b" " * 263_000)
     small = os.stat_result((stat.S_IFREG | 0o600, 1, 1, 1, 0, 0, 10, 0, 0, 0))
     monkeypatch.setattr(ap.os, "lstat", lambda _path: small)
     monkeypatch.setattr(ap.os, "fstat", lambda _fd: small)
@@ -2524,19 +2590,36 @@ def test_verify_passport_refuses_a_read_that_exceeds_the_cap(
         ap.verify_artifact_passport(passport_path, copied_mp4, KEY)
 
 
-@pytest.mark.parametrize(
-    "exc", [OSError("gone"), mz.MaterializationError("not_regular_file", "swapped")]
-)
-def test_verify_passport_refuses_an_artifact_that_changed_during_hashing(
-    tmp_path: Path, copied_mp4: Path, monkeypatch: Any, exc: BaseException
+def test_verify_passport_refuses_an_artifact_whose_hash_read_fails(
+    tmp_path: Path, copied_mp4: Path, monkeypatch: Any
 ) -> None:
+    """The digest read runs on the single open descriptor (``os.pread``); a
+    read that fails there is a typed refusal - never a verified passport."""
     passport_path = _write(tmp_path / "storyboard.passport.json", _passport(copied_mp4))
 
     def _raise(*_args: Any, **_kwargs: Any) -> Any:
-        raise exc
+        raise OSError("gone")
 
-    monkeypatch.setattr(ap, "stream_sha256", _raise)
+    monkeypatch.setattr(ap.os, "pread", _raise)
     with pytest.raises(ap.PassportError, match="artifact_mismatch"):
+        ap.verify_artifact_passport(passport_path, copied_mp4, KEY)
+
+
+def test_verify_passport_refuses_an_artifact_that_changed_during_hashing(
+    tmp_path: Path, copied_mp4: Path, monkeypatch: Any
+) -> None:
+    """A file whose hashed length drifts from its ``fstat`` size changed while
+    it was being hashed through the descriptor - a typed refusal."""
+    passport_path = _write(tmp_path / "storyboard.passport.json", _passport(copied_mp4))
+    real_pread = ap.os.pread
+    truncated_at = copied_mp4.stat().st_size - 1
+
+    def _shrinking_pread(fd: int, count: int, offset: int) -> bytes:
+        data = real_pread(fd, count, offset)
+        return data[: max(0, truncated_at - offset)]  # "shrank" mid-hash
+
+    monkeypatch.setattr(ap.os, "pread", _shrinking_pread)
+    with pytest.raises(ap.PassportError, match="artifact changed during verification"):
         ap.verify_artifact_passport(passport_path, copied_mp4, KEY)
 
 

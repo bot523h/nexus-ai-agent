@@ -19,7 +19,7 @@ import os
 import re
 import stat
 from collections.abc import Iterator, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from nexus_ai_agent.creative.artifact_passport import (
@@ -47,6 +47,16 @@ class AuthorizedDownload:
     path: Path
     size_bytes: int
     sha256: str
+    #: The verified, rewound descriptor the HTTP stream MUST read from: the
+    #: exact inode whose bytes were hashed during authorization. ``None`` only
+    #: for hand-built objects (tests); the streaming helper then — and only
+    #: then — falls back to a single ``O_NOFOLLOW`` open of ``path``.
+    fd: int | None = field(default=None, compare=False, repr=False)
+
+
+def _open_readonly_no_follow(path: Path) -> int:
+    """Open a regular file once, never following a final symlink."""
+    return os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0))
 
 
 def _syntactically_valid(rel_path: object) -> str:
@@ -96,17 +106,46 @@ def authorize_artifact_download(
     passport_path = resolved.parent / f"{resolved.name[: -len('.mp4')]}{PASSPORT_SUFFIX}"
     if not passport_path.exists():
         raise DownloadRefused(409, "passport_missing")
+
+    # Open the artifact EXACTLY ONCE. Every check below — regular file, inode
+    # continuity against the stat above, and the SHA-256 inside the passport
+    # verification — runs against this same descriptor, and the HTTP stream is
+    # served FROM it: the bytes that were verified are the bytes that are
+    # streamed (BytesVerified == BytesStreamed). The path is never opened a
+    # second time, so no symlink swap or in-place edit can slip between the
+    # verification and the response body.
     try:
-        check = verify_artifact_passport(passport_path, resolved, signing_key)
-    except PassportError as exc:
-        raise DownloadRefused(409, f"passport_{exc.reason}") from exc
-    if check.passport.get("output_rel_path") != str(resolved.relative_to(root)):
-        raise DownloadRefused(409, "passport_for_other_artifact")
-    return AuthorizedDownload(
-        path=resolved,
-        size_bytes=int(check.passport["output_size_bytes"]),
-        sha256=str(check.passport["output_sha256"]),
-    )
+        mp4_fd = _open_readonly_no_follow(resolved)
+    except OSError:
+        raise DownloadRefused(404, "artifact_not_found") from None
+    try:
+        opened = os.fstat(mp4_fd)
+        if not stat.S_ISREG(opened.st_mode):
+            raise DownloadRefused(404, "artifact_not_found")
+        if (opened.st_ino, opened.st_dev) != (st.st_ino, st.st_dev):
+            # The path resolved to a different inode between the stat and the
+            # single open: treat it as the artifact having changed under us.
+            raise DownloadRefused(409, "artifact_changed")
+        try:
+            check = verify_artifact_passport(passport_path, resolved, signing_key, mp4_fd=mp4_fd)
+        except PassportError as exc:
+            raise DownloadRefused(409, f"passport_{exc.reason}") from exc
+        if check.passport.get("output_rel_path") != str(resolved.relative_to(root)):
+            raise DownloadRefused(409, "passport_for_other_artifact")
+        if int(check.passport["output_size_bytes"]) != opened.st_size:
+            raise DownloadRefused(409, "artifact_changed")
+        # Rewind the VERIFIED descriptor so the stream starts at byte zero of
+        # exactly the inode that was hashed.
+        os.lseek(mp4_fd, 0, os.SEEK_SET)
+        return AuthorizedDownload(
+            path=resolved,
+            size_bytes=int(check.passport["output_size_bytes"]),
+            sha256=str(check.passport["output_sha256"]),
+            fd=mp4_fd,
+        )
+    except BaseException:
+        os.close(mp4_fd)
+        raise
 
 
 #: Streaming chunk size: the response never holds more than this in memory.
@@ -133,9 +172,24 @@ def artifact_rel_path_for_job(row: Mapping[str, object] | None, project_id: str)
     return rel
 
 
-def iter_authorized_chunks(path: Path) -> Iterator[bytes]:
-    """Yield an already-authorized file in fixed-size chunks."""
-    with path.open("rb") as handle:
+def iter_authorized_chunks(source: AuthorizedDownload | Path | int) -> Iterator[bytes]:
+    """Yield an already-authorized file in fixed-size chunks.
+
+    ``source`` is the :class:`AuthorizedDownload` itself (preferred): the
+    chunks come from the exact descriptor that was verified — the same inode,
+    the same bytes, never a second path-based open. An already-open descriptor
+    (``int``) is streamed the same way; a bare path is opened once with
+    ``O_NOFOLLOW`` for legacy callers. Whatever the source, the descriptor is
+    closed when the stream is exhausted or closed — there is no fd leak on
+    error, early exit, or client disconnect.
+    """
+    if isinstance(source, AuthorizedDownload):
+        fd = source.fd if source.fd is not None else _open_readonly_no_follow(source.path)
+    elif isinstance(source, Path):
+        fd = _open_readonly_no_follow(source)
+    else:
+        fd = source
+    with os.fdopen(fd, "rb") as handle:
         while True:
             chunk = handle.read(STREAM_CHUNK_BYTES)
             if not chunk:

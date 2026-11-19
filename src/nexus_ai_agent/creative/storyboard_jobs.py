@@ -146,6 +146,29 @@ def _inside(root: Path, candidate: Path) -> bool:
     return candidate.resolve().is_relative_to(root.resolve())
 
 
+def verify_storyboard_final_pair(final_output: Path, final_passport: Path) -> str | None:
+    """Post-promotion gate for the FINAL artifact pair; ``None`` means PASS.
+
+    Re-verifies the promoted destination exactly as an independent reader
+    would: v2-only passport policy (``min_version=2``), HMAC seal, per-shot
+    Merkle tree, and the destination MP4's size and SHA-256 re-hashed from a
+    single open descriptor. Returns ``None`` when the pair verifies, or a
+    typed reason string when it does not — the caller must then roll the
+    promotion back and refuse to complete the job.
+    """
+    try:
+        workspace, key = studio_settings(os.environ)
+    except StoryboardJobConfigError as exc:
+        return str(exc)
+    if not (_inside(workspace, final_output) and _inside(workspace, final_passport)):
+        return "path_outside_workspace"
+    try:
+        verify_artifact_passport(final_passport, final_output, key, min_version=2)
+    except PassportError as exc:
+        return f"passport_{exc.reason}"
+    return None
+
+
 def storyboard_render_verifier(
     payload: dict[str, object], result: dict[str, object]
 ) -> VerificationOutcome:
@@ -211,9 +234,27 @@ def storyboard_render_verifier(
             return _refuse("artifact_missing", "MP4 or passport is not on disk")
 
     try:
-        check = verify_artifact_passport(passport, mp4, key)
+        check = verify_artifact_passport(passport, mp4, key, min_version=2)
     except PassportError as exc:
         return _refuse(f"passport_{exc.reason}", exc.detail)
+
+    # Version-2 policy for the production storyboard path: the sealed per-shot
+    # tree must exist and must have EXACTLY one leaf per rendered shot. An
+    # empty (or short) tree on a non-empty board is a forged or partial
+    # passport - fail closed before any media probing runs.
+    expected_shot_count = len(shots)
+    shot_hashes = check.passport.get("shot_hashes")
+    shot_proofs = check.passport.get("shot_inclusion_proofs")
+    if (
+        not isinstance(shot_hashes, list)
+        or not isinstance(shot_proofs, list)
+        or len(shot_hashes) != expected_shot_count
+        or len(shot_proofs) != expected_shot_count
+    ):
+        return _refuse(
+            "shot_tree_incomplete",
+            "passport shot tree does not match the rendered shot count",
+        )
 
     actual_sha = _sha256_file(mp4)
     if actual_sha != claimed_sha:
@@ -254,4 +295,5 @@ __all__ = [
     "open_studio",
     "storyboard_render_job",
     "storyboard_render_verifier",
+    "verify_storyboard_final_pair",
 ]
