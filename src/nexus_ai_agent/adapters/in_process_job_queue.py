@@ -397,8 +397,8 @@ def default_artifact_verifiers() -> dict[str, ArtifactVerifier]:
     from nexus_ai_agent.jobs.feature_verification import pdf_extract_verifier, story_verifier
 
     return {
-        "storyboard_render": storyboard_render_verifier,
         "creative_render": creative_render_verifier,
+        "storyboard_render": storyboard_render_verifier,
         "slideshow_render": slideshow_render_verifier,
         "story": story_verifier,
         "pdf_extract": pdf_extract_verifier,

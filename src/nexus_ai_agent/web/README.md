@@ -38,7 +38,7 @@ If this table and the code disagree, the code wins and this table is corrected i
 | Approvals | DEFERRED | Approval persistence and cross-process single use are not durable yet. |
 | Asset library | DEFERRED | No HTTP surface. |
 | Resource packs | VERIFIED_WITH_LIMITATIONS | `GET /api/studio/resource-packs` re-verifies installed packs read-only; it cannot install, repair or activate one. |
-| Artifact download | DEFERRED | No authorized download route. The library gate `authorize_artifact_download` (`creative/artifact_download.py`) is tested but not wired to HTTP, so the app shows the passport, not the bytes. |
+| Artifact download | VERIFIED | `GET /api/studio/projects/{project_id}/jobs/{job_id}/artifact` streams the MP4 (64 KiB chunks) only after `authorize_artifact_download` passes: passport seal, PASS verdict and on-disk digest. Cross-project jobs return 404; traversal 403; malformed path 422; passport or byte mismatch 409; unconfigured studio 503. Evidence: `tests/integration/test_studio_artifact_download.py`. |
 
 ## Security properties (each has a test)
 

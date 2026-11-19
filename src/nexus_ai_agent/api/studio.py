@@ -18,10 +18,17 @@ import re
 from typing import Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import ValidationError
 
 from nexus_ai_agent.api.studio_session import authenticate_studio_caller
+from nexus_ai_agent.creative.artifact_download import (
+    DownloadRefused,
+    artifact_rel_path_for_job,
+    authorize_artifact_download,
+    iter_authorized_chunks,
+)
+from nexus_ai_agent.creative.storyboard_jobs import StoryboardJobConfigError, studio_settings
 from nexus_ai_agent.product.studio_read import ProjectReadDenied, StudioReadService
 from nexus_ai_agent.product.studio_submit import (
     StudioRenderSubmission,
@@ -96,6 +103,43 @@ def get_studio_submission_service() -> StudioRenderSubmissionService:
         registry.queue,
         resolve_studio_facts_from_env(),
         revision_store=SqlProjectRevisionStore(),
+    )
+
+
+@router.get(
+    "/projects/{project_id}/jobs/{job_id}/artifact",
+    dependencies=[Depends(require_studio_project)],
+)
+async def download_studio_artifact(project_id: str, job_id: str) -> StreamingResponse:
+    """Stream the verified MP4 of one authorized project job.
+
+    Passport first, bytes second: the artifact is authorized (passport seal,
+    PASS verdict, digest of the bytes on disk) before a single byte is sent. A
+    job of another project, or an unknown job, is a ``404``. Status codes come
+    from the authorization gate: ``403`` traversal/symlink/outside workspace,
+    ``404`` no artifact, ``409`` passport missing or stale, ``422`` malformed path.
+    """
+    if not job_id or len(job_id) > 128 or "/" in job_id or ".." in job_id:
+        raise HTTPException(status_code=400, detail="invalid job id")
+    from nexus_ai_agent.api.app import get_creative_registry
+
+    try:
+        row = await get_creative_registry().get_job(job_id)
+        rel = artifact_rel_path_for_job(row, project_id)
+        workspace, signing_key = studio_settings(os.environ)
+        authorized = authorize_artifact_download(workspace, rel, signing_key)
+    except DownloadRefused as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.reason) from None
+    except StoryboardJobConfigError:
+        raise HTTPException(status_code=503, detail="studio not configured") from None
+    return StreamingResponse(
+        iter_authorized_chunks(authorized.path),
+        media_type="video/mp4",
+        headers={
+            "Content-Length": str(authorized.size_bytes),
+            "Content-Disposition": 'attachment; filename="storyboard.mp4"',
+            "X-Artifact-SHA256": authorized.sha256,
+        },
     )
 
 

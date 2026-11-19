@@ -18,6 +18,7 @@ from __future__ import annotations
 import os
 import re
 import stat
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -104,4 +105,45 @@ def authorize_artifact_download(
     )
 
 
-__all__ = ["AuthorizedDownload", "DownloadRefused", "authorize_artifact_download"]
+#: Streaming chunk size: the response never holds more than this in memory.
+STREAM_CHUNK_BYTES = 64 * 1024
+
+
+def artifact_rel_path_for_job(row: Mapping[str, object] | None, project_id: str) -> str:
+    """Return the MP4 path a job produced, for the authorized project only.
+
+    A job that is missing, belongs to another project or has no artifact gets
+    the same ``404`` so the response never reveals another project's job. A
+    job that exists in this project but has not produced an artifact yet is a
+    ``409``: the state is real, the bytes are not available.
+    """
+    if row is None:
+        raise DownloadRefused(404, "job_not_found")
+    input_data = row.get("input_data")
+    if not isinstance(input_data, Mapping) or input_data.get("project_id") != project_id:
+        raise DownloadRefused(404, "job_not_found")
+    result = row.get("result")
+    rel = result.get("output_rel_path") if isinstance(result, Mapping) else None
+    if not isinstance(rel, str) or not rel:
+        raise DownloadRefused(409, "artifact_not_ready")
+    return rel
+
+
+def iter_authorized_chunks(path: Path) -> Iterator[bytes]:
+    """Yield an already-authorized file in fixed-size chunks."""
+    with path.open("rb") as handle:
+        while True:
+            chunk = handle.read(STREAM_CHUNK_BYTES)
+            if not chunk:
+                return
+            yield chunk
+
+
+__all__ = [
+    "STREAM_CHUNK_BYTES",
+    "AuthorizedDownload",
+    "DownloadRefused",
+    "artifact_rel_path_for_job",
+    "authorize_artifact_download",
+    "iter_authorized_chunks",
+]

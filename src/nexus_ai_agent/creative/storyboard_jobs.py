@@ -53,7 +53,7 @@ def _utc_now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _studio_settings(environ: Mapping[str, str]) -> tuple[Path, str]:
+def studio_settings(environ: Mapping[str, str]) -> tuple[Path, str]:
     raw_workspace = environ.get(ENV_WORKSPACE, "").strip()
     if not raw_workspace:
         raise StoryboardJobConfigError(f"{ENV_WORKSPACE} is not set")
@@ -69,7 +69,7 @@ def open_studio(
     environ: Mapping[str, str] | None = None,
 ) -> tuple[RenderContext, DurableApprovalLedger]:
     """Build the render context from configuration. The caller closes the ledger."""
-    workspace, key = _studio_settings(os.environ if environ is None else environ)
+    workspace, key = studio_settings(os.environ if environ is None else environ)
     ledger = DurableApprovalLedger(durable_approval_ledger_path(workspace), now=_utc_now)
     ctx = RenderContext(workspace_root=workspace, approval_ledger=ledger, signing_key=key)
     return ctx, ledger
@@ -117,7 +117,7 @@ def storyboard_render_verifier(
     if result.get("status") != "rendered" or result.get("verifier_status") != "PASS":
         return _refuse("handler_not_rendered", "result does not claim a PASS render")
     try:
-        workspace, key = _studio_settings(os.environ)
+        workspace, key = studio_settings(os.environ)
     except StoryboardJobConfigError as exc:
         return _refuse("studio_not_configured", str(exc))
 
