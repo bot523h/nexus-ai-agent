@@ -23,19 +23,25 @@ Guarantees, all fail-closed:
   status) and recomputes the asset Merkle root. The render handler calls it
   immediately before FFmpeg runs.
 
-Asset Merkle root (RFC 6962 §2.1, literal recursion): the empty tree hashes to
-``SHA-256(b"")``; a leaf is ``SHA-256(0x00 || record_json)``; for ``n > 1`` the
-split point is ``k = 1 << ((n - 1).bit_length() - 1)`` (the largest power of two
-strictly below ``n``) and ``MTH(D[0:n]) = SHA-256(0x01 || MTH(D[0:k]) ||
-MTH(D[k:n]))``. Inclusion proofs follow RFC 6962 PATH and are verified with the
-RFC 9162 §2.1.3.2 algorithm bound to ``total_leaves``, so a proof for a tree
-that duplicates its last leaf (CVE-2012-2459) never verifies against the real
-root.
+Asset Merkle root: RFC 6962 section 2.1, with domain-separated SHA-256
+leaves and internal nodes. The previous level-by-level promotion algorithm has
+the same root. ``total_leaves`` is recorded next to the root.
+
+Shot Merkle root and per-shot inclusion proofs: the asset tree above commits to
+*assets* (one PNG and one WAV per shot). A second, per-shot tree commits to each
+shot's A/V material as one leaf: ``shot_content_hash`` = SHA-256 of the
+canonical shot record, and the RFC 6962 leaf payload is that hash's ASCII hex.
+For every shot an inclusion proof (:func:`merkle_inclusion_proof_record`) is
+produced and carried in :class:`MaterializedBundle` and, sealed, in the artifact
+passport. :func:`verify_shot_inclusion_proofs` re-derives the root from the
+declared shot hashes and verifies every audit path fail-closed, returning typed
+violation codes instead of trusting the stored proofs.
 """
 
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import math
 import os
@@ -64,7 +70,17 @@ MIN_FPS = 1.0
 MAX_FPS = 60.0
 MIN_SHOT_SEC = 0.04
 MAX_SHOT_SEC = 600.0
+#: Schema tag for the canonical per-shot content record that seeds a shot leaf.
+SHOT_CONTENT_SCHEMA = "nagar-shot-content-v1"
+#: Schema tag carried by every serialised inclusion proof.
+SHOT_PROOF_SCHEMA = "nagar-merkle-inclusion-proof-v1"
+#: The name a verifier uses when it demands that tag: a proof that does not
+#: declare *this* schema is not a proof of this protocol and must be refused.
+MERKLE_PROOF_SCHEMA = SHOT_PROOF_SCHEMA
+#: RFC 6962 Merkle Tree Hash of the empty tree (``SHA-256("")``).
+EMPTY_MERKLE_ROOT = hashlib.sha256(b"").hexdigest()
 _SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
+_HEX64 = re.compile(r"^[0-9a-f]{64}$")
 
 
 class MaterializationError(RuntimeError):
@@ -152,6 +168,12 @@ class MaterializedBundle:
     shot_durations_s: tuple[float, ...]
     asset_merkle_root: str
     total_asset_leaves: int
+    #: One SHA-256 per shot, over the canonical shot content record (A/V material).
+    shot_hashes: tuple[str, ...] = ()
+    #: RFC 6962 root of the per-shot tree (``EMPTY_MERKLE_ROOT`` when there are no shots).
+    shot_merkle_root: str = ""
+    #: RFC 6962 audit path for every shot, in shot order (fail-closed verified).
+    shot_inclusion_proofs: tuple[dict[str, Any], ...] = ()
 
     @property
     def total_duration_s(self) -> float:
@@ -199,10 +221,10 @@ def validate_safe_id(value: object, name: str) -> str:
 def stream_sha256(path: Path) -> tuple[str, int, int]:
     """Return ``(sha256_hex, size, inode)`` by streaming the file in 64 KiB chunks.
 
-    ``O_NOFOLLOW`` makes the open itself refuse a symlink, closing the window
-    between a path check and the read.
+    ``O_NOFOLLOW`` refuses a final symlink. ``O_NONBLOCK`` prevents a FIFO
+    substituted before open from blocking before the descriptor is checked.
     """
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
     fd = os.open(path, flags)
     try:
         st = os.fstat(fd)
@@ -257,82 +279,282 @@ def _rfc6962_node(left: bytes, right: bytes) -> bytes:
     return hashlib.sha256(b"\x01" + left + right).digest()
 
 
-def _split_point(size: int) -> int:
-    """RFC 6962 ``k``: the largest power of two strictly smaller than ``size`` (size > 1)."""
-    return 1 << ((size - 1).bit_length() - 1)
-
-
-def _mth(leaf_hashes: Sequence[bytes], lo: int, hi: int) -> bytes:
-    """RFC 6962 §2.1 MTH over ``leaf_hashes[lo:hi]`` by literal recursion."""
-    size = hi - lo
-    if size == 0:
+def _merkle_hash(leaves: Sequence[bytes], start: int, end: int) -> bytes:
+    n = end - start
+    if n == 0:
         return hashlib.sha256(b"").digest()
-    if size == 1:
-        return leaf_hashes[lo]
-    k = _split_point(size)
-    return _rfc6962_node(_mth(leaf_hashes, lo, lo + k), _mth(leaf_hashes, lo + k, hi))
+    if n == 1:
+        return _rfc6962_leaf(leaves[start])
+    k = 1 << ((n - 1).bit_length() - 1)
+    return _rfc6962_node(
+        _merkle_hash(leaves, start, start + k), _merkle_hash(leaves, start + k, end)
+    )
 
 
 def merkle_root(leaf_payloads: Sequence[bytes]) -> tuple[str, int]:
-    """Return ``(root_hex, total_leaves)`` per RFC 6962 §2.1."""
-    total = len(leaf_payloads)
-    leaf_hashes = [_rfc6962_leaf(payload) for payload in leaf_payloads]
-    return _mth(leaf_hashes, 0, total).hex(), total
+    """Return the RFC 6962 root and leaf count (preserves the existing API)."""
+    return _merkle_hash(leaf_payloads, 0, len(leaf_payloads)).hex(), len(leaf_payloads)
 
 
-def merkle_inclusion_proof(leaf_payloads: Sequence[bytes], index: int) -> tuple[bytes, ...]:
-    """RFC 6962 PATH(index, D[n]): the sibling hashes that prove leaf ``index``."""
-    total = len(leaf_payloads)
-    if not 0 <= index < total:
-        raise MaterializationError("merkle_index_out_of_range", str(index))
-    leaf_hashes = [_rfc6962_leaf(payload) for payload in leaf_payloads]
+def merkle_inclusion_proof(leaves: Sequence[bytes], index: int) -> tuple[str, ...]:
+    """Return the bottom-up RFC 6962 audit path for a leaf."""
+    if isinstance(index, bool) or not isinstance(index, int) or not 0 <= index < len(leaves):
+        raise ValueError("leaf index outside tree")
 
-    def path(m: int, lo: int, hi: int) -> list[bytes]:
-        size = hi - lo
-        if size <= 1:
+    def path(start: int, end: int, i: int) -> list[bytes]:
+        n = end - start
+        if n == 1:
             return []
-        k = _split_point(size)
-        if m < k:
-            return [*path(m, lo, lo + k), _mth(leaf_hashes, lo + k, hi)]
-        return [*path(m - k, lo + k, hi), _mth(leaf_hashes, lo, lo + k)]
+        k = 1 << ((n - 1).bit_length() - 1)
+        if i < k:
+            return path(start, start + k, i) + [_merkle_hash(leaves, start + k, end)]
+        return path(start + k, end, i - k) + [_merkle_hash(leaves, start, start + k)]
 
-    return tuple(path(index, 0, total))
+    return tuple(h.hex() for h in path(0, len(leaves), index))
 
 
-def verify_merkle_proof(
-    leaf_payload: bytes,
-    index: int,
-    total_leaves: int,
-    proof: Sequence[bytes],
-    root_hex: str,
+def verify_merkle_inclusion_proof(
+    leaf: bytes, *, index: int, total_leaves: int, proof: Sequence[str], expected_root: str
 ) -> bool:
-    """RFC 9162 §2.1.3.2 inclusion verification bound to ``total_leaves``.
-
-    Fails closed: any out-of-range index, wrong-length proof or root mismatch
-    returns ``False``. The proof length is checked against ``total_leaves``
-    so a proof for a shorter tree cannot be replayed against a longer one.
-    """
-    if total_leaves <= 0 or not 0 <= index < total_leaves:
+    """Verify a tree-size-bound audit path; reject malformed or surplus hashes."""
+    if (
+        not isinstance(leaf, bytes)
+        or isinstance(index, bool)
+        or not isinstance(index, int)
+        or isinstance(total_leaves, bool)
+        or not isinstance(total_leaves, int)
+        or total_leaves <= 0
+        or index < 0
+        or index >= total_leaves
+        or not isinstance(expected_root, str)
+        or not re.fullmatch(r"[0-9a-f]{64}", expected_root)
+        or not isinstance(proof, (list, tuple))
+    ):
         return False
-    fn, sn = index, total_leaves - 1
-    result = _rfc6962_leaf(leaf_payload)
-    for sibling in proof:
-        if sn == 0:
-            return False
-        if fn & 1 or fn == sn:
-            result = _rfc6962_node(sibling, result)
-            if not fn & 1:
-                while fn & 1 == 0 and fn != 0:
-                    fn >>= 1
-                    sn >>= 1
+    # Construct directions from the authenticated tree size, then consume bottom-up.
+    directions: list[bool] = []
+    i, n = index, total_leaves
+    while n > 1:
+        k = 1 << ((n - 1).bit_length() - 1)
+        if i < k:
+            directions.append(False)  # sibling on right
+            n = k
         else:
-            result = _rfc6962_node(result, sibling)
-        fn >>= 1
-        sn >>= 1
-    return sn == 0 and result.hex() == root_hex
+            directions.append(True)  # sibling on left
+            i -= k
+            n -= k
+    if len(proof) != len(directions):
+        return False
+    result = _rfc6962_leaf(leaf)
+    for sibling, on_left in zip(proof, reversed(directions), strict=True):
+        if not isinstance(sibling, str) or not re.fullmatch(r"[0-9a-f]{64}", sibling):
+            return False
+        digest = bytes.fromhex(sibling)
+        result = _rfc6962_node(digest, result) if on_left else _rfc6962_node(result, digest)
+    return hmac.compare_digest(result.hex(), expected_root)
 
 
-def atomic_write(final_path: Path, write: Callable[[IO[bytes]], object]) -> None:
+def merkle_root_sha256(leaf_payloads: Sequence[bytes]) -> str:
+    """Return the RFC 6962 Merkle Tree Hash of ``leaf_payloads`` as lowercase hex.
+
+    The empty tree hashes ``SHA-256("")``, a single leaf hashes ``0x00 || leaf``
+    and internal nodes hash ``0x01 || left || right``; the odd tail is promoted,
+    never duplicated. This is the value sealed in an artifact passport.
+    """
+    return _merkle_hash(leaf_payloads, 0, len(leaf_payloads)).hex()
+
+
+def shot_content_hash(
+    *,
+    shot_id: str,
+    image_sha256: str,
+    wav_sha256: str,
+    duration_s: float,
+) -> str:
+    """SHA-256 over the canonical per-shot content record (the shot's leaf value).
+
+    Binding the shot id, both asset digests and the exact frame-quantized
+    duration means any change to the shot's A/V material - or to its length -
+    produces a different leaf, hence a different inclusion proof and root.
+    """
+    validate_safe_id(shot_id, "shot_id")
+    for name, value in (("image_sha256", image_sha256), ("wav_sha256", wav_sha256)):
+        if not isinstance(value, str) or not _HEX64.fullmatch(value):
+            raise MaterializationError("invalid_digest", name)
+    duration = _finite_shot_duration(duration_s)
+    record = {
+        "schema": SHOT_CONTENT_SCHEMA,
+        "shot_id": shot_id,
+        "image_sha256": image_sha256,
+        "wav_sha256": wav_sha256,
+        "duration_s": repr(float(duration)),
+    }
+    return hashlib.sha256(canonical_json(record)).hexdigest()
+
+
+def shot_leaf_payloads(shot_hashes: Sequence[str]) -> list[bytes]:
+    """Turn validated shot hashes into RFC 6962 leaf payloads (ASCII hex bytes).
+
+    Fail-closed: a non-string, a wrong length or any character outside
+    ``[0-9a-f]`` is refused before it can enter a tree.
+    """
+    payloads: list[bytes] = []
+    for value in shot_hashes:
+        if not isinstance(value, str) or not _HEX64.fullmatch(value):
+            raise MaterializationError("invalid_digest", "shot_hashes must be lowercase hex64")
+        payloads.append(value.encode("ascii"))
+    return payloads
+
+
+def merkle_inclusion_proof_record(leaf_payloads: Sequence[bytes], index: int) -> dict[str, Any]:
+    """Serialise the RFC 6962 audit path of ``leaf_payloads[index]``.
+
+    The returned mapping carries everything a verifier needs *and* nothing it
+    can be tricked by: the claimed leaf index, the leaf value itself, the number
+    of leaves the path was built for, the root it was built under, and the
+    bottom-up sibling hashes. It is only ever trusted after
+    :func:`verify_shot_inclusion_proofs` (or the passport verifier) re-derives
+    the root from the declared leaves and replays the path.
+    """
+    if isinstance(index, bool) or not isinstance(index, int) or not 0 <= index < len(leaf_payloads):
+        raise MaterializationError("invalid_leaf_index", repr(index))
+    payload = leaf_payloads[index]
+    if not isinstance(payload, bytes) or not _HEX64.fullmatch(payload.decode("ascii", "replace")):
+        raise MaterializationError("invalid_leaf_payload", "leaf payload must be lowercase hex")
+    return {
+        "schema": SHOT_PROOF_SCHEMA,
+        "leaf_index": index,
+        "leaf_hash": payload.decode("ascii"),
+        "total_leaves": len(leaf_payloads),
+        "root_hash": merkle_root_sha256(leaf_payloads),
+        "sibling_hashes": list(merkle_inclusion_proof(leaf_payloads, index)),
+    }
+
+
+def _proof_is_valid(
+    proof: object,
+    payloads: Sequence[bytes],
+    shot_hashes: Sequence[str],
+    index: int,
+    merkle_root: str,
+) -> bool:
+    """Replay one audit path; every field must agree with the declared leaves.
+
+    The ``schema`` tag is checked first: a mapping that does not declare
+    :data:`MERKLE_PROOF_SCHEMA` may use the same field names for a different
+    protocol, so it is refused before any of its values are trusted.
+    """
+    if not isinstance(proof, Mapping):  # noqa: SIM102 - explicit, flat fail-closed checks
+        return False
+    if proof.get("schema") != MERKLE_PROOF_SCHEMA:
+        return False
+    if proof.get("leaf_index") != index:
+        return False
+    if proof.get("leaf_hash") != shot_hashes[index]:
+        return False
+    if proof.get("root_hash") != merkle_root:
+        return False
+    if proof.get("total_leaves") != len(shot_hashes):
+        return False
+    path = proof.get("sibling_hashes")
+    if not isinstance(path, (list, tuple)):
+        return False
+    return verify_merkle_inclusion_proof(
+        payloads[index],
+        index=index,
+        total_leaves=len(shot_hashes),
+        proof=path,
+        expected_root=merkle_root,
+    )
+
+
+def verify_shot_inclusion_proofs(
+    *,
+    shot_hashes: Sequence[str],
+    merkle_root: str,
+    proofs: Sequence[object],
+) -> tuple[str, ...]:
+    """Fail-closed verification of a whole per-shot tree.
+
+    Returns an empty tuple when the tree and every audit path verify; otherwise
+    the typed violation codes, in a deterministic order:
+
+    * ``shot_merkle_root_mismatch`` - the root does not equal the RFC 6962 root
+      recomputed from the declared shot hashes;
+    * ``shot_inclusion_proof_count_mismatch`` - the number of proofs differs
+      from the number of leaves. This holds for the empty tree too: zero leaves
+      means zero proofs, so a passport that carries proofs for an empty
+      ``shot_hashes`` list is refused instead of silently ignored;
+    * ``shot_inclusion_proof_invalid`` - a proof is not a mapping, does not
+      declare :data:`MERKLE_PROOF_SCHEMA`, disagrees with the declared leaf
+      index/hash/root/leaf count, has a malformed path, or replays to a
+      different root.
+    """
+    if not isinstance(merkle_root, str) or not _HEX64.fullmatch(merkle_root):
+        return ("shot_merkle_root_mismatch",)
+    try:
+        payloads = shot_leaf_payloads(shot_hashes)
+    except MaterializationError:
+        return ("shot_inclusion_proof_invalid",)
+    violations: list[str] = []
+    recomputed = merkle_root_sha256(payloads)
+    if not hmac.compare_digest(recomputed, merkle_root):
+        violations.append("shot_merkle_root_mismatch")
+    if len(proofs) != len(payloads):
+        violations.append("shot_inclusion_proof_count_mismatch")
+    if len(proofs) == len(payloads):
+        for index, proof in enumerate(proofs):
+            if not _proof_is_valid(proof, payloads, shot_hashes, index, merkle_root):
+                violations.append("shot_inclusion_proof_invalid")
+    return tuple(violations)
+
+
+def shot_content_hashes_from_assets(assets: Sequence[AssetRecord]) -> tuple[str, ...]:
+    """Re-derive the shot tree leaves from sealed asset records, in shot order.
+
+    Used by :meth:`StoryboardMediaMaterializer.verify_materialized_provenance` so
+    the shot root is proven to bind the very asset digests that were just
+    re-hashed from disk (not merely a self-consistent list of hashes).
+    """
+    images: dict[str, str] = {}
+    wavs: dict[str, tuple[str, float]] = {}
+    order: list[str] = []
+    for record in assets:
+        if record.kind in ("slate_png", "local_image"):
+            images[record.shot_id] = record.sha256
+            order.append(record.shot_id)
+        elif record.kind == "tone_wav":
+            wavs[record.shot_id] = (record.sha256, record.duration_s)
+    hashes: list[str] = []
+    for shot_id in order:
+        wav_sha, duration = wavs[shot_id]
+        hashes.append(
+            shot_content_hash(
+                shot_id=shot_id,
+                image_sha256=images[shot_id],
+                wav_sha256=wav_sha,
+                duration_s=duration,
+            )
+        )
+    return tuple(hashes)
+
+
+DEFAULT_SAMPLE_RATE_HZ = 16_000
+
+
+def planned_shot_durations(
+    manifest: Any, sample_rate_hz: int = DEFAULT_SAMPLE_RATE_HZ
+) -> tuple[float, ...]:  # noqa: ANN401
+    """Compute the frame-quantized durations from the compiled editorial events."""
+    if isinstance(sample_rate_hz, bool) or sample_rate_hz not in SUPPORTED_SAMPLE_RATES:
+        raise MaterializationError("invalid_profile", "unsupported sample rate")
+    return tuple(
+        round(_finite_shot_duration(event.video_duration_sec) * sample_rate_hz) / sample_rate_hz
+        for event in manifest.editorial.events
+    )
+
+
+def atomic_write(final_path: Path, write: Callable[[IO[bytes]], None]) -> None:
     """Write via ``mkstemp`` in the same directory, fsync, then ``os.replace``."""
     final_path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp_name = tempfile.mkstemp(
@@ -408,7 +630,8 @@ def write_slate_png(
             if len(pending) >= CHUNK_BYTES:
                 handle.write(_png_chunk(b"IDAT", compressor.compress(bytes(pending))))
                 pending.clear()
-        # flush() always emits the zlib trailer, so the final IDAT is never empty.
+        # ``zlib.flush`` always terminates the stream with at least the zlib header
+        # and the Adler-32 trailer, so the final IDAT is written unconditionally.
         tail = compressor.compress(bytes(pending)) + compressor.flush()
         handle.write(_png_chunk(b"IDAT", tail))
         handle.write(_png_chunk(b"IEND", b""))
@@ -493,6 +716,7 @@ class StoryboardMediaMaterializer:
         target.mkdir(parents=True, exist_ok=True)
         records: list[AssetRecord] = []
         durations: list[float] = []
+        shot_hashes: list[str] = []
         sr = self._profile.sample_rate
         for event in manifest.editorial.events:
             shot_id = f"s{int(event.scene_index):03d}-sh{int(event.shot_index):03d}"
@@ -553,13 +777,27 @@ class StoryboardMediaMaterializer:
                 )
             )
             durations.append(actual_duration)
+            # Per-shot leaf: one hash over this shot's image, tone and duration.
+            shot_hashes.append(
+                shot_content_hash(
+                    shot_id=shot_id,
+                    image_sha256=image_sha,
+                    wav_sha256=wav_sha,
+                    duration_s=actual_duration,
+                )
+            )
 
         manifest_path = target / MANIFEST_FILENAME
         manifest_bytes = manifest.to_canonical_json().encode("utf-8")
-        atomic_write(manifest_path, lambda handle: handle.write(manifest_bytes))
+
+        def _write_manifest(handle: IO[bytes]) -> None:
+            handle.write(manifest_bytes)
+
+        atomic_write(manifest_path, _write_manifest)
         m_sha, m_size, m_inode = stream_sha256(manifest_path)
 
         root_hex, leaves = merkle_root([canonical_json(r.as_dict()) for r in records])
+        shot_payloads = shot_leaf_payloads(shot_hashes)
         return MaterializedBundle(
             out_dir=str(target),
             profile=self._profile,
@@ -571,6 +809,12 @@ class StoryboardMediaMaterializer:
             shot_durations_s=tuple(durations),
             asset_merkle_root=root_hex,
             total_asset_leaves=leaves,
+            shot_hashes=tuple(shot_hashes),
+            shot_merkle_root=merkle_root_sha256(shot_payloads),
+            shot_inclusion_proofs=tuple(
+                merkle_inclusion_proof_record(shot_payloads, index)
+                for index in range(len(shot_payloads))
+            ),
         )
 
     def verify_materialized_provenance(self, bundle: MaterializedBundle) -> None:
@@ -598,6 +842,31 @@ class StoryboardMediaMaterializer:
         root_hex, leaves = merkle_root([canonical_json(r) for r in records])
         if root_hex != bundle.asset_merkle_root or leaves != bundle.total_asset_leaves:
             raise MaterializationError("provenance_violated", "asset merkle root mismatch")
+        self._verify_shot_seal(bundle)
+
+    def _verify_shot_seal(self, bundle: MaterializedBundle) -> None:
+        """Prove the per-shot tree binds the re-hashed assets and every audit path.
+
+        Two independent claims are checked: the shot leaves are re-derived from
+        the *sealed asset records* (so a swapped PNG/WAV or a changed duration
+        changes a leaf), and every stored inclusion proof replays to the
+        declared root. Either mismatch is a fail-closed provenance refusal.
+        """
+        if not bundle.shot_hashes:
+            if bundle.shot_inclusion_proofs or bundle.shot_merkle_root:
+                raise MaterializationError("provenance_violated", "shot proof without shots")
+            return
+        if shot_content_hashes_from_assets(bundle.assets) != bundle.shot_hashes:
+            raise MaterializationError("provenance_violated", "shot content hash mismatch")
+        violations = verify_shot_inclusion_proofs(
+            shot_hashes=bundle.shot_hashes,
+            merkle_root=bundle.shot_merkle_root,
+            proofs=bundle.shot_inclusion_proofs,
+        )
+        if violations:
+            raise MaterializationError(
+                "provenance_violated", f"shot inclusion proof: {violations[0]}"
+            )
 
 
 def _manifest_record(bundle: MaterializedBundle) -> AssetRecord:
@@ -625,7 +894,12 @@ def _finite_shot_duration(value: object) -> float:
 __all__ = [
     "ASSET_RECORD_SCHEMA",
     "CHUNK_BYTES",
+    "DEFAULT_SAMPLE_RATE_HZ",
+    "EMPTY_MERKLE_ROOT",
     "MANIFEST_FILENAME",
+    "MERKLE_PROOF_SCHEMA",
+    "SHOT_CONTENT_SCHEMA",
+    "SHOT_PROOF_SCHEMA",
     "AssetRecord",
     "MaterializationError",
     "MaterializedBundle",
@@ -633,12 +907,21 @@ __all__ = [
     "StoryboardMediaMaterializer",
     "atomic_write",
     "canonical_json",
+    "merkle_inclusion_proof",
+    "merkle_inclusion_proof_record",
     "merkle_root",
+    "merkle_root_sha256",
+    "planned_shot_durations",
     "refuse_symlink_chain",
     "resolve_within",
+    "shot_content_hash",
+    "shot_content_hashes_from_assets",
+    "shot_leaf_payloads",
     "shot_seed",
     "stream_sha256",
     "validate_safe_id",
+    "verify_merkle_inclusion_proof",
+    "verify_shot_inclusion_proofs",
     "write_slate_png",
     "write_tone_wav",
 ]

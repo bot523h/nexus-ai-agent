@@ -78,6 +78,13 @@ from uuid import uuid4
 
 import structlog
 
+from nexus_ai_agent.application.execution_context import (
+    _current_claim,
+    current_execution_claim,
+)
+from nexus_ai_agent.application.execution_context import (
+    get_current_execution_claim as get_current_execution_claim,
+)
 from nexus_ai_agent.application.ports.job_queue import JobStatus
 from nexus_ai_agent.jobs.creative_passport import (
     CREATIVE_RENDER_JOB_TYPE,
@@ -121,6 +128,14 @@ from nexus_ai_agent.provenance.observer import CausalObserver
 
 JobHandler = Callable[[dict[str, object]], Awaitable[dict[str, object]]]
 JobCompletionHook = Callable[["JobCompletion"], Awaitable[None]]
+
+# Re-exported for callers of this adapter: the execution claim of the handler
+# currently running (``ExecutionClaim`` above, ``current_execution_claim`` and
+# ``get_current_execution_claim`` from ``application.execution_context``).
+# The context is installed only for the handler invocation. It propagates
+# through ``asyncio.to_thread``, but is evidence of the minted token, not
+# proof of current ownership: side effects still require the queue's durable
+# ownership check.
 
 
 try:  # pragma: no cover - import success, not a test, selects the backend
@@ -1789,7 +1804,16 @@ class InProcessJobQueue:
                         None,
                     )
                     return
-            result = await handler(payload)
+            # Queue-minted execution claim: installed only for the handler
+            # invocation (and everything it spawns, including
+            # ``asyncio.to_thread`` workers). It is evidence of the minted
+            # token, not proof of current ownership — side effects still go
+            # through the queue's fenced ownership check.
+            context_token = _current_claim.set(claim)
+            try:
+                result = await handler(payload)
+            finally:
+                _current_claim.reset(context_token)
             if not isinstance(result, dict):
                 raise TypeError("job handler must return a dictionary")
         except asyncio.CancelledError:

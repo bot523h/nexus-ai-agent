@@ -80,6 +80,9 @@ class ApprovalIdentity:
     def as_dict(self) -> dict[str, object]:
         return {name: getattr(self, name) for name in _IDENTITY_FIELDS}
 
+    def identity_digest(self) -> str:
+        return digest_of(self.as_dict())
+
     def mismatches(self, binding: ApprovalBinding) -> tuple[tuple[str, str, str], ...]:
         """Every (field, expected, actual) where the request disagrees with the
         stored binding. Empty tuple means the identity matches exactly."""
@@ -99,6 +102,19 @@ class ApprovalError(ValueError):
         self.detail = detail
 
 
+class ApprovalAlreadyConsumedError(ApprovalError):
+    """The reservation was already closed under a different attempt.
+
+    Raised by :meth:`ApprovalLedger.finalize_consumption` when the stored
+    ``last_attempt`` of the reservation does not equal the presented
+    attempt: a superseded (or unknown) execution can never finalize a
+    reservation owned by another attempt.
+    """
+
+    def __init__(self, detail: str = "") -> None:
+        super().__init__("already_consumed", detail)
+
+
 class ApprovalLedger:
     """Thread-safe, single-use, fully identity-bound approval bindings.
 
@@ -112,6 +128,10 @@ class ApprovalLedger:
         self._now = now
         self._lock = threading.RLock()
         self._bindings: dict[str, ApprovalBinding] = {}
+        # Reservation of a CONSUMED approval for recovery of the same job:
+        # approval_id -> (job_id, identity fingerprint, finalized_at, last_attempt).
+        # A missing reservation for a CONSUMED legacy binding means finalized.
+        self._reservations: dict[str, tuple[str, str, str | None, int]] = {}
 
     # --- storage seam -------------------------------------------------------
 
@@ -136,6 +156,19 @@ class ApprovalLedger:
 
     def _all(self) -> tuple[ApprovalBinding, ...]:
         return tuple(self._bindings.values())
+
+    def _read_reservation(self, approval_id: str) -> tuple[str, str, str | None, int] | None:
+        return self._reservations.get(approval_id)
+
+    def _write_reservation(
+        self,
+        approval_id: str,
+        job_id: str,
+        fingerprint: str,
+        finalized_at: str | None,
+        attempt: int,
+    ) -> None:
+        self._reservations[approval_id] = (job_id, fingerprint, finalized_at, attempt)
 
     # --- public contract ----------------------------------------------------
 
@@ -208,19 +241,54 @@ class ApprovalLedger:
             self._store(approved)
             return approved
 
-    def consume(self, approval_id: str, *, identity: ApprovalIdentity) -> ApprovalBinding:
-        """APPROVED → CONSUMED, exactly once.
+    def consume(
+        self,
+        approval_id: str,
+        *,
+        identity: ApprovalIdentity,
+        job_id: str | None = None,
+        attempt: int = 1,
+    ) -> ApprovalBinding:
+        """Consume once, or reserve for recovery of the same identified job.
 
         The whole read-check-transition runs inside one transaction. For the
         durable backend that is a ``BEGIN IMMEDIATE`` write lock, so two
         processes cannot both win: the first commits CONSUMED and every later
         call reads CONSUMED and is a typed ``replay`` refusal. A refused call
         rolls back and leaves the approval exactly as it was.
+
+        With ``job_id`` the CONSUMED binding is reserved for recovery by that
+        job: a later ``consume`` presenting the same identity and job re-reads
+        the consumed binding instead of failing, fenced by the monotonically
+        increasing ``attempt`` (a stale attempt is refused; a newer attempt
+        takes over the reservation). The reservation is not an execution
+        fence: the queue must still prevent overlapping attempts from
+        publishing concurrently.
         """
+        if job_id is not None and (not isinstance(job_id, str) or not job_id.strip()):
+            raise ApprovalError("invalid_job_id", "job id must be a non-empty string")
+        self._validate_attempt(attempt)
         with self._transaction():
             binding = self.get(approval_id)
             if binding.state is ApprovalState.CONSUMED:
-                raise ApprovalError("replay", "approval already consumed — execution is single-use")
+                reservation = self._read_reservation(approval_id)
+                if (
+                    job_id is None
+                    or reservation is None
+                    or reservation[0] != job_id
+                    or reservation[2] is not None
+                    or reservation[1] != identity.identity_digest()
+                ):
+                    raise ApprovalError("replay", "approval already consumed")
+                try:
+                    self._check_identity(binding, identity)
+                except ApprovalError as exc:
+                    raise ApprovalError("replay", "reserved identity changed") from exc
+                if attempt < reservation[3]:
+                    raise ApprovalError("stale_attempt", "attempt superseded")
+                if attempt > reservation[3]:
+                    self._write_reservation(approval_id, job_id, reservation[1], None, attempt)
+                return binding
             if binding.state is ApprovalState.REVOKED:
                 raise ApprovalError("revoked", "approval was revoked")
             if binding.state is not ApprovalState.APPROVED:
@@ -228,7 +296,74 @@ class ApprovalLedger:
             self._check_identity(binding, identity)
             consumed = binding.model_copy(update={"state": ApprovalState.CONSUMED})
             self._store(consumed)
+            if job_id is not None:
+                self._write_reservation(
+                    approval_id, job_id, identity.identity_digest(), None, attempt
+                )
             return consumed
+
+    @staticmethod
+    def _validate_attempt(attempt: int) -> None:
+        if (
+            isinstance(attempt, bool)
+            or not isinstance(attempt, int)
+            or not 1 <= attempt <= 2**63 - 1
+        ):
+            raise ApprovalError("invalid_attempt", "attempt must be a positive SQLite integer")
+
+    def assert_active_reservation(
+        self, approval_id: str, *, job_id: str, attempt: int, identity: ApprovalIdentity
+    ) -> None:
+        """Check identity and fencing token, including a completed reservation.
+
+        This is a point-in-time check, not a filesystem lock or publication fence.
+        """
+        self._validate_attempt(attempt)
+        with self._transaction():
+            binding = self.get(approval_id)
+            reservation = self._read_reservation(approval_id)
+            if (
+                binding.state is not ApprovalState.CONSUMED
+                or reservation is None
+                or reservation[0] != job_id
+                or reservation[1] != identity.identity_digest()
+            ):
+                raise ApprovalError("replay", "reservation identity mismatch")
+            try:
+                self._check_identity(binding, identity)
+            except ApprovalError as exc:
+                raise ApprovalError("replay", "reserved identity changed") from exc
+            if attempt != reservation[3]:
+                raise ApprovalError("stale_attempt", "attempt does not own reservation")
+
+    def finalize_consumption(self, approval_id: str, *, job_id: str, attempt: int = 1) -> None:
+        """Idempotently finalize the matching reservation; consumed stays terminal.
+
+        Closes the open reservation owned by ``job_id`` so no future recovery
+        can re-read the consumed binding. The fencing token is locked: when
+        the stored ``last_attempt`` differs from the presented ``attempt``
+        the reservation belongs to another execution of the job and an
+        :class:`ApprovalAlreadyConsumedError` is raised — a superseded (or
+        unknown) attempt can never finalize a newer attempt's reservation.
+        """
+        self._validate_attempt(attempt)
+        with self._transaction():
+            binding = self.get(approval_id)
+            reservation = self._read_reservation(approval_id)
+            if (
+                binding.state is not ApprovalState.CONSUMED
+                or reservation is None
+                or reservation[0] != job_id
+            ):
+                raise ApprovalError("replay", "reservation does not belong to job")
+            if int(reservation[3]) != int(attempt):
+                raise ApprovalAlreadyConsumedError(
+                    f"reservation last_attempt {int(reservation[3])} != attempt {int(attempt)}"
+                )
+            if reservation[2] is None:
+                self._write_reservation(
+                    approval_id, job_id, reservation[1], self._now(), int(attempt)
+                )
 
     def revoke(self, approval_id: str) -> ApprovalBinding:
         """REVOKED — terminal. Used on interrupt/cancel/stale turn."""
@@ -273,14 +408,34 @@ class DurableApprovalLedger(ApprovalLedger):
             str(self._path), isolation_level=None, check_same_thread=False, timeout=30.0
         )
         self._conn.execute("PRAGMA journal_mode=WAL")
-        self._conn.execute(
-            "CREATE TABLE IF NOT EXISTS approvals ("
-            " approval_id TEXT PRIMARY KEY,"
-            " session_id TEXT NOT NULL,"
-            " turn_id TEXT NOT NULL,"
-            " state TEXT NOT NULL,"
-            " body TEXT NOT NULL)"
-        )
+        # Serialize schema inspection and migration across concurrent
+        # processes: every backend opens the same file, so the reservation
+        # table (and its ``last_attempt`` fencing column) must exist exactly
+        # once before any ledger operation runs.
+        with self._transaction():
+            self._conn.execute(
+                "CREATE TABLE IF NOT EXISTS approvals ("
+                " approval_id TEXT PRIMARY KEY,"
+                " session_id TEXT NOT NULL,"
+                " turn_id TEXT NOT NULL,"
+                " state TEXT NOT NULL,"
+                " body TEXT NOT NULL)"
+            )
+            self._conn.execute(
+                "CREATE TABLE IF NOT EXISTS approval_reservations ("
+                " approval_id TEXT PRIMARY KEY, job_id TEXT NOT NULL, "
+                " fingerprint TEXT NOT NULL, finalized_at TEXT, "
+                " last_attempt INTEGER NOT NULL DEFAULT 1)"
+            )
+            columns = {
+                row[1]
+                for row in self._conn.execute("PRAGMA table_info(approval_reservations)")
+            }
+            if "last_attempt" not in columns:
+                self._conn.execute(
+                    "ALTER TABLE approval_reservations "
+                    "ADD COLUMN last_attempt INTEGER NOT NULL DEFAULT 1"
+                )
         with contextlib.suppress(OSError):
             os.chmod(self._path, 0o600)
 
@@ -341,6 +496,31 @@ class DurableApprovalLedger(ApprovalLedger):
         rows = self._conn.execute("SELECT body FROM approvals ORDER BY rowid").fetchall()
         return tuple(ApprovalBinding.model_validate_json(row[0]) for row in rows)
 
+    def _read_reservation(self, approval_id: str) -> tuple[str, str, str | None, int] | None:
+        row = self._conn.execute(
+            "SELECT job_id, fingerprint, finalized_at, last_attempt FROM approval_reservations "
+            "WHERE approval_id = ?",
+            (approval_id,),
+        ).fetchone()
+        return (row[0], row[1], row[2], int(row[3])) if row is not None else None
+
+    def _write_reservation(
+        self,
+        approval_id: str,
+        job_id: str,
+        fingerprint: str,
+        finalized_at: str | None,
+        attempt: int,
+    ) -> None:
+        self._conn.execute(
+            "INSERT INTO approval_reservations (approval_id, job_id, fingerprint, "
+            "finalized_at, last_attempt) "
+            "VALUES (?, ?, ?, ?, ?) ON CONFLICT(approval_id) DO UPDATE SET "
+            "job_id=excluded.job_id, fingerprint=excluded.fingerprint, "
+            "finalized_at=excluded.finalized_at, last_attempt=excluded.last_attempt",
+            (approval_id, job_id, fingerprint, finalized_at, attempt),
+        )
+
 
 def durable_approval_ledger_path(workspace: str | Path) -> Path:
     """Canonical SQLite location for the studio's durable approval ledger."""
@@ -348,6 +528,7 @@ def durable_approval_ledger_path(workspace: str | Path) -> Path:
 
 
 __all__ = [
+    "ApprovalAlreadyConsumedError",
     "ApprovalError",
     "ApprovalIdentity",
     "ApprovalLedger",

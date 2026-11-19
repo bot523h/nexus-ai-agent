@@ -9,6 +9,23 @@ seal is HMAC-SHA256 over the canonical JSON of every field except
 Verification checks the seal in constant time, then re-hashes the MP4 currently
 on disk and compares its size and SHA-256 with the passport. Any mismatch,
 missing field, unknown version, or a non-``PASS`` status is refused.
+
+Per-shot Merkle provenance (RFC 6962): every passport also seals the per-shot
+tree - ``shot_hashes``, ``shot_merkle_root`` and one inclusion proof per shot -
+so the HMAC covers each audit path individually. Verification is fail-closed in
+three steps: the root is recomputed from the declared shot hashes, the proof
+count is compared with the shot count, and every proof must agree on its leaf
+index, leaf hash, root and leaf count *and* replay to the sealed root. Any
+failure refuses the passport with the typed code ``shot_merkle_root_mismatch``,
+``shot_inclusion_proof_count_mismatch`` or ``shot_inclusion_proof_invalid``.
+
+Versioning: ``passport_version`` 1 is the pre-Merkle format that predates the
+per-shot tree; version 2 (:data:`PASSPORT_VERSION`) always carries it. Passports
+already written to disk as version 1 keep verifying, because the Merkle fields
+are *optional* there - but if a version 1 passport does carry any of them they
+are validated exactly as strictly as version 2's. A caller that must not accept
+legacy evidence asks for ``min_version=2`` and every version 1 passport is then
+refused with ``passport_version_unsupported``.
 """
 
 from __future__ import annotations
@@ -20,18 +37,32 @@ import math
 import os
 import re
 import stat
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import IO, Any
 
-from nexus_ai_agent.creative.materializer import atomic_write, canonical_json, stream_sha256
+from nexus_ai_agent.creative.materializer import (
+    MaterializationError,
+    atomic_write,
+    canonical_json,
+    merkle_inclusion_proof_record,
+    merkle_root_sha256,
+    shot_leaf_payloads,
+    stream_sha256,
+    verify_shot_inclusion_proofs,
+)
 
-PASSPORT_VERSION = 1
+#: Version this module emits. Version 2 added the sealed per-shot Merkle tree.
+PASSPORT_VERSION = 2
+#: Versions :func:`verify_artifact_passport` can still verify.
+SUPPORTED_PASSPORT_VERSIONS = (1, 2)
 PASSPORT_SUFFIX = ".passport.json"
 MAX_PASSPORT_BYTES = 65_536
 _HEX64 = re.compile(r"^[0-9a-f]{64}$")
 _UNSIGNED_FIELDS = ("hmac_sha256",)
-REQUIRED_FIELDS = (
+#: The fields every passport carried before the per-shot tree existed.
+PASSPORT_V1_FIELDS = (
     "passport_version",
     "job_id",
     "project_id",
@@ -48,6 +79,14 @@ REQUIRED_FIELDS = (
     "created_at_unix_s",
     "hmac_sha256",
 )
+#: The three fields version 2 added. Optional in version 1, mandatory in version 2.
+SHOT_MERKLE_FIELDS = ("shot_hashes", "shot_merkle_root", "shot_inclusion_proofs")
+REQUIRED_V1_FIELDS = frozenset(PASSPORT_V1_FIELDS)
+REQUIRED_FIELDS = REQUIRED_V1_FIELDS | frozenset(SHOT_MERKLE_FIELDS)
+#: Typed violation codes produced by :func:`passport_shot_proof_violations`.
+SHOT_MERKLE_ROOT_MISMATCH = "shot_merkle_root_mismatch"
+SHOT_PROOF_COUNT_MISMATCH = "shot_inclusion_proof_count_mismatch"
+SHOT_PROOF_INVALID = "shot_inclusion_proof_invalid"
 
 
 class PassportError(ValueError):
@@ -97,9 +136,17 @@ def build_passport(
     probed_duration_s: float,
     verifier_status: str,
     created_at_unix_s: float,
+    shot_hashes: Sequence[str] = (),
     signing_key: object,
 ) -> dict[str, Any]:
-    """Assemble and seal a passport. Refuses anything that is not a PASS."""
+    """Assemble and seal a passport. Refuses anything that is not a PASS.
+
+    ``shot_hashes`` is the optional per-shot tree: when supplied, the RFC 6962
+    root and one inclusion proof per shot are derived here and sealed, so no
+    caller can emit a passport whose proofs disagree with its own leaves. An
+    empty sequence seals the empty-tree root and no proofs. The emitted passport
+    is always version 2, i.e. it always carries all three Merkle fields.
+    """
     if verifier_status != "PASS":
         raise PassportError("verifier_not_pass", f"status={verifier_status!r}")
     for name, value in (
@@ -119,9 +166,10 @@ def build_passport(
         raise PassportError("invalid_number", "probed_duration_s must be positive")
     if output_size_bytes <= 0:
         raise PassportError("invalid_number", "output_size_bytes must be positive")
+    leaves, proofs = _shot_tree(shot_hashes)
     key = _signing_key(signing_key)
     fields: dict[str, Any] = {
-        "passport_version": PASSPORT_VERSION,
+        "passport_version": int(PASSPORT_VERSION),
         "job_id": job_id,
         "project_id": project_id,
         "source_sha256": source_sha256,
@@ -135,48 +183,138 @@ def build_passport(
         "probed_duration_s": repr(float(probed_duration_s)),
         "verifier_status": verifier_status,
         "created_at_unix_s": int(created_at_unix_s),
+        "shot_hashes": list(shot_hashes),
+        "shot_merkle_root": merkle_root_sha256(leaves),
+        "shot_inclusion_proofs": proofs,
     }
+    violations = verify_shot_inclusion_proofs(
+        shot_hashes=fields["shot_hashes"],
+        merkle_root=fields["shot_merkle_root"],
+        proofs=fields["shot_inclusion_proofs"],
+    )
+    if violations:  # pragma: no cover - build-time invariant, cannot be reached
+        raise PassportError(violations[0], "self-verification of the sealed shot tree failed")
     fields["hmac_sha256"] = _seal(fields, key)
     return fields
+
+
+def _shot_tree(shot_hashes: Sequence[str]) -> tuple[list[bytes], list[dict[str, Any]]]:
+    """Validate shot hashes and derive the leaf payloads plus every audit path."""
+    if isinstance(shot_hashes, (str, bytes)) or not isinstance(shot_hashes, Sequence):
+        raise PassportError("invalid_digest", "shot_hashes must be a sequence of hex digests")
+    try:
+        leaves = shot_leaf_payloads(tuple(shot_hashes))
+    except MaterializationError as exc:
+        raise PassportError("invalid_digest", f"shot_hashes: {exc.detail}") from exc
+    proofs = [merkle_inclusion_proof_record(leaves, index) for index in range(len(leaves))]
+    return leaves, proofs
+
+
+def passport_shot_proof_violations(passport: Mapping[str, Any]) -> tuple[str, ...]:
+    """Return the typed per-shot Merkle violations carried by ``passport``.
+
+    An empty tuple means the sealed tree verifies. Structural problems are
+    reported as violations rather than exceptions so callers (and the download
+    gate) get a stable, typed refusal either way.
+    """
+    shot_hashes = passport.get("shot_hashes")
+    merkle_root = passport.get("shot_merkle_root")
+    proofs = passport.get("shot_inclusion_proofs")
+    if not isinstance(merkle_root, str):
+        return (SHOT_MERKLE_ROOT_MISMATCH,)
+    if not isinstance(shot_hashes, list) or not all(isinstance(h, str) for h in shot_hashes):
+        return (SHOT_PROOF_INVALID,)
+    if not isinstance(proofs, list):
+        return (SHOT_PROOF_INVALID,)
+    return verify_shot_inclusion_proofs(
+        shot_hashes=shot_hashes, merkle_root=merkle_root, proofs=proofs
+    )
 
 
 def write_passport(path: Path, passport: dict[str, Any]) -> None:
     """Atomically persist a passport beside its artifact."""
     payload = json.dumps(passport, sort_keys=True, indent=2, ensure_ascii=False).encode("utf-8")
-    atomic_write(path, lambda handle: handle.write(payload))
+
+    def _write(handle: IO[bytes]) -> None:
+        handle.write(payload)
+
+    atomic_write(path, _write)
 
 
 def verify_artifact_passport(
     passport_path: Path,
     mp4_path: Path,
     secret_key: object,
+    *,
+    min_version: int = 1,
 ) -> PassportCheck:
-    """Verify seal, verdict and the exact MP4 bytes on disk. Raises on any mismatch."""
+    """Verify seal, verdict and the exact MP4 bytes on disk. Raises on any mismatch.
+
+    ``min_version`` is the oldest passport version the caller is willing to
+    accept: the default 1 keeps every already-written passport verifiable, while
+    a caller that only trusts evidence sealed with the per-shot Merkle tree asks
+    for ``min_version=2`` and legacy passports are refused as
+    ``passport_version_unsupported``.
+    """
+    if isinstance(min_version, bool) or not isinstance(min_version, int) or min_version < 1:
+        raise PassportError("invalid_min_version", repr(min_version))
     key = _signing_key(secret_key)
     pst = _lstat_regular(passport_path, "passport")
     if pst.st_size <= 0 or pst.st_size > MAX_PASSPORT_BYTES:
         raise PassportError("passport_size", str(pst.st_size))
     try:
-        passport = json.loads(Path(passport_path).read_bytes().decode("utf-8"))
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+        fd = os.open(passport_path, flags)
+        with os.fdopen(fd, "rb") as handle:
+            opened = os.fstat(handle.fileno())
+            if not stat.S_ISREG(opened.st_mode):
+                raise PassportError("passport_not_regular", str(passport_path))
+            if opened.st_size <= 0 or opened.st_size > MAX_PASSPORT_BYTES:
+                raise PassportError("passport_size", str(opened.st_size))
+            raw = handle.read(MAX_PASSPORT_BYTES + 1)
+        if len(raw) > MAX_PASSPORT_BYTES:
+            raise PassportError("passport_size", str(len(raw)))
+        passport = json.loads(raw.decode("utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise PassportError("passport_unreadable", type(exc).__name__) from exc
     if not isinstance(passport, dict):
         raise PassportError("passport_malformed", "not an object")
-    missing = [name for name in REQUIRED_FIELDS if name not in passport]
+    version = passport.get("passport_version")
+    if (
+        isinstance(version, bool)
+        or not isinstance(version, int)
+        or version not in SUPPORTED_PASSPORT_VERSIONS
+    ):
+        raise PassportError("passport_version_unsupported", repr(version))
+    if version < min_version:
+        raise PassportError(
+            "passport_version_unsupported", f"version {version} < required {min_version}"
+        )
+    required = REQUIRED_FIELDS if version >= 2 else REQUIRED_V1_FIELDS
+    missing = sorted(name for name in required if name not in passport)
     if missing:
         raise PassportError("passport_malformed", f"missing {missing}")
-    if passport["passport_version"] != PASSPORT_VERSION:
-        raise PassportError("passport_version", str(passport["passport_version"]))
     expected_seal = _seal(passport, key)
     if not hmac.compare_digest(str(passport["hmac_sha256"]), expected_seal):
         raise PassportError("seal_mismatch", "HMAC does not verify")
     if passport["verifier_status"] != "PASS":
         raise PassportError("verifier_not_pass", str(passport["verifier_status"]))
+    # Per-shot Merkle provenance is checked before a single artifact byte is
+    # re-read: a passport whose tree does not recompute is refused outright.
+    # Version 2 must carry the tree; version 1 may omit it, but any Merkle field
+    # it *does* carry is validated just as strictly - a partial tree is a defect.
+    if version >= 2 or any(name in passport for name in SHOT_MERKLE_FIELDS):
+        proof_violations = passport_shot_proof_violations(passport)
+        if proof_violations:
+            raise PassportError(proof_violations[0], ", ".join(proof_violations))
 
     mst = _lstat_regular(mp4_path, "artifact")
     if mst.st_size != passport["output_size_bytes"]:
         raise PassportError("artifact_mismatch", "size differs from passport")
-    digest, _, _ = stream_sha256(Path(mp4_path))
+    try:
+        digest, _, _ = stream_sha256(Path(mp4_path))
+    except (OSError, MaterializationError) as exc:
+        raise PassportError("artifact_mismatch", "artifact changed during verification") from exc
     if not hmac.compare_digest(digest, str(passport["output_sha256"])):
         raise PassportError("artifact_mismatch", "sha256 differs from passport")
     return PassportCheck(passport=passport, output_path=Path(mp4_path))
@@ -196,11 +334,19 @@ def _lstat_regular(path: Path, label: str) -> os.stat_result:
 
 __all__ = [
     "PASSPORT_SUFFIX",
+    "PASSPORT_V1_FIELDS",
     "PASSPORT_VERSION",
     "REQUIRED_FIELDS",
+    "REQUIRED_V1_FIELDS",
+    "SHOT_MERKLE_FIELDS",
+    "SUPPORTED_PASSPORT_VERSIONS",
+    "SHOT_MERKLE_ROOT_MISMATCH",
+    "SHOT_PROOF_COUNT_MISMATCH",
+    "SHOT_PROOF_INVALID",
     "PassportCheck",
     "PassportError",
     "build_passport",
+    "passport_shot_proof_violations",
     "verify_artifact_passport",
     "write_passport",
 ]
