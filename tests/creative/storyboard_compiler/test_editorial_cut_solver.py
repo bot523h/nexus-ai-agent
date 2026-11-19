@@ -2177,3 +2177,98 @@ def test_wave8_strict_verifier_exposes_no_way_to_weaken_the_anchor() -> None:
         sb.verify_manifest_integrity_strict(
             compile_storyboard(DIALOGUE_AND_REACTION_SCRIPT), require_trusted_anchor=False
         )
+
+
+def test_wave8_trusted_source_text_closes_the_self_attestation_hole() -> None:
+    """The anchor must be computable from bytes the caller holds, not from the manifest.
+
+    ``expected_source_sha256`` cannot be audited by this module: a caller that lifts
+    it out of ``manifest.script.source_sha256`` re-creates the hole, because a
+    dynamically recompiled forgery always matches its own digest. This test pins the
+    two properties that make the hole closable: the text route refuses the forgery,
+    and it is checked against text this function hashes itself.
+    """
+    import hashlib
+
+    from nexus_ai_agent.creative.storyboard_compiler import bilingual_script_parser
+
+    legit = compile_storyboard(DIALOGUE_AND_REACTION_SCRIPT)
+    rival_text = "INT. RING - NIGHT\nA\nGo!\n\nB\nNow!\n\nA\nHit!"
+    rival = compile_storyboard(rival_text)
+
+    # Baseline: hashing the trusted text ourselves reproduces the parser's own pin,
+    # so the two routes are comparable rather than merely parallel.
+    normalized = bilingual_script_parser.normalize_script_text(DIALOGUE_AND_REACTION_SCRIPT)
+    assert hashlib.sha256(normalized.encode("utf-8")).hexdigest() == legit.script.source_sha256
+
+    # The hole, demonstrated: the rival is fully self-consistent and its *own* digest
+    # satisfies the digest route — which is why that route needs an independent source.
+    assert verify_manifest_integrity(rival) is True
+    assert (
+        verify_manifest_integrity_strict(rival, expected_source_sha256=rival.script.source_sha256)
+        is True
+    )
+
+    # The fix: the caller supplies the screenplay it agreed to compile.
+    assert verify_manifest_integrity_strict(legit, trusted_source_text=DIALOGUE_AND_REACTION_SCRIPT)
+    assert (
+        verify_manifest_integrity_strict(
+            legit, trusted_source_text=DIALOGUE_AND_REACTION_SCRIPT.encode("utf-8")
+        )
+        is True
+    )
+    assert (
+        verify_manifest_integrity_strict(rival, trusted_source_text=DIALOGUE_AND_REACTION_SCRIPT)
+        is False
+    )
+    # ... and a rival cannot be smuggled past it by quoting its own digest alongside.
+    assert (
+        verify_manifest_integrity_strict(
+            rival,
+            trusted_source_text=DIALOGUE_AND_REACTION_SCRIPT,
+            expected_source_sha256=rival.script.source_sha256,
+        )
+        is False
+    )
+    # Agreement between the two routes is accepted, not merely tolerated.
+    assert (
+        verify_manifest_integrity_strict(
+            legit,
+            trusted_source_text=DIALOGUE_AND_REACTION_SCRIPT,
+            expected_source_sha256=legit.script.source_sha256,
+        )
+        is True
+    )
+    # ... and a matching text never papers over a digest that does not match: the two
+    # anchors are conjunctive, so the weaker one cannot rescue a disagreement.
+    assert (
+        verify_manifest_integrity_strict(
+            legit,
+            trusted_source_text=DIALOGUE_AND_REACTION_SCRIPT,
+            expected_source_sha256="0" * 64,
+        )
+        is False
+    )
+    # The parser's normalization is part of the pin: the same screenplay written with
+    # CRLF line endings is the same screenplay, and the digest route must say so.
+    assert (
+        verify_manifest_integrity_strict(
+            legit, trusted_source_text=DIALOGUE_AND_REACTION_SCRIPT.replace("\n", "\r\n")
+        )
+        is True
+    )
+
+
+@pytest.mark.parametrize(
+    "unusable",
+    ["", "   \n\t", b"", b"\xff\xfe\x00not-utf8", 123, None, True, ["INT. X - DAY"]],
+)
+def test_wave8_trusted_source_text_fails_closed_on_unusable_input(unusable: object) -> None:
+    """Untrusted input is a refusal, never an exception and never an accidental pass."""
+    legit = compile_storyboard(DIALOGUE_AND_REACTION_SCRIPT)
+    assert (
+        verify_manifest_integrity_strict(
+            legit, trusted_source_text=cast("str | bytes | None", unusable)
+        )
+        is False
+    )

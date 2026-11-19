@@ -103,7 +103,7 @@ passed, 23 skipped** in ~61 s with 111 test files. The suite grew roughly
 elevenfold in case count since; the *shape* did not change, which is why the
 layer rules in §2 still hold.
 
-### 5.2 Benchmark standard (`N = 3`, warm-up, jitter tolerance)
+### 5.2 Benchmark standard (`N = 3`, warm-up, per-workload budgets)
 
 Wall-clock micro-benchmarks live in `tests/creative/atlas/test_wave21_30_benchmarks.py`
 and are contracts, not marketing: each operator runs a small / medium / large
@@ -111,21 +111,45 @@ synthetic workload and asserts a median budget. Three rules make them honest:
 
 1. **`N = 3` timed samples, median reported.** `max` is printed alongside the
    median but never asserted — a single outlier is information, not a verdict.
-2. **One untimed warm-up run precedes the sample loop.** The first call of an
-   operator pays first-touch page faults, allocator growth and lazily imported
-   `numpy` kernels. Excluding it is the difference between measuring the
-   operator and measuring process start-up.
-3. **Every budget carries the shared `JITTER_TOLERANCE` of 1.25.** A median of
-   three samples legitimately moves by a few percent on a shared runner: the
-   audit of this base measured `modal_wind n=1024` at 2053.85 ms against a hard
-   2000 ms cap (2.7 % over) with no code change at all. A real regression in
-   these operators is a multiple of the budget, not a percent, so the widened
-   bar (2000 → 2500 ms, 3000 → 3750 ms, ...) still bites.
+2. **One untimed warm-up run precedes the sample loop, with a `reset` hook.**
+   The first call of an operator pays first-touch page faults, allocator growth
+   and lazily imported `numpy` kernels. Excluding it is the difference between
+   measuring the operator and measuring process start-up. The warm-up also
+   *produces files* in the two lanes that write artefacts (`master_render`,
+   `encode_rgb24_stream`), so `_sample` takes an optional `reset` callback that
+   restores the workload's filesystem state before every run — including the
+   warm-up. Without it the timed runs would overwrite the warm-up's output
+   instead of creating a fresh artefact, which is a different workload (and, for
+   a lane that refuses to overwrite, a failure path measured as if it were the
+   render).
+3. **Budgets are per workload and strict; there is no shared multiplier.** A
+   previous revision multiplied every budget by `JITTER_TOLERANCE = 1.25` after
+   an audit measured `modal_wind n=1024` at 2053.85 ms against a hard 2000 ms
+   cap (2.7 % over) on a shared runner. That factor was the wrong instrument: it
+   also lifted the 30 s encode budget to 37.5 s and the 8 s master budget to
+   10 s, so a 15–20 % regression would have passed a gate whose whole job is to
+   catch it. The audited jitter on that one workload was **2.69 %**; the budgets
+   are therefore back at their strict base values (2000 / 3000 / 8000 / 30000 ms)
+   and exactly one workload carries a margin: `BOTANICAL_WIND_BUDGET_MS = 2150`
+   (7.5 % over 2000 ms) for `modal_wind n=1024`, the only operator that runs
+   near its own ceiling on a slow runner (2053.85 ms there vs ~1000 ms in this
+   workspace). Keeping the margin local preserves the sensitivity of the other
+   seven workloads.
 
 Benchmarks never assert on memory measured process-wide (`ru_maxrss`); where
 peak allocation matters the assertion is `tracemalloc`-scoped around the single
-operation, and such a ceiling is environment-sensitive outside the CI image (see
-§7).
+operation. One such ceiling did fail outside the CI image for a reason that was
+never environmental: `tracemalloc.get_traced_memory()` is a *process-wide*
+high-water mark, so it charges the measured operation for every first-touch
+allocation that happens to land inside the window. In a lean interpreter that
+term reached ~1.9 MB and failed a push whose own residency had not changed
+(`peak_bytes=2035495` against a 200 000-byte O(1) budget). The ceiling was not
+raised: the test in `tests/storage/personal_cloud_vault/test_sync_journal_manager.py`
+now pays that cost with a warm-up push of the same fixture into a throwaway
+snapshot before `tracemalloc.start()`, and measures the steady state the budget
+is a claim about — 113.6 KB against the unchanged 200 000 / 262 144-byte
+ceilings. Measured effect of the warm-up on this workspace: cold 135.7 KB,
+warm 113.6 KB.
 
 ### 5.3 Coverage standard
 
@@ -158,6 +182,15 @@ A campaign is only green when:
   `tests/unit/test_mutation_harness_anchors.py` ratchets uniqueness);
 * **the restored bytes are verified** by hash, and the baseline is re-run green
   afterwards, so the campaign cannot pass by leaving the tree weakened;
+* **the campaign may also live beside the tests it mutates.** `tests/architecture/test_cp4_fence_protocol_mutations.py`
+  is an in-tree campaign (11 mutants) for the two CP4 guarantees that "looks
+  correct" used to satisfy: the two-phase S3 GC fence in
+  `storage/personal_cloud_vault/byos_drivers.py` and the mandatory anchor of
+  `verify_manifest_integrity_strict`. Each mutant is applied to a hardlink copy
+  of `src/` and `tests/`, parsed with `ast.parse` before it is scored, and run in
+  its own subprocess — so no C extension (`numpy`, `scipy`, `PIL`, `sqlalchemy`)
+  is ever reloaded in-process — and a kill counts only on pytest exit code 1
+  with a named `FAILED test_...` node.
 * AST-level checks are used where a text edit would be ambiguous: the campaigns
   parse the mutated module with `ast.parse` before running, so an edit that
   produces a syntactically different program is rejected as an invalid mutant
@@ -221,7 +254,7 @@ python -m nexus_ai_agent.diagnostics.truth --root .
 | PostgreSQL suites skip locally without `NEXUS_DATABASE_URL` | local confidence is lower than CI confidence | CI `migrate-postgres` job |
 | No browser/E2E UI test | the dashboard is HTML-by-render, not a UI framework | deliberate: see [`OVERVIEW.md`](OVERVIEW.md) §7 (dashboard is read-only by design) |
 | P0-8/P0-9 have no guard test yet | engine double-wiring and empty graph memory can return unnoticed | board **task-124** [`SECURITY.md`](SECURITY.md) §3 |
-| `tracemalloc` ceilings are sensitive to what the local interpreter has already imported | a streaming-residency assertion can fail on one machine and pass on another with identical code (observed at this base: `test_n1_streaming_push_o1_tracemalloc_ceiling_and_disk_locator_healing` fails in a minimal local virtualenv, passes in the CI image) | §5.2; treat it as a CI-image contract and reproduce there before calling it a regression |
+| `tracemalloc` ceilings are sensitive to what the local interpreter has already imported | a streaming-residency assertion can fail on one machine and pass on another with identical code (`test_n1_streaming_push_o1_tracemalloc_ceiling_and_disk_locator_healing` failed in a minimal local virtualenv and passed in the CI image at this base) | resolved: the test warms the code path before `tracemalloc.start()` and asserts the unchanged 200 000-byte ceiling on the steady state (§5.2); any future ceiling must do the same rather than widen the number |
 | Some mutation campaigns are still manual (`make mutations` covers only two of them) | a trust plane can lose its adversarial proof without anything turning red | board **task-260** (execution-core campaign as a CI job) |
 
 ## 8. Adding a test

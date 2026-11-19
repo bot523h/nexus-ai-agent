@@ -37,6 +37,7 @@ from .bilingual_script_parser import (
     DialogueLine,
     EmotionTag,
     ParsedScript,
+    normalize_script_text,
     parse_bilingual_script,
     verify_script_provenance,
 )
@@ -2003,11 +2004,41 @@ def verify_manifest_integrity(
     )
 
 
+def _trusted_source_digest(trusted_source_text: str | bytes) -> str | None:
+    """SHA-256 of the *normalized* form of an independently supplied screenplay.
+
+    The digest is computed here, from bytes the caller handed us, and in the same
+    normalization the parser applies (``normalize_script_text``) — so it is directly
+    comparable with ``ParsedScript.source_sha256`` without the caller ever touching
+    a field of the manifest it is asking us to trust. Returns ``None`` (fail-closed)
+    for unusable input rather than raising: this is an untrusted-input boundary.
+    """
+    if isinstance(trusted_source_text, bytes):
+        try:
+            text = trusted_source_text.decode("utf-8")
+        except UnicodeDecodeError:
+            return None
+    elif isinstance(trusted_source_text, str):
+        text = trusted_source_text
+    else:
+        return None
+    if not text:
+        return None
+    try:
+        normalized = normalize_script_text(text)
+    except Exception:  # normalize_script_text rejects non-str; never propagate
+        return None
+    if not normalized.strip():
+        return None
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
 def verify_manifest_integrity_strict(
     manifest: CompiledStoryboardManifest,
     *,
     hmac_key: bytes | str | None = None,
     expected_source_sha256: str | None = None,
+    trusted_source_text: str | bytes | None = None,
     expected_max_saccade_limit: float | None = None,
     expected_initial_axis_side: int | None = None,
 ) -> bool:
@@ -2023,15 +2054,37 @@ def verify_manifest_integrity_strict(
 
     This wrapper exists so the decision to trust cannot be made by omission. It is
     fail-closed by construction: ``require_trusted_anchor=True`` is hard-wired, so
-    it refuses unless ``expected_source_sha256`` or ``hmac_key`` is supplied, and
-    it still refuses a supplied-but-unusable key (empty, non-``str``/``bytes``) or a
-    wrong one, because those checks live in the underlying verifier. Anything that
-    gates delivery on manifest integrity should call this, not the bare checker.
+    it refuses unless one of the three anchor routes is supplied:
+
+    * ``hmac_key`` -- the manifest was sealed with a deployment secret;
+    * ``trusted_source_text`` -- **the strongest route for source pinning**: the
+      caller supplies the screenplay bytes it agreed to compile, and *this function*
+      hashes them (after the parser's own normalization) and compares that digest
+      with the manifest. Nothing about the manifest is read before the comparison,
+      so the manifest cannot supply its own answer;
+    * ``expected_source_sha256`` -- a digest the caller holds from elsewhere.
+
+    ``expected_source_sha256`` is the one route the function cannot audit: a caller
+    that lifts it straight out of ``manifest.script.source_sha256`` turns the anchor
+    into a self-attestation and has re-created exactly the hole this wrapper closes
+    (the value always matches, whatever the manifest claims). Prefer
+    ``trusted_source_text`` when the screenplay is the thing being pinned, or
+    ``hmac_key`` when a secret is available. Passing both a text and a digest is
+    allowed only when they agree; a disagreement is a refusal, never a tie-break.
     """
+    digest: str | None = None
+    if trusted_source_text is not None:
+        digest = _trusted_source_digest(trusted_source_text)
+        if digest is None:
+            return False
+        if expected_source_sha256 is not None and not hmac.compare_digest(
+            digest, expected_source_sha256
+        ):
+            return False
     return verify_manifest_integrity(
         manifest,
         hmac_key=hmac_key,
-        expected_source_sha256=expected_source_sha256,
+        expected_source_sha256=digest if digest is not None else expected_source_sha256,
         expected_max_saccade_limit=expected_max_saccade_limit,
         expected_initial_axis_side=expected_initial_axis_side,
         require_trusted_anchor=True,

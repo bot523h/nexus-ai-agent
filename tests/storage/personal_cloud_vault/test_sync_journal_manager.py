@@ -991,6 +991,24 @@ def test_n1_streaming_push_o1_tracemalloc_ceiling_and_disk_locator_healing(
     driver = _EvictTwoChunksDriver(vault_dir)
     mgr = PersonalCloudVaultManager(driver, chunk_size=chunk_size, kdf_iterations=100_000)
 
+    # Warm-up, outside the measured window — and outside the measured project.
+    #
+    # ``tracemalloc.get_traced_memory()`` is a *process-wide* high-water mark: it
+    # charges the push for every first-touch allocation that happens to land while
+    # it runs, not just for the push's own buffers. Measured on this fixture, a cold
+    # process pays ~10.6 kB of first-execution cost inside the window (ABC
+    # registration and lazily created tables, visible as ``<frozen abc>`` in a
+    # snapshot); in a leaner interpreter the same effect reached ~1.9 MB and failed
+    # a push that had not regressed at all — the audit's ``peak_bytes=2035495``
+    # against the 200 000-byte O(1) budget. A push of the same fixture into a
+    # throwaway snapshot pays all of that first, so the measured run is the *steady
+    # state* the ceiling is a claim about. The ceiling itself is untouched.
+    mgr.push_project_snapshot(
+        project_id="streaming-warmup",
+        source=project_dir,
+        master_secret="streaming-o1-warmup",
+        snapshot_id="snap-stream-warmup",
+    )
     gc.collect()
     tracemalloc.start()
     try:

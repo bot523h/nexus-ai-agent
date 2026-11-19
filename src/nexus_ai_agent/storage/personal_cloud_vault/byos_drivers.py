@@ -40,6 +40,7 @@ from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
 from nexus_ai_agent.storage.personal_cloud_vault.crypto_chunk_envelope import (
+    ENVELOPE_MAGIC,
     VaultSnapshotManifest,
 )
 from nexus_ai_agent.storage.personal_cloud_vault.errors import (
@@ -128,6 +129,104 @@ def _build_lease_json_bytes(
         sort_keys=True,
         separators=(",", ":"),
     ).encode("utf-8")
+
+
+#: Lifetime of a GC fence object (seconds).
+#:
+#: A fence is a *claim held by a running collector*, not a tombstone: it carries an
+#: absolute expiry so that a collector which dies mid-pass cannot pin a chunk for
+#: ever, and so that a writer can tell a live claim from the debris of a crashed
+#: one. The TTL is generous compared with a single chunk delete (seconds) because
+#: the cost of reclaiming a *live* fence too early is unbounded (a chunk deleted
+#: under a push), while the cost of reclaiming a dead one too late is a retry.
+GC_FENCE_TTL_SECONDS: float = 300.0
+
+#: The exact prefix an AEAD wire envelope starts with (``>H`` length + magic).
+_WIRE_ENVELOPE_HEADER_BYTES = 2 + len(ENVELOPE_MAGIC) + 2 + 32
+
+
+def _wire_envelope_chunk_id(raw: bytes) -> str | None:
+    """Return the chunk id embedded in an AEAD wire envelope, or ``None``.
+
+    The envelope's authenticated header binds the chunk id (see
+    ``crypto_chunk_envelope._build_envelope_header``), so a collector that staged
+    these bytes can prove they belong to the object key it is restoring before it
+    writes a single byte back. Payloads that are not envelopes (opaque fixtures,
+    plaintext tests) return ``None`` and are verified by read-back instead — the
+    driver must not assume another layer's on-disk format.
+    """
+    if len(raw) < _WIRE_ENVELOPE_HEADER_BYTES:
+        return None
+    header_len = int.from_bytes(raw[0:2], "big")
+    if header_len < len(ENVELOPE_MAGIC) + 2 + 32:
+        return None
+    if raw[2 : 2 + len(ENVELOPE_MAGIC)] != ENVELOPE_MAGIC:
+        return None
+    return raw[2 + len(ENVELOPE_MAGIC) + 2 : _WIRE_ENVELOPE_HEADER_BYTES].hex()
+
+
+def _build_gc_fence_body(
+    token: str,
+    chunk_id: str,
+    *,
+    now_epoch: float,
+    ttl_seconds: float = GC_FENCE_TTL_SECONDS,
+) -> bytes:
+    """Serialize a fence claim: owner token, subject chunk, creation, and expiry."""
+    return json.dumps(
+        {
+            "fence_token": token,
+            "chunk_id": chunk_id,
+            "created_at_epoch": now_epoch,
+            "expires_at_epoch": now_epoch + ttl_seconds,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+
+
+@dataclass(frozen=True)
+class _GcFence:
+    """A GC fence object as observed on the bucket."""
+
+    raw: bytes
+    token: str
+    expires_at_epoch: float | None
+    etag: str | None
+
+    def is_live(self, now_epoch: float) -> bool:
+        """True unless the claim has *provably* expired.
+
+        An unparsable fence, or one with no usable expiry, counts as live: a fence
+        we cannot read is not evidence that no collector is running.
+        """
+        if self.expires_at_epoch is None:
+            return True
+        return self.expires_at_epoch > now_epoch
+
+
+def _parse_gc_fence(raw: bytes, etag: str | None) -> _GcFence:
+    """Parse a fence body without ever raising (untrusted input, fail-closed)."""
+    try:
+        parsed = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        return _GcFence(raw=raw, token="", expires_at_epoch=None, etag=etag)
+    if not isinstance(parsed, dict):
+        return _GcFence(raw=raw, token="", expires_at_epoch=None, etag=etag)
+    token = parsed.get("fence_token")
+    raw_expiry = parsed.get("expires_at_epoch")
+    expiry: float | None = None
+    if isinstance(raw_expiry, (int, float)) and not isinstance(raw_expiry, bool):
+        with contextlib.suppress(OverflowError, ValueError):
+            candidate = float(raw_expiry)
+            if math.isfinite(candidate):
+                expiry = candidate
+    return _GcFence(
+        raw=raw,
+        token=token if isinstance(token, str) else "",
+        expires_at_epoch=expiry,
+        etag=etag,
+    )
 
 
 def _parse_and_validate_lease_payload(
@@ -1241,12 +1340,15 @@ class S3CompatibleSigV4Driver:
         # Serialises lease acquisition against GC within this process; cross-process
         # safety still comes from the conditional lease writes and the fence protocol.
         self._coord_lock = threading.RLock()
-        # Test seam, ``None`` in production: called immediately before the *final*
-        # lease-fence decision in ``delete_chunk_if_unleased``, which is the one
-        # window a test cannot otherwise reach deterministically (it is bounded by
-        # a single network round trip). See
-        # tests/unit/test_personal_cloud_vault_lease_fence.py.
+        # Test seams, ``None`` in production. Both mark a window a test cannot
+        # otherwise reach deterministically, because each is bounded by one network
+        # round trip inside ``delete_chunk_if_unleased``:
+        #   * ``_fence_race_probe``      — before the final lease-fence decision;
+        #   * ``_post_final_check_race_probe`` — *after* that decision succeeded and
+        #     immediately before the fence object is retired. A push landing here is
+        #     the audited race. See tests/unit/test_personal_cloud_vault_lease_fence.py.
         self._fence_race_probe: Callable[[], None] | None = None
+        self._post_final_check_race_probe: Callable[[], None] | None = None
 
     @property
     def config(self) -> S3SigV4Config:
@@ -1438,6 +1540,44 @@ class S3CompatibleSigV4Driver:
             )
         self._chunk_mtimes.pop(valid, None)
 
+    def _assert_no_live_gc_fence(
+        self,
+        chunk_ids: Iterable[str],
+        *,
+        now_epoch: float,
+        when: str,
+    ) -> None:
+        """Refuse to publish a lease over a chunk a collector is deleting right now.
+
+        ``when`` names the half of the handshake this is (before the lease write, or
+        the read-after-write half), so the raised message says which side observed
+        the collision. A *dead* fence is deliberately not a refusal: it is debris
+        from a collector that crashed, and it is reclaimed separately
+        (:meth:`_reclaim_dead_gc_fences`).
+        """
+        fenced = self._live_gc_fenced_chunks(chunk_ids, now_epoch=now_epoch)
+        if fenced:
+            raise VaultRevisionConflictError(
+                "S3 GC fence is live for chunk(s) "
+                f"{sorted(fenced)} ({when}); refusing to lease a chunk a collector "
+                "is deleting. Retry once the collection finishes."
+            )
+
+    def _reclaim_dead_gc_fences(self, chunk_ids: Iterable[str], *, now_epoch: float) -> None:
+        """Clear provably expired fences — but only for chunks proven to still exist.
+
+        A dead fence is removed because the caller now holds a lease that protects
+        the chunk; if the chunk is *missing*, that collector may have completed its
+        delete before dying, and erasing its fence would erase the only evidence.
+        """
+        for cid in chunk_ids:
+            fence = self._read_gc_fence(cid)
+            if fence is None or fence.is_live(now_epoch):
+                continue
+            if not self.has_chunk(cid):
+                continue
+            self._delete_gc_fence_if_unchanged(cid, fence)
+
     def acquire_push_lease(
         self,
         chunk_ids: Iterable[str] = (),
@@ -1448,9 +1588,25 @@ class S3CompatibleSigV4Driver:
     ) -> str:
         """Create a lease object under ``leases/<lease_id>.json`` on the S3 bucket.
 
-        The lease is written first; only then are any GC fences for its chunks
-        cleared, so a fence observed by :meth:`delete_chunk_if_unleased` always
-        implies the lease that protects the chunk is already durable.
+        A lease is a promise that the chunks it names are protected. Across
+        processes that promise is only worth something if the collector and the
+        pusher agree on a handshake, so this method implements the pusher's half of
+        it (the collector's half is :meth:`delete_chunk_if_unleased`):
+
+        * **before** the lease is written, every chunk is checked for a *live* GC
+          fence. A live fence means a collector is mid-pass on that chunk, so the
+          acquisition is refused (:class:`VaultRevisionConflictError`) rather than
+          raced;
+        * the lease is written with ``If-None-Match: *`` on a fresh id;
+        * **after** the lease is written, fences are read again (write-then-read, the
+          Dekker half that makes "both sides miss" impossible). A fence that appeared
+          in between means the collector started while we were registering: the lease
+          object is deleted again — it must never survive over a chunk a collector
+          is deleting — and the acquisition is refused.
+
+        A previously blind ``DELETE`` of every fence for the leased chunks is gone:
+        a writer must never erase a live collector's claim (it would let the
+        collector's own guard be removed by the party it was guarding against).
         """
         finite_ttl = _validate_positive_finite_seconds(ttl_seconds, name="ttl_seconds")
         materialised_chunks = [_validate_chunk_id(cid) for cid in chunk_ids]
@@ -1461,6 +1617,10 @@ class S3CompatibleSigV4Driver:
             else _validate_snapshot_id(lease_id)
         )
         obj_key = self._object_key("leases", f"{effective_id}.json")
+
+        self._assert_no_live_gc_fence(
+            materialised_chunks, now_epoch=now, when="before the lease write"
+        )
         head_resp = self._send("HEAD", object_key=obj_key)
         if head_resp.status_code == 200:
             raise VaultRevisionConflictError(f"S3 push lease {effective_id!r} already exists")
@@ -1488,9 +1648,16 @@ class S3CompatibleSigV4Driver:
             raise VaultTransportError(
                 f"S3 acquire_push_lease failed with HTTP {put_resp.status_code}"
             )
-        with self._coord_lock:
-            for valid_cid in materialised_chunks:
-                self._send("DELETE", object_key=self._gc_fence_key(valid_cid))
+        try:
+            self._assert_no_live_gc_fence(
+                materialised_chunks, now_epoch=now, when="after the lease write"
+            )
+        except VaultRevisionConflictError:
+            # Roll our own object back before propagating: a lease that outlived the
+            # refusal would protect a chunk the collector is already deleting.
+            self._send("DELETE", object_key=obj_key)
+            raise
+        self._reclaim_dead_gc_fences(materialised_chunks, now_epoch=now)
         return effective_id
 
     def update_push_lease(
@@ -1501,22 +1668,39 @@ class S3CompatibleSigV4Driver:
         project_id: str = "",
         ttl_seconds: float = 3600.0,
     ) -> None:
-        """Refresh ``leases/<lease_id>.json`` on the S3 bucket."""
+        """Refresh ``leases/<lease_id>.json`` on the S3 bucket.
+
+        The same fence handshake as :meth:`acquire_push_lease`, because this is the
+        call that actually adds chunks to a live lease in the real push path
+        (``_acquire_driver_lease()`` takes an empty lease, then every chunk is added
+        here before it is uploaded). A chunk whose fence is live is *not* added: the
+        refresh refuses, and when the conditional write already happened the previous
+        lease body is restored so the lease never silently covers a chunk a collector
+        is deleting.
+        """
         finite_ttl = _validate_positive_finite_seconds(ttl_seconds, name="ttl_seconds")
         valid_id = _validate_snapshot_id(lease_id)
+        materialised_chunks = [_validate_chunk_id(cid) for cid in chunk_ids]
         obj_key = self._object_key("leases", f"{valid_id}.json")
+        now = self._clock().timestamp()
+
+        self._assert_no_live_gc_fence(
+            materialised_chunks, now_epoch=now, when="before the lease refresh"
+        )
         head_resp = self._send("HEAD", object_key=obj_key)
         if head_resp.status_code != 200:
             raise VaultTransportError(f"Active S3 push lease not found: {valid_id}")
         lowered_head = {k.lower(): v for k, v in head_resp.headers.items()}
         prior_etag = lowered_head.get("etag")
-        now = self._clock().timestamp()
+        prior = self._send("GET", object_key=obj_key)
+        prior_body = prior.body if prior.status_code == 200 else None
+
         payload = _build_lease_json_bytes(
             lease_id=valid_id,
             project_id=project_id,
             now_epoch=now,
             ttl_seconds=finite_ttl,
-            chunk_ids=chunk_ids,
+            chunk_ids=materialised_chunks,
         )
         conditional: dict[str, str] = {}
         if prior_etag:
@@ -1539,6 +1723,41 @@ class S3CompatibleSigV4Driver:
             raise VaultTransportError(
                 f"S3 update_push_lease failed with HTTP {put_resp.status_code}"
             )
+        try:
+            self._assert_no_live_gc_fence(
+                materialised_chunks, now_epoch=now, when="after the lease refresh"
+            )
+        except VaultRevisionConflictError:
+            self._restore_prior_lease_body(obj_key, prior_body, put_resp)
+            raise
+
+    def _restore_prior_lease_body(
+        self,
+        obj_key: str,
+        prior_body: bytes | None,
+        put_resp: S3HttpResponse,
+    ) -> bool:
+        """Best-effort rollback of a lease refresh that raced a collector.
+
+        Conditional on the ``ETag`` our own write returned, so a *newer* concurrent
+        refresh is never clobbered. When the bucket does not report that ETag the
+        rollback is skipped deliberately: the collector's post-retirement lease read
+        (:meth:`delete_chunk_if_unleased`, step 3) restores the chunk anyway, and an
+        unconditional overwrite could destroy a third party's lease state — a worse
+        outcome than leaving ours in place for its TTL.
+        """
+        lowered = {k.lower(): v for k, v in put_resp.headers.items()}
+        our_etag = lowered.get("etag")
+        if prior_body is None or not our_etag:
+            return False
+        resp = self._send(
+            "PUT",
+            object_key=obj_key,
+            body=prior_body,
+            content_type="application/json",
+            extra_headers={"if-match": our_etag},
+        )
+        return resp.status_code in (200, 201, 204)
 
     def release_push_lease(self, lease_id: str) -> None:
         """Delete ``leases/<lease_id>.json`` from the S3 bucket."""
@@ -1590,6 +1809,162 @@ class S3CompatibleSigV4Driver:
             state.append((stem, f"{lowered.get('etag', '')}|{lowered.get('last-modified', '')}"))
         return tuple(sorted(state))
 
+    def _read_gc_fence(self, chunk_id: str) -> _GcFence | None:
+        """Read the fence guarding ``chunk_id``; ``None`` when the bucket has none."""
+        resp = self._send("GET", object_key=self._gc_fence_key(chunk_id))
+        if resp.status_code == 404:
+            return None
+        if resp.status_code != 200:
+            raise VaultTransportError(
+                f"S3 GC fence probe failed for {chunk_id} with HTTP {resp.status_code}"
+            )
+        lowered = {k.lower(): v for k, v in resp.headers.items()}
+        return _parse_gc_fence(resp.body, lowered.get("etag"))
+
+    def _live_gc_fenced_chunks(
+        self, chunk_ids: Iterable[str], *, now_epoch: float
+    ) -> tuple[str, ...]:
+        """Return the chunk ids currently guarded by a *live* collector fence."""
+        fenced: list[str] = []
+        for cid in chunk_ids:
+            fence = self._read_gc_fence(cid)
+            if fence is not None and fence.is_live(now_epoch):
+                fenced.append(cid)
+        return tuple(fenced)
+
+    def _create_gc_fence(self, chunk_id: str, *, now_epoch: float) -> tuple[str, str | None] | None:
+        """Claim the fence for ``chunk_id``; ``None`` means somebody else holds it.
+
+        The claim is created with ``If-None-Match: *`` so two collectors can never
+        both believe they own a chunk — the loser gets 409/412 and simply does not
+        collect. Only a *provably expired* claim may be taken over, and only with an
+        ``If-Match`` on the exact bytes that were inspected, so a live collector is
+        never silently overwritten.
+        """
+        fence_key = self._gc_fence_key(chunk_id)
+        token = uuid.uuid4().hex
+        body = _build_gc_fence_body(token, chunk_id, now_epoch=now_epoch)
+        resp = self._send(
+            "PUT",
+            object_key=fence_key,
+            body=body,
+            content_type="application/json",
+            extra_headers={"if-none-match": "*"},
+        )
+        if resp.status_code in (409, 412):
+            existing = self._read_gc_fence(chunk_id)
+            if existing is None or existing.is_live(now_epoch) or not existing.etag:
+                return None
+            reclaimed = self._send(
+                "PUT",
+                object_key=fence_key,
+                body=body,
+                content_type="application/json",
+                extra_headers={"if-match": existing.etag},
+            )
+            if reclaimed.status_code in (409, 412):
+                return None
+            if reclaimed.status_code not in (200, 201, 204):
+                raise VaultTransportError(
+                    f"S3 GC fence reclaim failed for {chunk_id} with HTTP {reclaimed.status_code}"
+                )
+            return token, reclaimed.headers.get("etag") or reclaimed.headers.get("ETag")
+        if resp.status_code not in (200, 201, 204):
+            raise VaultTransportError(
+                f"S3 GC fence claim failed for {chunk_id} with HTTP {resp.status_code}"
+            )
+        return token, resp.headers.get("etag") or resp.headers.get("ETag")
+
+    def _fence_token_is_ours(self, chunk_id: str, token: str) -> bool:
+        """True only while the bucket still carries *our* claim, byte for byte."""
+        fence = self._read_gc_fence(chunk_id)
+        if fence is None or not fence.token:
+            return False
+        return hmac.compare_digest(fence.token, token)
+
+    def _retire_gc_fence(self, chunk_id: str, token: str) -> bool:
+        """Delete our fence — never somebody else's.
+
+        The owner token is re-read immediately before the delete, and the delete
+        itself is conditional on the observed ``ETag`` when the bucket reports one.
+        A fence that was replaced in between is left alone: it belongs to a newer
+        collector whose claim we have no right to erase.
+        """
+        fence = self._read_gc_fence(chunk_id)
+        if fence is None:
+            return True
+        if not fence.token or not hmac.compare_digest(fence.token, token):
+            return False
+        headers = {"if-match": fence.etag} if fence.etag else {}
+        resp = self._send("DELETE", object_key=self._gc_fence_key(chunk_id), extra_headers=headers)
+        if resp.status_code in (409, 412):
+            return False
+        if resp.status_code not in (200, 202, 204, 404):
+            raise VaultTransportError(
+                f"S3 GC fence retire failed for {chunk_id} with HTTP {resp.status_code}"
+            )
+        return True
+
+    def _delete_gc_fence_if_unchanged(self, chunk_id: str, observed: _GcFence) -> bool:
+        """Delete a *dead* fence only if it still holds exactly the bytes we read."""
+        current = self._read_gc_fence(chunk_id)
+        if current is None:
+            return True
+        if current.raw != observed.raw:
+            return False
+        headers = {"if-match": current.etag} if current.etag else {}
+        resp = self._send("DELETE", object_key=self._gc_fence_key(chunk_id), extra_headers=headers)
+        if resp.status_code in (409, 412):
+            return False
+        if resp.status_code not in (200, 202, 204, 404):
+            raise VaultTransportError(
+                f"S3 GC fence cleanup failed for {chunk_id} with HTTP {resp.status_code}"
+            )
+        return True
+
+    def _restore_chunk_conditionally(self, chunk_id: str, staged_payload: bytes) -> bool:
+        """Put staged bytes back without ever overwriting a newer object.
+
+        Two independent guarantees, because a rollback that corrupts is worse than a
+        rollback that fails:
+
+        * **identity** — if the staged bytes are an AEAD wire envelope, the chunk id
+          authenticated in its header must equal the object key. A payload filed
+          under the wrong id is refused outright (:class:`VaultTamperDetectedError`)
+          instead of being written back under a lie;
+        * **no clobbering** — the write is create-if-absent (``If-None-Match: *``).
+          S3 answers 409/412 when a concurrent push already republished the chunk,
+          and that object is authoritative: the collector verifies it exists and
+          leaves it untouched. The restored object is then read back and compared
+          by SHA-256, so "restored" means "the bytes are actually there".
+        """
+        embedded = _wire_envelope_chunk_id(staged_payload)
+        if embedded is not None and embedded != chunk_id:
+            raise VaultTamperDetectedError(
+                f"Refusing to restore chunk {chunk_id}: staged wire envelope is {embedded}"
+            )
+        expected_digest = hashlib.sha256(staged_payload).hexdigest()
+        resp = self._send(
+            "PUT",
+            object_key=self._object_key("chunks", f"{chunk_id}.chk"),
+            body=staged_payload,
+            content_type="application/octet-stream",
+            extra_headers={"if-none-match": "*"},
+        )
+        if resp.status_code in (409, 412):
+            # Somebody republished this chunk while we were rolling back. Their object
+            # wins by contract; we only prove the chunk is not lost.
+            return self.has_chunk(chunk_id)
+        if resp.status_code not in (200, 201, 204):
+            raise VaultTransportError(
+                f"S3 GC chunk restore failed for {chunk_id} with HTTP {resp.status_code}"
+            )
+        self._chunk_mtimes[chunk_id] = self._clock().timestamp()
+        readback = self._send("GET", object_key=self._object_key("chunks", f"{chunk_id}.chk"))
+        if readback.status_code != 200:
+            return False
+        return hashlib.sha256(readback.body).hexdigest() == expected_digest
+
     def _final_lease_fence_check(
         self,
         chunk_id: str,
@@ -1617,20 +1992,33 @@ class S3CompatibleSigV4Driver:
         *,
         now_epoch: float | None = None,
     ) -> bool:
-        """Delete ``chunk_id`` only when no lease appeared across the whole check.
+        """Delete ``chunk_id`` only when no lease can claim it, across processes.
 
-        The lease set is snapshotted, re-read immediately before the ``DELETE``, and the
-        lease-object state token (ETag / Last-Modified per lease) must be identical
-        before and after the deletion decision. A two-sided fence around the ``DELETE``
-        closes the residual window: a push that acquires a lease between the last check
-        and the delete clears the fence (so we abort before touching the chunk), and a
-        push that acquires one *during* the delete restores the bytes we already read —
-        so a chunk that was unleased when we started is never lost to a concurrent push.
+        The collector and every push run as *independent* processes against one
+        bucket, so nothing here may rest on ``self._coord_lock`` (that lock only
+        orders calls inside one interpreter). The protocol is therefore two-phase
+        and object-based, in the sense of Dekker's handshake:
 
-        The fence is only *retired* after one more authoritative lease listing
-        (:meth:`_final_lease_fence_check`): the window between the post-delete re-read
-        and the final fence ``DELETE`` is a single round trip wide, and a lease landing
-        there must still win — the chunk is restored and the call reports ``False``.
+        1. the collector **claims** ``gc-fences/<chunk>.fence`` with
+           ``If-None-Match: *`` and a body carrying a unique owner token plus an
+           expiry — two collectors can never both own a chunk;
+        2. the collector reads the lease set, deletes the chunk, and re-reads both
+           the fence *and* the leases twice more;
+        3. the fence is retired only while the collector still owns it, and the
+           lease set is read **once more after the fence is gone**.
+
+        That last read is what closes the millisecond window between the final check
+        and the fence delete: a pusher that registers a lease there is still seen
+        (its lease outlives the fence), so the collector puts the bytes back and
+        reports ``False``. Symmetrically, a pusher refuses to lease a chunk whose
+        fence is live, and re-reads fences *after* writing its lease (see
+        :meth:`acquire_push_lease`). Both sides write their claim before reading the
+        other's, so no interleaving lets both of them miss.
+
+        Every rollback goes through :meth:`_restore_chunk_conditionally`: identity
+        is checked against the object key and the write is create-if-absent, so a
+        concurrent push is never overwritten. Any result other than ``True`` means
+        the chunk is still (or again) present.
         """
         valid = _validate_chunk_id(chunk_id)
         effective_now = _validate_finite_epoch(now_epoch, default_now=self._clock().timestamp())
@@ -1646,49 +2034,74 @@ class S3CompatibleSigV4Driver:
                 return False
 
             staged_payload = self.get_chunk(valid)
-            fence_key = self._gc_fence_key(valid)
-            fence_token = uuid.uuid4().hex
-            self._send("PUT", object_key=fence_key, body=fence_token.encode("ascii"))
-
-            fence_resp = self._send("GET", object_key=fence_key)
-            if (
-                fence_resp.status_code != 200
-                or fence_resp.body.decode("ascii", "replace") != fence_token
-                or self._lease_state_token() != before_state
-                or valid in self.read_active_leased_chunks(now_epoch=effective_now)
-            ):
-                self._send("DELETE", object_key=fence_key)
+            claim = self._create_gc_fence(valid, now_epoch=effective_now)
+            if claim is None:
+                # Another collector owns the chunk right now (or a live fence cannot
+                # be proven dead). Refusing is the only safe answer.
                 return False
+            fence_token, _ = claim
+            retired = False
+            try:
+                if not self._fence_token_is_ours(valid, fence_token):
+                    return False
+                if self._lease_state_token() != before_state or valid in (
+                    self.read_active_leased_chunks(now_epoch=effective_now)
+                ):
+                    return False
 
-            self.delete_chunk(valid)
+                self.delete_chunk(valid)
 
-            post_fence = self._send("GET", object_key=fence_key)
-            if (
-                post_fence.status_code != 200
-                or post_fence.body.decode("ascii", "replace") != fence_token
-                or self._lease_state_token() != before_state
-                or valid in self.read_active_leased_chunks(now_epoch=effective_now)
-            ):
-                self.put_chunk(valid, staged_payload)
-                self._send("DELETE", object_key=fence_key)
-                return False
+                if (
+                    not self._fence_token_is_ours(valid, fence_token)
+                    or self._lease_state_token() != before_state
+                    or valid in self.read_active_leased_chunks(now_epoch=effective_now)
+                ):
+                    self._restore_chunk_conditionally(valid, staged_payload)
+                    return False
 
-            if self._fence_race_probe is not None:  # test seam, see __init__
-                self._fence_race_probe()
-            if not self._final_lease_fence_check(
-                valid, expected_state=before_state, now_epoch=effective_now
-            ):
-                # A lease landed after the post-delete re-read: the pusher owns the
-                # chunk now, so put the bytes back (only if nobody re-uploaded them
-                # already — never clobber a newer object) and keep the fence retired
-                # only after the data it guarded is durable again.
-                if not self.has_chunk(valid):
-                    self.put_chunk(valid, staged_payload)
-                self._send("DELETE", object_key=fence_key)
-                return False
+                if self._fence_race_probe is not None:  # test seam, see __init__
+                    self._fence_race_probe()
+                if not self._final_lease_fence_check(
+                    valid, expected_state=before_state, now_epoch=effective_now
+                ):
+                    self._restore_chunk_conditionally(valid, staged_payload)
+                    return False
 
-            self._send("DELETE", object_key=fence_key)
-            return True
+                if self._post_final_check_race_probe is not None:  # test seam
+                    self._post_final_check_race_probe()
+                # The check above is a round trip old. Re-verify ownership *and* the
+                # lease world at the instant of retirement: this is the window the
+                # audit found, and it is now observed twice more instead of once.
+                if not self._fence_token_is_ours(valid, fence_token) or not (
+                    self._final_lease_fence_check(
+                        valid, expected_state=before_state, now_epoch=effective_now
+                    )
+                ):
+                    self._restore_chunk_conditionally(valid, staged_payload)
+                    return False
+
+                retired = self._retire_gc_fence(valid, fence_token)
+                if not retired:
+                    # Our claim was replaced while we were retiring it: the deletion
+                    # is no longer ours to publish.
+                    self._restore_chunk_conditionally(valid, staged_payload)
+                    return False
+
+                # Final, post-retirement read. The fence is gone now, so *this* is
+                # the only observation that can still see a lease registered in the
+                # last round trip — the exact race the audit described.
+                if self._lease_state_token() != before_state or valid in (
+                    self.read_active_leased_chunks(now_epoch=effective_now)
+                ):
+                    self._restore_chunk_conditionally(valid, staged_payload)
+                    return False
+                return True
+            finally:
+                if not retired:
+                    # A claim we own must never outlive this call: it would block
+                    # every writer for a whole TTL. Retirement is idempotent and
+                    # refuses to touch a fence that is no longer ours.
+                    self._retire_gc_fence(valid, fence_token)
 
     def _staging_journal_key(self, project_id: str, parent_snapshot_id: str | None) -> str:
         digest = _staging_journal_digest(project_id, parent_snapshot_id)
