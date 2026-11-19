@@ -1,0 +1,4 @@
+# The optional cockpit must also work from a wheel, not just an editable checkout.
+recursive-include src/nexus_ai_agent/cockpit/static *.html *.css *.js *.svg *.woff2 *.txt
+# Its source of truth is the existing packaged builtin registry + trust/template data.
+recursive-include src/nexus_ai_agent/creative/packs *.json
