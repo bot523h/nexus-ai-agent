@@ -983,6 +983,31 @@ def build_handlers(
                 "🎁 **Referral System**\n\n/referral — My stats\n/referral_board — Leaderboard",
                 parse_mode="Markdown",
             )
+        elif data == "menu_language":
+            await language_cmd(update, context)
+        elif data.startswith("lang_"):
+            lang_code = data[5:].lower()
+            from nexus_ai_agent.i18n import SUPPORTED_LANGUAGES
+
+            if lang_code not in SUPPORTED_LANGUAGES:
+                supported = ", ".join(SUPPORTED_LANGUAGES.keys())
+                await query.edit_message_text(
+                    f"❌ '{lang_code}' not supported.\nSupported: {supported}"
+                )
+                return
+            user_id = _user_id(update)
+            if user_id is not None:
+                async with db_session_factory() as session:
+                    stmt = select(UserLanguage).where(UserLanguage.user_id == user_id)
+                    ul = (await session.exec(stmt)).first()
+                    if ul:
+                        ul.language = lang_code
+                        ul.updated_at = datetime.now(timezone.utc)
+                    else:
+                        session.add(UserLanguage(user_id=user_id, language=lang_code))
+                    await session.commit()
+            lang_name = SUPPORTED_LANGUAGES[lang_code]
+            await query.edit_message_text(f"✅ Language set to: {lang_name}")
         elif data == "menu_back":
             await start(update, context)
 

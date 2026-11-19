@@ -59,13 +59,18 @@ async def agent_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
         success = await AgentManager.activate(user_id, agent_id)
         if success:
             agent_list = AgentManager.list_agents()
-            agent_info = next(a for a in agent_list if a["id"] == agent_id)
-            await query.edit_message_text(
-                f"✅ *{agent_info['name']}* فعال شد!\n\n"
-                f"{agent_info['description']}\n\n"
-                "از این به بعد من با این شخصیت پاسخ شما را می‌دهم. برای توقف: /agent_stop",
-                parse_mode="Markdown",
-            )
+            agent_info = next((a for a in agent_list if a["id"] == agent_id), None)
+            if agent_info:
+                await query.edit_message_text(
+                    f"✅ *{agent_info['name']}* فعال شد!\n\n"
+                    f"{agent_info['description']}\n\n"
+                    "از این به بعد من با این شخصیت پاسخ شما را می‌دهم. برای توقف: /agent_stop",
+                    parse_mode="Markdown",
+                )
+            else:
+                await query.edit_message_text(f"✅ Agent {agent_id} فعال شد.")
+        else:
+            await query.edit_message_text("❌ خطا در فعال‌سازی Agent.")
 
 
 async def myagent_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
