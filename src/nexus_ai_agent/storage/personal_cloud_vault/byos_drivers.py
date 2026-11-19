@@ -1241,6 +1241,12 @@ class S3CompatibleSigV4Driver:
         # Serialises lease acquisition against GC within this process; cross-process
         # safety still comes from the conditional lease writes and the fence protocol.
         self._coord_lock = threading.RLock()
+        # Test seam, ``None`` in production: called immediately before the *final*
+        # lease-fence decision in ``delete_chunk_if_unleased``, which is the one
+        # window a test cannot otherwise reach deterministically (it is bounded by
+        # a single network round trip). See
+        # tests/unit/test_personal_cloud_vault_lease_fence.py.
+        self._fence_race_probe: Callable[[], None] | None = None
 
     @property
     def config(self) -> S3SigV4Config:
@@ -1584,6 +1590,27 @@ class S3CompatibleSigV4Driver:
             state.append((stem, f"{lowered.get('etag', '')}|{lowered.get('last-modified', '')}"))
         return tuple(sorted(state))
 
+    def _final_lease_fence_check(
+        self,
+        chunk_id: str,
+        *,
+        expected_state: tuple[tuple[str, str], ...],
+        now_epoch: float,
+    ) -> bool:
+        """Return ``True`` only if the lease world is still exactly ``expected_state``.
+
+        This is the last observation before the fence object is retired. The two-sided
+        fence already brackets the chunk ``DELETE``, but the final fence ``DELETE`` and
+        the post-delete re-read are still separated by one round trip: a lease created
+        inside that gap would protect a chunk this call had already removed, and would
+        be written against a fence that is about to disappear. Fail-closed here — any
+        change in the lease state token, or any active lease covering ``chunk_id``,
+        keeps the fence in place and makes the caller roll the bytes back.
+        """
+        if self._lease_state_token() != expected_state:
+            return False
+        return chunk_id not in self.read_active_leased_chunks(now_epoch=now_epoch)
+
     def delete_chunk_if_unleased(
         self,
         chunk_id: str,
@@ -1599,6 +1626,11 @@ class S3CompatibleSigV4Driver:
         and the delete clears the fence (so we abort before touching the chunk), and a
         push that acquires one *during* the delete restores the bytes we already read —
         so a chunk that was unleased when we started is never lost to a concurrent push.
+
+        The fence is only *retired* after one more authoritative lease listing
+        (:meth:`_final_lease_fence_check`): the window between the post-delete re-read
+        and the final fence ``DELETE`` is a single round trip wide, and a lease landing
+        there must still win — the chunk is restored and the call reports ``False``.
         """
         valid = _validate_chunk_id(chunk_id)
         effective_now = _validate_finite_epoch(now_epoch, default_now=self._clock().timestamp())
@@ -1638,6 +1670,20 @@ class S3CompatibleSigV4Driver:
                 or valid in self.read_active_leased_chunks(now_epoch=effective_now)
             ):
                 self.put_chunk(valid, staged_payload)
+                self._send("DELETE", object_key=fence_key)
+                return False
+
+            if self._fence_race_probe is not None:  # test seam, see __init__
+                self._fence_race_probe()
+            if not self._final_lease_fence_check(
+                valid, expected_state=before_state, now_epoch=effective_now
+            ):
+                # A lease landed after the post-delete re-read: the pusher owns the
+                # chunk now, so put the bytes back (only if nobody re-uploaded them
+                # already — never clobber a newer object) and keep the fence retired
+                # only after the data it guarded is durable again.
+                if not self.has_chunk(valid):
+                    self.put_chunk(valid, staged_payload)
                 self._send("DELETE", object_key=fence_key)
                 return False
 

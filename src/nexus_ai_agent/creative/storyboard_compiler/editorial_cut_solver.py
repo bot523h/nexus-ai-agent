@@ -84,6 +84,7 @@ __all__ = [
     "solve_eye_trace_transition",
     "verify_editorial_timeline",
     "verify_manifest_integrity",
+    "verify_manifest_integrity_strict",
 ]
 
 MANIFEST_SCHEMA_VERSION: Final[str] = "nexus.storyboard_compiler.v1"
@@ -1999,6 +2000,41 @@ def verify_manifest_integrity(
         and manifest.cinematography_sha256 == expected_cinema
         and manifest.editorial_sha256 == expected_edit
         and manifest.manifest_sha256 == expected_manifest
+    )
+
+
+def verify_manifest_integrity_strict(
+    manifest: CompiledStoryboardManifest,
+    *,
+    hmac_key: bytes | str | None = None,
+    expected_source_sha256: str | None = None,
+    expected_max_saccade_limit: float | None = None,
+    expected_initial_axis_side: int | None = None,
+) -> bool:
+    """Production/release gate: :func:`verify_manifest_integrity` with the anchor mandatory.
+
+    ``verify_manifest_integrity`` has to stay callable without a key -- it is the
+    format-level checker, and a manifest that is merely *internally* consistent is a
+    legitimate intermediate state (the compiler's own tests rely on that). The
+    consequence is that its default is ``require_trusted_anchor=False``, and a
+    caller that forgets to pass an anchor silently accepts a fully self-consistent
+    forgery: an attacker who writes a different screenplay, recompiles it honestly
+    and recomputes all four digests produces something keyless verification blesses.
+
+    This wrapper exists so the decision to trust cannot be made by omission. It is
+    fail-closed by construction: ``require_trusted_anchor=True`` is hard-wired, so
+    it refuses unless ``expected_source_sha256`` or ``hmac_key`` is supplied, and
+    it still refuses a supplied-but-unusable key (empty, non-``str``/``bytes``) or a
+    wrong one, because those checks live in the underlying verifier. Anything that
+    gates delivery on manifest integrity should call this, not the bare checker.
+    """
+    return verify_manifest_integrity(
+        manifest,
+        hmac_key=hmac_key,
+        expected_source_sha256=expected_source_sha256,
+        expected_max_saccade_limit=expected_max_saccade_limit,
+        expected_initial_axis_side=expected_initial_axis_side,
+        require_trusted_anchor=True,
     )
 
 
