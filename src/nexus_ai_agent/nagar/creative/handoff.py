@@ -750,12 +750,35 @@ def validate_storyboard_render_request(payload: Mapping[str, Any]) -> Storyboard
     )
 
 
+def build_storyboard_render_payload(payload: Mapping[str, Any]) -> dict[str, object]:
+    """Validate at enqueue time and return the flat queue payload for ``storyboard_render``.
+
+    The render chain re-validates at execution, but a request that is malformed
+    or whose screenplay does not match ``source_sha256`` must never reach the
+    queue at all. The returned dict is JSON-serialisable and carries exactly the
+    fields the worker reads.
+    """
+    request = validate_storyboard_render_request(payload)
+    flat: dict[str, object] = {
+        "project_id": request.project_id,
+        "job_id": request.job_id,
+        "screenplay_text": request.screenplay_text,
+        "source_sha256": request.source_sha256,
+        "manifest_sha256": request.manifest_sha256,
+        "approval_id": request.approval_id,
+        "principal_id": request.principal_id,
+    }
+    flat.update(request.profile)
+    return flat
+
+
 __all__ = [
     "CREATIVE_RENDER_JOB_TYPE",
     "MAX_INTENT_CHARS",
     "MAX_SCREENPLAY_CHARS",
     "STORYBOARD_RENDER_JOB_TYPE",
     "StoryboardRenderRequest",
+    "build_storyboard_render_payload",
     "validate_storyboard_render_request",
     "TRIM_COMMAND",
     "TRIM_OPERATION",

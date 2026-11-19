@@ -28,7 +28,11 @@ from nexus_ai_agent.creative.storyboard_render import (
     render_storyboard_sync,
 )
 from nexus_ai_agent.creative.studio_cli import StudioCliError, studio_doctor, studio_init
-from nexus_ai_agent.nagar.ibpc.approval import ApprovalLedger
+from nexus_ai_agent.nagar.ibpc.approval import (
+    ApprovalLedger,
+    DurableApprovalLedger,
+    durable_approval_ledger_path,
+)
 
 SIGNING_KEY = "s" * 48
 SCRIPT = (
@@ -44,11 +48,11 @@ PROFILE = {"width": 320, "height": 180, "fps": 12, "sample_rate": 16000}
 class Env:
     """One isolated studio: workspace, ledger, context and a helper to submit jobs."""
 
-    def __init__(self, root: Path) -> None:
+    def __init__(self, root: Path, ledger: ApprovalLedger | None = None) -> None:
         self.root = root
         self.ws = root / "workspace"
         self.ws.mkdir(parents=True)
-        self.ledger = ApprovalLedger(now=lambda: "2026-11-18T07:40:00Z")
+        self.ledger = ledger or ApprovalLedger(now=lambda: "2026-11-18T07:40:00Z")
         self.ctx = RenderContext(
             workspace_root=self.ws,
             approval_ledger=self.ledger,
@@ -135,6 +139,48 @@ def test_no_stray_temp_files_remain_after_success(env: Env) -> None:
 
 
 # ----------------------------- approval: replay and mutation -----------------------------
+
+
+def test_durable_approval_survives_restarts_and_replay_after_restart_is_refused(
+    tmp_path: Path,
+) -> None:
+    """Issue → restart → render → restart → replay is refused fail-closed."""
+    ws_root = tmp_path / "studio"
+    ws_root.mkdir()
+    db_path = durable_approval_ledger_path(ws_root / "workspace")
+    clock = lambda: "2026-11-18T07:40:00Z"  # noqa: E731
+
+    first = Env(tmp_path / "first", DurableApprovalLedger(db_path, now=clock))
+    approval = first.approve()
+    first.ledger.close()  # simulated process exit
+
+    second = Env(tmp_path / "second", DurableApprovalLedger(db_path, now=clock))
+    second.ws = first.ws
+    second.ctx = RenderContext(
+        workspace_root=first.ws,
+        approval_ledger=second.ledger,
+        signing_key=SIGNING_KEY,
+        clock=lambda: 1_700_000_000.0,
+    )
+    result = render_storyboard_sync(second.payload(approval), second.ctx)
+    assert result["status"] == "rendered"
+    assert result["verifier_status"] == "PASS"
+    second.ledger.close()
+
+    third_ledger = DurableApprovalLedger(db_path, now=clock)
+    third = Env(tmp_path / "third", third_ledger)
+    third.ws = first.ws
+    third.ctx = RenderContext(
+        workspace_root=first.ws,
+        approval_ledger=third_ledger,
+        signing_key=SIGNING_KEY,
+        clock=lambda: 1_700_000_000.0,
+    )
+    with pytest.raises(StoryboardRenderError) as info:
+        render_storyboard_sync(third.payload(approval, job_id="job-2"), third.ctx)
+    assert info.value.reason == "approval_replay"
+    assert not third.artifact("job-2").exists()
+    third_ledger.close()
 
 
 def test_replayed_approval_is_refused_and_creates_no_second_artifact(env: Env) -> None:

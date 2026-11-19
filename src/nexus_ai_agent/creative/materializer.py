@@ -23,12 +23,14 @@ Guarantees, all fail-closed:
   status) and recomputes the asset Merkle root. The render handler calls it
   immediately before FFmpeg runs.
 
-Asset Merkle root: leaves are ``SHA-256(0x00 || record_json)``, internal nodes
-are ``SHA-256(0x01 || left || right)``, and an unpaired node at any level is
-promoted unchanged (promote-without-duplicate). ``total_leaves`` is recorded
-next to the root. This follows the prefix and promotion rules of the task
-specification; the tree shape is the level-by-level pairing, which is not the
-RFC 6962 largest-power-of-two split.
+Asset Merkle root (RFC 6962 §2.1, literal recursion): the empty tree hashes to
+``SHA-256(b"")``; a leaf is ``SHA-256(0x00 || record_json)``; for ``n > 1`` the
+split point is ``k = 1 << ((n - 1).bit_length() - 1)`` (the largest power of two
+strictly below ``n``) and ``MTH(D[0:n]) = SHA-256(0x01 || MTH(D[0:k]) ||
+MTH(D[k:n]))``. Inclusion proofs follow RFC 6962 PATH and are verified with the
+RFC 9162 §2.1.3.2 algorithm bound to ``total_leaves``, so a proof for a tree
+that duplicates its last leaf (CVE-2012-2459) never verifies against the real
+root.
 """
 
 from __future__ import annotations
@@ -255,20 +257,79 @@ def _rfc6962_node(left: bytes, right: bytes) -> bytes:
     return hashlib.sha256(b"\x01" + left + right).digest()
 
 
+def _split_point(size: int) -> int:
+    """RFC 6962 ``k``: the largest power of two strictly smaller than ``size`` (size > 1)."""
+    return 1 << ((size - 1).bit_length() - 1)
+
+
+def _mth(leaf_hashes: Sequence[bytes], lo: int, hi: int) -> bytes:
+    """RFC 6962 §2.1 MTH over ``leaf_hashes[lo:hi]`` by literal recursion."""
+    size = hi - lo
+    if size == 0:
+        return hashlib.sha256(b"").digest()
+    if size == 1:
+        return leaf_hashes[lo]
+    k = _split_point(size)
+    return _rfc6962_node(_mth(leaf_hashes, lo, lo + k), _mth(leaf_hashes, lo + k, hi))
+
+
 def merkle_root(leaf_payloads: Sequence[bytes]) -> tuple[str, int]:
-    """Return ``(root_hex, total_leaves)`` using prefixed hashes and promotion."""
+    """Return ``(root_hex, total_leaves)`` per RFC 6962 §2.1."""
     total = len(leaf_payloads)
-    if total == 0:
-        return hashlib.sha256(b"").hexdigest(), 0
-    level = [_rfc6962_leaf(payload) for payload in leaf_payloads]
-    while len(level) > 1:
-        nxt: list[bytes] = []
-        for index in range(0, len(level) - 1, 2):
-            nxt.append(_rfc6962_node(level[index], level[index + 1]))
-        if len(level) % 2 == 1:
-            nxt.append(level[-1])
-        level = nxt
-    return level[0].hex(), total
+    leaf_hashes = [_rfc6962_leaf(payload) for payload in leaf_payloads]
+    return _mth(leaf_hashes, 0, total).hex(), total
+
+
+def merkle_inclusion_proof(leaf_payloads: Sequence[bytes], index: int) -> tuple[bytes, ...]:
+    """RFC 6962 PATH(index, D[n]): the sibling hashes that prove leaf ``index``."""
+    total = len(leaf_payloads)
+    if not 0 <= index < total:
+        raise MaterializationError("merkle_index_out_of_range", str(index))
+    leaf_hashes = [_rfc6962_leaf(payload) for payload in leaf_payloads]
+
+    def path(m: int, lo: int, hi: int) -> list[bytes]:
+        size = hi - lo
+        if size <= 1:
+            return []
+        k = _split_point(size)
+        if m < k:
+            return [*path(m, lo, lo + k), _mth(leaf_hashes, lo + k, hi)]
+        return [*path(m - k, lo + k, hi), _mth(leaf_hashes, lo, lo + k)]
+
+    return tuple(path(index, 0, total))
+
+
+def verify_merkle_proof(
+    leaf_payload: bytes,
+    index: int,
+    total_leaves: int,
+    proof: Sequence[bytes],
+    root_hex: str,
+) -> bool:
+    """RFC 9162 §2.1.3.2 inclusion verification bound to ``total_leaves``.
+
+    Fails closed: any out-of-range index, wrong-length proof or root mismatch
+    returns ``False``. The proof length is checked against ``total_leaves``
+    so a proof for a shorter tree cannot be replayed against a longer one.
+    """
+    if total_leaves <= 0 or not 0 <= index < total_leaves:
+        return False
+    fn, sn = index, total_leaves - 1
+    result = _rfc6962_leaf(leaf_payload)
+    for sibling in proof:
+        if sn == 0:
+            return False
+        if fn & 1 or fn == sn:
+            result = _rfc6962_node(sibling, result)
+            if not fn & 1:
+                while fn & 1 == 0 and fn != 0:
+                    fn >>= 1
+                    sn >>= 1
+        else:
+            result = _rfc6962_node(result, sibling)
+        fn >>= 1
+        sn >>= 1
+    return sn == 0 and result.hex() == root_hex
 
 
 def atomic_write(final_path: Path, write: Callable[[IO[bytes]], None]) -> None:
