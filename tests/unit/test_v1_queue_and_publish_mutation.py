@@ -1,6 +1,6 @@
 """AST mutation tests for the queue → publication security fences (Gate 5).
 
-Seven load-bearing boundaries are mutated for real on the parsed AST and the
+Ten load-bearing boundaries are mutated for real on the parsed AST and the
 guarding tests must kill every mutant (``MUTANT KILLED``):
 
 1. the ``attempt`` fence in ``ApprovalLedger.consume`` (a stale attempt may
@@ -16,7 +16,14 @@ guarding tests must kill every mutant (``MUTANT KILLED``):
 6. the shot-tree policy of the production storyboard verifier (a passport
    without a leaf per rendered shot is a forged board);
 7. the ``artifact_verification == "PASS"`` condition of the studio download
-   gate (an unverified artifact is never downloadable).
+   gate (an unverified artifact is never downloadable);
+8. the fail-closed quarantine contract of ``_promote_staged_artifacts`` (a
+   ``storyboard_render`` result without a valid staging contract may never
+   promote to ``None`` — that is the old fail-open hole);
+9. the ``close()`` of ``_FdLease`` (the verified download descriptor must
+   actually be closed, exactly once);
+10. the sealed-identity comparison of the idempotent re-entry gate (a final
+    pair left by a different render is a mismatch, never a silent success).
 
 C-Extension Safety: every mutant is ``ast.parse``-d *before* any scoring, is
 exec'd as its own module under a private ``nexus_mutant_*`` name and is added
@@ -30,6 +37,7 @@ from __future__ import annotations
 import ast
 import asyncio
 import hashlib
+import os
 import sys
 import time
 from datetime import timedelta
@@ -44,6 +52,7 @@ from nexus_ai_agent.adapters.in_process_job_queue import InProcessJobQueue
 from nexus_ai_agent.api import studio as studio_module
 from nexus_ai_agent.application.execution_context import ExecutionClaim
 from nexus_ai_agent.application.ports.job_queue import JobStatus
+from nexus_ai_agent.creative import artifact_download as download_module
 from nexus_ai_agent.creative import materializer as mz
 from nexus_ai_agent.creative import storyboard_jobs as storyboard_jobs_module
 from nexus_ai_agent.creative import storyboard_render as storyboard_render_module
@@ -76,6 +85,7 @@ MUTATION_TARGETS = {
     "render": "src/nexus_ai_agent/creative/storyboard_render.py",
     "jobs": "src/nexus_ai_agent/creative/storyboard_jobs.py",
     "studio": "src/nexus_ai_agent/api/studio.py",
+    "download": "src/nexus_ai_agent/creative/artifact_download.py",
 }
 
 
@@ -640,3 +650,241 @@ def test_mutant_download_gate_without_the_pass_condition_is_killed() -> None:
     _unverified_download_behaviour(studio_module)
     mutant = _load_mutant(MUTATION_TARGETS["studio"], _neuter, "download_no_pass_gate")
     _kill(lambda: _unverified_download_behaviour(mutant))
+
+
+# --------------------------------------------------------------------------- #
+# Mutant 8: the fail-closed quarantine contract of the promotion
+# --------------------------------------------------------------------------- #
+
+
+def _missing_staging_contract_behaviour(module: ModuleType, root: Path) -> None:
+    """A ``storyboard_render`` result with NO quarantine contract at all must
+    be refused with ``staged_artifacts_missing_or_unpromoted`` — never a
+    silent ``None`` (the old fail-open hole CP4 closes)."""
+
+    async def scenario() -> None:
+        queue = module.InProcessJobQueue(
+            root / "m8-queue.sqlite3",
+            handlers={},
+            artifact_verifiers={},
+        )
+        await queue.acquire_ownership()
+        try:
+            claim = ExecutionClaim(job_id="job-m8", attempt=1)
+            result: dict[str, object] = {
+                "status": "rendered",
+                "verifier_status": "PASS",
+                # NO staged_*/final_* paths: the quarantine contract is absent.
+                "output_rel_path": "projects/p8/renders/job-m8/storyboard.mp4",
+            }
+            await asyncio.to_thread(
+                queue._promote_staged_artifacts, claim, result, "storyboard_render"
+            )
+        except module._PromotionRefused as exc:
+            assert "staged_artifacts_missing_or_unpromoted" in str(exc), str(exc)
+        else:
+            raise AssertionError("a contract-less storyboard result must fail closed")
+        finally:
+            await queue.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_mutant_promotion_returning_none_without_staging_is_killed() -> None:
+    """Revert the fail-closed contract check to ``return None``: the
+    contract-less storyboard result would promote silently — the refusal
+    must kill it."""
+
+    def _swap_raise_to_return(stmts: list[ast.stmt]) -> bool:
+        found = False
+        for index, stmt in enumerate(stmts):
+            if isinstance(
+                stmt, ast.Raise
+            ) and "staged_artifacts_missing_or_unpromoted" in ast.unparse(stmt):
+                stmts[index] = ast.Return(value=ast.Constant(value=None))
+                found = True
+            for field in ("body", "orelse", "finalbody"):
+                child = getattr(stmt, field, None)
+                if isinstance(child, list) and _swap_raise_to_return(child):
+                    found = True
+        return found
+
+    def _mutate(tree: ast.Module) -> None:
+        func = _function(tree, "_promote_staged_artifacts")
+        assert _swap_raise_to_return(func.body), "the fail-closed contract raise must exist"
+
+    _missing_staging_contract_behaviour(queue_module, _tmp_root())
+    mutant = _load_mutant(MUTATION_TARGETS["queue"], _mutate, "promote_fail_open_none")
+    _kill(lambda: _missing_staging_contract_behaviour(mutant, _tmp_root()))
+
+
+# --------------------------------------------------------------------------- #
+# Mutant 9: the fd lease of the authorized download
+# --------------------------------------------------------------------------- #
+
+
+def _fd_lease_close_behaviour(module: ModuleType) -> None:
+    """``_FdLease.close()`` must retire the descriptor — really close it."""
+    fd = os.open(str(REPO_ROOT / "pyproject.toml"), os.O_RDONLY)
+    try:
+        lease = module._FdLease(fd)
+        assert lease.fd == fd, "the lease must expose the owned descriptor"
+        lease.close()
+        assert lease.fd is None, "close() must retire the descriptor"
+        try:
+            os.fstat(fd)
+        except OSError:
+            return  # closed exactly once: the descriptor is really gone
+        raise AssertionError("close() must actually close the descriptor")
+    finally:
+        try:  # best-effort tidy-up on the mutant path (fd may be closed)
+            os.close(fd)
+        except OSError:
+            pass
+
+
+def test_mutant_fd_lease_without_a_real_close_is_killed() -> None:
+    """Neuter ``_FdLease.close`` to a ``pass``: the verified download
+    descriptor would stay open forever — the real-close assertion must kill it."""
+
+    def _neuter(tree: ast.Module) -> None:
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ClassDef) and node.name == "_FdLease":
+                for item in node.body:
+                    if isinstance(item, ast.FunctionDef) and item.name == "close":
+                        item.body = [ast.Pass()]
+                        return
+        raise AssertionError("_FdLease.close must exist")
+
+    _fd_lease_close_behaviour(download_module)
+    mutant = _load_mutant(MUTATION_TARGETS["download"], _neuter, "fd_lease_no_close")
+    _kill(lambda: _fd_lease_close_behaviour(mutant))
+
+
+# --------------------------------------------------------------------------- #
+# Mutant 10: the sealed-identity gate of the idempotent re-entry
+# --------------------------------------------------------------------------- #
+
+
+def _foreign_final_pair_behaviour(module: ModuleType, root: Path, monkeypatch: Any) -> None:
+    """An idempotent re-entry whose surviving final pair verifies but was
+    sealed for DIFFERENT bytes (another render's ``output_sha256``) must be
+    refused with ``idempotent_pair_identity_mismatch``."""
+
+    async def scenario() -> None:
+        release = asyncio.Event()
+
+        async def probe_handler(payload: dict[str, object]) -> dict[str, object]:
+            await release.wait()  # keep the auto-scheduled attempt 1 in flight
+            return {"success": True}
+
+        workspace = root / "studio-m10"
+        render_dir = workspace / "projects" / "p10" / "renders" / "j10"
+        render_dir.mkdir(parents=True, exist_ok=True)
+        mp4 = render_dir / "storyboard.mp4"
+        payload_bytes = b"\x11" * 2048
+        mp4.write_bytes(payload_bytes)
+        real_sha = hashlib.sha256(payload_bytes).hexdigest()
+        passport = build_passport(
+            job_id="j10",
+            project_id="p10",
+            source_sha256=hashlib.sha256(b"source").hexdigest(),
+            manifest_sha256=hashlib.sha256(b"manifest").hexdigest(),
+            render_profile_hash=hashlib.sha256(b"profile").hexdigest(),
+            asset_merkle_root=hashlib.sha256(b"assets").hexdigest(),
+            total_asset_leaves=1,
+            output_rel_path="projects/p10/renders/j10/storyboard.mp4",
+            output_size_bytes=len(payload_bytes),
+            output_sha256=real_sha,
+            probed_duration_s=1.0,
+            verifier_status="PASS",
+            created_at_unix_s=1,
+            shot_hashes=[hashlib.sha256(b"shot-1").hexdigest()],
+            signing_key=KEY,
+        )
+        write_passport(render_dir / "storyboard.passport.json", passport)
+
+        monkeypatch.setenv("NEXUS_STUDIO_WORKSPACE", str(workspace))
+        monkeypatch.setenv("NEXUS_STUDIO_SIGNING_KEY", KEY)
+
+        queue = module.InProcessJobQueue(
+            root / "m10-queue.sqlite3",
+            handlers={"mutation_probe": probe_handler},
+            artifact_verifiers={},
+        )
+        await queue.acquire_ownership()
+        try:
+            job_id = await queue.enqueue(
+                job_type="mutation_probe", idempotency_key="probe-m10", payload={}
+            )
+            deadline = time.monotonic() + 30
+            while (await queue.get_status(job_id)).value != "processing":
+                assert time.monotonic() < deadline, "attempt 1 never claimed the row"
+                await asyncio.sleep(0.05)
+            for _ in range(20):
+                reset = await asyncio.to_thread(queue._reset_unfinished, timedelta(0), set())
+                if any(entry[0] == job_id for entry in reset):
+                    break
+                await asyncio.sleep(0.1)
+            else:
+                raise AssertionError("the takeover never committed")
+            claim = await asyncio.to_thread(queue._mark_processing, job_id)
+            assert claim is not None and claim.attempt == 2
+            assert await asyncio.to_thread(queue._mark_verifying, claim)
+
+            # The staged files of THIS attempt are gone; a complete final pair
+            # sits at the destination — but it was sealed for OTHER bytes.
+            result = {
+                "status": "rendered",
+                "verifier_status": "PASS",
+                "job_id": "j10",  # matches the passport...
+                "output_sha256": hashlib.sha256(b"other-bytes-entirely").hexdigest(),
+                "staged_output_path": str(
+                    workspace / "artifacts" / ".staging" / job_id / "attempt-2" / "storyboard.mp4"
+                ),
+                "staged_passport_path": str(
+                    workspace
+                    / "artifacts"
+                    / ".staging"
+                    / job_id
+                    / "attempt-2"
+                    / "storyboard.passport.json"
+                ),
+                "final_output_path": str(mp4),
+                "final_passport_path": str(render_dir / "storyboard.passport.json"),
+            }
+            await asyncio.to_thread(
+                queue._promote_staged_artifacts, claim, result, "storyboard_render"
+            )
+        except module._PromotionRefused as exc:
+            assert "idempotent_pair_identity_mismatch" in str(exc), str(exc)
+        else:
+            raise AssertionError("a foreign final pair must never be adopted")
+        finally:
+            release.set()
+            await queue.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_mutant_idempotent_pair_without_the_identity_check_is_killed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Neuter the sealed-identity comparison in ``_verify_idempotent_pair``:
+    the foreign final pair would be adopted as this attempt's publication —
+    the mismatch refusal must kill it."""
+
+    def _neuter(tree: ast.Module) -> None:
+        func = _function(tree, "_verify_idempotent_pair")
+        found = False
+        for node in ast.walk(func):
+            if isinstance(node, ast.If) and "passport_value != attempt_value" in ast.unparse(
+                node.test
+            ):
+                node.test = ast.Constant(value=False)
+                found = True
+        assert found, "the sealed-identity comparison must exist"
+
+    _foreign_final_pair_behaviour(queue_module, _tmp_root(), monkeypatch)
+    mutant = _load_mutant(MUTATION_TARGETS["queue"], _neuter, "idempotent_no_identity")
+    _kill(lambda: _foreign_final_pair_behaviour(mutant, _tmp_root(), monkeypatch))

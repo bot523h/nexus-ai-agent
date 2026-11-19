@@ -526,6 +526,10 @@ async def main():
     # own contract says fencing tests must not take the sidecar lock).
     if MODE != "takeover":
         await queue.acquire_ownership()
+    if MODE == "die-between-renames":
+        # Crash injection: die EXACTLY between the two promotion renames —
+        # the new MP4 has landed at the final path, its passport has not.
+        queue._between_promote_replaces_hook = lambda: os._exit(99)
     if MODE == "crash-after-render":
         await queue.enqueue(
             job_type="storyboard_render",
@@ -534,6 +538,15 @@ async def main():
         )
         # The worker thread dies with os._exit(99) inside the render; this
         # coroutine simply keeps the process alive until that happens.
+        await asyncio.sleep(3600)
+    elif MODE == "die-between-renames":
+        await queue.enqueue(
+            job_type="storyboard_render",
+            idempotency_key="sb-subprocess-between-renames",
+            payload=PAYLOAD_JSON,
+        )
+        # The worker thread dies with os._exit(99) between the two renames;
+        # this coroutine simply keeps the process alive until that happens.
         await asyncio.sleep(3600)
     elif MODE == "die-at-finalize":
         job_id = await queue.enqueue(
@@ -822,5 +835,109 @@ def test_stale_attempt_cannot_publish_or_finalize_after_takeover(
         assert reservation[2] is not None
         with pytest.raises(ApprovalAlreadyConsumedError):
             ledger.finalize_consumption(approval_id, job_id=queue_job_id, attempt=1)
+    finally:
+        ledger.close()
+
+
+def test_subprocess_crash_between_two_promotion_renames_recovers_cleanly(
+    studio: Path, tmp_path: Path
+) -> None:
+    """A real os._exit(99) BETWEEN the two promotion renames: the new MP4 is
+    at the final path without its passport, the row is never COMPLETED and
+    the download gate refuses it; a brand-new process repairs the destination
+    and completes attempt 2 with a valid, consistent, downloadable pair."""
+    from nexus_ai_agent.api.studio import _require_completed_and_verified
+    from nexus_ai_agent.creative.artifact_download import (
+        DownloadRefused,
+        artifact_rel_path_for_job,
+        authorize_artifact_download,
+    )
+
+    db = tmp_path / "between-renames-queue.sqlite3"
+    payload_file = tmp_path / "payload.json"
+    payload_file.write_text(json.dumps(_payload(_approval_id(studio))), encoding="utf-8")
+
+    crash = _run_child("die-between-renames", db, payload_file, studio)
+    assert crash.returncode == 99, crash.stderr[-2000:]
+
+    renders = studio / "projects" / PROJECT_ID / "renders" / JOB_ID
+    row = _queue_row(db)
+    queue_job_id = str(row["id"])
+
+    # The crashed promotion left EXACTLY the inconsistent destination: the
+    # new MP4 landed at the final path, its passport never did...
+    assert (renders / "storyboard.mp4").is_file()
+    assert not (renders / "storyboard.passport.json").exists()
+    # ...no previous generation was ever parked (this was the first render)...
+    assert not list((studio / "projects").rglob("*.promote-backup"))
+    # ...and the crashed attempt's quarantine still holds its staged passport.
+    assert list((_studio_quarantine(studio) / queue_job_id / "attempt-1").glob("*.passport.json"))
+
+    # The row was never COMPLETED...
+    assert row["status"] != "completed"
+    # ...so the download gate refuses it at BOTH layers: the artifact gate
+    # (a row with no durable result publishes no downloadable path)...
+    gate_row = {
+        "id": queue_job_id,
+        "status": row["status"],
+        "input_data": {"project_id": PROJECT_ID},
+        "result": json.loads(str(row["result_json"] or "null")),
+    }
+    with pytest.raises(DownloadRefused) as info:
+        artifact_rel_path_for_job(gate_row, PROJECT_ID)
+        _require_completed_and_verified(gate_row)
+    assert (info.value.status_code, info.value.reason) == (409, "artifact_not_ready")
+    # ...and the passport gate (an orphaned MP4 without its sealed passport).
+    orphan_rel = f"projects/{PROJECT_ID}/renders/{JOB_ID}/storyboard.mp4"
+    with pytest.raises(DownloadRefused) as info:
+        authorize_artifact_download(studio, orphan_rel, SIGNING_KEY)
+    assert (info.value.status_code, info.value.reason) == (409, "passport_missing")
+
+    successor = _run_child("successor", db, payload_file, studio)
+    assert successor.returncode == 0, successor.stderr[-2000:]
+
+    row = _queue_row(db)
+    assert row["status"] == "completed"
+    assert row["attempt"] == 2
+    result = json.loads(str(row["result_json"]))
+    assert result["status"] == "rendered"
+    assert result["attempt"] == 2
+    assert result["approval_id"]
+
+    # The successor's own promotion repaired the destination: a consistent
+    # final pair, no leftover backups anywhere in the studio...
+    assert (renders / "storyboard.mp4").is_file()
+    assert (renders / "storyboard.passport.json").is_file()
+    assert not list((studio / "projects").rglob("*.promote-backup"))
+    # ...the successor's quarantine was emptied by the atomic promotion...
+    assert not list((_studio_quarantine(studio) / queue_job_id / "attempt-2").glob("*.mp4"))
+    # ...and the published pair is actually downloadable end-to-end: the
+    # completed row resolves to a rel path that authorizes cleanly.
+    completed_row = {
+        "id": queue_job_id,
+        "status": row["status"],
+        "input_data": {"project_id": PROJECT_ID},
+        "result": result,
+    }
+    rel = artifact_rel_path_for_job(completed_row, PROJECT_ID)
+    _require_completed_and_verified(completed_row)
+    authorized = authorize_artifact_download(studio, rel, SIGNING_KEY)
+    try:
+        assert authorized.size_bytes == (renders / "storyboard.mp4").stat().st_size
+    finally:
+        authorized.close()
+
+    # The approval reservation was closed by THIS attempt's finalization.
+    approval_id = str(result["approval_id"])
+    ledger = DurableApprovalLedger(
+        durable_approval_ledger_path(studio), now=lambda: "2026-11-19T06:00:00Z"
+    )
+    try:
+        assert ledger.get(approval_id).state is ApprovalState.CONSUMED
+        reservation = ledger._read_reservation(approval_id)
+        assert reservation is not None
+        assert reservation[0] == queue_job_id
+        assert reservation[3] == 2
+        assert reservation[2] is not None, "successor must finalize the reservation"
     finally:
         ledger.close()

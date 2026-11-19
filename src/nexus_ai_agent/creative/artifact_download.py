@@ -11,6 +11,14 @@ HTTP status that the route can return as-is:
 
 Nothing is read or streamed until every check has passed. The passport check
 re-hashes the MP4 on disk, so a byte changed after the render is refused.
+
+Descriptor lifetime is leak-proof by construction: the authorization hands
+the verified descriptor to :class:`AuthorizedDownload`, which owns it through
+an :class:`_FdLease` closed exactly once — explicitly (``close()``/context
+manager), at stream exhaustion, or by ``weakref.finalize`` when an authorized
+download or its stream is dropped without ever being iterated. A generator
+body never runs before its first ``next()``, so the streaming helper is a
+plain function returning a custom iterator, never a ``yield`` in disguise.
 """
 
 from __future__ import annotations
@@ -18,7 +26,8 @@ from __future__ import annotations
 import os
 import re
 import stat
-from collections.abc import Iterator, Mapping
+import weakref
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -42,21 +51,116 @@ class DownloadRefused(Exception):
         self.reason = reason
 
 
+def _close_fd_box(box: list[int | None]) -> None:
+    """Close the descriptor parked in ``box`` exactly once (finalize target)."""
+    fd = box[0]
+    box[0] = None
+    if fd is not None:
+        try:
+            os.close(fd)
+        except OSError:  # pragma: no cover - an already-closed fd stays closed
+            pass
+
+
+class _FdLease:
+    """Atomic ownership of one open descriptor; closed exactly once.
+
+    ``close()`` is idempotent and race-free: the descriptor number is lifted
+    out of the box before :func:`os.close` runs, so no fd can ever be closed
+    twice. A ``weakref.finalize`` guard closes the descriptor even when the
+    owner is simply dropped on the floor without any explicit ``close()``.
+    """
+
+    __slots__ = ("_box", "_finalizer", "__weakref__")
+
+    def __init__(self, fd: int) -> None:
+        self._box: list[int | None] = [fd]
+        self._finalizer = weakref.finalize(self, _close_fd_box, self._box)
+
+    @property
+    def fd(self) -> int | None:
+        """The owned descriptor, or ``None`` once it has been closed."""
+        return self._box[0]
+
+    def close(self) -> None:
+        """Close the descriptor (idempotent; safe to call from anywhere)."""
+        self._finalizer()
+
+
 @dataclass(frozen=True)
 class AuthorizedDownload:
     path: Path
     size_bytes: int
     sha256: str
-    #: The verified, rewound descriptor the HTTP stream MUST read from: the
-    #: exact inode whose bytes were hashed during authorization. ``None`` only
-    #: for hand-built objects (tests); the streaming helper then — and only
-    #: then — falls back to a single ``O_NOFOLLOW`` open of ``path``.
-    fd: int | None = field(default=None, compare=False, repr=False)
+    #: The lease of the verified, rewound descriptor the HTTP stream MUST
+    #: read from: the exact inode whose bytes were hashed during
+    #: authorization. ``None`` only for hand-built objects (tests); the
+    #: streaming helper then — and only then — falls back to a single
+    #: ``O_NOFOLLOW`` open of ``path``.
+    _lease: _FdLease | None = field(default=None, compare=False, repr=False)
+
+    @property
+    def fd(self) -> int | None:
+        """The verified descriptor (``None`` once closed, or never opened)."""
+        return None if self._lease is None else self._lease.fd
+
+    def close(self) -> None:
+        """Release the verified descriptor (idempotent)."""
+        if self._lease is not None:
+            self._lease.close()
+
+    def __enter__(self) -> AuthorizedDownload:
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        self.close()
 
 
 def _open_readonly_no_follow(path: Path) -> int:
     """Open a regular file once, never following a final symlink."""
     return os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0))
+
+
+class _AuthorizedChunkIterator:
+    """The byte stream of one verified descriptor, closed exactly once.
+
+    Reading stops (and the descriptor closes) at EOF or on any read error;
+    dropping the iterator without ever iterating it also closes the
+    descriptor, via the lease's ``weakref.finalize`` guard. This is a plain
+    iterator class — NOT a generator — precisely so that ownership is taken
+    at construction time, before the first ``next()``.
+    """
+
+    def __init__(self, lease: _FdLease) -> None:
+        self._lease = lease
+        self._finalizer = weakref.finalize(self, lease.close)
+
+    def __iter__(self) -> _AuthorizedChunkIterator:
+        return self
+
+    def __next__(self) -> bytes:
+        fd = self._lease.fd
+        if fd is None:
+            raise StopIteration
+        try:
+            chunk = os.read(fd, STREAM_CHUNK_BYTES)
+        except OSError:
+            self.close()
+            raise
+        if not chunk:
+            self.close()
+            raise StopIteration
+        return chunk
+
+    def close(self) -> None:
+        """Release the descriptor (idempotent)."""
+        self._lease.close()
+
+    def __enter__(self) -> _AuthorizedChunkIterator:
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        self.close()
 
 
 def _syntactically_valid(rel_path: object) -> str:
@@ -141,7 +245,7 @@ def authorize_artifact_download(
             path=resolved,
             size_bytes=int(check.passport["output_size_bytes"]),
             sha256=str(check.passport["output_sha256"]),
-            fd=mp4_fd,
+            _lease=_FdLease(mp4_fd),
         )
     except BaseException:
         os.close(mp4_fd)
@@ -172,29 +276,36 @@ def artifact_rel_path_for_job(row: Mapping[str, object] | None, project_id: str)
     return rel
 
 
-def iter_authorized_chunks(source: AuthorizedDownload | Path | int) -> Iterator[bytes]:
-    """Yield an already-authorized file in fixed-size chunks.
+def iter_authorized_chunks(
+    source: AuthorizedDownload | Path | int,
+) -> _AuthorizedChunkIterator:
+    """Return the byte stream of an already-authorized file.
+
+    This is a plain function — deliberately NOT a generator: a generator body
+    (and its ``finally``) never runs before the first ``next()``, so a stream
+    that is built and then dropped uniterated would leak its descriptor.
+    Ownership of the descriptor is taken AT CALL TIME inside the returned
+    :class:`_AuthorizedChunkIterator`, whose lease closes it at EOF, on any
+    read error, on ``close()`` — or via ``weakref.finalize`` when the stream
+    is dropped without ever being iterated.
 
     ``source`` is the :class:`AuthorizedDownload` itself (preferred): the
     chunks come from the exact descriptor that was verified — the same inode,
     the same bytes, never a second path-based open. An already-open descriptor
     (``int``) is streamed the same way; a bare path is opened once with
-    ``O_NOFOLLOW`` for legacy callers. Whatever the source, the descriptor is
-    closed when the stream is exhausted or closed — there is no fd leak on
-    error, early exit, or client disconnect.
+    ``O_NOFOLLOW`` for legacy callers.
     """
     if isinstance(source, AuthorizedDownload):
-        fd = source.fd if source.fd is not None else _open_readonly_no_follow(source.path)
+        lease = (
+            source._lease
+            if source._lease is not None
+            else _FdLease(_open_readonly_no_follow(source.path))
+        )
     elif isinstance(source, Path):
-        fd = _open_readonly_no_follow(source)
+        lease = _FdLease(_open_readonly_no_follow(source))
     else:
-        fd = source
-    with os.fdopen(fd, "rb") as handle:
-        while True:
-            chunk = handle.read(STREAM_CHUNK_BYTES)
-            if not chunk:
-                return
-            yield chunk
+        lease = _FdLease(source)
+    return _AuthorizedChunkIterator(lease)
 
 
 __all__ = [

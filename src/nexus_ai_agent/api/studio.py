@@ -21,9 +21,11 @@ from typing import Any
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import ValidationError
+from starlette.background import BackgroundTask
 
 from nexus_ai_agent.api.studio_session import authenticate_studio_caller
 from nexus_ai_agent.creative.artifact_download import (
+    AuthorizedDownload,
     DownloadRefused,
     artifact_rel_path_for_job,
     authorize_artifact_download,
@@ -155,23 +157,34 @@ async def download_studio_artifact(project_id: str, job_id: str) -> StreamingRes
         raise HTTPException(status_code=400, detail="invalid job id")
     from nexus_ai_agent.api.app import get_creative_registry
 
+    authorized: AuthorizedDownload | None = None
     try:
         row = await get_creative_registry().get_job(job_id)
         rel = artifact_rel_path_for_job(row, project_id)
         _require_completed_and_verified(row)
         workspace, signing_key = studio_settings(os.environ)
         authorized = authorize_artifact_download(workspace, rel, signing_key)
-    except DownloadRefused as exc:
-        raise HTTPException(status_code=exc.status_code, detail=exc.reason) from None
-    except StoryboardJobConfigError:
-        raise HTTPException(status_code=503, detail="studio not configured") from None
-    return StreamingResponse(
         # The stream reads from the descriptor that was verified — the same
         # inode and bytes (BytesVerified == BytesStreamed), never a second
-        # path-based open. The generator closes the descriptor when the
-        # response finishes or the client disconnects.
-        iter_authorized_chunks(authorized),
+        # path-based open. Ownership of the descriptor moves into the stream
+        # AT CALL TIME (it is a plain iterator, not a generator).
+        stream = iter_authorized_chunks(authorized)
+    except DownloadRefused as exc:
+        if authorized is not None:
+            authorized.close()  # never leak the verified descriptor on refusal
+        raise HTTPException(status_code=exc.status_code, detail=exc.reason) from None
+    except StoryboardJobConfigError:
+        if authorized is not None:  # pragma: no cover - refused before opening
+            authorized.close()
+        raise HTTPException(status_code=503, detail="studio not configured") from None
+    except BaseException:
+        if authorized is not None:
+            authorized.close()  # belt and braces: nothing may outlive the request
+        raise
+    return StreamingResponse(
+        stream,
         media_type="video/mp4",
+        background=BackgroundTask(stream.close),
         headers={
             "Content-Length": str(authorized.size_bytes),
             "Content-Disposition": 'attachment; filename="storyboard.mp4"',

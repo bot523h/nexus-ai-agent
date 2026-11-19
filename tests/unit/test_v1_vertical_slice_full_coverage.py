@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import ast
 import dataclasses
+import gc
 import hashlib
 import io
 import json
@@ -1023,6 +1024,41 @@ def test_download_gate_refuses_malformed_paths(tmp_path: Path, rel_path: object)
         ad.authorize_artifact_download(tmp_path, rel_path, KEY)  # type: ignore[arg-type]
     assert info.value.status_code == 422
     assert info.value.reason == "malformed_path"
+
+
+def test_uniterated_download_stream_and_discarded_authorization_never_leak_fd(
+    real_mp4: Path,
+) -> None:
+    """CP4: a stream never iterated, and an authorization never streamed.
+
+    A generator body never runs before its first ``next()``, so the old
+    ``yield``-based ``iter_authorized_chunks`` leaked the verified descriptor
+    whenever the response object was discarded uniterated. The new
+    plain-function/iterator design must close the descriptor in EVERY case:
+    dropped stream, dropped authorization, EOF, and explicit close — proven
+    here with ``os.fstat(fd)`` returning ``EBADF`` after ``gc.collect()``.
+    """
+    fd = os.open(real_mp4, os.O_RDONLY)
+    stream = ad.iter_authorized_chunks(fd)  # type: ignore[arg-type]
+    del stream
+    gc.collect()
+    with pytest.raises(OSError):
+        os.fstat(fd)  # closed by weakref.finalize even though never iterated
+
+    # (b) an authorization whose stream is never built at all
+    ad2 = ad.AuthorizedDownload(path=real_mp4, size_bytes=1, sha256="0" * 64, _lease=None)
+    ad2.close()  # hand-built object: close() is still safe and idempotent
+    ad2.close()
+
+    # Belt and braces: the lease path itself, with double close
+    lease_fd = os.open(real_mp4, os.O_RDONLY)
+    lease = ad._FdLease(lease_fd)
+    assert lease.fd == lease_fd
+    lease.close()
+    assert lease.fd is None
+    lease.close()  # second close must NOT close an unrelated descriptor
+    with pytest.raises(OSError):
+        os.fstat(lease_fd)
 
 
 def test_download_gate_refuses_traversal_and_symlinks(tmp_path: Path, real_mp4: Path) -> None:
@@ -4521,3 +4557,538 @@ def test_verifier_refuses_a_forged_audio_track(real_mp4: Path, monkeypatch: Any)
 
     allowed = av.verify_mp4(real_mp4, expected_duration_s=1.0, tolerance_s=0.3, require_audio=False)
     assert allowed.status == av.PASS
+
+
+# --------------------------------------------------------------------------- #
+# CP4 closure: descriptor lifetime, gate tampering and skip-branch coverage
+# --------------------------------------------------------------------------- #
+
+
+def test_cp4_download_stream_iteration_paths(copied_mp4: Path) -> None:
+    """``iter_authorized_chunks`` over a bare path: full iteration to EOF,
+    the iterator context manager, and StopIteration once the lease is closed."""
+    stream = ad.iter_authorized_chunks(copied_mp4)
+    with stream:
+        assert iter(stream) is stream
+        chunks: list[bytes] = []
+        while True:
+            try:
+                chunks.append(next(stream))
+            except StopIteration:
+                break
+    assert b"".join(chunks) == copied_mp4.read_bytes()
+    with pytest.raises(StopIteration):
+        next(stream)  # the lease is retired: a closed stream stays closed
+
+
+def test_cp4_download_authorized_object_and_lease_lifecycle(copied_mp4: Path) -> None:
+    """The authorized object carries its verified descriptor through the lease:
+    ``fd`` reads through, the stream closes it, ``close`` is idempotent."""
+    fd = os.open(copied_mp4, os.O_RDONLY)
+    lease = ad._FdLease(fd)
+    authorized = ad.AuthorizedDownload(path=copied_mp4, size_bytes=1, sha256="0" * 64, _lease=lease)
+    assert authorized.fd == fd
+    stream = ad.iter_authorized_chunks(authorized)
+    first = next(stream)
+    assert first == copied_mp4.read_bytes()[: len(first)]
+    stream.close()
+    assert authorized.fd is None  # the lease behind the authorization is closed
+    authorized.close()  # idempotent: a second close is a no-op
+    with pytest.raises(StopIteration):
+        next(stream)
+
+    # The context manager of the authorized object closes its own lease.
+    fd2 = os.open(copied_mp4, os.O_RDONLY)
+    with ad.AuthorizedDownload(
+        path=copied_mp4, size_bytes=1, sha256="0" * 64, _lease=ad._FdLease(fd2)
+    ) as held:
+        assert held.fd == fd2
+    with pytest.raises(OSError):
+        os.fstat(fd2)
+    # The finalize target tolerates an already-emptied box (double finalization).
+    ad._close_fd_box([None])
+
+
+def test_cp4_download_read_error_closes_descriptor(
+    copied_mp4: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A read error mid-stream closes the descriptor before it propagates."""
+    fd = os.open(copied_mp4, os.O_RDONLY)
+    stream = ad.iter_authorized_chunks(fd)
+    real_read = os.read
+
+    def _boom(read_fd: int, count: int) -> bytes:
+        if read_fd == fd:
+            raise OSError("injected read failure")
+        return real_read(read_fd, count)
+
+    monkeypatch.setattr(os, "read", _boom)
+    with pytest.raises(OSError, match="injected read failure"):
+        next(stream)
+    with pytest.raises(OSError):
+        os.fstat(fd)  # the error path must have closed the descriptor
+
+
+def test_cp4_download_gate_open_and_identity_failures(
+    tmp_path: Path, copied_mp4: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every failure between the single stat and the served descriptor: open
+    errors, a non-regular descriptor, an inode swap, and a size disagreement."""
+    root = tmp_path / "ws"
+    render_dir = root / "projects" / "p" / "renders" / "j"
+    render_dir.mkdir(parents=True)
+    mp4 = render_dir / "storyboard.mp4"
+    mp4.write_bytes(copied_mp4.read_bytes())
+    ap.write_passport(render_dir / "storyboard.passport.json", _passport(mp4))
+    rel = "projects/p/renders/j/storyboard.mp4"
+    real_open = ad._open_readonly_no_follow
+
+    def _refuse_open(path: Path) -> int:
+        raise OSError("gone")
+
+    monkeypatch.setattr(ad, "_open_readonly_no_follow", _refuse_open)
+    with pytest.raises(ad.DownloadRefused) as info:
+        ad.authorize_artifact_download(root, rel, KEY)
+    assert (info.value.status_code, info.value.reason) == (404, "artifact_not_found")
+
+    monkeypatch.setattr(ad, "_open_readonly_no_follow", lambda path: os.open(root, os.O_RDONLY))
+    with pytest.raises(ad.DownloadRefused) as info:
+        ad.authorize_artifact_download(root, rel, KEY)
+    assert (info.value.status_code, info.value.reason) == (404, "artifact_not_found")
+
+    decoy = tmp_path / "decoy.mp4"
+    decoy.write_bytes(copied_mp4.read_bytes())
+    monkeypatch.setattr(ad, "_open_readonly_no_follow", lambda path: real_open(decoy))
+    with pytest.raises(ad.DownloadRefused) as info:
+        ad.authorize_artifact_download(root, rel, KEY)
+    assert (info.value.status_code, info.value.reason) == (409, "artifact_changed")
+
+    monkeypatch.setattr(ad, "_open_readonly_no_follow", real_open)
+    from types import SimpleNamespace
+
+    fake_check = SimpleNamespace(
+        passport={
+            "output_rel_path": rel,
+            "output_size_bytes": mp4.stat().st_size + 7,
+            "output_sha256": "0" * 64,
+        }
+    )
+    monkeypatch.setattr(ad, "verify_artifact_passport", lambda *a, **k: fake_check)
+    with pytest.raises(ad.DownloadRefused) as info:
+        ad.authorize_artifact_download(root, rel, KEY)
+    assert (info.value.status_code, info.value.reason) == (409, "artifact_changed")
+
+
+def test_cp4_render_local_images_validation_and_digest_refusals(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The local-image contract: shape validation, escaping paths and
+    unreadable content all refuse before a single shot renders."""
+    from nexus_ai_agent.creative import storyboard_render as sr
+
+    with pytest.raises(sr.StoryboardRenderError, match="invalid_local_images"):
+        sr._extract_local_images({"local_images": []})
+    with pytest.raises(sr.StoryboardRenderError, match="invalid_local_images"):
+        sr._extract_local_images({"local_images": {"bad shot!": "a.png"}})
+    with pytest.raises(sr.StoryboardRenderError, match="invalid_local_images"):
+        sr._extract_local_images({"local_images": {"s001-sh001": "/abs.png"}})
+    with pytest.raises(sr.StoryboardRenderError, match="invalid_local_images"):
+        sr._extract_local_images({"local_images": {"s001-sh001": "   "}})
+    assert sr._extract_local_images({}) == {}
+    assert sr._extract_local_images({"local_images": None}) == {}
+    assert sr._extract_local_images({"local_images": {"s001-sh001": "img.png"}}) == {
+        "s001-sh001": "img.png"
+    }
+
+    with pytest.raises(sr.StoryboardRenderError):
+        sr.local_image_content_digests(tmp_path, {"shot_1": "../escape.png"})
+
+    (tmp_path / "img.png").write_bytes(b"png-bytes")
+
+    def _unreadable(*_a: object, **_k: object) -> tuple[str, int, int]:
+        raise OSError("unreadable")
+
+    monkeypatch.setattr(sr, "stream_sha256", _unreadable)
+    with pytest.raises(sr.StoryboardRenderError, match="local_image_unreadable"):
+        sr.local_image_content_digests(tmp_path, {"shot_1": "img.png"})
+
+
+def test_cp4_render_sync_explicit_attempt_is_quarantined(tmp_path: Path) -> None:
+    """An explicit ``attempt`` takes the quarantined staging branch even
+    without a contextvar claim; an invalid payload still fails closed."""
+    from nexus_ai_agent.creative.storyboard_render import (
+        RenderContext,
+        StoryboardRenderError,
+        render_storyboard_sync,
+    )
+    from nexus_ai_agent.nagar.ibpc.approval import ApprovalLedger
+
+    ctx = RenderContext(
+        workspace_root=tmp_path,
+        approval_ledger=ApprovalLedger(now=lambda: "2026-11-19T12:00:00Z"),
+        signing_key=KEY,
+    )
+    with pytest.raises(StoryboardRenderError):
+        render_storyboard_sync({"garbage": True}, ctx, queue_job_id="job-cp4", attempt=3)
+
+
+def test_cp4_storyboard_jobs_refusal_and_skip_branches(
+    tmp_path: Path, copied_mp4: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The skip/refusal branches of the job helpers: missing configuration,
+    escaping destinations, broken passports, vanished staging and the
+    finalize skip reasons."""
+    from nexus_ai_agent.creative.storyboard_jobs import (
+        finalize_storyboard_approval,
+        storyboard_render_verifier,
+        verify_storyboard_final_pair,
+    )
+    from nexus_ai_agent.creative.storyboard_render import (
+        approval_identity_for,
+        issue_render_approval,
+    )
+    from nexus_ai_agent.nagar.ibpc.approval import (
+        ApprovalState,
+        DurableApprovalLedger,
+        durable_approval_ledger_path,
+    )
+
+    workspace = tmp_path / "studio"
+    workspace.mkdir()
+    monkeypatch.delenv("NEXUS_STUDIO_WORKSPACE", raising=False)
+    # finalize without a configured studio fails closed with the typed reason
+    assert "NEXUS_STUDIO_WORKSPACE" in finalize_storyboard_approval("a", job_id="j", attempt=1)
+    # ...and so does the final-pair verifier
+    assert "NEXUS_STUDIO_WORKSPACE" in str(
+        verify_storyboard_final_pair(copied_mp4, copied_mp4.with_suffix(".passport.json"))
+    )
+    monkeypatch.setenv("NEXUS_STUDIO_WORKSPACE", str(workspace))
+    monkeypatch.setenv("NEXUS_STUDIO_SIGNING_KEY", KEY)
+
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    mp4_out = outside / "storyboard.mp4"
+    mp4_out.write_bytes(copied_mp4.read_bytes())
+    pp_out = outside / "storyboard.passport.json"
+    ap.write_passport(pp_out, _passport(mp4_out))
+    assert verify_storyboard_final_pair(mp4_out, pp_out) == "path_outside_workspace"
+
+    inside = workspace / "projects" / "p" / "renders" / "j"
+    inside.mkdir(parents=True)
+    mp4_in = inside / "storyboard.mp4"
+    mp4_in.write_bytes(copied_mp4.read_bytes())
+    pp_in = inside / "storyboard.passport.json"
+    pp_in.write_bytes(b"definitely not json")
+    reason = verify_storyboard_final_pair(mp4_in, pp_in)
+    assert isinstance(reason, str) and reason.startswith("passport_")
+
+    payload = {"fps": FPS}
+    base_result: dict[str, Any] = {
+        "status": "rendered",
+        "verifier_status": "PASS",
+        "output_rel_path": "projects/p/renders/j/storyboard.mp4",
+        "passport_rel_path": "projects/p/renders/j/storyboard.passport.json",
+        "output_sha256": "0" * 64,
+        "shot_durations_s": [0.5, 0.5],
+    }
+    escaping = dict(
+        base_result,
+        staged_output_path=str(mp4_out),
+        staged_passport_path=str(pp_out),
+    )
+    outcome = storyboard_render_verifier(payload, escaping)
+    assert outcome.ok is False and outcome.reason_code == "path_outside_workspace"
+
+    vanished = dict(
+        base_result,
+        staged_output_path=str(workspace / ".staging" / "x.mp4"),
+        staged_passport_path=str(workspace / ".staging" / "x.passport.json"),
+    )
+    outcome = storyboard_render_verifier(payload, vanished)
+    assert outcome.ok is False and outcome.reason_code == "artifact_missing"
+
+    # The finalize skips on a real durable ledger: a superseded attempt and
+    # an unknown approval are typed skips, never crashes.
+    script = "INT. ROOM - DAY\nA: Hello there, friend.\n"
+    compiled = compile_storyboard(script)
+    profile_hash = mz.RenderProfile.from_mapping(PROFILE).profile_hash()
+    ident = approval_identity_for(
+        project_id="p",
+        job_id="j",
+        principal_id="owner-1",
+        source_sha256=hashlib.sha256(script.encode("utf-8")).hexdigest(),
+        script_sha256=compiled.script_sha256,
+        manifest_sha256=compiled.manifest_sha256,
+        render_profile_hash=profile_hash,
+    )
+    ledger = DurableApprovalLedger(
+        durable_approval_ledger_path(workspace), now=lambda: "2026-11-19T06:00:00Z"
+    )
+    try:
+        approval_id = issue_render_approval(
+            ledger,
+            project_id="p",
+            job_id="j",
+            principal_id="owner-1",
+            source_sha256=hashlib.sha256(script.encode("utf-8")).hexdigest(),
+            script_sha256=compiled.script_sha256,
+            manifest_sha256=compiled.manifest_sha256,
+            render_profile_hash=profile_hash,
+        )
+        assert ledger.consume(approval_id, identity=ident, job_id="j", attempt=1).state is (
+            ApprovalState.CONSUMED
+        )
+        ledger.consume(approval_id, identity=ident, job_id="j", attempt=2)
+    finally:
+        ledger.close()
+    assert finalize_storyboard_approval(approval_id, job_id="j", attempt=1) == ("already_consumed")
+    assert finalize_storyboard_approval("missing-approval", job_id="j", attempt=1) == (
+        "unknown_approval"
+    )
+
+
+def test_cp4_approval_consume_and_reservation_fences() -> None:
+    """The reservation fence itself: invalid shapes, takeover, the active
+    reservation assertions and the finalize ownership rules."""
+    from nexus_ai_agent.creative.storyboard_render import (
+        approval_identity_for,
+        issue_render_approval,
+    )
+    from nexus_ai_agent.nagar.ibpc.approval import (
+        ApprovalAlreadyConsumedError,
+        ApprovalError,
+        ApprovalLedger,
+        ApprovalState,
+    )
+
+    ledger = ApprovalLedger(now=lambda: "2026-11-19T12:00:00Z")
+    ident = approval_identity_for(
+        project_id="p",
+        job_id="j",
+        principal_id="owner-1",
+        source_sha256="a" * 64,
+        script_sha256="b" * 64,
+        manifest_sha256="c" * 64,
+        render_profile_hash="d" * 64,
+    )
+    approval_id = issue_render_approval(
+        ledger,
+        project_id="p",
+        job_id="j",
+        principal_id="owner-1",
+        source_sha256="a" * 64,
+        script_sha256="b" * 64,
+        manifest_sha256="c" * 64,
+        render_profile_hash="d" * 64,
+    )
+    with pytest.raises(ApprovalError, match="invalid_job_id"):
+        ledger.consume(approval_id, identity=ident, job_id="", attempt=1)
+    with pytest.raises(ApprovalError, match="invalid_job_id"):
+        ledger.consume(approval_id, identity=ident, job_id=123, attempt=1)
+    for bad_attempt in (0, -1, True, "1", 2**63):
+        with pytest.raises(ApprovalError, match="invalid_attempt"):
+            ledger.consume(approval_id, identity=ident, job_id="j", attempt=bad_attempt)
+
+    assert ledger.consume(approval_id, identity=ident, job_id="j", attempt=1).state is (
+        ApprovalState.CONSUMED
+    )
+    # A NEWER attempt takes the reservation over (the takeover branch)...
+    assert ledger.consume(approval_id, identity=ident, job_id="j", attempt=2).state is (
+        ApprovalState.CONSUMED
+    )
+    # ...and re-reading with the SAME attempt is the idempotent path.
+    assert ledger.consume(approval_id, identity=ident, job_id="j", attempt=2).state is (
+        ApprovalState.CONSUMED
+    )
+    # The active-reservation gate accepts exactly the owning attempt.
+    ledger.assert_active_reservation(approval_id, job_id="j", attempt=2, identity=ident)
+    with pytest.raises(ApprovalError, match="replay"):
+        ledger.assert_active_reservation(approval_id, job_id="other", attempt=2, identity=ident)
+    with pytest.raises(ApprovalError, match="stale_attempt"):
+        ledger.assert_active_reservation(approval_id, job_id="j", attempt=1, identity=ident)
+
+    # A binding tampered with after consumption refuses the re-read.
+    tampered = ledger._bindings[approval_id].model_copy(update={"principal_id": "intruder"})
+    ledger._bindings[approval_id] = tampered
+    with pytest.raises(ApprovalError, match="reserved identity changed"):
+        ledger.consume(approval_id, identity=ident, job_id="j", attempt=2)
+    with pytest.raises(ApprovalError, match="reserved identity changed"):
+        ledger.assert_active_reservation(approval_id, job_id="j", attempt=2, identity=ident)
+    restored = tampered.model_copy(update={"principal_id": "owner-1"})
+    ledger._bindings[approval_id] = restored
+
+    # Finalization ownership: a foreign job is refused, a stale attempt can
+    # never close a newer attempt's reservation.
+    with pytest.raises(ApprovalError, match="replay"):
+        ledger.finalize_consumption(approval_id, job_id="other", attempt=2)
+    with pytest.raises(ApprovalAlreadyConsumedError):
+        ledger.finalize_consumption(approval_id, job_id="j", attempt=1)
+    ledger.finalize_consumption(approval_id, job_id="j", attempt=2)
+    ledger.finalize_consumption(approval_id, job_id="j", attempt=2)  # idempotent
+
+
+def test_cp4_approval_consume_without_a_reservation_cannot_re_read() -> None:
+    """A consumed approval consumed without ``job_id`` has no reservation: any
+    later consume is a plain replay, and the active-reservation gate refuses."""
+    from nexus_ai_agent.creative.storyboard_render import (
+        approval_identity_for,
+        issue_render_approval,
+    )
+    from nexus_ai_agent.nagar.ibpc.approval import ApprovalError, ApprovalLedger
+
+    ledger = ApprovalLedger(now=lambda: "2026-11-19T12:00:00Z")
+    ident = approval_identity_for(
+        project_id="p",
+        job_id="j",
+        principal_id="owner-1",
+        source_sha256="a" * 64,
+        script_sha256="b" * 64,
+        manifest_sha256="c" * 64,
+        render_profile_hash="d" * 64,
+    )
+    approval_id = issue_render_approval(
+        ledger,
+        project_id="p",
+        job_id="j",
+        principal_id="owner-1",
+        source_sha256="a" * 64,
+        script_sha256="b" * 64,
+        manifest_sha256="c" * 64,
+        render_profile_hash="d" * 64,
+    )
+    ledger.consume(approval_id, identity=ident)
+    with pytest.raises(ApprovalError, match="replay"):
+        ledger.consume(approval_id, identity=ident)
+    with pytest.raises(ApprovalError, match="replay"):
+        ledger.consume(approval_id, identity=ident, job_id="j", attempt=9)
+    with pytest.raises(ApprovalError, match="replay"):
+        ledger.assert_active_reservation(approval_id, job_id="j", attempt=1, identity=ident)
+    with pytest.raises(ApprovalError, match="replay"):
+        ledger.finalize_consumption(approval_id, job_id="j", attempt=1)
+
+
+def test_cp4_durable_ledger_migrates_a_legacy_reservation_table(tmp_path: Path) -> None:
+    """A pre-fencing database (no ``last_attempt`` column) is migrated in place
+    on open, so the reservation fence exists exactly once everywhere."""
+    from nexus_ai_agent.nagar.ibpc.approval import DurableApprovalLedger
+
+    db = tmp_path / "ledger.sqlite3"
+    connection = sqlite3.connect(db)
+    try:
+        connection.execute(
+            "CREATE TABLE approvals ("
+            " approval_id TEXT PRIMARY KEY, session_id TEXT NOT NULL,"
+            " turn_id TEXT NOT NULL, state TEXT NOT NULL, body TEXT NOT NULL)"
+        )
+        connection.execute(
+            "CREATE TABLE approval_reservations ("
+            " approval_id TEXT PRIMARY KEY, job_id TEXT NOT NULL,"
+            " fingerprint TEXT NOT NULL, finalized_at TEXT)"
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    ledger = DurableApprovalLedger(db, now=lambda: "2026-11-19T12:00:00Z")
+    try:
+        assert ledger._read_reservation("nope") is None
+    finally:
+        ledger.close()
+
+    connection = sqlite3.connect(db)
+    try:
+        columns = {row[1] for row in connection.execute("PRAGMA table_info(approval_reservations)")}
+    finally:
+        connection.close()
+    assert "last_attempt" in columns
+
+
+def test_cp4_passport_verification_tamper_surfaces(
+    tmp_path: Path, copied_mp4: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The single-open verification window: a passport swapped after its
+    lstat, an artifact that vanishes, and a non-regular descriptor all refuse
+    with typed reasons."""
+    mp4 = tmp_path / "storyboard.mp4"
+    original_bytes = copied_mp4.read_bytes()
+    mp4.write_bytes(original_bytes)
+    passport_path = tmp_path / "storyboard.passport.json"
+    ap.write_passport(passport_path, _passport(mp4))
+    real_lstat = ap._lstat_regular
+
+    def _swapping_lstat(path: Path, label: str) -> os.stat_result:
+        result = real_lstat(path, label)
+        if str(path) == str(passport_path):
+            # The lstat saw a DIFFERENT inode than any later open can return:
+            # tamper the stat result itself (the filesystem would happily
+            # recycle the freed inode number on a physical swap).
+            return os.stat_result(
+                (
+                    result.st_mode,
+                    result.st_ino + 1,
+                    result.st_dev,
+                    result.st_nlink,
+                    result.st_uid,
+                    result.st_gid,
+                    result.st_size,
+                    result.st_atime,
+                    result.st_mtime,
+                    result.st_ctime,
+                )
+            )
+        return result
+
+    monkeypatch.setattr(ap, "_lstat_regular", _swapping_lstat)
+    with pytest.raises(ap.PassportError, match="passport_unreadable"):
+        ap.verify_artifact_passport(passport_path, mp4, KEY)
+    monkeypatch.setattr(ap, "_lstat_regular", real_lstat)
+
+    def _vanishing_lstat(path: Path, label: str) -> os.stat_result:
+        result = real_lstat(path, label)
+        if str(path) == str(mp4):
+            path.unlink()  # present at lstat, gone at open
+        return result
+
+    monkeypatch.setattr(ap, "_lstat_regular", _vanishing_lstat)
+    with pytest.raises(ap.PassportError, match="artifact changed during verification"):
+        ap.verify_artifact_passport(passport_path, mp4, KEY)
+    monkeypatch.setattr(ap, "_lstat_regular", real_lstat)
+
+    mp4.write_bytes(original_bytes)
+    real_open = os.open
+
+    def _directory_open(path: object, flags: int, *args: object, **kwargs: object) -> int:
+        if str(path) == str(mp4):
+            return real_open(tmp_path, flags)  # type: ignore[call-overload]
+        return real_open(path, flags, *args, **kwargs)  # type: ignore[call-overload]
+
+    monkeypatch.setattr(os, "open", _directory_open)
+    with pytest.raises(ap.PassportError, match="artifact_not_regular"):
+        ap.verify_artifact_passport(passport_path, mp4, KEY)
+    monkeypatch.setattr(os, "open", real_open)
+
+    # The artifact's inode differs from the one the preceding lstat saw: the
+    # descriptor hashes different bytes than were measured.
+    def _inodo_lstat(path: Path, label: str) -> os.stat_result:
+        result = real_lstat(path, label)
+        if str(path) == str(mp4):
+            return os.stat_result(
+                (
+                    result.st_mode,
+                    result.st_ino + 1,
+                    result.st_dev,
+                    result.st_nlink,
+                    result.st_uid,
+                    result.st_gid,
+                    result.st_size,
+                    result.st_atime,
+                    result.st_mtime,
+                    result.st_ctime,
+                )
+            )
+        return result
+
+    monkeypatch.setattr(ap, "_lstat_regular", _inodo_lstat)
+    with pytest.raises(ap.PassportError, match="artifact inode changed"):
+        ap.verify_artifact_passport(passport_path, mp4, KEY)
+    monkeypatch.setattr(ap, "_lstat_regular", real_lstat)
