@@ -2250,7 +2250,12 @@ with tempfile.TemporaryDirectory() as td:
             if request.method == "GET":
                 if key not in objects:
                     return S3HttpResponse(status_code=404)
-                return S3HttpResponse(status_code=200, body=objects[key])
+                # A real bucket reports the object's ETag on GET as well as on HEAD, and
+                # a lease refresh now refuses to PUT without one: the prior body's ETag is
+                # the precondition the rollback depends on.
+                return S3HttpResponse(
+                    status_code=200, headers=_identity_headers(key), body=objects[key]
+                )
             return S3HttpResponse(status_code=200)
 
         driver = S3CompatibleSigV4Driver(

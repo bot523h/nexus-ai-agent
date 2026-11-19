@@ -43,6 +43,11 @@ returns `UNKNOWN_GENERATION`, which is fail-closed: `_lost_materialised_chunks`
 treats it as "lost" whether it appears before or after the write (`M22`,
 `test_missing_version_and_generation_metadata_fails_closed`).
 
+The three components are independent evidence, and the generation stamp is the one
+that carries an unversioned bucket: with no `x-amz-version-id` to read, an ABA
+delete-and-reupload still shows a different `x-amz-meta-nexus-chunk-gen` (`M28`,
+`test_identical_bytes_aba_detected_via_metadata_generation_when_bucket_has_no_version_id`).
+
 ## No unconditional delete, anywhere
 
 The rule that closes the whole family of races is one sentence: **a lease or a fence
@@ -51,6 +56,16 @@ is only ever removed through a precondition on the identity that was read.**
 * `release_push_lease(lease_id, expected_etag=…)` sends `If-Match`. An empty
   `expected_etag` is refused with `VaultTransportError` — "unknown identity" is not a
   licence to delete (`M20`).
+* `release_push_lease(lease_id)` **without** an argument is still conditional: the
+  driver conditions on the ETag of its own last write (`_owned_lease_etags`), and if
+  it never wrote that lease it reads the object once and conditions on what it
+  observed. A refresh by another writer therefore turns our release into a `412`
+  instead of a silent takeover (`M27`,
+  `test_release_push_lease_without_explicit_etag_is_still_bound_to_owner_etag`).
+  The local device driver and the portable bundle driver keep the same
+  `_owned_lease_etags` record (their "ETag" is the sha256 of the lease body), so the
+  rule holds on all three backends rather than only where the network makes it
+  visible.
 * Reaping an expired lease re-reads it and requires *both* `current_etag ==
   expected_etag` and `current_lease_token == expected_lease_token` (`hmac.
   compare_digest`), then confirms the deadline is still in the past by the clock-skew
@@ -64,6 +79,16 @@ is only ever removed through a precondition on the identity that was read.**
 `test_absent_lease_etag_never_causes_unconditional_lease_deletion` covers the
 degraded backend shape: no `ETag` reported at all means the lease is not reaped and
 its chunk stays protected.
+
+The *refresh* path has the same rule, applied one step earlier. Before
+`update_push_lease` writes anything it proves the prior state it is about to
+overwrite: a `404` on the `HEAD` or the prior `GET` is `VaultKeyNotFoundError`, an
+unreadable or empty prior body is a `VaultTransportError`, a missing `ETag` on either
+read is a `VaultTransportError`, and a `HEAD`/`GET` disagreement is a
+`VaultRevisionConflictError` (`M25`, `M26`). Every one of those exits *before* the
+`PUT`, so there is no path that writes a lease it cannot restore — the old code sent
+an unconditional `PUT` when the `HEAD` had no `ETag`, and turned
+`prior_body = None` into a `DELETE` in the rollback.
 
 ## Rollback belongs to the writer that failed
 
@@ -111,12 +136,13 @@ from "not measured" (`M23`, `M24`,
 
 ## Evidence
 
-* `tests/unit/test_personal_cloud_vault_lease_fence.py` — 22 tests, including the
-  five lease state-machine proofs above.
+* `tests/unit/test_personal_cloud_vault_lease_fence.py` — 28 tests, including the
+  lease state-machine proofs above, the pre-PUT proof of the refresh path, and the
+  owner-bound release without an explicit ETag.
 * `tests/creative/audio_engine/test_finite_input_guards.py` — 33 tests, including
   the scalar and `clean_reference` contracts.
-* `tests/architecture/test_cp4_fence_protocol_mutations.py` — 24 source mutants,
-  each scored only when the *named* test is the one that fails; M17–M24 are the
+* `tests/architecture/test_cp4_fence_protocol_mutations.py` — 28 source mutants,
+  each scored only when the *named* test is the one that fails; M17–M28 are the
   clause-by-clause proof of this page.
 * Coverage of the four modules under `--cov-branch` on this suite:
   `byos_drivers.py` 92 %, `editorial_cut_solver.py` 100 %, `wiener_denoise.py` 81 %,

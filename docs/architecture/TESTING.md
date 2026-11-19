@@ -183,7 +183,7 @@ A campaign is only green when:
 * **the restored bytes are verified** by hash, and the baseline is re-run green
   afterwards, so the campaign cannot pass by leaving the tree weakened;
 * **the campaign may also live beside the tests it mutates.** `tests/architecture/test_cp4_fence_protocol_mutations.py`
-  is an in-tree campaign (24 mutants) for the guarantees that "looks correct" used
+  is an in-tree campaign (28 mutants) for the guarantees that "looks correct" used
   to satisfy: the two-phase S3 GC fence and its CP5 hardening in
   `storage/personal_cloud_vault/byos_drivers.py` — the ABA chunk-generation proof,
   the bucket-clock anchor that makes lease expiry immune to a lagging writer, and
@@ -196,7 +196,13 @@ A campaign is only green when:
   content `ETag`, and an unknown identity treated as unchanged), the mandatory
   anchor of `verify_manifest_integrity_strict`, and the non-finite guards in the
   loudness core and in the Wiener denoiser's scalar and `clean_reference`
-  contracts. Each mutant is applied to a hardlink copy of `src/` and `tests/`,
+  contracts. The CP6.1 follow-up hardens the same two paths one layer further: a
+  refresh that PUTs without an `ETag` precondition, a refresh that reads an
+  unreadable or already-moved prior lease as "there was none" (and then rolls it
+  back into a delete), a release that trusts a fresh read of the object instead of
+  the write it recorded for itself, and a chunk identity that ignores the
+  generation stamp whenever the bucket is unversioned. Each mutant is applied to a
+  hardlink copy of `src/` and `tests/`,
   parsed with `ast.parse` before it is scored, and run in its own subprocess — so
   no C extension (`numpy`, `scipy`, `PIL`, `sqlalchemy`) is ever reloaded
   in-process — and a kill counts only on pytest exit code 1 with a named

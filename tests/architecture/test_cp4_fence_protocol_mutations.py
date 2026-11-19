@@ -33,6 +33,12 @@ to be enough:
   identical bytes (M21), an unknown-identity object treated as unchanged (M22), and
   the two audio contracts that refuse a non-finite scalar parameter and a non-finite
   ``clean_reference`` (M23, M24).
+* the CP6.1 hardening of the same two paths: a refresh that PUTs without an ``ETag``
+  precondition (M25), a refresh that treats an unreadable or moved prior lease as
+  "there was none" and then rolls it back into a delete (M26), a release that trusts a
+  fresh read of the object instead of its own recorded write (M27), and a chunk
+  identity that ignores the generation stamp whenever the bucket is unversioned
+  (M28).
 
 Every mutant also names the test that must be the one to kill it, and the campaign
 fails if that node does not appear among the reported failures — a mutant killed by
@@ -331,12 +337,14 @@ MUTANTS: tuple[tuple[str, str, str, str, str, str], ...] = (
     (
         "M20 release accepts an empty ETag",
         DRIVERS,
-        """            if not expected_etag.strip():
+        """            raw_etag: object = expected_etag
+            if not isinstance(raw_etag, str) or not raw_etag.strip():
                 raise VaultTransportError(
                     f"Refusing to release S3 push lease {valid_id!r} without a known ETag: "
                     "an unconditional DELETE could remove a lease another writer just took over"
                 )""",
-        """            if False:
+        """            raw_etag: object = expected_etag
+            if False:
                 raise VaultTransportError("unreachable")""",
         FENCE_TESTS,
         "test_absent_lease_etag_never_causes_unconditional_lease_deletion",
@@ -372,6 +380,57 @@ MUTANTS: tuple[tuple[str, str, str, str, str, str], ...] = (
         raise ValueError(f"{name} must be a finite real number")""",
         AUDIO_TESTS,
         "test_wiener_rejects_nan_and_inf_scalar_parameters",
+    ),
+    (
+        "M25 lease refresh PUTs without an ETag precondition",
+        DRIVERS,
+        """        if not head_etag or not get_etag:
+            raise VaultTransportError("S3 lease update requires a non-empty ETag precondition")""",
+        """        if False:
+            raise VaultTransportError("S3 lease update requires a non-empty ETag precondition")""",
+        FENCE_TESTS,
+        "test_update_push_lease_refuses_to_send_put_when_head_or_get_lacks_etag",
+    ),
+    (
+        "M26 unreadable prior lease treated as absent",
+        DRIVERS,
+        """        if prior.status_code != 200 or not prior.body:
+            raise VaultTransportError(
+                f"S3 update_push_lease could not read the prior lease {valid_id!r} "
+                f"(HTTP {prior.status_code}); refusing to refresh without a prior body "
+                "to restore"
+            )""",
+        """        if False:
+            raise VaultTransportError("never reached")""",
+        FENCE_TESTS,
+        "test_update_push_lease_aborts_before_put_when_prior_get_fails_or_disagrees_with_head",
+    ),
+    (
+        "M27 release trusts a fresh read instead of its own write",
+        DRIVERS,
+        """        elif valid_id in self._owned_lease_etags:
+            # Our own write: condition on the ETag it produced, so a refresh by another
+            # writer turns this release into a 412 instead of a silent takeover.
+            etag_to_match = self._owned_lease_etags[valid_id][0]""",
+        """        elif valid_id in self._owned_lease_etags:
+            observed = self._read_lease_state(obj_key)
+            etag_to_match = ""
+            if observed is not None:
+                etag_to_match = observed.etag""",
+        FENCE_TESTS,
+        "test_release_push_lease_without_explicit_etag_is_still_bound_to_owner_etag",
+    ),
+    (
+        "M28 chunk generation ignored on an unversioned bucket",
+        DRIVERS,
+        """        version_id = lowered.get("x-amz-version-id", "").strip()
+        generation = lowered.get(CHUNK_GENERATION_META_HEADER, "").strip()""",
+        """        version_id = lowered.get("x-amz-version-id", "").strip()
+        generation = (
+            lowered.get(CHUNK_GENERATION_META_HEADER, "").strip() if version_id else ""
+        )""",
+        FENCE_TESTS,
+        "test_identical_bytes_aba_detected_via_metadata_generation_when_bucket_has_no_version_id",
     ),
     (
         "M24 non-finite clean_reference silently ignored",
@@ -439,8 +498,8 @@ def _failed_node_ids(stdout: str) -> list[str]:
 
 
 def test_campaign_has_the_expected_mutants() -> None:
-    assert len(MUTANTS) == 24
-    assert len({m[0] for m in MUTANTS}) == 24
+    assert len(MUTANTS) == 28
+    assert len({m[0] for m in MUTANTS}) == 28
 
 
 def test_every_mutation_anchor_is_unique() -> None:

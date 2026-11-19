@@ -46,6 +46,7 @@ from nexus_ai_agent.storage.personal_cloud_vault.crypto_chunk_envelope import (
 from nexus_ai_agent.storage.personal_cloud_vault.errors import (
     PersonalVaultError,
     VaultAuthenticationError,
+    VaultKeyNotFoundError,
     VaultQuotaExceededError,
     VaultRevisionConflictError,
     VaultTamperDetectedError,
@@ -918,6 +919,10 @@ class LocalDeviceVaultDriver:
         self._leases_dir = self._root_dir / ".leases"
         self._staging_dir = self._root_dir / ".staging"
         self._max_quota_bytes = max_quota_bytes
+        # Leases this instance wrote, as ``stem -> (sha256 of the body, lease token)``.
+        # Same rule as the S3 driver: a release without an explicit ETag conditions on
+        # our own write, so a refresh by another writer is a conflict, not an unlink.
+        self._owned_lease_etags: dict[str, tuple[str, str]] = {}
 
         try:
             self._chunks_dir.mkdir(parents=True, exist_ok=True)
@@ -1079,13 +1084,14 @@ class LocalDeviceVaultDriver:
             else _validate_snapshot_id(lease_id)
         )
         lease_path = self._lease_path(effective_id)
+        local_lease_token = uuid.uuid4().hex
         payload = _build_lease_json_bytes(
             lease_id=effective_id,
             project_id=project_id,
             now_epoch=now,
             ttl_seconds=finite_ttl,
             chunk_ids=chunk_ids,
-            lease_token=uuid.uuid4().hex,
+            lease_token=local_lease_token,
         )
         flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
         with self._coordination_lock():
@@ -1104,6 +1110,10 @@ class LocalDeviceVaultDriver:
                 os.fsync(fd)
             finally:
                 os.close(fd)
+        self._owned_lease_etags[effective_id] = (
+            hashlib.sha256(payload).hexdigest(),
+            local_lease_token,
+        )
         return effective_id
 
     def update_push_lease(
@@ -1119,18 +1129,23 @@ class LocalDeviceVaultDriver:
         valid_id = _validate_snapshot_id(lease_id)
         lease_path = self._lease_path(valid_id)
         now = time.time()
+        refreshed_token = uuid.uuid4().hex
         payload = _build_lease_json_bytes(
             lease_id=valid_id,
             project_id=project_id,
             now_epoch=now,
             ttl_seconds=finite_ttl,
             chunk_ids=chunk_ids,
-            lease_token=uuid.uuid4().hex,
+            lease_token=refreshed_token,
         )
         with self._coordination_lock():
             if lease_path.is_symlink() or not lease_path.is_file():
                 raise VaultTransportError(f"Active push lease not found: {lease_id}")
             _atomic_write_file(lease_path, payload)
+        self._owned_lease_etags[valid_id] = (
+            hashlib.sha256(payload).hexdigest(),
+            refreshed_token,
+        )
 
     def release_push_lease(self, lease_id: str, *, expected_etag: str | None = None) -> None:
         """Release and unlink a cross-process push lease file.
@@ -1155,7 +1170,22 @@ class LocalDeviceVaultDriver:
                         f"Push lease {lease_id!r} changed since it was observed; refusing "
                         "to release a lease this caller no longer owns"
                     )
+            elif lease_id in self._owned_lease_etags:
+                if not lease_path.is_file():
+                    # Provably gone (a reaper, or an earlier release): releasing twice is
+                    # a no-op, not a conflict — there is nothing to protect.
+                    self._owned_lease_etags.pop(lease_id, None)
+                    return
+                current = lease_path.read_bytes()
+                current_etag = hashlib.sha256(current).hexdigest()
+                owned_etag, _owned_token = self._owned_lease_etags[lease_id]
+                if current_etag != owned_etag:
+                    raise VaultRevisionConflictError(
+                        f"Push lease {lease_id!r} changed since this driver wrote it; "
+                        "refusing to release a lease this caller no longer owns"
+                    )
             lease_path.unlink(missing_ok=True)
+            self._owned_lease_etags.pop(lease_id, None)
 
     def _read_active_leased_chunks_unlocked(self, *, effective_now: float) -> set[str]:
         """Parse every lease file, failing closed on ANY unexpected entry.
@@ -1549,6 +1579,12 @@ class S3CompatibleSigV4Driver:
         )
         self._clean_prefix = config.prefix.strip("/")
         self._chunk_mtimes: dict[str, float] = {}
+        # Leases *this instance* has written, as ``stem -> (our ETag, our token)``.
+        # It exists so that ``release_push_lease`` can condition the delete on the
+        # ETag of our own write even when the caller passes no ``expected_etag``: a
+        # lease we wrote and that a later writer refreshed is no longer ours to
+        # remove, and an unconditional DELETE would destroy the successor's claim.
+        self._owned_lease_etags: dict[str, tuple[str, str]] = {}
         # Serialises lease acquisition against GC within this process; cross-process
         # safety still comes from the conditional lease writes and the fence protocol.
         self._coord_lock = threading.RLock()
@@ -1999,7 +2035,20 @@ class S3CompatibleSigV4Driver:
             )
             raise
         self._reclaim_dead_gc_fences(materialised_chunks, now_epoch=now)
+        # From here on this instance is the owner of the object it wrote: a later
+        # ``release_push_lease(lease_id)`` can condition its delete on *this* ETag,
+        # so a refresh by another writer makes our release a 412 instead of a DELETE.
+        self._owned_lease_etags[effective_id] = (our_write_etag, our_lease_token)
         return effective_id
+
+    @staticmethod
+    def _lease_stem_from_key(obj_key: str) -> str:
+        """``leases/<stem>.json`` -> ``<stem>``; the key is the only handle a rollback has."""
+        return obj_key.rsplit("/", 1)[-1].removesuffix(".json")
+
+    def _forget_owned_lease(self, obj_key: str) -> None:
+        """Drop this instance's ownership record for the lease object at ``obj_key``."""
+        self._owned_lease_etags.pop(self._lease_stem_from_key(obj_key), None)
 
     def _rollback_lease_refresh(
         self,
@@ -2029,7 +2078,12 @@ class S3CompatibleSigV4Driver:
         A ``prior_body`` that itself names a chunk which just disappeared is still
         restored: deleting it would remove a lease this caller no longer owns. The
         caller raises the conflict either way, and the lease expires on its own TTL.
+
+        Whatever happens, this instance stops claiming ownership of the object: the
+        write it made is being undone, so a later ``release_push_lease`` must observe
+        the object again instead of trusting a stale ETag.
         """
+        self._forget_owned_lease(obj_key)
         if not our_write_etag:
             return
         try:
@@ -2095,12 +2149,46 @@ class S3CompatibleSigV4Driver:
             self._pre_lease_put_race_probe()
 
         head_resp = self._send("HEAD", object_key=obj_key)
+        if head_resp.status_code == 404:
+            raise VaultKeyNotFoundError(f"Active S3 push lease not found: {valid_id}")
         if head_resp.status_code != 200:
-            raise VaultTransportError(f"Active S3 push lease not found: {valid_id}")
+            raise VaultTransportError(
+                f"S3 lease probe failed for {valid_id} with HTTP {head_resp.status_code}"
+            )
         lowered_head = {k.lower(): v for k, v in head_resp.headers.items()}
-        prior_etag = lowered_head.get("etag")
+        head_etag = lowered_head.get("etag", "").strip()
+
+        # The prior body is the *only* thing a rollback can restore, so it is proven
+        # before the refresh writes anything — every branch below refuses with no PUT
+        # sent. An unconditional (or unrestorable) overwrite of a lease is worse than a
+        # refused refresh: the lease is exactly what tells GC which chunks not to
+        # delete, and ``prior_body = None`` used to turn the rollback into a DELETE.
         prior = self._send("GET", object_key=obj_key)
-        prior_body = prior.body if prior.status_code == 200 else None
+        if prior.status_code == 404:
+            raise VaultKeyNotFoundError(
+                f"Active S3 push lease {valid_id!r} disappeared between HEAD and GET"
+            )
+        if prior.status_code != 200 or not prior.body:
+            raise VaultTransportError(
+                f"S3 update_push_lease could not read the prior lease {valid_id!r} "
+                f"(HTTP {prior.status_code}); refusing to refresh without a prior body "
+                "to restore"
+            )
+        get_etag = {k.lower(): v for k, v in (prior.headers or {}).items()}.get("etag", "").strip()
+        if not head_etag or not get_etag:
+            raise VaultTransportError("S3 lease update requires a non-empty ETag precondition")
+        if head_etag != get_etag:
+            # The object changed between the two reads: whatever we would write now
+            # would be based on a state that no longer exists, and a rollback would
+            # restore a body that was already superseded.
+            raise VaultRevisionConflictError(
+                f"S3 push lease {valid_id!r} changed between HEAD and GET; refusing to "
+                "overwrite a lease state this caller did not read"
+            )
+        # A prior body that is not a lease document could not be restored either.
+        _parse_and_validate_lease_payload(prior.body, source_label=obj_key)
+        prior_etag = get_etag
+        prior_body = prior.body
 
         our_lease_token = uuid.uuid4().hex
         payload = _build_lease_json_bytes(
@@ -2111,11 +2199,11 @@ class S3CompatibleSigV4Driver:
             chunk_ids=materialised_chunks,
             lease_token=our_lease_token,
         )
-        conditional: dict[str, str] = {}
-        if prior_etag:
-            # A concurrent refresher that already replaced the lease object wins:
-            # ``If-Match`` makes our optimistic update fail instead of losing theirs.
-            conditional["if-match"] = prior_etag
+        # ``prior_etag`` is non-empty by construction above, so the precondition is
+        # unconditional in the sense that matters: there is no path through this method
+        # that PUTs without ``If-Match``. (A ``PUT`` without it silently overwrites
+        # whatever a concurrent refresher just wrote, then fails afterwards.)
+        conditional: dict[str, str] = {"if-match": prior_etag}
         put_resp = self._send(
             "PUT",
             object_key=obj_key,
@@ -2146,7 +2234,7 @@ class S3CompatibleSigV4Driver:
             self._rollback_lease_refresh(
                 obj_key,
                 prior_body=prior_body,
-                prior_etag=prior_etag or "",
+                prior_etag=prior_etag,
                 our_write_etag=our_write_etag,
                 our_lease_token=our_lease_token,
             )
@@ -2156,7 +2244,7 @@ class S3CompatibleSigV4Driver:
             self._rollback_lease_refresh(
                 obj_key,
                 prior_body=prior_body,
-                prior_etag=prior_etag or "",
+                prior_etag=prior_etag,
                 our_write_etag=our_write_etag,
                 our_lease_token=our_lease_token,
             )
@@ -2169,31 +2257,65 @@ class S3CompatibleSigV4Driver:
             self._rollback_lease_refresh(
                 obj_key,
                 prior_body=prior_body,
-                prior_etag=prior_etag or "",
+                prior_etag=prior_etag,
                 our_write_etag=our_write_etag,
                 our_lease_token=our_lease_token,
             )
             raise
+        self._owned_lease_etags[valid_id] = (our_write_etag, our_lease_token)
 
     def release_push_lease(self, lease_id: str, *, expected_etag: str | None = None) -> None:
-        """Delete ``leases/<lease_id>.json`` from the S3 bucket.
+        """Delete ``leases/<lease_id>.json`` — always under an ``If-Match`` precondition.
 
-        With ``expected_etag`` the delete is conditional (``If-Match``) and an empty
-        value is refused: an unconditional delete of a lease id is only safe for the
-        writer that still owns it, and even then the id alone does not prove ownership.
+        There is no unconditional path, and that includes the call that omits
+        ``expected_etag`` (which is what ``sync_journal_manager`` does): the ETag then
+        comes from this instance's own last write, or — if this instance never wrote
+        the lease — from one read of the object. An empty or absent ETag is a refusal,
+        never a licence, because the DELETE it would authorise can remove a lease a
+        *different* writer refreshed one round trip earlier, and the chunks that lease
+        was protecting with it.
         """
         valid_id = _validate_snapshot_id(lease_id)
         obj_key = self._object_key("leases", f"{valid_id}.json")
-        headers: dict[str, str] = {}
+
         if expected_etag is not None:
-            if not expected_etag.strip():
+            # Runtime boundary: the annotation is ``str | None``, but a caller reaching
+            # through ``getattr`` (the sync-journal path) can pass anything.
+            raw_etag: object = expected_etag
+            if not isinstance(raw_etag, str) or not raw_etag.strip():
                 raise VaultTransportError(
                     f"Refusing to release S3 push lease {valid_id!r} without a known ETag: "
                     "an unconditional DELETE could remove a lease another writer just took over"
                 )
-            headers["if-match"] = expected_etag.strip()
-        resp = self._send("DELETE", object_key=obj_key, extra_headers=headers)
-        if expected_etag is not None and resp.status_code in (409, 412):
+            etag_to_match = raw_etag.strip()
+        elif valid_id in self._owned_lease_etags:
+            # Our own write: condition on the ETag it produced, so a refresh by another
+            # writer turns this release into a 412 instead of a silent takeover.
+            etag_to_match = self._owned_lease_etags[valid_id][0]
+            if not etag_to_match.strip():
+                raise VaultTransportError(
+                    f"Refusing to release S3 push lease {valid_id!r}: the recorded ETag for "
+                    "our own write is empty"
+                )
+        else:
+            state = self._read_lease_state(obj_key)
+            if state is None:
+                # Provably gone (404): nothing to delete, and nothing to condition on.
+                self._owned_lease_etags.pop(valid_id, None)
+                return
+            if not state.etag:
+                raise VaultTransportError(
+                    f"Refusing to release S3 push lease {valid_id!r}: the backend reported no "
+                    "ETag, so a DELETE could not be made conditional"
+                )
+            etag_to_match = state.etag
+
+        resp = self._send(
+            "DELETE",
+            object_key=obj_key,
+            extra_headers={"if-match": etag_to_match},
+        )
+        if resp.status_code in (409, 412):
             raise VaultRevisionConflictError(
                 f"S3 push lease {valid_id!r} changed since it was observed (HTTP "
                 f"{resp.status_code}); refusing to release a lease this caller no longer owns"
@@ -2202,6 +2324,7 @@ class S3CompatibleSigV4Driver:
             raise VaultTransportError(
                 f"S3 release_push_lease failed for {valid_id} with HTTP {resp.status_code}"
             )
+        self._owned_lease_etags.pop(valid_id, None)
 
     def read_active_leased_chunks(self, *, now_epoch: float | None = None) -> set[str]:
         """List and parse all active ``leases/*.json`` objects fail-closed."""
@@ -2357,6 +2480,7 @@ class S3CompatibleSigV4Driver:
         observation must still be our own write (ETag *and* token), and the ``DELETE``
         is sent with ``If-Match`` so a lease another writer took over is never removed.
         """
+        self._forget_owned_lease(obj_key)
         if not our_write_etag:
             return
         try:
@@ -2857,6 +2981,10 @@ class PortableBundleVaultDriver:
         self._leases: dict[str, bytes] = {}
         self._staging_journals: dict[str, bytes] = {}
         self._chunk_mtimes: dict[str, float] = {}
+        # Leases this instance wrote, as ``stem -> (sha256 of the body, lease token)``.
+        # Same rule as the other two drivers: a release without an explicit ETag is
+        # conditioned on our own write, never on the id alone.
+        self._owned_lease_etags: dict[str, tuple[str, str]] = {}
         # Cross-process lock identities live next to (never inside) the archive.
         self._lock_path = self._bundle_path.with_name(f".{self._bundle_path.name}.lock")
         self._owner_path = self._bundle_path.with_name(f".{self._bundle_path.name}.owner")
@@ -3309,13 +3437,14 @@ class PortableBundleVaultDriver:
             if lease_id is None
             else _validate_snapshot_id(lease_id)
         )
+        bundle_lease_token = uuid.uuid4().hex
         payload = _build_lease_json_bytes(
             lease_id=effective_id,
             project_id=project_id,
             now_epoch=now,
             ttl_seconds=finite_ttl,
             chunk_ids=leased_ids,
-            lease_token=uuid.uuid4().hex,
+            lease_token=bundle_lease_token,
         )
 
         def _apply(
@@ -3331,6 +3460,10 @@ class PortableBundleVaultDriver:
             leases[effective_id] = payload
 
         self._mutate(_apply)
+        self._owned_lease_etags[effective_id] = (
+            hashlib.sha256(payload).hexdigest(),
+            bundle_lease_token,
+        )
         return effective_id
 
     def update_push_lease(
@@ -3345,13 +3478,14 @@ class PortableBundleVaultDriver:
         finite_ttl = _validate_positive_finite_seconds(ttl_seconds, name="ttl_seconds")
         valid_id = _validate_snapshot_id(lease_id)
         leased_ids = sorted({_validate_chunk_id(cid) for cid in chunk_ids})
+        bundle_refresh_token = uuid.uuid4().hex
         payload = _build_lease_json_bytes(
             lease_id=valid_id,
             project_id=project_id,
             now_epoch=time.time(),
             ttl_seconds=finite_ttl,
             chunk_ids=leased_ids,
-            lease_token=uuid.uuid4().hex,
+            lease_token=bundle_refresh_token,
         )
 
         def _apply(
@@ -3365,6 +3499,10 @@ class PortableBundleVaultDriver:
             leases[valid_id] = payload
 
         self._mutate(_apply)
+        self._owned_lease_etags[valid_id] = (
+            hashlib.sha256(payload).hexdigest(),
+            bundle_refresh_token,
+        )
 
     def release_push_lease(self, lease_id: str, *, expected_etag: str | None = None) -> None:
         """Remove a ``leases/<lease_id>.json`` entry from this bundle.
@@ -3390,9 +3528,19 @@ class PortableBundleVaultDriver:
                     raise VaultRevisionConflictError(
                         f"Bundle lease {valid_id!r} changed since it was observed"
                     )
+            elif valid_id in self._owned_lease_etags:
+                current = self._leases.get(valid_id)
+                if current is not None:
+                    current_etag = hashlib.sha256(current).hexdigest()
+                    owned_etag, _owned_token = self._owned_lease_etags[valid_id]
+                    if current_etag != owned_etag:
+                        raise VaultRevisionConflictError(
+                            f"Bundle lease {valid_id!r} changed since this driver wrote it"
+                        )
             leases.pop(valid_id, None)
 
         self._mutate(_apply)
+        self._owned_lease_etags.pop(valid_id, None)
 
     def _active_leases_unlocked(self, *, effective_now: float) -> tuple[set[str], list[str]]:
         active_chunks: set[str] = set()

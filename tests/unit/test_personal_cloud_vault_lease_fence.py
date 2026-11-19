@@ -1047,3 +1047,212 @@ def test_missing_version_and_generation_metadata_fails_closed() -> None:
 
     assert [k for k in transport.objects if "/leases/" in k] == []
     assert writer.has_chunk(CHUNK) is True
+
+
+class _LeaseEtagFaultTransport(_VersionedBucketTransport):
+    """A bucket whose *lease reads* misbehave in the three ways that used to break.
+
+    ``strip_etag_on`` omits the ``ETag`` on lease ``HEAD`` and/or ``GET`` (a backend that
+    answers without one), ``get_status`` fails the lease ``GET`` outright, and
+    ``get_etag_override`` makes the ``GET`` disagree with the ``HEAD`` — a lease
+    replaced between the two reads. The write path is never tampered with: the point is
+    what the *refresh* does with a prior state it cannot trust.
+    """
+
+    def __init__(
+        self,
+        *,
+        strip_etag_on: str = "",
+        get_status: int | None = None,
+        get_etag_override: str | None = None,
+    ) -> None:
+        super().__init__()
+        self.strip_etag_on = strip_etag_on
+        self.get_status = get_status
+        self.get_etag_override = get_etag_override
+
+    def __call__(self, request: S3HttpRequest) -> S3HttpResponse:
+        response = super().__call__(request)
+        if "leases/" not in request.url:
+            return response
+        if request.method == "GET" and self.get_status is not None:
+            return S3HttpResponse(status_code=self.get_status)
+        if request.method not in ("HEAD", "GET"):
+            return response
+        strip = self.strip_etag_on == "both" or self.strip_etag_on == request.method.lower()
+        headers = {k: v for k, v in response.headers.items() if not (strip and k.lower() == "etag")}
+        if request.method == "GET" and self.get_etag_override is not None:
+            headers["etag"] = self.get_etag_override
+        return S3HttpResponse(status_code=response.status_code, headers=headers, body=response.body)
+
+
+class _NoVersionIdTransport(_VersionedBucketTransport):
+    """A bucket without object versioning: chunks answer with an ETag and our stamp only."""
+
+    def __call__(self, request: S3HttpRequest) -> S3HttpResponse:
+        response = super().__call__(request)
+        if "chunks/" not in request.url:
+            return response
+        stripped = {k: v for k, v in response.headers.items() if k.lower() != "x-amz-version-id"}
+        return S3HttpResponse(
+            status_code=response.status_code, headers=stripped, body=response.body
+        )
+
+
+@pytest.mark.parametrize("strip", ["head", "get", "both"])
+def test_update_push_lease_refuses_to_send_put_when_head_or_get_lacks_etag(strip: str) -> None:
+    """No ETag on the prior lease means no refresh at all — not an unconditional PUT.
+
+    The pre-fix code built ``conditional = {}`` when the ``HEAD`` reported no ETag and
+    then sent a plain ``PUT``, i.e. it overwrote whatever lease was there and only
+    *afterwards* discovered it could no longer prove ownership. Refusing before the
+    write costs a retry; overwriting costs the lease (and the chunks it protects).
+    """
+    transport = _LeaseEtagFaultTransport(strip_etag_on=strip)
+    writer = _driver(transport)
+    writer.put_chunk(CHUNK, b"precious-bytes")
+    lease_id = writer.acquire_push_lease(
+        [CHUNK], project_id="project-1", ttl_seconds=600.0, lease_id="etag-less-1"
+    )
+    lease_key = f"{PREFIX}/leases/{lease_id}.json"
+    before = transport.objects[lease_key]
+    puts_before = [entry for entry in transport.requests if entry == ("PUT", lease_key)]
+    assert puts_before, "the acquire itself must have written the lease"
+
+    with pytest.raises(VaultTransportError, match="non-empty ETag precondition"):
+        writer.update_push_lease(lease_id, [CHUNK], project_id="project-1", ttl_seconds=600.0)
+
+    assert [entry for entry in transport.requests if entry == ("PUT", lease_key)] == puts_before
+    assert transport.objects[lease_key] == before
+    assert [entry for entry in transport.requests if entry[0] == "DELETE"] == []
+
+
+def test_update_push_lease_aborts_before_put_when_prior_get_fails_or_disagrees_with_head() -> None:
+    """A prior body that cannot be read, or no longer matches the HEAD, stops the refresh.
+
+    ``prior_body = prior.body if prior.status_code == 200 else None`` was the second
+    half of the same bug: a failed ``GET`` silently produced "there was no prior lease",
+    and the rollback then *deleted* the lease instead of restoring it. A ``GET`` whose
+    ETag disagrees with the ``HEAD`` is the same state one round trip later.
+    """
+    # (a) the prior-body GET fails: no PUT, no DELETE, the lease is untouched.
+    failing = _LeaseEtagFaultTransport(get_status=503)
+    writer = _driver(failing)
+    writer.put_chunk(CHUNK, b"precious-bytes")
+    lease_id = writer.acquire_push_lease(
+        [CHUNK], project_id="project-1", ttl_seconds=600.0, lease_id="get-fails-1"
+    )
+    lease_key = f"{PREFIX}/leases/{lease_id}.json"
+    before = failing.objects[lease_key]
+    puts_before = [entry for entry in failing.requests if entry == ("PUT", lease_key)]
+
+    with pytest.raises(VaultTransportError, match="could not read the prior lease"):
+        writer.update_push_lease(lease_id, [CHUNK], project_id="project-1", ttl_seconds=600.0)
+
+    assert [entry for entry in failing.requests if entry == ("PUT", lease_key)] == puts_before
+    assert failing.objects[lease_key] == before
+    assert [entry for entry in failing.requests if entry[0] == "DELETE"] == []
+
+    # (b) HEAD and GET disagree: the object moved under us, so nothing is written.
+    disagreeing = _LeaseEtagFaultTransport(get_etag_override='"a-different-write"')
+    writer = _driver(disagreeing)
+    writer.put_chunk(CHUNK, b"precious-bytes")
+    lease_id = writer.acquire_push_lease(
+        [CHUNK], project_id="project-1", ttl_seconds=600.0, lease_id="head-get-differ"
+    )
+    lease_key = f"{PREFIX}/leases/{lease_id}.json"
+    before = disagreeing.objects[lease_key]
+    puts_before = [entry for entry in disagreeing.requests if entry == ("PUT", lease_key)]
+
+    with pytest.raises(VaultRevisionConflictError, match="changed between HEAD and GET"):
+        writer.update_push_lease(lease_id, [CHUNK], project_id="project-1", ttl_seconds=600.0)
+
+    assert [entry for entry in disagreeing.requests if entry == ("PUT", lease_key)] == puts_before
+    assert disagreeing.objects[lease_key] == before
+    assert [entry for entry in disagreeing.requests if entry[0] == "DELETE"] == []
+
+
+def test_release_push_lease_without_explicit_etag_is_still_bound_to_owner_etag() -> None:
+    """Omitting ``expected_etag`` no longer means "delete unconditionally".
+
+    Driver A writes the lease, driver B refreshes it, then A releases *without* an
+    argument — the shape ``sync_journal_manager._release_driver_lease`` uses. A's
+    recorded ETag is the one its own write produced, so the DELETE is a 412 and B's
+    lease survives. A driver that never wrote the lease has no record, so it must read
+    the object first; if the backend reports no ETag there, no DELETE is sent at all.
+    """
+    transport = _VersionedBucketTransport()
+    driver_a = _driver(transport)
+    driver_b = _driver(transport)
+    driver_a.put_chunk(CHUNK, b"precious-bytes")
+    lease_id = driver_a.acquire_push_lease(
+        [CHUNK], project_id="project-1", ttl_seconds=600.0, lease_id="shared-release-1"
+    )
+    lease_key = f"{PREFIX}/leases/{lease_id}.json"
+    acquired = transport.objects[lease_key]
+
+    driver_b.update_push_lease(lease_id, [CHUNK], project_id="project-1", ttl_seconds=900.0)
+    refreshed = transport.objects[lease_key]
+    assert refreshed != acquired
+    deletes_before = [entry for entry in transport.requests if entry[0] == "DELETE"]
+
+    with pytest.raises(VaultRevisionConflictError, match="no longer owns"):
+        driver_a.release_push_lease(lease_id)
+
+    assert transport.objects[lease_key] == refreshed
+    deletes_after = [entry for entry in transport.requests if entry[0] == "DELETE"]
+    assert len(deletes_after) == len(deletes_before) + 1  # the attempt, refused by 412
+
+    # Without a recorded ETag the driver reads first; no ETag anywhere => no DELETE.
+    etagless = _NoLeaseEtagTransport()
+    stranger = _driver(etagless)
+    etagless.write(lease_key, refreshed)
+    with pytest.raises(VaultTransportError, match="reported no ETag"):
+        stranger.release_push_lease(lease_id)
+    assert [entry for entry in etagless.requests if entry[0] == "DELETE"] == []
+    assert lease_key in etagless.objects
+
+    # The owner can still release its own lease when nothing moved under it.
+    driver_b.release_push_lease(lease_id)
+    assert lease_key not in transport.objects
+
+
+def test_identical_bytes_aba_detected_via_metadata_generation_when_bucket_has_no_version_id() -> (
+    None
+):
+    """The generation stamp alone must catch the ABA rewrite on an unversioned bucket.
+
+    Chunk ids are content-addressed, so the ``ETag`` of a delete-and-reupload is
+    identical by construction. Without bucket versioning there is no
+    ``x-amz-version-id`` to fall back on either: the only evidence left is the
+    ``x-amz-meta-nexus-chunk-gen`` header every upload mints, and it has to be enough.
+    """
+    transport = _NoVersionIdTransport()
+    writer = _driver(transport)
+    writer.put_chunk(CHUNK, b"precious-bytes")
+    etag_before = transport.etags[CHUNK_KEY]
+    generation_before = transport.meta[CHUNK_KEY]["x-amz-meta-nexus-chunk-gen"]
+    # The driver's own view of the object: no version id (the bucket has none), so the
+    # identity it compares is the empty version plus the generation stamp plus the ETag.
+    identity_before = writer._chunk_generation(CHUNK)
+    assert identity_before is not None
+    version_part, generation_part, _etag_part = identity_before.split("|")
+    assert version_part == ""
+    assert generation_part == generation_before
+
+    def _aba_replacement() -> None:
+        transport.objects.pop(CHUNK_KEY, None)
+        transport.write(
+            CHUNK_KEY,
+            b"precious-bytes",
+            meta={"x-amz-meta-nexus-chunk-gen": "replacement-generation"},
+        )
+
+    writer._pre_lease_put_race_probe = _aba_replacement
+
+    with pytest.raises(VaultRevisionConflictError, match="disappeared or changed generation"):
+        writer.acquire_push_lease([CHUNK], project_id="project-1", ttl_seconds=600.0)
+
+    assert transport.etags[CHUNK_KEY] == etag_before
+    assert transport.meta[CHUNK_KEY]["x-amz-meta-nexus-chunk-gen"] != generation_before
+    assert [key for key in transport.objects if "/leases/" in key] == []
