@@ -408,9 +408,9 @@ def write_slate_png(
             if len(pending) >= CHUNK_BYTES:
                 handle.write(_png_chunk(b"IDAT", compressor.compress(bytes(pending))))
                 pending.clear()
+        # flush() always emits the zlib trailer, so the final IDAT is never empty.
         tail = compressor.compress(bytes(pending)) + compressor.flush()
-        if tail:
-            handle.write(_png_chunk(b"IDAT", tail))
+        handle.write(_png_chunk(b"IDAT", tail))
         handle.write(_png_chunk(b"IEND", b""))
 
     atomic_write(path, _write)

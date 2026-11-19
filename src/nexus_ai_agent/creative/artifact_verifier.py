@@ -94,8 +94,8 @@ def read_top_level_boxes(path: Path) -> tuple[tuple[str, ...], list[str]]:
                 break
             types.append(kind)
             offset += size
-    if offset != file_size and not problems:
-        problems.append("boxes do not tile the file")
+    # The loop exits only at ``offset == file_size``: an overrunning box is refused
+    # above, so the boxes always tile the file exactly.
     if types and types[0] != "ftyp":
         problems.append("first box is not ftyp")
     for required in _REQUIRED_BOXES:

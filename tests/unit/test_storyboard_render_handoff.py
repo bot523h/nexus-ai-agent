@@ -63,3 +63,22 @@ def test_malformed_payload_is_refused_with_a_typed_reason(payload: Any, reason: 
     with pytest.raises(h.HandoffRefusal) as info:
         h.validate_storyboard_render_request(payload)
     assert info.value.reason == reason
+
+
+@pytest.mark.parametrize("bad", [True, "12", float("nan"), float("inf")])
+def test_a_profile_value_must_be_a_finite_number(bad: Any) -> None:
+    with pytest.raises(h.HandoffRefusal) as info:
+        h.validate_storyboard_render_request(_payload(fps=bad))
+    assert info.value.reason == "invalid_profile"
+
+
+@pytest.mark.parametrize("bad", ["", "../escape", "has space", None])
+def test_a_handoff_identifier_must_be_safe(bad: Any) -> None:
+    with pytest.raises(h.HandoffRefusal) as info:
+        h.validate_storyboard_render_request(_payload(job_id=bad))
+    assert info.value.reason == "invalid_identifier"
+
+
+def test_the_payload_builder_refuses_what_the_validator_refuses() -> None:
+    with pytest.raises(h.HandoffRefusal):
+        h.build_storyboard_render_payload(_payload(project_id="../x"))

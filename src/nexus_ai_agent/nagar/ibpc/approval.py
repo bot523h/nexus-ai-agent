@@ -80,9 +80,6 @@ class ApprovalIdentity:
     def as_dict(self) -> dict[str, object]:
         return {name: getattr(self, name) for name in _IDENTITY_FIELDS}
 
-    def identity_digest(self) -> str:
-        return digest_of(self.as_dict())
-
     def mismatches(self, binding: ApprovalBinding) -> tuple[tuple[str, str, str], ...]:
         """Every (field, expected, actual) where the request disagrees with the
         stored binding. Empty tuple means the identity matches exactly."""

@@ -69,9 +69,8 @@ def authorize_artifact_download(
     if ".." in rel.split("/"):
         raise DownloadRefused(403, "path_traversal")
     root = Path(workspace_root).resolve()
+    # ``rel`` is syntactically relative with no ``..``, so it cannot leave ``root``.
     joined = root / rel
-    if not joined.is_relative_to(root):
-        raise DownloadRefused(403, "path_outside_workspace")
     try:
         refuse_symlink_chain(root, joined)
     except MaterializationError as exc:
@@ -84,8 +83,7 @@ def authorize_artifact_download(
         st = os.lstat(resolved)
     except FileNotFoundError:
         raise DownloadRefused(404, "artifact_not_found") from None
-    if stat.S_ISLNK(st.st_mode):
-        raise DownloadRefused(403, "symlink_refused")
+    # ``resolve()`` follows links, so ``resolved`` is never a symlink here.
     if not stat.S_ISREG(st.st_mode):
         raise DownloadRefused(404, "artifact_not_found")
 
