@@ -332,7 +332,7 @@ def verify_merkle_proof(
     return sn == 0 and result.hex() == root_hex
 
 
-def atomic_write(final_path: Path, write: Callable[[IO[bytes]], None]) -> None:
+def atomic_write(final_path: Path, write: Callable[[IO[bytes]], object]) -> None:
     """Write via ``mkstemp`` in the same directory, fsync, then ``os.replace``."""
     final_path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp_name = tempfile.mkstemp(

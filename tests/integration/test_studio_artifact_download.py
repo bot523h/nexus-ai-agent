@@ -95,10 +95,10 @@ def rendered(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, objec
     return {"workspace": workspace, "result": dict(result)}
 
 
-def _client(monkeypatch: pytest.MonkeyPatch, rows: Mapping[str, Mapping[str, object]]) -> TestClient:
-    monkeypatch.setattr(
-        "nexus_ai_agent.api.app.get_creative_registry", lambda: FakeRegistry(rows)
-    )
+def _client(
+    monkeypatch: pytest.MonkeyPatch, rows: Mapping[str, Mapping[str, object]]
+) -> TestClient:
+    monkeypatch.setattr("nexus_ai_agent.api.app.get_creative_registry", lambda: FakeRegistry(rows))
     app = FastAPI()
     app.include_router(studio_api.router)
     return TestClient(app)
@@ -145,7 +145,9 @@ def test_another_projects_job_is_hidden_as_not_found(
     assert response.status_code == 404
 
 
-def test_unknown_job_is_not_found(rendered: dict[str, object], monkeypatch: pytest.MonkeyPatch) -> None:
+def test_unknown_job_is_not_found(
+    rendered: dict[str, object], monkeypatch: pytest.MonkeyPatch
+) -> None:
     client = _client(monkeypatch, {})
 
     assert client.get(_url("no-such-job")).status_code == 404
@@ -179,7 +181,9 @@ def test_bytes_changed_after_render_are_refused_with_409(
     assert response.content != mp4.read_bytes()
 
 
-def test_traversal_is_refused_with_403(rendered: dict[str, object], monkeypatch: pytest.MonkeyPatch) -> None:
+def test_traversal_is_refused_with_403(
+    rendered: dict[str, object], monkeypatch: pytest.MonkeyPatch
+) -> None:
     result = dict(rendered["result"])  # type: ignore[arg-type]
     result["output_rel_path"] = "projects/../escape.mp4"
     client = _client(monkeypatch, {JOB_ID: _row(result)})
