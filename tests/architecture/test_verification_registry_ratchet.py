@@ -17,7 +17,7 @@ from nexus_ai_agent.worker import default_job_handlers
 
 #: The verified job types this repository promises (task-178 + task-180).
 EXPECTED_VERIFIED_JOB_TYPES = frozenset(
-    {"creative_render", "slideshow_render", "story", "pdf_extract"}
+    {"creative_render", "slideshow_render", "story", "pdf_extract", "storyboard_render"}
 )
 
 

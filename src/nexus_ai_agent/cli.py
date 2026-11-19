@@ -9,6 +9,7 @@ from uuid import uuid4
 
 import typer
 
+from nexus_ai_agent.creative.studio_typer import studio_app
 from nexus_ai_agent.llm.litellm_provider import build_llm_provider
 from nexus_ai_agent.llm.provider import LLMProvider  # noqa: F401 — re-exported for typing
 
@@ -1241,6 +1242,7 @@ app.add_typer(maintenance_app, name="maintenance")
 app.add_typer(jobs_app, name="jobs")
 app.add_typer(packs_app, name="packs")
 app.add_typer(slideshow_app, name="slideshow")
+app.add_typer(studio_app, name="studio")
 app.add_typer(knowledge_app, name="knowledge")
 
 

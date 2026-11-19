@@ -202,10 +202,11 @@ CAPABILITIES: tuple[dict[str, str], ...] = (
     },
     {
         "id": "artifact_download",
-        "status": "DEFERRED",
-        "reason": "No authorized artifact download route; the app shows the passport "
-        "(hash, size, verification), not the bytes.",
-        "evidence": "src/nexus_ai_agent/product/studio_experience.py",
+        "status": "VERIFIED",
+        "reason": "GET /api/studio/projects/{project_id}/jobs/{job_id}/artifact streams the "
+        "MP4 only after passport, seal, PASS verdict and on-disk digest checks; "
+        "cross-project jobs return 404.",
+        "evidence": "tests/integration/test_studio_artifact_download.py",
     },
 )
 

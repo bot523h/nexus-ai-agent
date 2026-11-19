@@ -72,6 +72,18 @@
 
 ---
 
+## NAGAR One — local-first creative studio (V1 animatic slice)
+
+NAGAR One is the local-first studio: a screenplay becomes a verified animatic MP4 on your own machine. It needs `ffmpeg` and `ffprobe` on `PATH`.
+
+```text
+nexus studio init --workspace ./studio-workspace
+nexus studio doctor --workspace ./studio-workspace
+nexus studio serve --host 127.0.0.1 --port 8765 --workspace ./studio-workspace
+```
+
+`init` creates the workspace folders with mode 0700. `doctor` checks FFmpeg, the workspace, atomic writes, the queue database and the storyboard compiler. `serve` starts the Studio web app at `/studio/`; sign-in uses the dashboard token (`NEXUS_DASHBOARD_TOKEN`). Capability status, the verification truth levels and the known limits are in the [web app README](src/nexus_ai_agent/web/README.md) and [product contract §8](docs/product/NAGAR_ONE_PRODUCT_CONTRACT.md).
+
 ## Nagar image generation and slideshow (v3.13.0)
 
 ### `/imagine`: text to image

@@ -70,3 +70,32 @@ Nothing in this repository may be presented to a user as a real execution when i
 is simulated, mock, description-only or in-memory-only. Capabilities that are not
 production-ready must be labelled as such (see the truth matrix vocabulary:
 `VERIFIED` / `PARTIAL` / `MISSING` / `BLOCKED` / `DEFERRED`).
+
+## 8. V1 animatic vertical slice (local-first)
+
+Scope: a screenplay becomes a verified 16:9 animatic MP4 on the person's own machine, with no network calls.
+
+Pipeline, fail-closed at every step (`creative/storyboard_render.py`):
+
+1. Validate the request (`nagar/creative/handoff.py`: identifiers, finite profile values, digest format).
+2. Compile the screenplay and verify manifest integrity (`creative/storyboard_compiler`).
+3. Consume a single-use IBPC approval (`nagar/ibpc/approval.py`). Replay is refused.
+4. Materialize media deterministically (`creative/materializer.py`): atomic writes, symlink refusal, Merkle-sealed, TOCTOU re-check before FFmpeg.
+5. Render with FFmpeg, then verify the MP4 independently (`creative/artifact_verifier.py`: PASS, VIOLATED or UNOBSERVED).
+6. Seal a Creative Artifact Passport (`creative/artifact_passport.py`, HMAC-SHA256). Only a PASS verdict can be sealed.
+
+Truth levels:
+
+| Claim | Level | Evidence |
+|---|---|---|
+| A screenplay renders to a PASS MP4 with real FFmpeg | REAL-COMPUTE | `tests/e2e/test_nagar_one_vertical_slice.py`; N=3 benchmark gives identical 50,462-byte output in three fresh processes |
+| Materializer writes atomically, refuses symlinks, rejects traversal | REAL-DISK | `tests/unit/test_creative_materializer.py` (43 tests) |
+| Verifier and passport: PASS/VIOLATED/UNOBSERVED, seal and artifact tamper detection | REAL-COMPUTE | `tests/unit/test_artifact_verifier_passport.py` (22 tests) and mutation checks |
+| Approval replay, TOCTOU swap and symlink swap are refused | REAL-COMPUTE | e2e and unit tests; mutation checks confirmed the tests fail when each guard is disabled |
+| Download authorization gate (library function) | REAL-COMPUTE | e2e download tests; **no HTTP route** |
+| Authorized artifact download over HTTP | VERIFIED | `api/studio.py` route `GET /api/studio/projects/{project_id}/jobs/{job_id}/artifact`; matrix row `artifact_download` in `api/studio_web.py`; evidence `tests/integration/test_studio_artifact_download.py` |
+| `storyboard.render` registered in the production worker | NOT WIRED | The handler exists; it is not in `default_job_handlers` |
+| `nexus studio init / doctor / serve` at runtime | UNVERIFIED here | Wiring exists in `cli.py` and `creative/studio_typer.py`; `typer` and `fastapi` were not installed in the verification environment |
+| Merkle root construction | REAL-COMPUTE | Domain-separated SHA-256 (0x00 leaf, 0x01 node), unpaired node promoted. This is **not** RFC 6962's largest-power-of-two split. |
+
+Known limits: the IBPC approval ledger is process-local, so approvals do not survive a restart or cross processes. The Studio web app shows the passport, not the MP4 bytes.
