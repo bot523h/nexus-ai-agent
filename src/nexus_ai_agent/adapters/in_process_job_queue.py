@@ -78,9 +78,9 @@ from uuid import uuid4
 
 import structlog
 
+from nexus_ai_agent.application.execution_context import _current_claim
 from nexus_ai_agent.application.execution_context import (
-    _current_claim,
-    current_execution_claim,
+    current_execution_claim as current_execution_claim,
 )
 from nexus_ai_agent.application.execution_context import (
     get_current_execution_claim as get_current_execution_claim,
@@ -1141,6 +1141,12 @@ class InProcessJobQueue:
                     )
                 )
             self._schedule(job_id)
+        # Idempotent startup reconciliation: close the approval reservations
+        # of jobs that completed durably but whose finalization never ran
+        # (a crash between the COMPLETED commit and the finalize call).
+        reconciled = await asyncio.to_thread(self._reconcile_completed_approval_reservations)
+        if reconciled:
+            logger.info("approval_reservations_reconciled count=%d", reconciled)
         return [job_id for job_id, _, _ in reset]
 
     async def resume_pending_jobs(self) -> list[str]:
@@ -1924,6 +1930,15 @@ class InProcessJobQueue:
                     claim, publication, verifier, payload, result
                 )
             if outcome.ok:
+                # Quarantined (``.staging``) artifacts: promote them to their
+                # final path only NOW — the independent verifier has PASSed
+                # this attempt's bytes and the promotion itself re-checks the
+                # (job_id, attempt) fence. A refused verdict never gets here.
+                promoted_result = await asyncio.to_thread(
+                    self._promote_staged_artifacts, claim, result
+                )
+                if promoted_result is not None:
+                    result = promoted_result
                 stored_passport: str | None = None
                 final_result = {**result, VERIFICATION_RESULT_KEY: outcome.block}
                 if trim_request:
@@ -2078,6 +2093,15 @@ class InProcessJobQueue:
                 )
                 if publication is not None and publication.finalize is not None and published:
                     await self._finalize_safely(publication, payload, result, claim)
+                # Approval-reservation finalization (storyboard-render style
+                # approvals): the job is durably COMPLETED, so the consumed
+                # approval's reservation can be closed for this exact
+                # (job_id, attempt) fencing token. Idempotent; a skip is
+                # logged degradation, never a job outcome — startup
+                # reconciliation retries it.
+                await asyncio.to_thread(
+                    self._finalize_approval_reservation, job_type, job_id, claim, final_result
+                )
             else:
                 if publication is not None and outcome.reason_code != "stale_execution":
                     # A refusal retracts this attempt (staged temp before
@@ -2361,6 +2385,144 @@ class InProcessJobQueue:
             await asyncio.to_thread(publication.finalize, payload, finalize_context)
         except Exception:  # noqa: BLE001 - the job is already durably COMPLETED
             logger.warning("artifact publication finalize failed (backup left)", exc_info=True)
+
+    def _promote_staged_artifacts(
+        self, claim: ExecutionClaim, result: dict[str, object]
+    ) -> dict[str, object] | None:
+        """Atomically publish a verified attempt's quarantined artifacts.
+
+        Runs ONLY after the independent verifier answered ``PASS`` and only
+        while this execution still owns the row (the ``(job_id, attempt)``
+        fence is re-checked here). The ``.staging`` quarantine files are moved
+        to their final path with :func:`os.replace` (same-filesystem atomic
+        rename) and the result's ``output_path`` is updated to the final path.
+        A ``VIOLATED``/``UNOBSERVED`` verdict never reaches this method: the
+        quarantined files stay in the attempt's quarantine directory.
+
+        Returns the updated result, or ``None`` when the result carries no
+        quarantine contract (nothing to promote) or the fence was lost (the
+        row is no longer this attempt's — the terminal CAS will refuse too).
+        """
+        staged_output = result.get("staged_output_path")
+        staged_passport = result.get("staged_passport_path")
+        final_output = result.get("final_output_path")
+        final_passport = result.get("final_passport_path")
+        if not (
+            isinstance(staged_output, str)
+            and staged_output
+            and isinstance(staged_passport, str)
+            and staged_passport
+            and isinstance(final_output, str)
+            and final_output
+            and isinstance(final_passport, str)
+            and final_passport
+        ):
+            return None  # not a quarantined result: nothing to promote
+        staged_out_path = Path(staged_output)
+        staged_pp_path = Path(staged_passport)
+        final_out_path = Path(final_output)
+        final_pp_path = Path(final_passport)
+        if staged_out_path == final_out_path:
+            return None  # already at its final path
+        if not self._owns_execution(claim, JobStatus.VERIFYING):
+            # Ownership was lost between the PASS verdict and this rename:
+            # a superseded attempt must never publish over a newer owner's
+            # destination. The terminal CAS below refuses it as well.
+            self._log_rejected(claim.job_id, claim, JobStatus.COMPLETED)
+            return None
+        if not staged_out_path.is_file() or not staged_pp_path.is_file():
+            if final_out_path.is_file() and final_pp_path.is_file():
+                # Idempotent re-entry: an earlier pass already promoted this
+                # attempt (e.g. a redelivered completion).
+                updated = dict(result)
+                updated["output_path"] = str(final_out_path)
+                return updated
+            logger.warning(
+                "staged artifacts missing at promotion job_id=%s attempt=%d",
+                claim.job_id,
+                claim.attempt,
+            )
+            return None
+        for final in (final_out_path, final_pp_path):
+            final.parent.mkdir(parents=True, exist_ok=True)
+        os.replace(staged_out_path, final_out_path)
+        os.replace(staged_pp_path, final_pp_path)
+        updated = dict(result)
+        updated["output_path"] = str(final_out_path)
+        return updated
+
+    def _finalize_approval_reservation(
+        self,
+        job_type: str,
+        job_id: str,
+        claim: ExecutionClaim,
+        result: Mapping[str, object],
+    ) -> None:
+        """Close the consumed approval's reservation after durable ``COMPLETED``.
+
+        Idempotent and never fatal: the job is already terminal, so a skipped
+        finalization is logged degradation while the reservation stays fenced
+        by its ``last_attempt`` (startup reconciliation retries it).
+        """
+        approval_id = result.get("approval_id") if isinstance(result, Mapping) else None
+        if not isinstance(approval_id, str) or not approval_id:
+            return
+        from nexus_ai_agent.nagar.creative.handoff import STORYBOARD_RENDER_JOB_TYPE
+
+        if job_type != STORYBOARD_RENDER_JOB_TYPE:
+            return
+        from nexus_ai_agent.creative.storyboard_jobs import finalize_storyboard_approval
+
+        error = finalize_storyboard_approval(approval_id, job_id=job_id, attempt=claim.attempt)
+        if error is not None:
+            logger.info(
+                "approval finalization skipped job_id=%s attempt=%d reason=%s",
+                job_id,
+                claim.attempt,
+                error,
+            )
+
+    def _reconcile_completed_approval_reservations(self) -> int:
+        """Idempotent startup reconciliation of approval reservations.
+
+        A process can die between the durable ``COMPLETED`` commit and the
+        approval finalization; on startup every completed job whose result
+        carries an approval id gets its reservation finalized again (a no-op
+        when it already is). A superseded attempt's reservation is skipped:
+        it is owned by a different ``last_attempt``.
+        """
+        from nexus_ai_agent.nagar.creative.handoff import STORYBOARD_RENDER_JOB_TYPE
+
+        with self._db_lock, self._connection() as connection:
+            rows = connection.execute(
+                """
+                SELECT id, attempt, result_json FROM nexus_job_queue
+                WHERE status = ? AND job_type = ?
+                """,
+                (JobStatus.COMPLETED.value, STORYBOARD_RENDER_JOB_TYPE),
+            ).fetchall()
+        from nexus_ai_agent.creative.storyboard_jobs import finalize_storyboard_approval
+
+        finalized = 0
+        for row in rows:
+            try:
+                parsed = json.loads(str(row["result_json"] or ""))
+            except ValueError:
+                continue
+            if not isinstance(parsed, dict):
+                continue
+            approval_id = parsed.get("approval_id")
+            attempt = row["attempt"]
+            if not isinstance(approval_id, str) or not approval_id:
+                continue
+            if isinstance(attempt, bool) or not isinstance(attempt, int) or attempt < 1:
+                continue
+            if (
+                finalize_storyboard_approval(approval_id, job_id=str(row["id"]), attempt=attempt)
+                is None
+            ):
+                finalized += 1
+        return finalized
 
     async def _confirm_safely(
         self,

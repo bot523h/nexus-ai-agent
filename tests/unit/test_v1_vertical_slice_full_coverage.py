@@ -4027,7 +4027,12 @@ def test_cli_resolves_the_durable_approval_database(tmp_path: Path, monkeypatch:
     assert studio_cli._resolve_approval_db(plain) == in_cwd
 
     with pytest.raises(studio_cli.StudioCliError, match="approval database unusable"):
-        studio_cli._open_durable_ledger(tmp_path / "missing-dir" / "x.sqlite3")
+        # A parent that is a regular file can never hold the SQLite database:
+        # the ledger refuses to open it (a merely missing parent directory is
+        # created, but this path is unusable no matter what).
+        blocked = tmp_path / "not-a-dir"
+        blocked.write_text("i am a file", encoding="utf-8")
+        studio_cli._open_durable_ledger(blocked / "x.sqlite3")
 
 
 def test_cli_renders_with_a_real_durable_approval_ledger(

@@ -99,9 +99,10 @@ def test_resolve_within_refuses_a_resolved_path_outside_the_root(tmp_path: Path)
 
 
 def test_inclusion_proof_refuses_an_index_out_of_range() -> None:
-    with pytest.raises(mz.MaterializationError) as info:
+    # RFC 6962 API: an out-of-range index is a plain ValueError (the typed
+    # MaterializationError spelling belonged to the pre-RFC proof helper).
+    with pytest.raises(ValueError, match="leaf index outside tree"):
         mz.merkle_inclusion_proof([b"a", b"b"], 2)
-    assert _reason(info) == "merkle_index_out_of_range"
 
 
 @pytest.mark.parametrize("total", [1, 2, 3, 5, 8, 13])
@@ -110,25 +111,43 @@ def test_every_leaf_of_every_size_verifies_against_the_root(total: int) -> None:
     root, _ = mz.merkle_root(payloads)
     for index in range(total):
         proof = mz.merkle_inclusion_proof(payloads, index)
-        assert mz.verify_merkle_proof(payloads[index], index, total, proof, root)
+        assert mz.verify_merkle_inclusion_proof(
+            payloads[index],
+            index=index,
+            total_leaves=total,
+            proof=proof,
+            expected_root=root,
+        )
 
 
 def test_verify_merkle_proof_fails_closed_on_every_malformed_input() -> None:
     payloads = [b"a", b"b", b"c"]
     root, _ = mz.merkle_root(payloads)
     proof = mz.merkle_inclusion_proof(payloads, 1)
-    assert not mz.verify_merkle_proof(b"a", 1, 0, proof, root)
-    assert not mz.verify_merkle_proof(b"b", 5, 3, proof, root)
-    assert not mz.verify_merkle_proof(b"b", 1, 3, (*proof, b"\x00" * 32), root)
-    assert not mz.verify_merkle_proof(b"b", 1, 3, proof[:1], root)
-    assert not mz.verify_merkle_proof(b"tampered", 1, 3, proof, root)
+    assert not mz.verify_merkle_inclusion_proof(
+        b"a", index=1, total_leaves=0, proof=proof, expected_root=root
+    )
+    assert not mz.verify_merkle_inclusion_proof(
+        b"b", index=5, total_leaves=3, proof=proof, expected_root=root
+    )
+    assert not mz.verify_merkle_inclusion_proof(
+        b"b", index=1, total_leaves=3, proof=(*proof, "00" * 32), expected_root=root
+    )
+    assert not mz.verify_merkle_inclusion_proof(
+        b"b", index=1, total_leaves=3, proof=proof[:1], expected_root=root
+    )
+    assert not mz.verify_merkle_inclusion_proof(
+        b"tampered", index=1, total_leaves=3, proof=proof, expected_root=root
+    )
 
 
 def test_verify_merkle_proof_rejects_a_proof_replayed_against_a_longer_tree() -> None:
     short = [b"a", b"b"]
     root_short, _ = mz.merkle_root(short)
     proof = mz.merkle_inclusion_proof(short, 0)
-    assert not mz.verify_merkle_proof(b"a", 0, 4, proof, root_short)
+    assert not mz.verify_merkle_inclusion_proof(
+        b"a", index=0, total_leaves=4, proof=proof, expected_root=root_short
+    )
 
 
 # ----------------------------- durability and media helpers -----------------------------

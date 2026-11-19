@@ -428,8 +428,7 @@ class DurableApprovalLedger(ApprovalLedger):
                 " last_attempt INTEGER NOT NULL DEFAULT 1)"
             )
             columns = {
-                row[1]
-                for row in self._conn.execute("PRAGMA table_info(approval_reservations)")
+                row[1] for row in self._conn.execute("PRAGMA table_info(approval_reservations)")
             }
             if "last_attempt" not in columns:
                 self._conn.execute(

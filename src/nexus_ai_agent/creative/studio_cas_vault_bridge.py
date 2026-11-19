@@ -1741,8 +1741,11 @@ def sync_and_verify_studio_bundle_in_vault(
         deduplicated_chunks=push.deduplicated_chunks,
         # The vault publishes restored files straight to disk and keeps the
         # in-memory ``files`` mapping empty by design (O(1) RAM restore), so
-        # the restored count is read from the verified snapshot manifest.
-        restored_files_count=len(pull.manifest.files),
+        # the restored count is read from the verified snapshot manifest; a
+        # legacy report that carried the bytes in memory is counted directly.
+        restored_files_count=len(
+            pull.files or getattr(getattr(pull, "manifest", None), "files", None) or ()
+        ),
         restored_mp4_path=restored_mp4,
         restored_passport_path=restored_passport,
         restored_passport_verification=passport_check,

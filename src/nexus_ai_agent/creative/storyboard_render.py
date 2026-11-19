@@ -23,6 +23,11 @@ left at a final path:
    directory. The independent verifier inspects that temp file. Only on
    ``PASS`` is it replaced into place, and only then is the HMAC passport
    written. If the MP4 is still not ``PASS`` after the move, it is removed.
+   Under the durable queue the attempt's MP4 and passport are quarantined in
+   ``<artifacts_dir>/.staging/<queue_job_id>/attempt-<n>/`` (the approval is
+   consumed under the same ``(queue_job_id, attempt)`` fence); the queue's
+   independent verifier promotes them to the final path with an atomic rename
+   only after its own ``PASS``.
 
 Authority note: the approval ledger is process-local (ibpc design). An approval
 issued in one process cannot be consumed in another, so this handler must run
@@ -32,7 +37,9 @@ in the same process that issued the approval.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import os
+import re
 import subprocess
 import tempfile
 import time
@@ -41,6 +48,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from nexus_ai_agent.application.execution_context import current_execution_claim
 from nexus_ai_agent.creative.artifact_passport import (
     PASSPORT_SUFFIX,
     build_passport,
@@ -52,6 +60,8 @@ from nexus_ai_agent.creative.materializer import (
     MaterializedBundle,
     RenderProfile,
     StoryboardMediaMaterializer,
+    canonical_json,
+    resolve_within,
     stream_sha256,
 )
 from nexus_ai_agent.creative.storyboard_compiler import (
@@ -72,6 +82,14 @@ APPROVAL_SOURCE_REVISION = 0
 DEFAULT_FFMPEG_TIMEOUT_S = 180.0
 #: Duration tolerance: one frame of quantisation per shot, plus a fixed margin.
 DURATION_MARGIN_S = 0.05
+#: Quarantine directory (relative to the studio artifacts dir) holding the
+#: per-attempt staged MP4/passport of queue-driven renders until the queue's
+#: independent verifier promotes them with an atomic rename.
+STAGING_DIRNAME = ".staging"
+#: Safe shot id (the materializer's canonical ``sNNN-shNNN`` spelling).
+_SAFE_SHOT_ID = re.compile(r"^s\d{3}-sh\d{3}$")
+#: Safe queue job id for a staging path component (no traversal, no separators).
+_SAFE_QUEUE_JOB_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
 
 
 class StoryboardRenderError(RuntimeError):
@@ -95,6 +113,95 @@ class RenderContext:
     ffprobe: str = "ffprobe"
     clock: Callable[[], float] = time.time
     ffmpeg_timeout_s: float = DEFAULT_FFMPEG_TIMEOUT_S
+    #: Root of the per-attempt ``.staging`` quarantine for queue-driven
+    #: renders. ``None`` (the default) resolves to ``<workspace>/artifacts``.
+    artifacts_dir: Path | None = None
+
+
+def _extract_local_images(payload: Mapping[str, Any]) -> dict[str, str]:
+    """Validated ``shot_id -> workspace-relative image path`` mapping (fail-closed)."""
+    raw = payload.get("local_images")
+    if raw is None:
+        return {}
+    if not isinstance(raw, Mapping):
+        raise StoryboardRenderError("invalid_local_images", "local_images must be an object")
+    out: dict[str, str] = {}
+    for shot_id, path in raw.items():
+        if not isinstance(shot_id, str) or not _SAFE_SHOT_ID.fullmatch(shot_id):
+            raise StoryboardRenderError(
+                "invalid_local_images", f"shot id {shot_id!r} is not a safe shot id"
+            )
+        if not isinstance(path, str) or not path.strip() or path.startswith("/"):
+            raise StoryboardRenderError(
+                "invalid_local_images", f"image path for {shot_id!r} must be relative"
+            )
+        out[shot_id] = path
+    return out
+
+
+def local_image_content_digests(
+    workspace_root: Path, local_images: Mapping[str, str]
+) -> dict[str, str]:
+    """SHA-256 of each local reference image's *actual file content* (fail-closed).
+
+    The digest is what the render profile hash folds in, so the approval binds
+    the exact bytes on disk — not the path, and not the file's metadata.
+    """
+    workspace = Path(workspace_root).resolve()
+    digests: dict[str, str] = {}
+    for shot_id in sorted(local_images):
+        try:
+            source = resolve_within(workspace, local_images[shot_id])
+            sha, _, _ = stream_sha256(source)
+        except MaterializationError as exc:
+            raise StoryboardRenderError(exc.reason, exc.detail) from exc
+        except OSError as exc:
+            raise StoryboardRenderError(
+                "local_image_unreadable", f"{shot_id}: {type(exc).__name__}"
+            ) from exc
+        digests[shot_id] = sha
+    return digests
+
+
+def render_profile_hash(
+    profile: RenderProfile, image_digests: Mapping[str, str] | None = None
+) -> str:
+    """The render profile hash, with local reference-image digests folded in.
+
+    A shot rendered from a local reference image (``local_images``) has its
+    output bytes defined by that image's content, so the SHA-256 of the actual
+    file is part of the profile identity the approval binds. Without local
+    images this is exactly ``RenderProfile.profile_hash()``.
+    """
+    if not image_digests:
+        return profile.profile_hash()
+    extended = {
+        "profile": profile.canonical_dict(),
+        "local_images": dict(sorted(image_digests.items())),
+    }
+    return hashlib.sha256(canonical_json(extended)).hexdigest()
+
+
+def staged_artifact_paths(
+    artifacts_dir: Path,
+    *,
+    queue_job_id: str,
+    attempt: int,
+    job_id: str,
+) -> tuple[Path, Path]:
+    """The per-attempt quarantine paths for a queue-driven render.
+
+    ``{artifacts_dir}/.staging/{queue_job_id}/attempt-{attempt}/{job_id}.mp4``
+    and the matching passport next to it. Both components are validated: a
+    traversal-shaped id can never steer the quarantine outside the artifacts
+    dir.
+    """
+    if not isinstance(queue_job_id, str) or not _SAFE_QUEUE_JOB_ID.fullmatch(queue_job_id):
+        raise StoryboardRenderError("invalid_queue_job_id", repr(queue_job_id))
+    if isinstance(attempt, bool) or not isinstance(attempt, int) or attempt < 1:
+        raise StoryboardRenderError("invalid_attempt", repr(attempt))
+    quarantine = Path(artifacts_dir) / STAGING_DIRNAME / queue_job_id / f"attempt-{attempt}"
+    return quarantine / f"{job_id}.mp4", quarantine / f"{job_id}{PASSPORT_SUFFIX}"
 
 
 def approval_identity_for(
@@ -255,8 +362,31 @@ def _run_ffmpeg(argv: list[str], timeout_s: float, tmp_path: Path) -> None:
         raise StoryboardRenderError("ffmpeg_failed", f"rc={completed.returncode}: {tail}")
 
 
-def render_storyboard_sync(payload: Mapping[str, Any], ctx: RenderContext) -> dict[str, Any]:
-    """Run the six-step chain synchronously. Raises :class:`StoryboardRenderError`."""
+def render_storyboard_sync(
+    payload: Mapping[str, Any],
+    ctx: RenderContext,
+    *,
+    queue_job_id: str | None = None,
+    attempt: int | None = None,
+) -> dict[str, Any]:
+    """Run the six-step chain synchronously. Raises :class:`StoryboardRenderError`.
+
+    ``queue_job_id``/``attempt`` override the queue-minted execution claim read
+    from the current context (``current_execution_claim``). Under the queue the
+    approval is consumed with ``job_id=queue_job_id, attempt=attempt`` (the
+    reservation fence that lets a retried attempt re-read its consumed
+    binding), and the MP4/passport of *this* attempt are written to the
+    ``.staging`` quarantine instead of the final path — the queue's independent
+    verifier promotes them only after ``PASS``.
+    """
+    claim = current_execution_claim()
+    if queue_job_id is None and claim is not None:
+        queue_job_id = claim.job_id
+    if attempt is None:
+        attempt = claim.attempt if claim is not None else 1
+    quarantined = queue_job_id is not None
+    effective_job_id = queue_job_id
+
     # 1. request validation
     try:
         req = validate_storyboard_render_request(payload)
@@ -266,6 +396,10 @@ def render_storyboard_sync(payload: Mapping[str, Any], ctx: RenderContext) -> di
         profile = RenderProfile.from_mapping(req.profile)
     except MaterializationError as exc:
         raise StoryboardRenderError(exc.reason, exc.detail) from exc
+    local_images = _extract_local_images(payload)
+
+    workspace = Path(ctx.workspace_root).resolve()
+    image_digests = local_image_content_digests(workspace, local_images) if local_images else {}
 
     # 2. compile and seal
     try:
@@ -281,9 +415,12 @@ def render_storyboard_sync(payload: Mapping[str, Any], ctx: RenderContext) -> di
         raise StoryboardRenderError("manifest_integrity_failed")
     if req.manifest_sha256 is not None and req.manifest_sha256 != manifest.manifest_sha256:
         raise StoryboardRenderError("manifest_digest_mismatch")
-    profile_hash = profile.profile_hash()
+    profile_hash = render_profile_hash(profile, image_digests)
 
-    # 3. single-use approval, identity-bound
+    # 3. single-use approval, identity-bound. Under the queue the consumption
+    # is reserved for THIS queue job and fenced by the attempt, so a retried
+    # attempt of the same job re-reads its consumed binding instead of being
+    # refused as a replay — and a stale attempt can never take it over.
     try:
         ctx.approval_ledger.consume(
             req.approval_id,
@@ -296,24 +433,59 @@ def render_storyboard_sync(payload: Mapping[str, Any], ctx: RenderContext) -> di
                 manifest_sha256=manifest.manifest_sha256,
                 render_profile_hash=profile_hash,
             ),
+            job_id=effective_job_id,
+            attempt=attempt,
         )
     except ApprovalError as exc:
         raise StoryboardRenderError(f"approval_{exc.reason}", exc.detail) from exc
 
-    workspace = Path(ctx.workspace_root).resolve()
     materializer = StoryboardMediaMaterializer(workspace, profile)
     out_dir = workspace / "projects" / req.project_id / "renders" / req.job_id
     try:
         # 4. materialize
-        bundle = materializer.materialize(manifest, out_dir)
+        bundle = materializer.materialize(manifest, out_dir, local_images=local_images)
+        if image_digests:
+            # TOCTOU seal for the local plates: the bytes the approval bound
+            # are the bytes that were rendered — a plate swapped between the
+            # digest and the render is a refusal, never a silent re-seal.
+            for record in bundle.assets:
+                if record.kind == "local_image" and record.sha256 != image_digests.get(
+                    record.shot_id
+                ):
+                    raise StoryboardRenderError(
+                        "local_image_changed_after_approval", record.shot_id
+                    )
         # 5. TOCTOU seal, immediately before FFmpeg
         materializer.verify_materialized_provenance(bundle)
     except MaterializationError as exc:
         raise StoryboardRenderError(exc.reason, exc.detail) from exc
 
-    # 6. render to temp, verify the temp, then move it into place
+    artifacts_dir = (
+        Path(ctx.artifacts_dir).resolve()
+        if ctx.artifacts_dir is not None
+        else workspace / "artifacts"
+    )
     final_mp4 = Path(bundle.out_dir) / f"{RENDER_OUTPUT_BASENAME}.mp4"
-    fd, tmp_name = tempfile.mkstemp(dir=bundle.out_dir, prefix=".storyboard.", suffix=".mp4.tmp")
+    final_passport_path = Path(bundle.out_dir) / f"{RENDER_OUTPUT_BASENAME}{PASSPORT_SUFFIX}"
+    if quarantined:
+        assert effective_job_id is not None
+        staged_mp4, staged_passport_path = staged_artifact_paths(
+            artifacts_dir,
+            queue_job_id=effective_job_id,
+            attempt=attempt,
+            job_id=req.job_id,
+        )
+        render_target_dir = staged_mp4.parent
+        output_mp4 = staged_mp4
+        passport_target = staged_passport_path
+    else:
+        render_target_dir = Path(bundle.out_dir)
+        output_mp4 = final_mp4
+        passport_target = final_passport_path
+
+    # 6. render to temp, verify the temp, then move it into place
+    render_target_dir.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(dir=render_target_dir, prefix=".storyboard.", suffix=".mp4.tmp")
     os.close(fd)
     tmp_mp4 = Path(tmp_name)
     moved = False
@@ -331,9 +503,9 @@ def render_storyboard_sync(payload: Mapping[str, Any], ctx: RenderContext) -> di
             raise StoryboardRenderError(
                 f"verifier_{verdict.status.lower()}", "; ".join(verdict.reasons)
             )
-        os.replace(tmp_mp4, final_mp4)
+        os.replace(tmp_mp4, output_mp4)
         moved = True
-        if stream_sha256(final_mp4)[0] != verdict.output_sha256:
+        if stream_sha256(output_mp4)[0] != verdict.output_sha256:
             raise StoryboardRenderError("artifact_changed_after_verify")
         # 7. passport, only after PASS and the post-move hash check
         passport = build_passport(
@@ -344,6 +516,9 @@ def render_storyboard_sync(payload: Mapping[str, Any], ctx: RenderContext) -> di
             render_profile_hash=profile_hash,
             asset_merkle_root=bundle.asset_merkle_root,
             total_asset_leaves=bundle.total_asset_leaves,
+            # The passport always seals the FINAL path: after the queue's
+            # verifier promotes the quarantined bytes, this is where they live
+            # and what the download gate compares against.
             output_rel_path=str(final_mp4.relative_to(workspace)),
             output_size_bytes=verdict.size_bytes,
             output_sha256=verdict.output_sha256,
@@ -352,20 +527,19 @@ def render_storyboard_sync(payload: Mapping[str, Any], ctx: RenderContext) -> di
             created_at_unix_s=ctx.clock(),
             signing_key=ctx.signing_key,
         )
-        passport_path = Path(bundle.out_dir) / f"{RENDER_OUTPUT_BASENAME}{PASSPORT_SUFFIX}"
-        write_passport(passport_path, passport)
+        write_passport(passport_target, passport)
     except StoryboardRenderError:
         tmp_mp4.unlink(missing_ok=True)
         if moved:
-            final_mp4.unlink(missing_ok=True)
+            output_mp4.unlink(missing_ok=True)
         raise
     except Exception as exc:
         tmp_mp4.unlink(missing_ok=True)
         if moved:
-            final_mp4.unlink(missing_ok=True)
+            output_mp4.unlink(missing_ok=True)
         raise StoryboardRenderError("render_failed", type(exc).__name__) from exc
 
-    return {
+    result: dict[str, Any] = {
         "status": "rendered",
         "job_id": req.job_id,
         "project_id": req.project_id,
@@ -377,12 +551,24 @@ def render_storyboard_sync(payload: Mapping[str, Any], ctx: RenderContext) -> di
         "manifest_sha256": manifest.manifest_sha256,
         "asset_merkle_root": bundle.asset_merkle_root,
         "total_asset_leaves": bundle.total_asset_leaves,
-        "passport_rel_path": str(passport_path.relative_to(workspace)),
+        "passport_rel_path": str(final_passport_path.relative_to(workspace)),
         "total_shots": manifest.total_shots,
         "shot_durations_s": list(bundle.shot_durations_s),
         "render_profile_hash": profile_hash,
         "approval_consumed": req.approval_id,
+        "approval_id": req.approval_id,
+        "attempt": attempt,
+        "final_output_path": str(final_mp4),
+        "final_passport_path": str(final_passport_path),
     }
+    if quarantined:
+        # The quarantine paths of THIS attempt: the queue's independent
+        # verifier re-reads exactly these bytes, and only a PASS verdict plus
+        # a valid (job_id, attempt) ownership promotes them to the final
+        # paths above.
+        result["staged_output_path"] = str(staged_mp4)
+        result["staged_passport_path"] = str(staged_passport_path)
+    return result
 
 
 def make_storyboard_render_handler(ctx: RenderContext) -> Callable[[dict[str, Any]], Any]:
@@ -400,11 +586,15 @@ def make_storyboard_render_handler(ctx: RenderContext) -> Callable[[dict[str, An
 
 __all__ = [
     "RENDER_OUTPUT_BASENAME",
+    "STAGING_DIRNAME",
     "RenderContext",
     "StoryboardRenderError",
     "approval_identity_for",
     "build_ffmpeg_argv",
     "issue_render_approval",
+    "local_image_content_digests",
     "make_storyboard_render_handler",
+    "render_profile_hash",
     "render_storyboard_sync",
+    "staged_artifact_paths",
 ]

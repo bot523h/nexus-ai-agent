@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import os
 import re
+from collections.abc import Mapping
 from typing import Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
@@ -106,6 +107,31 @@ def get_studio_submission_service() -> StudioRenderSubmissionService:
     )
 
 
+def _require_completed_and_verified(row: Mapping[str, object] | None) -> None:
+    """Fail-closed download gate: a COMPLETED row with a recorded PASS verdict.
+
+    Project ownership alone is not enough: a job that is still running, was
+    reopened or failed must never serve bytes, and neither may a row whose
+    durable result lacks the queue's independent ``artifact_verification``
+    PASS block — a handler's own "rendered" claim is never download authority.
+    """
+    if row is None:
+        return  # the unknown/foreign-project spelling is decided below (404)
+    status = str(row.get("canonical_status") or row.get("status") or "")
+    if status.lower() not in {"completed", "done"}:
+        raise DownloadRefused(409, "job_not_completed")
+    result = row.get("result")
+    block = result.get("artifact_verification") if isinstance(result, Mapping) else None
+    if not isinstance(block, Mapping):
+        raise DownloadRefused(409, "artifact_not_verified")
+    media_verdict = block.get("media_verdict")
+    if media_verdict is not None:
+        if media_verdict != "PASS":
+            raise DownloadRefused(409, "artifact_not_verified")
+    elif block.get("status") != "verified":
+        raise DownloadRefused(409, "artifact_not_verified")
+
+
 @router.get(
     "/projects/{project_id}/jobs/{job_id}/artifact",
     dependencies=[Depends(require_studio_project)],
@@ -115,7 +141,10 @@ async def download_studio_artifact(project_id: str, job_id: str) -> StreamingRes
 
     Passport first, bytes second: the artifact is authorized (passport seal,
     PASS verdict, digest of the bytes on disk) before a single byte is sent. A
-    job of another project, or an unknown job, is a ``404``. Status codes come
+    job of another project, or an unknown job, is a ``404``. The row must
+    moreover be ``COMPLETED`` with the queue's independent verification block
+    recording ``PASS`` — anything else is a ``409`` (``job_not_completed`` /
+    ``artifact_not_verified`` / ``artifact_not_ready``). Status codes come
     from the authorization gate: ``403`` traversal/symlink/outside workspace,
     ``404`` no artifact, ``409`` passport missing or stale, ``422`` malformed path.
     """
@@ -126,6 +155,7 @@ async def download_studio_artifact(project_id: str, job_id: str) -> StreamingRes
     try:
         row = await get_creative_registry().get_job(job_id)
         rel = artifact_rel_path_for_job(row, project_id)
+        _require_completed_and_verified(row)
         workspace, signing_key = studio_settings(os.environ)
         authorized = authorize_artifact_download(workspace, rel, signing_key)
     except DownloadRefused as exc:

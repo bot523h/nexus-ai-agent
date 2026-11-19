@@ -183,19 +183,22 @@ def test_passport_with_another_version_is_refused(clip: Path, tmp_path: Path) ->
     pp.write_text(json.dumps(data), encoding="utf-8")
     with pytest.raises(ap.PassportError) as info:
         ap.verify_artifact_passport(pp, clip, KEY)
-    assert info.value.reason == "passport_version"
+    assert info.value.reason == "passport_version_unsupported"
 
 
 def test_a_validly_sealed_non_pass_passport_is_refused(clip: Path, tmp_path: Path) -> None:
     """The seal holds, so only the verdict check can stop a VIOLATED passport."""
-    fields = _fields(clip, verifier_status="VIOLATED")
-    passport = dict(fields)
-    passport["passport_version"] = ap.PASSPORT_VERSION
+    # Version 2 contract: start from a real, fully sealed v2 passport (per-shot
+    # Merkle tree included), flip the verdict and re-seal. Only the verdict
+    # check can then refuse it.
+    pp = _write_passport(tmp_path, clip)
+    passport = json.loads(pp.read_text(encoding="utf-8"))
+    passport["verifier_status"] = "VIOLATED"
     passport["hmac_sha256"] = ap._seal(passport, ap._signing_key(KEY))
-    pp = tmp_path / "violated.passport.json"
-    pp.write_text(json.dumps(passport), encoding="utf-8")
+    violated = tmp_path / "violated.passport.json"
+    violated.write_text(json.dumps(passport), encoding="utf-8")
     with pytest.raises(ap.PassportError) as info:
-        ap.verify_artifact_passport(pp, clip, KEY)
+        ap.verify_artifact_passport(violated, clip, KEY)
     assert info.value.reason == "verifier_not_pass"
 
 

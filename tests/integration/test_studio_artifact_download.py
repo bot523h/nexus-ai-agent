@@ -105,9 +105,28 @@ def _client(
 
 
 def _row(result: Mapping[str, object] | None, project: str = PROJECT_ID) -> dict[str, object]:
-    row: dict[str, object] = {"input_data": {"project_id": project}}
+    """A registry row the way the queue leaves it after a verified completion."""
+    row: dict[str, object] = {
+        "input_data": {"project_id": project},
+        "status": "completed",
+        "canonical_status": "completed",
+    }
     if result is not None:
-        row["result"] = dict(result)
+        stored = dict(result)
+        # The queue's independent verification block, as durably recorded for
+        # a COMPLETED job (the download gate refuses anything without it).
+        stored.setdefault(
+            "artifact_verification",
+            {
+                "status": "verified",
+                "reason_code": None,
+                "job_type": "storyboard_render",
+                "output_sha256": stored.get("output_sha256"),
+                "passport_seal_verified": True,
+                "media_verdict": "PASS",
+            },
+        )
+        row["result"] = stored
     return row
 
 
@@ -211,3 +230,48 @@ def test_unconfigured_studio_fails_closed_with_503(
     client = _client(monkeypatch, {JOB_ID: _row(rendered["result"])})  # type: ignore[arg-type]
 
     assert client.get(_url()).status_code == 503
+
+
+def test_a_job_that_is_not_completed_is_refused(
+    rendered: dict[str, object], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Ownership of the project is not enough: only COMPLETED may serve bytes."""
+    row = _row(rendered["result"])  # type: ignore[arg-type]
+    row["status"] = "processing"
+    row["canonical_status"] = "processing"
+    client = _client(monkeypatch, {JOB_ID: row})
+
+    response = client.get(_url())
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "job_not_completed"
+
+
+def test_a_completed_job_without_a_recorded_pass_verification_is_refused(
+    rendered: dict[str, object], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A handler's own "rendered" claim is never download authority."""
+    row = _row(None)
+    row["result"] = dict(rendered["result"])  # type: ignore[arg-type]
+    client = _client(monkeypatch, {JOB_ID: row})
+
+    response = client.get(_url())
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "artifact_not_verified"
+
+
+def test_a_completed_job_whose_verification_records_a_non_pass_verdict_is_refused(
+    rendered: dict[str, object], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    row = _row(rendered["result"])  # type: ignore[arg-type]
+    result = dict(row["result"])  # type: ignore[arg-type]
+    result["artifact_verification"] = dict(result["artifact_verification"])  # type: ignore[arg-type]
+    result["artifact_verification"]["media_verdict"] = "VIOLATED"  # type: ignore[index]
+    row["result"] = result
+    client = _client(monkeypatch, {JOB_ID: row})
+
+    response = client.get(_url())
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "artifact_not_verified"
