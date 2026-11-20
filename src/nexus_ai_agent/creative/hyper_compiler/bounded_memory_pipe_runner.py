@@ -685,6 +685,14 @@ class BoundedMemoryPipeRunner:
         last_activity = [time.monotonic()]
         activity_lock = threading.Lock()
         finished = threading.Event()
+        # CP6.2: a sticky fact recorded by the *writer itself* — its blocked
+        # ``stdin.write`` was torn down because the child's end of the pipe
+        # closed.  Two independent killers can end a timeout (the watchdog and
+        # the caller's bounded writer join) and they expire at the same instant,
+        # so the timeout *label* must not be decided by whichever one runs first;
+        # it is decided by this fact instead, which is true exactly when a kill is
+        # what freed a writer parked on ``stdin.write``.
+        writer_freed_by_pipe_close = [False]
 
         def mark_activity() -> None:
             with activity_lock:
@@ -726,7 +734,15 @@ class BoundedMemoryPipeRunner:
                         with state_lock:
                             live_frame[0] = held
                             peak_inflight[0] = max(peak_inflight[0], held)
-                        stdin.write(raw)
+                        try:
+                            stdin.write(raw)
+                        except (OSError, ValueError):
+                            # The child closed its end under this write (EPIPE) or
+                            # the pipe object was closed by the caller.  Sticky and
+                            # timing-free: this write is what the close freed.
+                            with state_lock:
+                                writer_freed_by_pipe_close[0] = True
+                            raise
                         with state_lock:
                             live_frame[0] = 0
                         mark_activity()
@@ -814,6 +830,17 @@ class BoundedMemoryPipeRunner:
                 except OSError:
                     pass
         if timed_out[0]:
+            # CP6.2: label the timeout deterministically.  ``timed_out`` may be
+            # set by the watchdog or the caller may have killed the child itself;
+            # both paths are equivalent, and the question is *which party was
+            # stuck*.  If the writer's blocked ``stdin.write`` was torn down by
+            # the pipe closing, a kill is what freed that writer, so the writer is
+            # the one that timed out; otherwise the child stalled while the writer
+            # was already done, which is a subprocess timeout.
+            with state_lock:
+                writer_blocked = writer_freed_by_pipe_close[0]
+            if writer_blocked:
+                raise PipeExecutionError("writer thread timed out")
             raise PipeExecutionError("FFmpeg subprocess timed out")
         if writer_error:
             writer_exc = writer_error[0]

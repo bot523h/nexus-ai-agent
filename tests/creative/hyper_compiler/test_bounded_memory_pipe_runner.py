@@ -926,7 +926,13 @@ def test_run_ffmpeg_stream_writer_blocked_on_write_is_freed_by_kill(
     class BlockingStdin:
         def write(self, data: bytes, /) -> int:
             events.append("write_entered")
-            release.wait(timeout=5.0)  # only proc.kill() releases this
+            # CP6.2: only ``proc.kill()`` may release this write.  The old 5 s
+            # budget was a second, independent timer inside the test itself: on a
+            # loaded runner a slow first window could let the writer unblock on
+            # its own and the call would report a writer *error* instead of a
+            # timeout.  ``wait`` without a deadline is released by kill only, and
+            # the call is bounded by the runner, so nothing here can hang.
+            release.wait()
             events.append("write_released")
             raise BrokenPipeError("child gone")
 
@@ -934,14 +940,28 @@ def test_run_ffmpeg_stream_writer_blocked_on_write_is_freed_by_kill(
             pass
 
     class FakeProc:
+        # CP6.2: a real ``Popen.poll()`` reaps a dead child (it is ``waitpid`` with
+        # a zero timeout), so the fake records the reap there too.  Two legitimate
+        # interleavings exist — the caller's bounded join may kill, or the watchdog
+        # may have already killed and the caller then only observes the corpse via
+        # ``poll()`` — and only an honest fake makes both report the same thing.
         def __init__(self, *args: object, **kwargs: object) -> None:
             self.stdin = BlockingStdin()
             self.stdout = io.BytesIO(b"")
             self.stderr = io.BytesIO(b"")
             self._dead = False
+            self._reaped = False
+
+        def _record_reap(self) -> None:
+            if not self._reaped:
+                self._reaped = True
+                events.append("reaped")
 
         def poll(self) -> int | None:
-            return 0 if self._dead else None
+            if not self._dead:
+                return None
+            self._record_reap()
+            return 0
 
         def kill(self) -> None:
             events.append("killed")
@@ -949,7 +969,7 @@ def test_run_ffmpeg_stream_writer_blocked_on_write_is_freed_by_kill(
             release.set()
 
         def wait(self, timeout: float | None = None) -> int:
-            events.append("reaped")
+            self._record_reap()
             return 0
 
     monkeypatch.setattr(subprocess, "Popen", FakeProc)
@@ -964,6 +984,88 @@ def test_run_ffmpeg_stream_writer_blocked_on_write_is_freed_by_kill(
     assert events.index("killed") < events.index("write_released")
     assert "reaped" in events
     assert time.monotonic() - start < 3.0
+
+
+def test_run_ffmpeg_stream_watchdog_kill_labels_the_blocked_writer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # CP6.2: the watchdog and the caller's bounded writer join both expire at
+    # ``timeout_seconds``, so either can free a writer parked on ``stdin.write``.
+    # Here the caller is *guaranteed* to be the loser: it is parked inside
+    # ``stdout.read`` and cannot even reach its join until the watchdog's kill
+    # releases the read.  The failure must still be reported as the writer
+    # timing out (a kill is what freed it), not as a subprocess timeout — the
+    # label must not depend on which killer won.
+    killed = threading.Event()
+    writer_freed = threading.Event()
+
+    class BlockingStdin:
+        def write(self, data: bytes, /) -> int:
+            writer_freed.wait()
+            raise BrokenPipeError("child gone")
+
+        def close(self) -> None:
+            pass
+
+    class BlockingStdout:
+        def read(self, size: int) -> bytes:
+            killed.wait()
+            return b""
+
+        def close(self) -> None:
+            pass
+
+    class FakeProc:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            self.stdin = BlockingStdin()
+            self.stdout = BlockingStdout()
+            self.stderr = io.BytesIO(b"")
+            self._dead = False
+
+        def poll(self) -> int | None:
+            return 0 if self._dead else None
+
+        def kill(self) -> None:
+            self._dead = True
+            killed.set()
+            writer_freed.set()
+
+        def wait(self, timeout: float | None = None) -> int:
+            return 0
+
+    monkeypatch.setattr(subprocess, "Popen", FakeProc)
+    monkeypatch.setattr(bmpr, "_KILL_TIMEOUT_SECONDS", 0.2)
+    runner = BoundedMemoryPipeRunner(timeout_seconds=0.15)
+    start = time.monotonic()
+    with pytest.raises(PipeExecutionError, match="writer thread timed out"):
+        runner.run_ffmpeg_stream([frames(1)], spec())
+    assert killed.is_set()
+    assert writer_freed.is_set()
+    assert time.monotonic() - start < 3.0
+
+
+def test_run_ffmpeg_stream_real_filled_pipe_labels_writer_timeout() -> None:
+    # CP6.2 (live truth): the scenario the label exists for — a real child that
+    # never reads stdin, so the kernel pipe buffer (~64 KiB) fills and the writer
+    # parks inside ``stdin.write``.  An *endless* frame stream guarantees the
+    # writer is still writing when the watchdog kills the child, so the label is
+    # deterministic: the writer was the party that timed out.  No child outlives
+    # the call.
+    import shutil
+
+    sleeper = shutil.which("sleep")
+    if sleeper is None:
+        pytest.skip("no 'sleep' on PATH")
+
+    def endless() -> Iterator[Frame]:
+        while True:
+            yield np.full((8, 8, 3), 7, dtype=np.uint8)
+
+    runner = BoundedMemoryPipeRunner(timeout_seconds=0.3)
+    start = time.monotonic()
+    with pytest.raises(PipeExecutionError, match="writer thread timed out"):
+        runner._run_ffmpeg_pipe([sleeper, "30"], [endless()], spec(), None)
+    assert time.monotonic() - start < 5.0
 
 
 def test_run_ffmpeg_stream_writer_wedged_in_generator_is_daemon_and_bounded(
