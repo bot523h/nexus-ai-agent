@@ -427,7 +427,7 @@ def _aead_open(
     aad = _aead_aad(header, chunk_index, plaintext_len)
     key = _derive_aead_key(enc_key, nonce, cipher_suite, aad)
     try:
-        return _aead_encryptor(cipher_suite, key).decrypt(nonce, ciphertext + tag, aad)
+        return bytes(_aead_encryptor(cipher_suite, key).decrypt(nonce, ciphertext + tag, aad))
     except InvalidTag as exc:
         raise VaultTamperDetectedError(
             "Chunk AEAD authentication failed: ciphertext, header, nonce, or order tampered"
@@ -465,9 +465,11 @@ def _aead_seal_inplace(
         finally:
             view.release()
         encryptor.finalize()
-        return encryptor.tag
-    sealed = _aead_encryptor(cipher_suite, key).encrypt(
-        nonce, bytes(buffer[slot_start : slot_start + slot_len]), aad
+        return bytes(encryptor.tag)
+    sealed = bytes(
+        _aead_encryptor(cipher_suite, key).encrypt(
+            nonce, bytes(buffer[slot_start : slot_start + slot_len]), aad
+        )
     )
     buffer[slot_start : slot_start + slot_len] = sealed[:-AEAD_TAG_BYTES]
     return sealed[-AEAD_TAG_BYTES:]

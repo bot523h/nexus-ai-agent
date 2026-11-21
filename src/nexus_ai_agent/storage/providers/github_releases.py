@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from typing import Any, cast
 
 import httpx
 
@@ -29,10 +30,10 @@ class GitHubReleasesProvider:
             "X-GitHub-Api-Version": "2022-11-28",
         }
 
-    async def _get_or_create_release(self, client: httpx.AsyncClient) -> dict:
+    async def _get_or_create_release(self, client: httpx.AsyncClient) -> dict[str, Any]:
         r = await client.get(f"{self._api}/releases/tags/{self._TAG}", headers=self._headers())
         if r.status_code == 200:
-            return r.json()
+            return cast("dict[str, Any]", r.json())
         if r.status_code not in (404,):
             raise StorageError(f"GitHub release lookup failed: {r.status_code}")
 
@@ -45,22 +46,22 @@ class GitHubReleasesProvider:
         r = await client.post(f"{self._api}/releases", headers=self._headers(), json=payload)
         if r.status_code not in (200, 201):
             raise StorageError(f"GitHub release create failed: {r.status_code}")
-        return r.json()
+        return cast("dict[str, Any]", r.json())
 
     async def _find_asset(
         self,
         client: httpx.AsyncClient,
         *,
-        release: dict,
+        release: dict[str, Any],
         asset_name: str,
-    ) -> dict | None:
+    ) -> dict[str, Any] | None:
         assets_url = str(release.get("assets_url") or "")
         if not assets_url:
             raise StorageError("GitHub release has no assets_url")
         r = await client.get(assets_url, headers=self._headers())
         if r.status_code != 200:
             raise StorageError(f"GitHub assets list failed: {r.status_code}")
-        for a in r.json():
+        for a in cast("list[dict[str, Any]]", r.json()):
             if a.get("name") == asset_name:
                 return a
         return None

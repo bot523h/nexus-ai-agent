@@ -21,6 +21,23 @@ from nexus_ai_agent.selfhood.charter import CHARTER
 from nexus_ai_agent.selfhood.ledger import SelfEntryKind, SelfLedger
 
 ROOT = Path(__file__).resolve().parents[2]
+SRC = ROOT / "src"
+
+# The crash/cross-process tests must run the child under ``-I``: isolated mode is
+# the point (no PYTHONPATH, no CWD on ``sys.path``, no user site-dir), so a leak
+# from the parent process cannot make the test pass for the wrong reason. But the
+# isolation also hides a *source* checkout: when the parent imports
+# ``nexus_ai_agent`` from ``src/`` (editable-only or plain ``PYTHONPATH=src``) the
+# child has no route to the package and dies with ``ModuleNotFoundError`` before
+# it can exercise anything. Prepending the absolute ``src`` directory inside the
+# child script keeps every isolation guarantee while pinning the child to the
+# very tree under test. ``-I`` stays: dropping it would re-open the leak.
+SRC_PRELUDE = f"import sys; sys.path.insert(0, {str(SRC)!r})\n"
+
+
+def _child(source: str) -> str:
+    """Dedent a child script, then prepend the absolute ``src`` path injection."""
+    return SRC_PRELUDE + textwrap.dedent(source)
 
 
 def _ledger(tmp_path: Path) -> SelfLedger:
@@ -122,7 +139,7 @@ def test_amendment_requires_a_named_human_and_then_boots(tmp_path: Path) -> None
 
 def test_crash_restores_every_charter_entry_and_open_commitment(tmp_path: Path) -> None:
     path = tmp_path / "self.sqlite3"
-    child = textwrap.dedent(
+    child = _child(
         f"""
         import os
         from nexus_ai_agent.selfhood.boot import boot_self
@@ -182,7 +199,7 @@ def test_concurrent_open_commitment_admits_exactly_one_writer(tmp_path: Path) ->
 def test_two_processes_cannot_both_open_the_same_commitment(tmp_path: Path) -> None:
     path = tmp_path / "self.sqlite3"
     SelfLedger(path)
-    child = textwrap.dedent(
+    child = _child(
         f"""
         import sys
         from nexus_ai_agent.selfhood.ledger import SelfLedger

@@ -289,7 +289,8 @@ def configure_logging(level: str = "INFO", *, redact: bool = True) -> None:
 
 
 def get_logger(name: str) -> structlog.BoundLogger:
-    return structlog.get_logger(name)
+    # ``structlog.get_logger`` is untyped; the cast is the module's declared contract.
+    return cast(structlog.BoundLogger, structlog.get_logger(name))
 
 
 __all__ = [
