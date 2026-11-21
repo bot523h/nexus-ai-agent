@@ -37,6 +37,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+import numpy as np
+
 __all__ = [
     "ArtifactPassportReceipt",
     "CommandBusAuthorizer",
@@ -92,6 +94,8 @@ def merkle_leaf_hash(leaf: bytes, *, total_leaves: int | None = None) -> bytes:
     ``total_leaves`` 5, 6 and 7 — all four sizes produce a 3-node path that
     folds to the same root, so the size claim was unpinned.
     """
+    if total_leaves is not None:
+        _require_finite_scalar(total_leaves, name="total_leaves")
     if total_leaves is None:
         return hashlib.sha256(_LEAF_PREFIX + leaf).digest()
     if total_leaves < 1:
@@ -102,6 +106,8 @@ def merkle_leaf_hash(leaf: bytes, *, total_leaves: int | None = None) -> bytes:
 
 def merkle_node_hash(left: bytes, right: bytes) -> bytes:
     """``SHA-256(0x01 || left || right)`` — the RFC 6962 interior commitment."""
+    if len(left) != 32 or len(right) != 32:
+        raise LineageError("invalid node hash")
     return hashlib.sha256(_NODE_PREFIX + left + right).digest()
 
 
@@ -114,6 +120,7 @@ def _split(width: int) -> int:
     other size — which is exactly the failure this helper replaced: a tree of
     3 or 5 leaves produced proofs that no verifier could accept.
     """
+    _require_finite_scalar(width, name="width")
     if width <= 1:
         raise LineageError(f"cannot split a tree of {width} leaves")
     return 1 << ((width - 1).bit_length() - 1)
@@ -128,7 +135,9 @@ def merkle_root(leaves: Sequence[bytes]) -> bytes:
     split rule gives the append-only proof structure CT relies on.
     """
     if not leaves:
-        return hashlib.sha256(b"").digest()
+        raise LineageError("Merkle tree must not be empty")
+    if any(not isinstance(leaf, bytes) or len(leaf) != 32 for leaf in leaves):
+        raise LineageError("invalid SHA-256 leaf hash")
     if len(leaves) == 1:
         return leaves[0]
     split = _split(len(leaves))
@@ -142,6 +151,7 @@ def merkle_inclusion_proof(leaves: Sequence[bytes], index: int) -> tuple[bytes, 
     ``total_leaves`` and ``index`` it is unambiguous; alone it is not, which is
     why :class:`MerkleProof` carries all three.
     """
+    _require_finite_scalar(index, name="index")
     if not leaves:
         raise LineageError("cannot prove inclusion in an empty tree")
     if not 0 <= index < len(leaves):
@@ -188,6 +198,8 @@ def verify_merkle_inclusion(
     into the leaf domain, so a leaf hashed for one size cannot be reused at
     another.
     """
+    _require_finite_scalar(index, name="index")
+    _require_finite_scalar(total_leaves, name="total_leaves")
     if total_leaves <= 0 or not 0 <= index < total_leaves:
         return False
     if len(proof) != _proof_length(index, total_leaves):
@@ -221,6 +233,8 @@ def _proof_length(index: int, total_leaves: int) -> int:
     rightmost leaves of every odd-sized tree — the case that survived the first
     two attempts at this verifier.
     """
+    _require_finite_scalar(index, name="index")
+    _require_finite_scalar(total_leaves, name="total_leaves")
     if total_leaves <= 1:
         return 0
     length = 0
@@ -588,3 +602,22 @@ class StagedAudioPublication:
             shutil.rmtree(final)
         shutil.move(str(self.staging_dir), str(final))
         return LineageReceipt(destination=final, passport=passport, proofs=proofs)
+
+
+def _require_finite_scalar(value: object, *, name: str) -> None:
+    """Numeric inputs never silently coerce booleans or non-finite values."""
+    if isinstance(value, (bool, np.bool_)):
+        raise TypeError(f"{name} must not be bool")
+    if not isinstance(value, (int, float, np.integer, np.floating)):
+        raise TypeError(f"{name} must be numeric")
+    if not np.isfinite(value):
+        raise ValueError(f"{name} must be finite")
+
+
+def _require_finite_array(value: object, *, name: str) -> None:
+    """Validate before dtype conversion can erase boolean evidence."""
+    raw = np.asarray(value, dtype=object)
+    if any(isinstance(item, (bool, np.bool_)) for item in raw.flat):
+        raise TypeError(f"{name} must not contain bool")
+    if not np.all(np.isfinite(np.asarray(value))):
+        raise ValueError(f"{name} must be finite")

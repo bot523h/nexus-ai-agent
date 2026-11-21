@@ -61,8 +61,10 @@ from __future__ import annotations
 import hashlib
 import json
 import threading
-from collections.abc import Mapping
-from dataclasses import dataclass
+from collections import OrderedDict
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field
+from enum import Enum
 from typing import Any
 from uuid import uuid4
 
@@ -149,6 +151,458 @@ class _Reservation:
     result: CommandResult | None = None  # None means execution is in flight
 
 
+# --------------------------------------------------------------------------- #
+# PlanTransaction: atomic multi-step execution with LIFO compensating rollback
+# --------------------------------------------------------------------------- #
+#
+# A ``PlanTransaction`` is an ordered saga of steps. Each step either dispatches
+# a typed command through the bus or runs a caller-supplied ``execute`` closure,
+# and may carry a ``compensate`` closure that undoes its effect. Execution is
+# fail-closed: the first failing step stops forward progress immediately, every
+# previously succeeded step is compensated in exact reverse (LIFO) order, and a
+# compensation failure never abandons the remaining compensations -- all
+# rollback errors are collected and the transaction lands in ``ROLLBACK_FAILED``.
+# A finished transaction (``COMMITTED``, ``ROLLED_BACK`` or ``ROLLBACK_FAILED``)
+# can never be re-committed or re-rolled-back: the idempotency guard raises.
+
+
+MAX_COMMITTED_PLANS = 256
+
+
+class PlanTransactionState(Enum):
+    """Explicit state machine for a :class:`PlanTransaction`."""
+
+    PENDING = "PENDING"
+    EXECUTING = "EXECUTING"
+    COMMITTED = "COMMITTED"
+    ROLLING_BACK = "ROLLING_BACK"
+    ROLLED_BACK = "ROLLED_BACK"
+    ROLLBACK_FAILED = "ROLLBACK_FAILED"
+
+
+_FINISHED_PLAN_STATES = frozenset(
+    {
+        PlanTransactionState.COMMITTED,
+        PlanTransactionState.ROLLED_BACK,
+        PlanTransactionState.ROLLBACK_FAILED,
+    }
+)
+
+
+class PlanTransactionError(CommandExecutionError):
+    """A plan step failed; the transaction records the rollback outcome."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        plan_id: str = "",
+        failed_step_index: int | None = None,
+        original_error: BaseException | None = None,
+        rollback_errors: tuple[BaseException, ...] = (),
+    ) -> None:
+        super().__init__(message)
+        self.plan_id = plan_id
+        self.failed_step_index = failed_step_index
+        self.original_error = original_error
+        self.rollback_errors = rollback_errors
+
+
+class PlanRollbackError(PlanTransactionError):
+    """A plan step failed *and* at least one compensation also failed."""
+
+
+def _canonical_hash(payload: Any) -> str:
+    """SHA-256 hex digest of the canonical JSON form of ``payload``.
+
+    Non-JSON-native values fall back to ``repr`` so hashing never raises; the
+    digest is still deterministic for a given payload within a process.
+    """
+    try:
+        canonical = json.dumps(
+            payload,
+            sort_keys=True,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            allow_nan=False,
+            default=str,
+        )
+    except (TypeError, ValueError):
+        canonical = repr(payload)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _code_evidence(code: Any) -> Any:
+    """Hash bytecode/constants without importing a serialization runtime."""
+    if not hasattr(code, "co_code"):
+        return code
+    return {
+        "bytecode": code.co_code.hex(),
+        "names": code.co_names,
+        "constants": [_code_evidence(value) for value in code.co_consts],
+    }
+
+
+def _clone_plan_snapshot(source: Mapping[str, Any]) -> dict[str, Any]:
+    """Copy the three typed state containers, including cached result models."""
+    return {
+        "_project": source["_project"].model_copy(deep=True),
+        "_history": [record.model_copy(deep=True) for record in source["_history"]],
+        "_idempotency": {
+            key: _Reservation(
+                value.fingerprint, value.result.model_copy(deep=True) if value.result else None
+            )
+            for key, value in source["_idempotency"].items()
+        },
+    }
+
+
+@dataclass(frozen=True)
+class PlanStepRecord:
+    """Immutable audit record for one executed plan step."""
+
+    step_index: int
+    capability_name: str
+    status: str  # "succeeded" | "failed"
+    input_hash: str
+    output_hash: str
+
+
+@dataclass(frozen=True)
+class PlanRollbackRecord:
+    """Immutable audit record for one compensated plan step."""
+
+    step_index: int
+    capability_name: str
+    status: str  # "succeeded" | "failed"
+    input_hash: str
+    output_hash: str
+
+
+@dataclass(frozen=True)
+class PlanStep:
+    """One step of a :class:`PlanTransaction`.
+
+    Exactly one of ``command`` (dispatched through the bus) or ``execute``
+    (a caller closure) must be supplied. ``compensate`` is the rollback
+    closure invoked with the step's result when a later step fails; it is
+    optional for internal bus-only commands. Custom closures require one by
+    default. ``rollback_on_self_error`` opts into emergency compensation of a
+    partially executed failing step; it receives None when no result exists.
+    Internal bus state is always restored from the pre-plan snapshot on failure.
+    """
+
+    operation: str
+    command: TypedCommand | dict[str, Any] | str | bytes | None = None
+    execute: Callable[[], Any] | None = None
+    compensate: Callable[[Any], Any] | None = None
+    rollback_on_self_error: bool = False
+
+    def __post_init__(self) -> None:
+        if not self.operation:
+            raise PlanTransactionError("plan step requires a non-empty operation name")
+        if (self.command is None) == (self.execute is None):
+            raise PlanTransactionError(
+                f"plan step {self.operation!r} must supply exactly one of command or execute"
+            )
+        if self.command is not None and _parse(self.command).operation != self.operation:
+            raise ValueError("step operation does not match command.operation")
+
+
+@dataclass
+class PlanTransaction:
+    """An ordered multi-step transaction with compensating rollback.
+
+    ``commit`` runs every step in order. The first step that raises or returns
+    an unsuccessful result (``False`` from an ``execute`` closure) stops forward
+    execution immediately; all previously succeeded steps are then compensated
+    in exact reverse (LIFO) order. Compensation failures are collected without
+    abandoning the remaining compensations and move the transaction to
+    ``ROLLBACK_FAILED``; a clean rollback lands in ``ROLLED_BACK``. Full success
+    lands in ``COMMITTED``. Re-committing or re-rolling-back a finished
+    transaction raises :class:`PlanTransactionError`.
+    """
+
+    plan_id: str = field(default_factory=lambda: uuid4().hex)
+    steps: tuple[PlanStep, ...] = ()
+    require_compensation: bool = True
+    _snapshot: dict[str, Any] | None = field(default=None, repr=False)
+    _bus: CommandBus | None = field(default=None, repr=False)
+    state: PlanTransactionState = PlanTransactionState.PENDING
+    step_records: list[PlanStepRecord] = field(default_factory=list)
+    rollback_records: list[PlanRollbackRecord] = field(default_factory=list)
+    _committed_hash: str = field(default="", repr=False)
+    _committed_revision: int = field(default=-1, repr=False)
+    _committed_history_len: int = field(default=0, repr=False)
+    _committed_last_id: str | None = field(default=None, repr=False)
+    _step_results: dict[int, Any] = field(default_factory=dict, repr=False)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.plan_id, str) or not self.plan_id.strip():
+            raise ValueError("plan_id must be a non-empty string")
+        if self.require_compensation and any(
+            step.execute is not None and step.compensate is None for step in self.steps
+        ):
+            raise ValueError("custom steps require compensation")
+        if not self.steps:
+            raise PlanTransactionError("plan transaction requires at least one step")
+
+    # -- execution ------------------------------------------------------- #
+
+    def commit(self, bus: CommandBus | None = None) -> PlanTransaction:
+        """Execute under the bus lock, retaining its complete pre-plan snapshot."""
+        if bus is None:
+            return self._commit_steps(None)
+        with bus._lock:
+            if bus._executing:
+                raise CommandExecutionError("Re-entrant execution is forbidden")
+            if self.state is not PlanTransactionState.PENDING:
+                raise PlanTransactionError("transaction already finished")
+            fingerprint = _canonical_hash(
+                [self._step_input_hash(i, step) for i, step in enumerate(self.steps)]
+            )
+            prior = bus._plan_cache.get(self.plan_id) if self.plan_id else None
+            if prior is not None:
+                if prior[0] != fingerprint:
+                    raise ValueError("plan_id input conflict")
+                bus._plan_cache.move_to_end(self.plan_id)
+                return prior[1]
+            self._snapshot = _clone_plan_snapshot(vars(bus))
+            self._bus = bus
+            bus._executing = True
+            try:
+                result = self._commit_steps(bus)
+                self._committed_hash = bus.state_hash
+                self._committed_revision = bus.state_revision
+                self._committed_history_len = len(bus._history)
+                self._committed_last_id = bus._history[-1].transaction_id if bus._history else None
+                if self.plan_id:
+                    bus._plan_cache[self.plan_id] = (fingerprint, self)
+                    while len(bus._plan_cache) > MAX_COMMITTED_PLANS:
+                        bus._plan_cache.popitem(last=False)
+                return result
+            except BaseException:
+                self._restore_snapshot()
+                raise
+            finally:
+                bus._executing = False
+
+    def _restore_snapshot(self) -> None:
+        if self._bus is not None and self._snapshot is not None:
+            for name, value in _clone_plan_snapshot(self._snapshot).items():
+                setattr(self._bus, name, value)
+
+    def _commit_steps(self, bus: CommandBus | None) -> PlanTransaction:
+        """Forward execution and compensation while the outer lock is held."""
+        if self.state in _FINISHED_PLAN_STATES:
+            raise PlanTransactionError(
+                f"plan {self.plan_id!r} already finished in state {self.state.value}; "
+                "re-commit is forbidden",
+                plan_id=self.plan_id,
+            )
+        if self.state in (PlanTransactionState.EXECUTING, PlanTransactionState.ROLLING_BACK):
+            raise PlanTransactionError(
+                f"plan {self.plan_id!r} is already {self.state.value}; "
+                "re-entrant commit is forbidden",
+                plan_id=self.plan_id,
+            )
+        self.state = PlanTransactionState.EXECUTING
+        failed_index: int | None = None
+        failed_error: BaseException | None = None
+        for index, step in enumerate(self.steps):
+            input_hash = self._step_input_hash(index, step)
+            try:
+                result = self._execute_step(step, bus)
+                if result is False:
+                    raise PlanTransactionError(
+                        f"plan step {index} ({step.operation!r}) returned an unsuccessful result",
+                        plan_id=self.plan_id,
+                        failed_step_index=index,
+                    )
+            except BaseException as exc:  # noqa: BLE001 - any step failure rolls back
+                failed_index = index
+                failed_error = exc
+                self.step_records.append(
+                    PlanStepRecord(
+                        step_index=index,
+                        capability_name=step.operation,
+                        status="failed",
+                        input_hash=input_hash,
+                        output_hash=_canonical_hash(f"{type(exc).__name__}: {exc}"),
+                    )
+                )
+                break
+            self._step_results[index] = result
+            self.step_records.append(
+                PlanStepRecord(
+                    step_index=index,
+                    capability_name=step.operation,
+                    status="succeeded",
+                    input_hash=input_hash,
+                    output_hash=_canonical_hash(result),
+                )
+            )
+        if failed_index is None:
+            self.state = PlanTransactionState.COMMITTED
+            return self
+        # Fail-closed: stop forward progress and compensate in exact LIFO order.
+        self.state = PlanTransactionState.ROLLING_BACK
+        rollback_errors = self._run_compensations()
+        if rollback_errors:
+            self.state = PlanTransactionState.ROLLBACK_FAILED
+            raise PlanRollbackError(
+                f"plan {self.plan_id!r} step {failed_index} failed and "
+                f"{len(rollback_errors)} compensation(s) also failed; "
+                "transaction is ROLLBACK_FAILED",
+                plan_id=self.plan_id,
+                failed_step_index=failed_index,
+                original_error=failed_error,
+                rollback_errors=tuple(rollback_errors),
+            ) from failed_error
+        self.state = PlanTransactionState.ROLLED_BACK
+        raise PlanTransactionError(
+            f"plan {self.plan_id!r} step {failed_index} failed; "
+            "all prior steps were rolled back (ROLLED_BACK)",
+            plan_id=self.plan_id,
+            failed_step_index=failed_index,
+            original_error=failed_error,
+        ) from failed_error
+
+    def rollback(self) -> PlanTransaction:
+        """Compensate every succeeded step in LIFO order (manual rollback)."""
+        if self.state in _FINISHED_PLAN_STATES:
+            raise PlanTransactionError(
+                f"plan {self.plan_id!r} already finished in state {self.state.value}; "
+                "re-rollback is forbidden",
+                plan_id=self.plan_id,
+            )
+        if self.state == PlanTransactionState.ROLLING_BACK:
+            raise PlanTransactionError(
+                f"plan {self.plan_id!r} is already ROLLING_BACK; re-entrant rollback is forbidden",
+                plan_id=self.plan_id,
+            )
+        self.state = PlanTransactionState.ROLLING_BACK
+        rollback_errors = self._run_compensations()
+        if rollback_errors:
+            self.state = PlanTransactionState.ROLLBACK_FAILED
+            raise PlanRollbackError(
+                f"plan {self.plan_id!r} rollback failed with "
+                f"{len(rollback_errors)} compensation error(s); transaction is ROLLBACK_FAILED",
+                plan_id=self.plan_id,
+                rollback_errors=tuple(rollback_errors),
+            )
+        self.state = PlanTransactionState.ROLLED_BACK
+        return self
+
+    def rollback_committed_plan(self) -> PlanTransaction:
+        """Undo a committed plan only if no subsequent bus write intervened."""
+        bus = self._bus
+        if bus is None:
+            raise PlanTransactionError("committed undo requires a bus")
+        with bus._lock:
+            if bus._executing:
+                raise CommandExecutionError("Re-entrant execution is forbidden")
+            if self.state is not PlanTransactionState.COMMITTED:
+                raise PlanTransactionError("plan is not committed")
+            if (
+                bus.state_hash != self._committed_hash
+                or bus.state_revision != self._committed_revision
+                or len(bus._history) != self._committed_history_len
+                or (bus._history[-1].transaction_id if bus._history else None)
+                != self._committed_last_id
+            ):
+                raise PlanTransactionError(
+                    "bus changed after plan commit (ABA or revision drift detected)"
+                )
+            bus._executing = True
+            try:
+                self.state = PlanTransactionState.ROLLING_BACK
+                errors = self._run_compensations()
+                self._restore_snapshot()
+                bus._plan_cache.pop(self.plan_id, None)
+                self.state = (
+                    PlanTransactionState.ROLLBACK_FAILED
+                    if errors
+                    else PlanTransactionState.ROLLED_BACK
+                )
+                if errors:
+                    raise PlanRollbackError("committed undo failed", rollback_errors=tuple(errors))
+                return self
+            finally:
+                bus._executing = False
+
+    # -- internals ------------------------------------------------------- #
+
+    def _step_input_hash(self, index: int, step: PlanStep) -> str:
+        if step.command is not None:
+            return _fingerprint(_parse(step.command))
+        fn = step.execute
+        code = getattr(fn, "__code__", None)
+        cells = getattr(fn, "__closure__", None) or ()
+        return _canonical_hash(
+            {
+                "operation": step.operation,
+                "step_index": index,
+                "code": _code_evidence(code) if code else str(type(fn)),
+                "defaults": getattr(fn, "__defaults__", None),
+                "closure": [cell.cell_contents for cell in cells],
+            }
+        )
+
+    def _execute_step(self, step: PlanStep, bus: CommandBus | None) -> Any:
+        if step.execute is not None:
+            return step.execute()
+        if bus is None:
+            raise PlanTransactionError(
+                f"plan step {step.operation!r} carries a command but no bus was supplied",
+                plan_id=self.plan_id,
+            )
+        parsed = _parse(step.command)  # type: ignore[arg-type]
+        return bus._dispatch_locked(parsed)
+
+    def _run_compensations(self) -> list[BaseException]:
+        """Compensate succeeded steps in exact LIFO order; collect all errors."""
+        errors: list[BaseException] = []
+        # The failing step may have external partial effects. Opt in explicitly
+        # to emergency compensation (its result is None if execution raised).
+        succeeded = [
+            r
+            for r in self.step_records
+            if r.status == "succeeded"
+            or (r.status == "failed" and self.steps[r.step_index].rollback_on_self_error)
+        ]
+        for record in reversed(succeeded):
+            step = self.steps[record.step_index]
+            if step.compensate is None:
+                if step.execute is not None:
+                    errors.append(ValueError(f"uncompensated step {record.step_index}"))
+                continue
+            try:
+                compensation_result = step.compensate(self._step_results.get(record.step_index))
+            except BaseException as exc:  # noqa: BLE001 - collect, never abandon
+                errors.append(exc)
+                self.rollback_records.append(
+                    PlanRollbackRecord(
+                        step_index=record.step_index,
+                        capability_name=step.operation,
+                        status="failed",
+                        input_hash=record.input_hash,
+                        output_hash=_canonical_hash(f"{type(exc).__name__}: {exc}"),
+                    )
+                )
+            else:
+                self.rollback_records.append(
+                    PlanRollbackRecord(
+                        step_index=record.step_index,
+                        capability_name=step.operation,
+                        status="succeeded",
+                        input_hash=record.input_hash,
+                        output_hash=_canonical_hash(compensation_result),
+                    )
+                )
+        return errors
+
+
 class CommandBus:
     """Validates typed commands and applies them atomically to central state."""
 
@@ -190,6 +644,7 @@ class CommandBus:
         self._history: list[EditTransaction] = []
         self._idempotency: dict[tuple[str, str, str], _Reservation] = {}
         self._executing = False
+        self._plan_cache: OrderedDict[str, tuple[str, PlanTransaction]] = OrderedDict()
 
     @property
     def project(self) -> Project:
@@ -229,6 +684,25 @@ class CommandBus:
             if self._executing:
                 raise CommandExecutionError("nested command dispatch during execution is forbidden")
             return self._dispatch_locked(parsed)
+
+    def dispatch_plan(self, plan: PlanTransaction) -> PlanTransaction:
+        """Execute a :class:`PlanTransaction` atomically under the bus lock.
+
+        Steps run in order; the first failure stops forward progress and every
+        previously succeeded step is compensated in exact LIFO order. The
+        transaction's state machine (``COMMITTED`` / ``ROLLED_BACK`` /
+        ``ROLLBACK_FAILED``) and its step/rollback records carry the outcome.
+        """
+        if not isinstance(plan, PlanTransaction):
+            raise CommandValidationError("dispatch_plan requires a PlanTransaction")
+        with self._lock:
+            if self._executing:
+                raise CommandExecutionError("nested plan dispatch during execution is forbidden")
+            return self._dispatch_plan_locked(plan)
+
+    def _dispatch_plan_locked(self, plan: PlanTransaction) -> PlanTransaction:
+        """Transactional plan execution (see :meth:`dispatch_plan`)."""
+        return plan.commit(self)
 
     def _dispatch_locked(self, command: TypedCommand) -> CommandResult:
         if command.protocol_version != PROTOCOL_VERSION:
@@ -349,11 +823,12 @@ class CommandBus:
     def _apply_guarded(
         self, command: TypedCommand, spec: OperationSpec, input_data: dict[str, Any]
     ) -> CommandResult:
+        previous = self._executing
         self._executing = True
         try:
             return self._apply(command, spec, input_data)
         finally:
-            self._executing = False
+            self._executing = previous
 
     def _check_preconditions(self, preconditions: Preconditions) -> None:
         expected_revision = preconditions.state_revision

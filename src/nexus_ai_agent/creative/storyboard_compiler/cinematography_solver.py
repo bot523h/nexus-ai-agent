@@ -24,9 +24,9 @@ from __future__ import annotations
 
 import math
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from enum import Enum
-from typing import Final
+from typing import Any, Final, Self
 
 import numpy as np
 import numpy.typing as npt
@@ -47,6 +47,9 @@ Vec3Tuple = tuple[float, float, float]
 Mat3Tuple = tuple[Vec3Tuple, Vec3Tuple, Vec3Tuple]
 
 __all__ = [
+    "se3_exp",
+    "se3_log",
+    "verify_minimum_jerk_calculus_invariants",
     "AxisEnforcementTrace",
     "AxisOfAction",
     "AxisVerificationReport",
@@ -183,9 +186,37 @@ _LENS_TO_SCALE: Final[dict[int, ShotScale]] = {
 # --------------------------------------------------------------------------- #
 
 
+def _require_finite_scalar(value: object, *, name: str) -> float:
+    """Reject ``bool``, non-numeric, ``NaN`` and ``±Inf`` scalars fail-closed.
+
+    ``bool`` is rejected explicitly because ``isinstance(True, int)`` holds in
+    Python: without the check a boolean would silently pass as ``1.0``. NaN and
+    infinities raise :class:`CinematographyError` (a ``ValueError``).
+    """
+    if isinstance(value, (bool, np.bool_)):
+        raise TypeError(f"{name} must be a finite number, got bool {value!r}")
+    if not isinstance(value, (int, float, np.integer, np.floating)):
+        raise TypeError(f"{name} must be a finite number, got {type(value).__name__}")
+    result = float(value)
+    if not math.isfinite(result):
+        raise CinematographyError(f"{name} must be finite, got {value!r}")
+    return result
+
+
+def _require_finite_array(values: object, *, name: str) -> FloatArray:
+    """Reject ``bool`` elements and non-finite entries in an array fail-closed."""
+    raw = np.asarray(values, dtype=object)
+    if any(isinstance(item, (bool, np.bool_)) for item in raw.flat):
+        raise TypeError(f"{name} must be a finite numeric array, got bool element")
+    arr = np.asarray(values, dtype=np.float64)
+    if not np.all(np.isfinite(arr)):
+        raise CinematographyError(f"{name} must be finite, got non-finite entries")
+    return arr
+
+
 def _as_vec3(vec: Sequence[float] | FloatArray, *, name: str) -> FloatArray:
-    arr = np.asarray(vec, dtype=np.float64)
-    if arr.shape != (3,) or not np.all(np.isfinite(arr)):
+    arr = _require_finite_array(vec, name=name)
+    if arr.shape != (3,):
         raise CinematographyError(f"{name} must be a finite 3-vector, got shape {arr.shape}")
     return arr
 
@@ -232,24 +263,42 @@ def so3_exp(omega: Sequence[float] | FloatArray) -> FloatArray:
 
 
 def _validate_so3(rotation: Sequence[Sequence[float]] | FloatArray, *, tol: float) -> FloatArray:
-    rot = np.asarray(rotation, dtype=np.float64)
-    if rot.shape != (3, 3) or not np.all(np.isfinite(rot)):
-        raise CinematographyError(f"rotation must be a finite 3x3 matrix, got shape {rot.shape}")
-    ortho_err = float(np.linalg.norm(rot @ rot.T - np.eye(3, dtype=np.float64), ord="fro"))
+    _require_finite_scalar(tol, name="tol")
+    if not 0 < tol <= 1e-5:
+        raise CinematographyError("tol must lie in (0, 1e-5]")
+    rot = _require_finite_array(rotation, name="rotation")
+    if rot.shape != (3, 3):
+        raise CinematographyError(
+            "Matrix is not a valid SO(3) rotation: expected a finite 3x3 matrix, "
+            f"got shape {rot.shape}"
+        )
+    ortho_err = float(np.linalg.norm(rot.T @ rot - np.eye(3, dtype=np.float64), ord="fro"))
     if ortho_err > tol:
         raise CinematographyError(
-            f"rotation violates orthogonality: ||R @ R.T - I||_F = {ortho_err:.3e} > {tol:.3e}"
+            "Matrix is not a valid SO(3) rotation: orthogonality violated "
+            f"||R^T @ R - I||_F = {ortho_err:.3e} > {tol:.3e}"
         )
     det = float(np.linalg.det(rot))
     if abs(det - 1.0) > tol:
         raise CinematographyError(
-            f"rotation violates SO(3) determinant: det(R) = {det:.12f} (expected +1.0)"
+            f"Matrix is not a valid SO(3) rotation: determinant det(R) = {det:.12f} (expected +1.0)"
         )
     return rot
 
 
-def so3_log(rotation: Sequence[Sequence[float]] | FloatArray, *, tol: float = 1e-8) -> FloatArray:
-    """Inverse Rodrigues logarithm map ``log: SO(3) -> so(3)`` returning a 3-vector."""
+def so3_log(rotation: Sequence[Sequence[float]] | FloatArray, *, tol: float = 1e-5) -> FloatArray:
+    """Inverse Rodrigues logarithm map ``log: SO(3) -> so(3)`` returning a 3-vector.
+
+    The input must be a proper rotation: shape ``(3, 3)``, all entries finite,
+    ``||R^T @ R - I||_F <= 1e-5`` and ``|det(R) - 1| <= 1e-5``, otherwise
+    ``ValueError("Matrix is not a valid SO(3) rotation")`` is raised. The
+    antipodal singularity at ``theta -> pi`` (where ``R - R^T -> 0`` and the
+    classical Rodrigues formula divides by ``sin(theta) -> 0``) is resolved by
+    extracting the rotation axis from the exact rank-1 symmetric tensor
+    ``S = 0.5*(R + R^T) - cos(theta)*I = (1 - cos(theta)) * u u^T`` (which at
+    ``theta = pi`` equals ``2 * B`` with ``B = 0.5*(R + I) = u u^T``), so the
+    round trip ``||so3_exp(so3_log(R)) - R||_F < 1e-6`` holds on all of SO(3).
+    """
     rot = _validate_so3(rotation, tol=tol)
     vee = np.array(
         [rot[2, 1] - rot[1, 2], rot[0, 2] - rot[2, 0], rot[1, 0] - rot[0, 1]],
@@ -258,21 +307,60 @@ def so3_log(rotation: Sequence[Sequence[float]] | FloatArray, *, tol: float = 1e
     sin_theta = 0.5 * float(np.linalg.norm(vee))
     cos_theta = float(np.clip(0.5 * (float(np.trace(rot)) - 1.0), -1.0, 1.0))
     theta = math.atan2(sin_theta, cos_theta)
-    if theta < 1e-8:
-        return 0.5 * vee
+    if theta < 1e-7:
+        # Identity neighbourhood: Taylor coefficient of theta/(2 sin theta).
+        return (0.5 + theta * theta / 12.0 + 7.0 * theta**4 / 720.0) * vee
     if cos_theta < -0.99:
-        # Near pi rotation: extract unit axis at machine precision from the rank-1
-        # symmetric outer product S = 0.5*(R + R^T) - cos(theta)*I = (1 - cos(theta))*u*u^T
-        # and resolve hemisphere sign against the skew-symmetric vector vee(R - R^T).
+        # Antipodal region (covers pi - theta < 1e-4 and beyond): vee(R - R^T)
+        # vanishes with sin(theta), so the axis is read from the exact symmetric
+        # tensor S = (1 - cos(theta)) * u u^T instead of the skew part.
         sym = 0.5 * (rot + rot.T) - cos_theta * np.eye(3, dtype=np.float64)
         col_norms = np.linalg.norm(sym, axis=0)
         best = int(np.argmax(col_norms))
         axis: FloatArray = sym[:, best] / float(col_norms[best])
-        if float(np.dot(axis, vee)) < 0.0:
+        if sin_theta > 1e-12 and float(np.dot(axis, vee)) < 0.0:
             axis = -axis
         return theta * axis
     scale = theta / (2.0 * sin_theta)
     return scale * vee
+
+
+def se3_exp(twist: Sequence[float] | FloatArray) -> FloatArray:
+    """Exponential of a twist ordered as (translation velocity, rotation vector)."""
+    xi = _require_finite_array(twist, name="twist")
+    if xi.shape != (6,):
+        raise CinematographyError("twist must have shape (6,)")
+    omega = xi[3:]
+    theta = float(np.linalg.norm(omega))
+    k = skew_symmetric(omega)
+    if theta < 1e-4:
+        a = 0.5 - theta**2 / 24.0 + theta**4 / 720.0
+        b = 1.0 / 6.0 - theta**2 / 120.0 + theta**4 / 5040.0
+    else:
+        a = (1.0 - math.cos(theta)) / theta**2
+        b = (theta - math.sin(theta)) / theta**3
+    v = np.eye(3) + a * k + b * (k @ k)
+    result = np.eye(4, dtype=np.float64)
+    result[:3, :3] = so3_exp(omega)
+    result[:3, 3] = v @ xi[:3]
+    return result
+
+
+def se3_log(transform: Sequence[Sequence[float]] | FloatArray) -> FloatArray:
+    """Logarithm of SE(3), regular at identity and at a half-turn."""
+    t = _require_finite_array(transform, name="transform")
+    if t.shape != (4, 4) or not np.allclose(t[3], [0, 0, 0, 1], atol=1e-10, rtol=0):
+        raise CinematographyError("transform must be a valid SE(3) matrix")
+    omega = so3_log(t[:3, :3])
+    theta = float(np.linalg.norm(omega))
+    k = skew_symmetric(omega)
+    if theta < 1e-4:
+        coefficient = 1.0 / 12.0 + theta**2 / 720.0 + theta**4 / 30240.0
+    else:
+        # Half-angle form stays regular at pi, unlike division by sin(theta).
+        coefficient = 1.0 / theta**2 - 1.0 / (2.0 * theta * math.tan(theta / 2.0))
+    inverse_v = np.eye(3) - 0.5 * k + coefficient * (k @ k)
+    return np.concatenate((inverse_v @ t[:3, 3], omega))
 
 
 def is_valid_se3(matrix: Sequence[Sequence[float]] | FloatArray, *, tol: float = 1e-9) -> bool:
@@ -295,6 +383,11 @@ class CameraPoseSE3:
 
     rotation: Mat3Tuple
     translation: Vec3Tuple
+
+    def __post_init__(self) -> None:
+        _validate_so3(self.rotation, tol=1e-5)
+        _require_finite_array(self.translation, name="translation")
+        _as_vec3(self.translation, name="translation")
 
     @classmethod
     def from_rt(
@@ -347,6 +440,7 @@ class CameraPoseSE3:
 
 
 def _apply_optical_roll(rotation: FloatArray, roll_rad: float) -> FloatArray:
+    _require_finite_scalar(roll_rad, name="roll_rad")
     if not math.isfinite(roll_rad):
         raise CinematographyError(f"roll_rad must be finite, got {roll_rad!r}")
     if abs(roll_rad) == 0.0:
@@ -410,6 +504,13 @@ def project_world_point(
     sensor_height_mm: float = SENSOR_HEIGHT_MM,
 ) -> tuple[float, float]:
     """Project a 3D world point onto normalized sensor coordinates ``(u, v)``."""
+    _require_finite_scalar(focal_length_mm, name="focal_length_mm")
+    for name, value in (
+        ("sensor_width_mm", sensor_width_mm),
+        ("sensor_height_mm", sensor_height_mm),
+    ):
+        if _require_finite_scalar(value, name=name) <= 0:
+            raise CinematographyError(f"{name} must be positive")
     if not math.isfinite(focal_length_mm) or focal_length_mm <= 0.0:
         raise CinematographyError(f"focal_length_mm must be positive, got {focal_length_mm!r}")
     pt = _as_vec3(point_world, name="point_world")
@@ -432,8 +533,16 @@ def build_rule_of_thirds_pose(
     roll_rad: float = 0.0,
 ) -> CameraPoseSE3:
     """Solve closed-form horizon-level ``SE(3)`` pose placing ``subject_pos`` at ``target_uv``."""
+    _require_finite_scalar(focal_length_mm, name="focal_length_mm")
+    for name, value in (
+        ("sensor_width_mm", sensor_width_mm),
+        ("sensor_height_mm", sensor_height_mm),
+    ):
+        if _require_finite_scalar(value, name=name) <= 0:
+            raise CinematographyError(f"{name} must be positive")
     if not math.isfinite(focal_length_mm) or focal_length_mm <= 0.0:
         raise CinematographyError(f"focal_length_mm must be positive, got {focal_length_mm!r}")
+    _require_finite_array(target_uv, name="target_uv")
     u_star, v_star = target_uv
     if not (0.0 < u_star < 1.0 and 0.0 < v_star < 1.0):
         raise CinematographyError(f"target_uv must lie strictly in (0, 1)^2, got {target_uv!r}")
@@ -449,6 +558,7 @@ def build_rule_of_thirds_pose(
     r_x, r_y, r_z = float(ray[0]), float(ray[1]), float(ray[2])
     r_h = math.hypot(r_x, r_y)
 
+    _require_finite_scalar(roll_rad, name="roll_rad")
     if not math.isfinite(roll_rad):
         raise CinematographyError(f"roll_rad must be finite, got {roll_rad!r}")
 
@@ -504,6 +614,9 @@ class AxisOfAction:
     character_b: str = "CHARACTER_B"
 
     def __post_init__(self) -> None:
+        _require_finite_array(self.p1, name="p1")
+        _require_finite_array(self.p2, name="p2")
+        _require_finite_scalar(self.initial_side, name="initial_side")
         v1 = _as_vec3(self.p1, name="p1")
         v2 = _as_vec3(self.p2, name="p2")
         horiz = math.hypot(float(v2[0] - v1[0]), float(v2[1] - v1[1]))
@@ -556,6 +669,9 @@ def axis_side_sign(
     eps: float = 1e-9,
 ) -> int:
     """Return ``+1``, ``-1``, or ``0`` for camera placement relative to ``p1 -> p2``."""
+    _require_finite_scalar(eps, name="eps")
+    if eps < 0:
+        raise CinematographyError("eps must be nonnegative")
     cross_z = horizontal_axis_cross(camera_pos, p1, p2)
     if cross_z > eps:
         return 1
@@ -575,6 +691,21 @@ class AxisEnforcementTrace:
     original_signed_distance_m: float
     enforced_signed_distance_m: float
     was_axis_reflected: bool
+
+    def validate_strict(self) -> Self:
+        """Validate trusted geometry, while the raw constructor remains audit-safe."""
+        for item in fields(self):
+            value = getattr(self, item.name)
+            if item.type in ("float", "int"):
+                _require_finite_scalar(value, name=item.name)
+            elif item.type in ("Vec3Tuple", "Mat3Tuple"):
+                _require_finite_array(value, name=item.name)
+        return self
+
+    @classmethod
+    def from_validated(cls, **kwargs: Any) -> Self:
+        """Construct validated geometry, not an untrusted audit record."""
+        return cls(**kwargs).validate_strict()
 
 
 def enforce_axis_of_action_with_trace(
@@ -596,8 +727,10 @@ def enforce_axis_of_action_with_trace(
       into the valid half-plane and sets ``trace.was_axis_reflected = True`` along
       with ``trace.original_axis_side`` (``-1``, ``0``, or ``+1``).
     """
+    _require_finite_scalar(required_side, name="required_side")
     if required_side not in (-1, 1):
         raise CinematographyError(f"required_side must be +1 or -1, got {required_side!r}")
+    _require_finite_scalar(min_clearance_m, name="min_clearance_m")
     if not math.isfinite(min_clearance_m) or min_clearance_m <= 0.0:
         raise CinematographyError(f"min_clearance_m must be positive, got {min_clearance_m!r}")
 
@@ -691,6 +824,24 @@ class LensSettings:
     dof_near_m: float
     dof_far_m: float
 
+    def __post_init__(self) -> None:
+        _require_finite_scalar(self.focal_length_mm, name="focal_length_mm")
+        if self.focal_length_mm <= 0:
+            raise CinematographyError("focal_length_mm must be positive")
+        _require_finite_scalar(self.f_stop, name="f_stop")
+        if self.f_stop <= 0:
+            raise CinematographyError("f_stop must be positive")
+        _require_finite_scalar(self.horizontal_fov_deg, name="horizontal_fov_deg")
+        _require_finite_scalar(self.vertical_fov_deg, name="vertical_fov_deg")
+        _require_finite_scalar(self.focus_distance_m, name="focus_distance_m")
+        if self.focus_distance_m <= 0:
+            raise CinematographyError("focus_distance_m must be positive")
+        _require_finite_scalar(self.hyperfocal_distance_m, name="hyperfocal_distance_m")
+        if self.hyperfocal_distance_m <= 0:
+            raise CinematographyError("hyperfocal_distance_m must be positive")
+        _require_finite_scalar(self.dof_near_m, name="dof_near_m")
+        _require_finite_scalar(self.dof_far_m, name="dof_far_m")
+
 
 @dataclass(frozen=True)
 class RuleOfThirdsFraming:
@@ -703,6 +854,12 @@ class RuleOfThirdsFraming:
     framing_error_uv: float
     look_direction: ScreenLookDirection
 
+    def __post_init__(self) -> None:
+        _require_finite_array(self.target_uv, name="target_uv")
+        _require_finite_array(self.projected_start_uv, name="projected_start_uv")
+        _require_finite_array(self.projected_end_uv, name="projected_end_uv")
+        _require_finite_scalar(self.framing_error_uv, name="framing_error_uv")
+
 
 def select_lens_and_aperture(
     dramatic_tension: float,
@@ -714,10 +871,13 @@ def select_lens_and_aperture(
     focus_distance_m: float | None = None,
 ) -> LensSettings:
     """Select focal length, f-stop, and depth-of-field from dramatic tension."""
+    _require_finite_scalar(dramatic_tension, name="dramatic_tension")
     if not math.isfinite(dramatic_tension) or not (0.0 <= dramatic_tension <= 1.0):
         raise CinematographyError(
             f"dramatic_tension must be within [0.0, 1.0], got {dramatic_tension!r}"
         )
+    if focus_distance_m is not None:
+        _require_finite_scalar(focus_distance_m, name="focus_distance_m")
     if focus_distance_m is not None and (
         not math.isfinite(focus_distance_m) or focus_distance_m <= 0.0
     ):
@@ -849,6 +1009,20 @@ class TrajectorySample:
     angular_acceleration: Vec3Tuple
     angular_jerk: Vec3Tuple = (0.0, 0.0, 0.0)
 
+    def __post_init__(self) -> None:
+        _require_finite_scalar(self.tau, name="tau")
+        _require_finite_scalar(self.time_sec, name="time_sec")
+        _require_finite_scalar(self.s, name="s")
+        _require_finite_scalar(self.ds_dtau, name="ds_dtau")
+        _require_finite_scalar(self.d2s_dtau2, name="d2s_dtau2")
+        _require_finite_scalar(self.d3s_dtau3, name="d3s_dtau3")
+        _require_finite_array(self.linear_velocity, name="linear_velocity")
+        _require_finite_array(self.linear_acceleration, name="linear_acceleration")
+        _require_finite_array(self.linear_jerk, name="linear_jerk")
+        _require_finite_array(self.angular_velocity, name="angular_velocity")
+        _require_finite_array(self.angular_acceleration, name="angular_acceleration")
+        _require_finite_array(self.angular_jerk, name="angular_jerk")
+
 
 @dataclass(frozen=True)
 class MinimumJerkTrajectory:
@@ -863,6 +1037,14 @@ class MinimumJerkTrajectory:
     total_rotation_deg: float
     samples: tuple[TrajectorySample, ...]
 
+    def __post_init__(self) -> None:
+        _require_finite_scalar(self.duration_sec, name="duration_sec")
+        if self.duration_sec <= 0:
+            raise CinematographyError("duration_sec must be positive")
+        _require_finite_scalar(self.crane_arc_m, name="crane_arc_m")
+        _require_finite_scalar(self.total_translation_m, name="total_translation_m")
+        _require_finite_scalar(self.total_rotation_deg, name="total_rotation_deg")
+
 
 def minimum_jerk_scalar(tau: float) -> tuple[float, float, float, float]:
     """Evaluate ``s(tau) = 10*tau^3 - 15*tau^4 + 6*tau^5`` and its first three derivatives.
@@ -871,6 +1053,7 @@ def minimum_jerk_scalar(tau: float) -> tuple[float, float, float, float]:
     conditions: ``s(0) = 0``, ``s(1) = 1``, ``s'(0) = s'(1) = 0``, and
     ``s''(0) = s''(1) = 0``.
     """
+    _require_finite_scalar(tau, name="tau")
     if not math.isfinite(tau) or not (0.0 <= tau <= 1.0):
         raise CinematographyError(f"tau must be within [0.0, 1.0], got {tau!r}")
     one_minus = 1.0 - tau
@@ -885,7 +1068,7 @@ def minimum_jerk_scalar(tau: float) -> tuple[float, float, float, float]:
 
 def minimum_jerk_profile(taus: Sequence[float] | FloatArray) -> FloatArray:
     """Vectorized minimum-jerk evaluation returning array of shape ``(N, 4)``."""
-    arr = np.asarray(taus, dtype=np.float64)
+    arr = _require_finite_array(taus, name="taus")
     if arr.ndim != 1 or arr.size == 0 or not np.all(np.isfinite(arr)):
         raise CinematographyError("taus must be a non-empty 1-D array of finite values")
     if float(np.min(arr)) < 0.0 or float(np.max(arr)) > 1.0:
@@ -919,8 +1102,10 @@ def evaluate_trajectory_at(
     crane_arc_m: float = 0.0,
 ) -> TrajectorySample:
     """Evaluate exact pose, velocity, acceleration, and jerk at normalized time ``tau``."""
+    _require_finite_scalar(duration_sec, name="duration_sec")
     if not math.isfinite(duration_sec) or duration_sec <= 0.0:
         raise CinematographyError(f"duration_sec must be positive, got {duration_sec!r}")
+    _require_finite_scalar(crane_arc_m, name="crane_arc_m")
     if not math.isfinite(crane_arc_m):
         raise CinematographyError(f"crane_arc_m must be finite, got {crane_arc_m!r}")
 
@@ -989,6 +1174,7 @@ def generate_minimum_jerk_trajectory(
     """Generate a smooth minimum-jerk ``SE(3)`` camera trajectory across ``[0, duration_sec]``."""
     if not isinstance(num_samples, int) or isinstance(num_samples, bool) or num_samples < 2:
         raise CinematographyError(f"num_samples must be an integer >= 2, got {num_samples!r}")
+    _require_finite_scalar(duration_sec, name="duration_sec")
     if not math.isfinite(duration_sec) or duration_sec <= 0.0:
         raise CinematographyError(f"duration_sec must be positive, got {duration_sec!r}")
 
@@ -1070,6 +1256,29 @@ class CameraShotSpec:
     original_axis_side: int = 1
     was_axis_reflected: bool = False
 
+    def validate_strict(self) -> Self:
+        """Validate trusted geometry, while the raw constructor remains audit-safe."""
+        for item in fields(self):
+            value = getattr(self, item.name)
+            if item.type in ("float", "int"):
+                _require_finite_scalar(value, name=item.name)
+            elif item.type in ("Vec3Tuple", "Mat3Tuple"):
+                _require_finite_array(value, name=item.name)
+        if self.duration_sec <= 0:
+            raise CinematographyError("duration_sec must be positive")
+        for pose in (self.pose, self.end_pose):
+            _validate_so3(pose.rotation, tol=1e-5)
+            _as_vec3(pose.translation, name="translation")
+        for trace in (self.start_axis_trace, self.end_axis_trace):
+            trace.validate_strict()
+        self.lens.__post_init__()
+        return self
+
+    @classmethod
+    def from_validated(cls, **kwargs: Any) -> Self:
+        """Construct validated geometry, not an untrusted audit record."""
+        return cls(**kwargs).validate_strict()
+
 
 #: Alias for per-shot camera plan carrying 180-degree reflection provenance.
 ShotCameraPlan = CameraShotSpec
@@ -1086,6 +1295,10 @@ class AxisVerificationReport:
     violations: tuple[str, ...]
     reflected_shot_indices: tuple[int, ...] = ()
 
+    def __post_init__(self) -> None:
+        _require_finite_scalar(self.initial_side, name="initial_side")
+        _require_finite_scalar(self.intentional_jumps, name="intentional_jumps")
+
 
 @dataclass(frozen=True)
 class SceneCinematographyPlan:
@@ -1096,6 +1309,9 @@ class SceneCinematographyPlan:
     character_positions: tuple[tuple[str, Vec3Tuple], ...]
     shots: tuple[CameraShotSpec, ...]
     axis_report: AxisVerificationReport
+
+    def __post_init__(self) -> None:
+        _require_finite_scalar(self.scene_index, name="scene_index")
 
 
 def _axis_trace_matches_geometry(
@@ -1899,6 +2115,8 @@ def solve_scene_cinematography(
     strict_axis: bool = False,
 ) -> SceneCinematographyPlan:
     """Solve camera poses, 180-degree blocking, optics, and trajectories for one scene."""
+    _require_finite_scalar(starting_shot_index, name="starting_shot_index")
+    _require_finite_scalar(initial_axis_side, name="initial_axis_side")
     if starting_shot_index < 0:
         raise CinematographyError(f"starting_shot_index must be >= 0, got {starting_shot_index!r}")
     if (
@@ -2119,3 +2337,60 @@ def solve_script_cinematography(
         plans.append(plan)
         next_shot_idx += len(plan.shots)
     return tuple(plans)
+
+
+def verify_minimum_jerk_calculus_invariants(num_steps: int = 1000) -> dict[str, float | bool]:
+    """Composite Simpson quadrature and a boundary-preserving action variation.
+
+    The perturbation is epsilon*t^3*(1-t)^3. Its third derivative is orthogonal
+    to the extremal jerk, hence every nonzero epsilon increases the action.
+    """
+    if isinstance(num_steps, bool) or not isinstance(num_steps, int):
+        raise TypeError("num_steps must be an integer")
+    if num_steps < 100:
+        raise ValueError("num_steps must be at least 100")
+    n = num_steps + num_steps % 2
+    t: FloatArray = np.linspace(0.0, 1.0, n + 1)
+    profile: FloatArray = np.array([minimum_jerk_scalar(float(x)) for x in t], dtype=np.float64)
+
+    def integrate(y: FloatArray) -> float:
+        return float((y[0] + y[-1] + 4 * y[1:-1:2].sum() + 2 * y[2:-1:2].sum()) / (3 * n))
+
+    velocity_integral = integrate(profile[:, 1])
+    action = integrate(profile[:, 3] ** 2)
+    perturbation_jerk = 6 - 72 * t + 180 * t**2 - 120 * t**3
+    perturbed_action = integrate((profile[:, 3] + 0.1 * perturbation_jerk) ** 2)
+    boundary_ok = bool(
+        np.allclose(profile[[0, -1], :3], [[0, 0, 0], [1, 0, 0]], atol=1e-12, rtol=0)
+    )
+    # Independent nine-point central differences on position alone. The
+    # stencil is exact through degree eight, avoiding cancellation/truncation
+    # tradeoffs in the third derivative of this quintic.
+    offsets = np.arange(-4.0, 5.0)
+    moments = np.vstack([offsets**power for power in range(9)])
+    h = 0.01
+    errors = []
+    for derivative in (1, 2, 3):
+        rhs = np.zeros(9)
+        rhs[derivative] = math.factorial(derivative)
+        weights = np.linalg.solve(moments, rhs) / h**derivative
+        error = 0.0
+        for tau in np.linspace(0.05, 0.95, min(n, 101)):
+            positions = np.array([minimum_jerk_scalar(float(tau + h * x))[0] for x in offsets])
+            numerical = float(weights @ positions)
+            error = max(error, abs(numerical - minimum_jerk_scalar(float(tau))[derivative]))
+        errors.append(error)
+    return {
+        "derivative_1_max_error": errors[0],
+        "derivative_2_max_error": errors[1],
+        "derivative_3_max_error": errors[2],
+        "boundary_ok": boundary_ok,
+        "velocity_integral": velocity_integral,
+        "action": action,
+        "perturbed_action": perturbed_action,
+        "verified": boundary_ok
+        and max(errors) < 1e-5
+        and abs(velocity_integral - 1) < 1e-6
+        and abs(action - 720) < 1e-3
+        and perturbed_action > action,
+    }

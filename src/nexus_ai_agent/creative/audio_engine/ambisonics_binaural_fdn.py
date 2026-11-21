@@ -23,12 +23,14 @@ HEAD_RADIUS = 0.0875
 
 
 def _order(order: int) -> int:
+    _require_finite_scalar(order, name="order")
     if not isinstance(order, int) or isinstance(order, bool) or order not in (0, 1, 2, 3):
         raise ValueError("ACN/SN3D order must be an integer in [0, 3]")
     return order
 
 
 def _signal(samples: np.ndarray, *, matrix: bool = False) -> np.ndarray:
+    _require_finite_array(samples, name="samples")
     data = np.asarray(samples, dtype=np.float64)
     if data.ndim not in ((1, 2) if matrix else (1,)) or not np.isfinite(data).all():
         raise ValueError("audio must be finite, channel-first PCM")
@@ -41,6 +43,9 @@ def sn3d_harmonics(order: int, azimuth: np.ndarray, elevation: np.ndarray) -> np
     Associated Legendre recurrence and Schmidt semi-normalization yield
     sum_m Y_lm(u)^2 = 1 for every degree and unit direction u.
     """
+    _require_finite_scalar(order, name="order")
+    _require_finite_array(azimuth, name="azimuth")
+    _require_finite_array(elevation, name="elevation")
     _order(order)
     az, el = np.broadcast_arrays(np.asarray(azimuth, float), np.asarray(elevation, float))
     if not np.isfinite(az).all() or not np.isfinite(el).all() or np.any(np.abs(el) > np.pi / 2):
@@ -76,6 +81,10 @@ def encode_ambisonics(
     order: int = 1,
 ) -> np.ndarray:
     """Encode and sum independent point sources; input is (sources, samples)."""
+    _require_finite_array(samples, name="samples")
+    _require_finite_array(azimuth, name="azimuth")
+    _require_finite_array(elevation, name="elevation")
+    _require_finite_scalar(order, name="order")
     data = np.atleast_2d(_signal(samples, matrix=True))
     az = np.broadcast_to(np.asarray(azimuth, float), (data.shape[0],))
     el = np.broadcast_to(np.asarray(elevation, float), (data.shape[0],))
@@ -83,6 +92,7 @@ def encode_ambisonics(
 
 
 def _quadrature(order: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    _require_finite_scalar(order, name="order")
     z, weights = np.polynomial.legendre.leggauss(order + 2)
     count = 2 * order + 5
     az = np.tile(2 * np.pi * np.arange(count) / count, z.size)
@@ -91,6 +101,9 @@ def _quadrature(order: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
 
 
 def euler_so3(yaw: float, pitch: float, roll: float) -> np.ndarray:
+    _require_finite_scalar(yaw, name="yaw")
+    _require_finite_scalar(pitch, name="pitch")
+    _require_finite_scalar(roll, name="roll")
     if not np.isfinite([yaw, pitch, roll]).all():
         raise ValueError("rotation angles must be finite radians")
     cy, sy = math.cos(yaw), math.sin(yaw)
@@ -118,6 +131,10 @@ def ambisonic_rotation_matrix(
     arbitrary energy normalization of the signal. Inverse rotations and group
     composition retain their directional meaning, including HOA orders 2/3.
     """
+    _require_finite_scalar(order, name="order")
+    _require_finite_scalar(yaw, name="yaw")
+    _require_finite_scalar(pitch, name="pitch")
+    _require_finite_scalar(roll, name="roll")
     _order(order)
     rotation = euler_so3(yaw, pitch, roll)
     if camera_coordinates:
@@ -146,6 +163,10 @@ def rotate_ambisonics(
     roll: float = 0.0,
     camera_coordinates: bool = True,
 ) -> np.ndarray:
+    _require_finite_array(samples, name="samples")
+    _require_finite_scalar(yaw, name="yaw")
+    _require_finite_scalar(pitch, name="pitch")
+    _require_finite_scalar(roll, name="roll")
     data = _signal(samples, matrix=True)
     if data.ndim != 2 or data.shape[0] not in (1, 4, 9, 16):
         raise ValueError("B-format must have 1, 4, 9 or 16 ACN channels")
@@ -168,6 +189,10 @@ def woodworth_itd(
     Rear-hemisphere directions fold to the lateral great-circle angle. This
     preserves front/back ITD ambiguity; the pinna notch is an independent cue.
     """
+    _require_finite_scalar(azimuth, name="azimuth")
+    _require_finite_scalar(elevation, name="elevation")
+    _require_finite_scalar(head_radius, name="head_radius")
+    _require_finite_scalar(sound_speed, name="sound_speed")
     if not np.isfinite([azimuth, elevation, head_radius, sound_speed]).all():
         raise ValueError("head/direction parameters must be finite")
     if head_radius <= 0 or sound_speed <= 0 or abs(elevation) > math.pi / 2:
@@ -180,6 +205,9 @@ def lagrange_fractional_delay(
     samples: np.ndarray, delay_samples: float, *, order: int = 3
 ) -> np.ndarray:
     """Causal Lagrange fractional delay with ZERO extension (never circular wrap)."""
+    _require_finite_array(samples, name="samples")
+    _require_finite_scalar(delay_samples, name="delay_samples")
+    _require_finite_scalar(order, name="order")
     data = _signal(samples)
     if not math.isfinite(delay_samples) or delay_samples < 0 or not 1 <= order <= 8:
         raise ValueError("delay must be finite/nonnegative; interpolation order must be 1..8")
@@ -197,6 +225,9 @@ def lagrange_fractional_delay(
 
 
 def _hrtf_impulse(azimuth: float, elevation: float, sample_rate: int) -> np.ndarray:
+    _require_finite_scalar(azimuth, name="azimuth")
+    _require_finite_scalar(elevation, name="elevation")
+    _require_finite_scalar(sample_rate, name="sample_rate")
     length = 512
     bins = np.exp(-2j * np.pi * np.fft.rfftfreq(length))
     lateral = math.sin(azimuth) * math.cos(elevation)
@@ -224,6 +255,8 @@ def _hrtf_impulse(azimuth: float, elevation: float, sample_rate: int) -> np.ndar
 
 def binaural_decode(samples: np.ndarray, *, sample_rate: int = 48000) -> np.ndarray:
     """Virtual-loudspeaker quadrature projection into phase-coherent (2,N)."""
+    _require_finite_array(samples, name="samples")
+    _require_finite_scalar(sample_rate, name="sample_rate")
     data = _signal(samples, matrix=True)
     if data.ndim != 2 or data.shape[0] not in (1, 4, 9, 16):
         raise ValueError("B-format must have 1, 4, 9 or 16 ACN channels")
@@ -248,12 +281,17 @@ def binaural_decode(samples: np.ndarray, *, sample_rate: int = 48000) -> np.ndar
 
 
 def householder_matrix(lines: int = 8) -> np.ndarray:
+    _require_finite_scalar(lines, name="lines")
     if isinstance(lines, bool) or lines < 2 or lines > 32:
         raise ValueError("Householder line count must be in [2, 32]")
-    return np.eye(lines) - (2.0 / lines) * np.ones((lines, lines))
+    result = np.eye(lines) - (2.0 / lines) * np.ones((lines, lines))
+    if np.linalg.norm(result.T @ result - np.eye(lines)) > 1e-12:
+        raise ValueError("non-unitary Householder matrix")
+    return result
 
 
 def _next_prime(value: int) -> int:
+    _require_finite_scalar(value, name="value")
     candidate = max(2, value)
     while any(candidate % divisor == 0 for divisor in range(2, math.isqrt(candidate) + 1)):
         candidate += 1
@@ -269,6 +307,8 @@ class FdnRoom:
     rt60_high: float = 0.4
 
     def __post_init__(self) -> None:
+        for name, value in vars(self).items():
+            _require_finite_scalar(value, name=name)
         if not all(
             math.isfinite(value) and value > 0
             for value in (
@@ -317,6 +357,10 @@ def fdn_reverb(
     their transfer magnitude cannot exceed the low-band gain (<1). Eyring's
     absorption is derived from V/S/RT; no unmeasured decay is reported as fact.
     """
+    _require_finite_array(samples, name="samples")
+    _require_finite_scalar(sample_rate, name="sample_rate")
+    if tail_seconds is not None:
+        _require_finite_scalar(tail_seconds, name="tail_seconds")
     data = _signal(samples)
     room = room or FdnRoom()
     if not 8000 <= sample_rate <= 192000:
@@ -339,6 +383,8 @@ def fdn_reverb(
         * np.array(delays)[:, None]
         / (sample_rate * np.array([room.rt60_low, room.rt60_mid, room.rt60_high]))
     )
+    if not np.all(np.abs(gains) < 1):
+        raise ValueError("unstable FDN feedback gain")
     lp_low, lp_high, previous_delayed = np.zeros(8), np.zeros(8), np.zeros(8)
     warped_low = math.tan(math.pi * 250 / sample_rate)
     warped_high = math.tan(math.pi * min(3000, sample_rate * 0.35) / sample_rate)
@@ -368,6 +414,8 @@ def fdn_reverb(
 
 def schroeder_rt60(samples: np.ndarray, *, sample_rate: int) -> float:
     """Backward energy integration, -5..-35 dB regression extrapolated to -60 dB."""
+    _require_finite_array(samples, name="samples")
+    _require_finite_scalar(sample_rate, name="sample_rate")
     data = _signal(samples, matrix=True)
     if sample_rate <= 0 or data.size == 0:
         raise ValueError("decay measurement requires samples and a positive sample rate")
@@ -401,3 +449,22 @@ __all__ = [
     "sn3d_harmonics",
     "woodworth_itd",
 ]
+
+
+def _require_finite_scalar(value: object, *, name: str) -> None:
+    """Numeric inputs never silently coerce booleans or non-finite values."""
+    if isinstance(value, (bool, np.bool_)):
+        raise TypeError(f"{name} must not be bool")
+    if not isinstance(value, (int, float, np.integer, np.floating)):
+        raise TypeError(f"{name} must be numeric")
+    if not np.isfinite(value):
+        raise ValueError(f"{name} must be finite")
+
+
+def _require_finite_array(value: object, *, name: str) -> None:
+    """Validate before dtype conversion can erase boolean evidence."""
+    raw = np.asarray(value, dtype=object)
+    if any(isinstance(item, (bool, np.bool_)) for item in raw.flat):
+        raise TypeError(f"{name} must not contain bool")
+    if not np.all(np.isfinite(np.asarray(value))):
+        raise ValueError(f"{name} must be finite")
