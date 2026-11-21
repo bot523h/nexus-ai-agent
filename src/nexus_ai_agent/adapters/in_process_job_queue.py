@@ -62,6 +62,7 @@ automatically) and the queue's own lifecycle lines name it explicitly.
 from __future__ import annotations
 
 import asyncio
+import fcntl
 import hashlib
 import json
 import logging
@@ -78,6 +79,13 @@ from uuid import uuid4
 
 import structlog
 
+from nexus_ai_agent.application.execution_context import _current_claim
+from nexus_ai_agent.application.execution_context import (
+    current_execution_claim as current_execution_claim,
+)
+from nexus_ai_agent.application.execution_context import (
+    get_current_execution_claim as get_current_execution_claim,
+)
 from nexus_ai_agent.application.ports.job_queue import JobStatus
 from nexus_ai_agent.jobs.creative_passport import (
     CREATIVE_RENDER_JOB_TYPE,
@@ -121,6 +129,14 @@ from nexus_ai_agent.provenance.observer import CausalObserver
 
 JobHandler = Callable[[dict[str, object]], Awaitable[dict[str, object]]]
 JobCompletionHook = Callable[["JobCompletion"], Awaitable[None]]
+
+# Re-exported for callers of this adapter: the execution claim of the handler
+# currently running (``ExecutionClaim`` above, ``current_execution_claim`` and
+# ``get_current_execution_claim`` from ``application.execution_context``).
+# The context is installed only for the handler invocation. It propagates
+# through ``asyncio.to_thread``, but is evidence of the minted token, not
+# proof of current ownership: side effects still require the queue's durable
+# ownership check.
 
 
 try:  # pragma: no cover - import success, not a test, selects the backend
@@ -324,6 +340,52 @@ class _AttemptTransitionError(RuntimeError):
     """A queue CAS succeeded but its matching attempt-ledger CAS did not."""
 
 
+class _PromotionRefused(RuntimeError):
+    """The staged→final promotion failed its post-promotion gate (internal).
+
+    Raised by :meth:`InProcessJobQueue._promote_staged_artifacts` after it has
+    rolled the destination back to the previous generation; the job is then
+    failed closed — it can never reach ``COMPLETED`` on unverified bytes.
+    """
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
+
+
+def _file_identity(path: Path) -> tuple[int, int] | None:
+    """``(st_dev, st_ino)`` of the entry at ``path`` (no symlink follow), or ``None``.
+
+    A rename keeps the inode, so the identity recorded for a quarantined file
+    is the identity of the bytes that land at the final path.
+    """
+    try:
+        status = os.stat(path, follow_symlinks=False)
+    except FileNotFoundError:
+        return None
+    return (status.st_dev, status.st_ino)
+
+
+def _fsync_file(path: Path) -> None:
+    """Flush one file's already-written bytes to disk before it is renamed."""
+    fd = os.open(path, os.O_RDONLY | getattr(os, "O_CLOEXEC", 0))
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def _fsync_directory(path: Path) -> None:
+    """Persist a directory's entries (POSIX; a harmless no-op elsewhere)."""
+    if not hasattr(os, "O_DIRECTORY"):  # pragma: no cover - non-POSIX platform
+        return
+    fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_CLOEXEC", 0))
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
 @dataclass(frozen=True)
 class JobCompletion:
     """Terminal-state snapshot handed to the completion hook.
@@ -389,6 +451,7 @@ def default_artifact_verifiers() -> dict[str, ArtifactVerifier]:
     registered without a verifier, so no job type can silently regress to
     the historical unverified semantics.
     """
+    from nexus_ai_agent.creative.storyboard_jobs import storyboard_render_verifier
     from nexus_ai_agent.jobs.creative_verification import (
         creative_render_verifier,
         slideshow_render_verifier,
@@ -397,6 +460,7 @@ def default_artifact_verifiers() -> dict[str, ArtifactVerifier]:
 
     return {
         "creative_render": creative_render_verifier,
+        "storyboard_render": storyboard_render_verifier,
         "slideshow_render": slideshow_render_verifier,
         "story": story_verifier,
         "pdf_extract": pdf_extract_verifier,
@@ -451,6 +515,15 @@ class InProcessJobQueue:
         # cancels the child; shutdown also snapshots and awaits every child so
         # cancellation cannot leave an orphan refresh loop behind.
         self._heartbeat_tasks: dict[asyncio.Task[None], asyncio.Task[None]] = {}
+        # Crash-injection point for tests/diagnostics ONLY: when set, it is
+        # called exactly between the two promotion renames of a staged
+        # artifact pair (after the MP4 lands, before the passport does).
+        # Production code never sets it.
+        self._between_promote_replaces_hook: Callable[[], None] | None = None
+        # Serializes every promotion/reconciliation of a destination in this
+        # process; the per-path file lock below serializes across processes.
+        self._promotion_lock = threading.RLock()
+        self._held_promotion_locks: dict[str, int] = {}
         self._db_lock = threading.Lock()
         # In-flight artifact publications.  ``asyncio.to_thread`` hands the
         # work to a ThreadPoolExecutor thread; cancelling the awaiting task
@@ -1098,6 +1171,18 @@ class InProcessJobQueue:
         ``pending`` rows are always re-scheduled. Rows this very process is
         executing are never taken over. Terminal rows are never touched.
         """
+        # Startup reconciliation runs FIRST, before any pending or in-flight row
+        # is claimed and before any recovered execution is scheduled: interrupted
+        # promotion backups and completed-job approval reservations are settled
+        # while no worker can yet be running. Nothing awaits after the scheduling
+        # loop below, so the scheduled tasks stay registered in ``self._tasks``
+        # until the caller observes them.
+        reconciled = await asyncio.to_thread(self._reconcile_completed_approval_reservations)
+        if reconciled:
+            logger.info("approval_reservations_reconciled count=%d", reconciled)
+        swept = await asyncio.to_thread(self._reconcile_storyboard_promotion_backups)
+        if swept:
+            logger.debug("storyboard_promotion_backups_swept count=%d", swept)
         live = {job_id for job_id, task in self._tasks.items() if not task.done()}
         reset = await asyncio.to_thread(self._reset_unfinished, stale_after, live)
         for job_id, job_type, attempt in reset:
@@ -1787,7 +1872,16 @@ class InProcessJobQueue:
                         None,
                     )
                     return
-            result = await handler(payload)
+            # Queue-minted execution claim: installed only for the handler
+            # invocation (and everything it spawns, including
+            # ``asyncio.to_thread`` workers). It is evidence of the minted
+            # token, not proof of current ownership — side effects still go
+            # through the queue's fenced ownership check.
+            context_token = _current_claim.set(claim)
+            try:
+                result = await handler(payload)
+            finally:
+                _current_claim.reset(context_token)
             if not isinstance(result, dict):
                 raise TypeError("job handler must return a dictionary")
         except asyncio.CancelledError:
@@ -1898,6 +1992,65 @@ class InProcessJobQueue:
                     claim, publication, verifier, payload, result
                 )
             if outcome.ok:
+                # Quarantined (``.staging``) artifacts: promote them to their
+                # final path only NOW — the independent verifier has PASSed
+                # this attempt's bytes and the promotion itself re-checks the
+                # (job_id, attempt) fence before AND after the rename, fsyncs
+                # the bytes and the destination directory, and re-verifies the
+                # final pair BEFORE the row may become COMPLETED. A refused
+                # verdict never gets here.
+                try:
+                    promoted_result = await asyncio.to_thread(
+                        self._promote_staged_artifacts, claim, result, job_type
+                    )
+                except _PromotionRefused as exc:
+                    # The final pair did not verify (or the rename failed and
+                    # was rolled back): the destination was restored, the
+                    # quarantine keeps the evidence, and the row can never
+                    # become COMPLETED for these bytes.
+                    logger.warning(
+                        "staged promotion refused job_id=%s attempt=%d reason=%s",
+                        job_id,
+                        claim.attempt,
+                        exc.reason,
+                    )
+                    await self._fail_owned(
+                        claim,
+                        job_type,
+                        payload,
+                        f"promotion_failed:{exc.reason}",
+                        JobStatus.FAILED_TERMINAL,
+                        result,
+                    )
+                    return
+                if promoted_result is not None:
+                    result = promoted_result
+                from nexus_ai_agent.nagar.creative.handoff import STORYBOARD_RENDER_JOB_TYPE
+
+                if job_type == STORYBOARD_RENDER_JOB_TYPE:
+                    # The quarantine contract is mandatory end-to-end: the job
+                    # may only complete when THIS attempt's promotion actually
+                    # happened and its final pair is on disk. A silent ``None``
+                    # (lost fence, vanished staging, forged result) must never
+                    # reach COMPLETED or the approval finalization below.
+                    final_out = result.get("final_output_path")
+                    final_pp = result.get("final_passport_path")
+                    published = (
+                        isinstance(final_out, str)
+                        and isinstance(final_pp, str)
+                        and Path(final_out).is_file()
+                        and Path(final_pp).is_file()
+                    )
+                    if promoted_result is None or not published:
+                        await self._fail_owned(
+                            claim,
+                            job_type,
+                            payload,
+                            "promotion_failed:promotion_not_performed",
+                            JobStatus.FAILED_TERMINAL,
+                            result,
+                        )
+                        return
                 stored_passport: str | None = None
                 final_result = {**result, VERIFICATION_RESULT_KEY: outcome.block}
                 if trim_request:
@@ -2052,6 +2205,15 @@ class InProcessJobQueue:
                 )
                 if publication is not None and publication.finalize is not None and published:
                     await self._finalize_safely(publication, payload, result, claim)
+                # Approval-reservation finalization (storyboard-render style
+                # approvals): the job is durably COMPLETED, so the consumed
+                # approval's reservation can be closed for this exact
+                # (job_id, attempt) fencing token. Idempotent; a skip is
+                # logged degradation, never a job outcome — startup
+                # reconciliation retries it.
+                await asyncio.to_thread(
+                    self._finalize_approval_reservation, job_type, job_id, claim, final_result
+                )
             else:
                 if publication is not None and outcome.reason_code != "stale_execution":
                     # A refusal retracts this attempt (staged temp before
@@ -2335,6 +2497,539 @@ class InProcessJobQueue:
             await asyncio.to_thread(publication.finalize, payload, finalize_context)
         except Exception:  # noqa: BLE001 - the job is already durably COMPLETED
             logger.warning("artifact publication finalize failed (backup left)", exc_info=True)
+
+    def _promote_staged_artifacts(
+        self,
+        claim: ExecutionClaim,
+        result: dict[str, object],
+        job_type: str,
+    ) -> dict[str, object] | None:
+        """Atomically publish a verified attempt's quarantined artifacts.
+
+        Runs ONLY after the independent verifier answered ``PASS`` and only
+        while this execution still owns the row (the ``(job_id, attempt)``
+        fence is re-checked here, in the idempotent branch, and again after
+        the rename). The ``.staging`` quarantine files are flushed
+        (``fsync``), any leftovers of an earlier interrupted promotion at the
+        destination are reconciled away, the previous generation at the
+        destination is moved aside in the same directory, the quarantined
+        pair is renamed into place with :func:`os.replace` (same-filesystem
+        atomic rename), the destination directory is ``fsync``-ed, and the
+        FINAL pair is re-verified BEFORE the row may become ``COMPLETED``.
+        A ``VIOLATED``/``UNOBSERVED`` verdict never reaches this method: the
+        quarantined files stay in the attempt's quarantine directory.
+
+        Fail-closed for quarantined job types (``storyboard_render``): a
+        result that carries no valid quarantine contract — or whose staged
+        files vanished while no matching final pair exists — raises
+        :class:`_PromotionRefused` instead of quietly returning ``None``.
+        The idempotent re-entry branch is locked to THIS attempt's identity:
+        a surviving final pair must verify AND match the result's own
+        ``job_id``/``output_sha256``/``render_profile_hash``.
+
+        Durability and rollback: if the second rename, the directory fsync or
+        the post-promotion verification fails, the incomplete generation is
+        moved back to its quarantine and the previous generation is restored —
+        a new MP4 can never rest beside an old passport, and an unverified
+        pair can never stay published (:class:`_PromotionRefused` then fails
+        the job closed).
+
+        Returns the updated result, or ``None`` when the result carries no
+        quarantine contract for a non-quarantined job type, or the fence was
+        lost (the row is no longer this attempt's — the caller then fails the
+        job closed for quarantined types; the terminal CAS refuses anyway).
+        """
+        from nexus_ai_agent.nagar.creative.handoff import STORYBOARD_RENDER_JOB_TYPE
+
+        quarantine_contract = job_type == STORYBOARD_RENDER_JOB_TYPE
+        staged_output = result.get("staged_output_path")
+        staged_passport = result.get("staged_passport_path")
+        final_output = result.get("final_output_path")
+        final_passport = result.get("final_passport_path")
+        if not (
+            isinstance(staged_output, str)
+            and staged_output
+            and isinstance(staged_passport, str)
+            and staged_passport
+            and isinstance(final_output, str)
+            and final_output
+            and isinstance(final_passport, str)
+            and final_passport
+        ):
+            if quarantine_contract:
+                # A storyboard result without the quarantine contract can
+                # never be trusted to have published anything: fail closed.
+                raise _PromotionRefused("staged_artifacts_missing_or_unpromoted")
+            return None  # not a quarantined result: nothing to promote
+        staged_out_path = Path(staged_output)
+        staged_pp_path = Path(staged_passport)
+        final_out_path = Path(final_output)
+        final_pp_path = Path(final_passport)
+        if staged_out_path == final_out_path:
+            if quarantine_contract:
+                # The quarantine contract guarantees staged != final; equality
+                # means the pair was never quarantined at all.
+                raise _PromotionRefused("staged_artifacts_missing_or_unpromoted")
+            return None  # already at its final path
+        with self._promotion_lock, self._acquire_promotion_path_lock(final_out_path):
+            if not self._owns_execution(claim, JobStatus.VERIFYING):
+                # Ownership was lost between the PASS verdict and this rename:
+                # a superseded attempt must never publish over a newer owner's
+                # destination. The terminal CAS below refuses it as well.
+                self._log_rejected(claim.job_id, claim, JobStatus.COMPLETED)
+                return None
+            # Repair the destination of any promotion that died between its two
+            # renames (an orphaned MP4, or the previous generation parked in
+            # ``*.promote-backup`` files) before this attempt publishes over it.
+            self._reconcile_interrupted_promotion_backups(final_out_path, final_pp_path)
+            if not staged_out_path.is_file() or not staged_pp_path.is_file():
+                if final_out_path.is_file() and final_pp_path.is_file():
+                    # Idempotent re-entry: an earlier pass already promoted this
+                    # attempt (e.g. a redelivered completion). The fence is
+                    # re-read NOW, and the surviving pair must verify AND be this
+                    # exact render's — an older generation sitting at the final
+                    # path is a mismatch, never a silent success.
+                    if not self._owns_execution(claim, JobStatus.VERIFYING):
+                        self._log_rejected(claim.job_id, claim, JobStatus.COMPLETED)
+                        return None
+                    reason = self._verify_idempotent_pair(
+                        job_type, claim, result, final_out_path, final_pp_path
+                    )
+                    if reason is not None:
+                        raise _PromotionRefused(reason)
+                    updated = dict(result)
+                    updated["output_path"] = str(final_out_path)
+                    return updated
+                if quarantine_contract:
+                    # Staged files vanished and no complete final pair exists:
+                    # nothing verifiable remains of this attempt — fail closed.
+                    raise _PromotionRefused("staged_artifacts_missing_or_unpromoted")
+                logger.warning(
+                    "staged artifacts missing at promotion job_id=%s attempt=%d",
+                    claim.job_id,
+                    claim.attempt,
+                )
+                return None
+            for final in (final_out_path, final_pp_path):
+                final.parent.mkdir(parents=True, exist_ok=True)
+            # 1. Durability of the quarantined bytes: flush them BEFORE any rename,
+            #    so the promoted generation can never be a partially-written file.
+            _fsync_file(staged_out_path)
+            _fsync_file(staged_pp_path)
+            # Inode fence: the quarantined files' identities, recorded before any
+            # rename, decide which destination entries this attempt may roll back.
+            identities = (_file_identity(staged_out_path), _file_identity(staged_pp_path))
+            # 2. Transactional pair promotion: move any previous generation aside
+            #    (same directory → atomic renames) so a failed second rename, a
+            #    failed fsync or a failed post-promotion verification can restore
+            #    the exact previous pair.
+            backups: list[tuple[Path, Path]] = []
+            try:
+                for final in (final_out_path, final_pp_path):
+                    if final.exists():
+                        backup = final.with_name(f"{final.name}.promote-backup")
+                        os.replace(final, backup)
+                        backups.append((final, backup))
+                os.replace(staged_out_path, final_out_path)
+                # Crash-injection point: the MP4 has landed, the passport has not.
+                if self._between_promote_replaces_hook is not None:
+                    self._between_promote_replaces_hook()
+                os.replace(staged_pp_path, final_pp_path)
+                _fsync_directory(final_out_path.parent)
+                # 3. Post-promotion final verification, BEFORE the row may become
+                #    COMPLETED: the destination pair must re-verify (v2 passport
+                #    seal + shot tree + the destination MP4's own digest).
+                reason = self._verify_promoted_pair(job_type, final_out_path, final_pp_path)
+                if reason is not None:
+                    raise _PromotionRefused(reason)
+            except _PromotionRefused:
+                self._rollback_promotion(
+                    claim,
+                    staged_out_path,
+                    staged_pp_path,
+                    final_out_path,
+                    final_pp_path,
+                    backups,
+                    identities,
+                )
+                raise
+            except OSError as exc:
+                self._rollback_promotion(
+                    claim,
+                    staged_out_path,
+                    staged_pp_path,
+                    final_out_path,
+                    final_pp_path,
+                    backups,
+                    identities,
+                )
+                raise _PromotionRefused(f"promotion_os_error:{type(exc).__name__}") from exc
+            # 4. Ownership AFTER promotion: if the row was taken over in the
+            #    rename window, this attempt must not keep the publication. The
+            #    successor's own transactional promote replaces the pair, and the
+            #    terminal CAS below refuses COMPLETED for this attempt anyway.
+            if not self._owns_execution(claim, JobStatus.VERIFYING):
+                # The ownership was lost while the new pair was in place: this
+                # superseded attempt's bytes must not stay published. The quarantine
+                # gets them back and the previous generation is restored, so the
+                # successor starts from the exact destination it expects.
+                self._log_rejected(claim.job_id, claim, JobStatus.COMPLETED)
+                self._rollback_promotion(
+                    claim,
+                    staged_out_path,
+                    staged_pp_path,
+                    final_out_path,
+                    final_pp_path,
+                    backups,
+                    identities,
+                )
+                return None
+            # 5. Success: the previous generation is no longer needed.
+            for _final, backup in backups:
+                try:
+                    backup.unlink(missing_ok=True)
+                except OSError:  # pragma: no cover - best-effort cleanup
+                    logger.warning("promotion backup could not be removed: %s", backup)
+            _fsync_directory(final_out_path.parent)
+            updated = dict(result)
+            updated["output_path"] = str(final_out_path)
+            return updated
+
+    @contextmanager
+    def _acquire_promotion_path_lock(self, final_out_path: Path) -> Iterator[None]:
+        """Exclusive lock of one destination, across threads AND processes.
+
+        An ``flock`` on a sibling lock file serializes promoters of the same
+        final path even when they are different processes or different queue
+        instances. Nested use by the same destination (promotion → its own
+        reconciliation) re-enters without re-locking: a second ``flock`` on a
+        new descriptor in the same process would deadlock against the first.
+        """
+        key = str(final_out_path.parent / f".{final_out_path.name}.promote.lock")
+        with self._promotion_lock:
+            depth = self._held_promotion_locks.get(key, 0)
+            if depth:
+                self._held_promotion_locks[key] = depth + 1
+                try:
+                    yield
+                finally:
+                    self._held_promotion_locks[key] -= 1
+                return
+            try:
+                lock_fd = os.open(key, os.O_CREAT | os.O_RDWR | os.O_CLOEXEC | os.O_NOFOLLOW, 0o600)
+            except OSError as exc:
+                raise _PromotionRefused("promotion_lock_unavailable") from exc
+            try:
+                fcntl.flock(lock_fd, fcntl.LOCK_EX)
+                self._held_promotion_locks[key] = 1
+                try:
+                    yield
+                finally:
+                    del self._held_promotion_locks[key]
+            finally:
+                os.close(lock_fd)
+
+    def _verify_idempotent_pair(
+        self,
+        job_type: str,
+        claim: ExecutionClaim,
+        result: dict[str, object],
+        final_output: Path,
+        final_passport: Path,
+    ) -> str | None:
+        """Idempotent-re-entry gate; ``None`` means the pair is THIS attempt's.
+
+        The surviving destination pair must first re-verify exactly like a
+        fresh promotion; its sealed identity (``job_id``, ``output_sha256``
+        and — when the attempt's result carries one — ``render_profile_hash``)
+        must then match the values THIS attempt produced. A final pair left by
+        an older attempt or a different render is a mismatch, never a success.
+        """
+        reason = self._verify_promoted_pair(job_type, final_output, final_passport)
+        if reason is not None:
+            return reason
+        from nexus_ai_agent.nagar.creative.handoff import STORYBOARD_RENDER_JOB_TYPE
+
+        if job_type != STORYBOARD_RENDER_JOB_TYPE:
+            return None
+        try:
+            passport = json.loads(final_passport.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return "idempotent_pair_identity_mismatch"
+        if not isinstance(passport, dict):
+            return "idempotent_pair_identity_mismatch"
+        sealed: list[tuple[object, object]] = [
+            (passport.get("job_id"), result.get("job_id")),
+            (passport.get("output_sha256"), result.get("output_sha256")),
+        ]
+        claimed_profile = result.get("render_profile_hash")
+        if isinstance(claimed_profile, str) and claimed_profile:
+            sealed.append((passport.get("render_profile_hash"), claimed_profile))
+        for passport_value, attempt_value in sealed:
+            if passport_value != attempt_value:
+                logger.warning(
+                    "idempotent pair identity mismatch job_id=%s attempt=%d",
+                    claim.job_id,
+                    claim.attempt,
+                )
+                return "idempotent_pair_identity_mismatch"
+        return None
+
+    def _reconcile_interrupted_promotion_backups(
+        self, final_out_path: Path, final_pp_path: Path
+    ) -> None:
+        """Repair the destination of a promotion that died between its renames.
+
+        :func:`_promote_staged_artifacts` parks BOTH previous files
+        (``*.promote-backup``) before its first rename, so a crash can leave:
+        only parked backups (no new generation landed); a new MP4 without its
+        passport; or a complete new pair that was never verified. Reconciliation
+        never trusts a half-landed pair:
+
+        - a destination pair that is complete AND re-verifies (``PASS``) is the
+          generation that the crashed promotion published: only the parked
+          backups are dropped;
+        - otherwise the parked previous generation is restored file-by-file with
+          :func:`os.replace`, and if the restored destination still does not
+          verify as one complete pair, the destination files are removed so no
+          mixed (chimeric) generation can ever be served.
+
+        Fail-closed: an ``OSError`` during restoration, or a backup that is still
+        parked afterwards, raises :class:`_PromotionRefused` — never a silent
+        return. The quarantine (``.staging``) is not touched here.
+        """
+        if not final_out_path.parent.is_dir():
+            return  # no destination directory means no parked generation either
+        try:
+            with self._promotion_lock, self._acquire_promotion_path_lock(final_out_path):
+                self._reconcile_destination_locked(final_out_path, final_pp_path)
+        except OSError as exc:
+            raise _PromotionRefused("reconcile_interrupted_backup_failed") from exc
+
+    def _reconcile_destination_locked(self, final_out_path: Path, final_pp_path: Path) -> None:
+        """The reconciliation body; the caller holds this destination's locks."""
+        from nexus_ai_agent.nagar.creative.handoff import STORYBOARD_RENDER_JOB_TYPE
+
+        backup_out = final_out_path.with_name(f"{final_out_path.name}.promote-backup")
+        backup_pp = final_pp_path.with_name(f"{final_pp_path.name}.promote-backup")
+        if not (backup_out.exists() or backup_pp.exists()):
+            # No parked generation: the only possible leftover is an MP4 that
+            # lost its passport to the crash — an inconsistent destination.
+            if final_out_path.exists() and not final_pp_path.exists():
+                final_out_path.unlink(missing_ok=True)
+                _fsync_directory(final_out_path.parent)
+            return
+        complete = final_out_path.is_file() and final_pp_path.is_file()
+        if complete and (
+            self._verify_promoted_pair(STORYBOARD_RENDER_JOB_TYPE, final_out_path, final_pp_path)
+            is None
+        ):
+            # The crashed promotion had landed and verified a whole pair:
+            # keep it, and drop only the parked previous generation.
+            backup_out.unlink(missing_ok=True)
+            backup_pp.unlink(missing_ok=True)
+        else:
+            # Not a verified complete pair: put the previous generation back,
+            # file by file, exactly where each parked file came from.
+            for final, backup in ((final_out_path, backup_out), (final_pp_path, backup_pp)):
+                if backup.is_file():
+                    os.replace(backup, final)
+            _fsync_directory(final_out_path.parent)
+            restored = (
+                final_out_path.is_file()
+                and final_pp_path.is_file()
+                and self._verify_promoted_pair(
+                    STORYBOARD_RENDER_JOB_TYPE, final_out_path, final_pp_path
+                )
+                is None
+            )
+            if not restored:
+                # No verifiable pair remains: fail closed by removing what is
+                # left at the destination (downloads then refuse with 409).
+                final_out_path.unlink(missing_ok=True)
+                final_pp_path.unlink(missing_ok=True)
+        _fsync_directory(final_out_path.parent)
+        if backup_out.exists() or backup_pp.exists():
+            raise _PromotionRefused("reconcile_interrupted_backup_failed")
+
+    def _reconcile_storyboard_promotion_backups(self) -> int:
+        """Startup sweep of storyboard destinations for interrupted promotions.
+
+        Rows whose ``result_json`` records final paths get their destination
+        reconciled (a no-op for every consistent pair). A row that died
+        between the two renames has no result yet — its destination is
+        repaired at the start of the successor attempt's own promotion.
+        """
+        from nexus_ai_agent.nagar.creative.handoff import STORYBOARD_RENDER_JOB_TYPE
+
+        with self._db_lock, self._connection() as connection:
+            rows = connection.execute(
+                "SELECT result_json FROM nexus_job_queue "
+                "WHERE job_type = ? AND result_json IS NOT NULL",
+                (STORYBOARD_RENDER_JOB_TYPE,),
+            ).fetchall()
+        swept = 0
+        for row in rows:
+            try:
+                parsed = json.loads(str(row["result_json"] or ""))
+            except ValueError:
+                continue
+            if not isinstance(parsed, dict):
+                continue
+            final_output = parsed.get("final_output_path")
+            final_passport = parsed.get("final_passport_path")
+            if not (
+                isinstance(final_output, str)
+                and final_output
+                and isinstance(final_passport, str)
+                and final_passport
+            ):
+                continue
+            try:
+                self._reconcile_interrupted_promotion_backups(
+                    Path(final_output), Path(final_passport)
+                )
+            except _PromotionRefused as exc:
+                # Never counted as swept: the destination stays unverified and
+                # its download is refused (the passport gate fails closed).
+                logger.error(
+                    "storyboard promotion backup reconciliation refused reason=%s destination=%s",
+                    exc.reason,
+                    final_output,
+                )
+                continue
+            swept += 1
+        return swept
+
+    def _verify_promoted_pair(
+        self, job_type: str, final_output: Path, final_passport: Path
+    ) -> str | None:
+        """Post-promotion gate: re-verify the FINAL pair; ``None`` means PASS."""
+        from nexus_ai_agent.nagar.creative.handoff import STORYBOARD_RENDER_JOB_TYPE
+
+        if job_type != STORYBOARD_RENDER_JOB_TYPE:
+            return None  # no sealed-pair contract for this job type
+        from nexus_ai_agent.creative.storyboard_jobs import verify_storyboard_final_pair
+
+        return verify_storyboard_final_pair(final_output, final_passport)
+
+    def _rollback_promotion(  # noqa: PLR0913 - explicit rollback geometry
+        self,
+        claim: ExecutionClaim,
+        staged_out_path: Path,
+        staged_pp_path: Path,
+        final_out_path: Path,
+        final_pp_path: Path,
+        backups: list[tuple[Path, Path]],
+        identities: tuple[tuple[int, int] | None, tuple[int, int] | None],
+    ) -> None:
+        """Undo a promotion of THIS attempt, and only what is provably its own.
+
+        A destination entry carrying the quarantined file's recorded
+        ``(st_dev, st_ino)`` is this attempt's bytes and returns to quarantine.
+        An entry with another inode was written by a newer attempt: it is never
+        moved, overwritten or removed, and the previous generation parked for
+        it stays parked for the reconciliation that owns that destination.
+        """
+        try:
+            for staged, final, expected in (
+                (staged_out_path, final_out_path, identities[0]),
+                (staged_pp_path, final_pp_path, identities[1]),
+            ):
+                if expected is not None and _file_identity(final) == expected:
+                    os.replace(final, staged)
+                elif _file_identity(final) is not None:
+                    logger.warning(
+                        "destination owned by a newer attempt, left untouched: %s", final
+                    )
+            _fsync_directory(final_out_path.parent)
+            for final, backup in backups:
+                if not backup.is_file():
+                    continue
+                if _file_identity(final) is None:
+                    os.replace(backup, final)
+                else:
+                    logger.warning("previous generation kept parked for a newer owner: %s", backup)
+            _fsync_directory(final_out_path.parent)
+        except OSError:  # pragma: no cover - rollback is best-effort, logged
+            logger.exception(
+                "promotion rollback incomplete job_id=%s attempt=%d",
+                claim.job_id,
+                claim.attempt,
+            )
+
+    def _finalize_approval_reservation(
+        self,
+        job_type: str,
+        job_id: str,
+        claim: ExecutionClaim,
+        result: Mapping[str, object],
+    ) -> None:
+        """Close the consumed approval's reservation after durable ``COMPLETED``.
+
+        Idempotent and never fatal: the job is already terminal, so a skipped
+        finalization is logged degradation while the reservation stays fenced
+        by its ``last_attempt`` (startup reconciliation retries it).
+        """
+        approval_id = result.get("approval_id") if isinstance(result, Mapping) else None
+        if not isinstance(approval_id, str) or not approval_id:
+            return
+        from nexus_ai_agent.nagar.creative.handoff import STORYBOARD_RENDER_JOB_TYPE
+
+        if job_type != STORYBOARD_RENDER_JOB_TYPE:
+            return
+        from nexus_ai_agent.creative.storyboard_jobs import finalize_storyboard_approval
+
+        error = finalize_storyboard_approval(approval_id, job_id=job_id, attempt=claim.attempt)
+        if error is not None:
+            logger.info(
+                "approval finalization skipped job_id=%s attempt=%d reason=%s",
+                job_id,
+                claim.attempt,
+                error,
+            )
+
+    def _reconcile_completed_approval_reservations(self) -> int:
+        """Idempotent startup reconciliation of approval reservations.
+
+        A process can die between the durable ``COMPLETED`` commit and the
+        approval finalization; on startup every completed job whose result
+        carries an approval id gets its reservation finalized again (a no-op
+        when it already is). A superseded attempt's reservation is skipped:
+        it is owned by a different ``last_attempt``.
+        """
+        from nexus_ai_agent.nagar.creative.handoff import STORYBOARD_RENDER_JOB_TYPE
+
+        with self._db_lock, self._connection() as connection:
+            rows = connection.execute(
+                """
+                SELECT id, attempt, result_json FROM nexus_job_queue
+                WHERE status = ? AND job_type = ?
+                """,
+                (JobStatus.COMPLETED.value, STORYBOARD_RENDER_JOB_TYPE),
+            ).fetchall()
+        from nexus_ai_agent.creative.storyboard_jobs import finalize_storyboard_approval
+
+        finalized = 0
+        for row in rows:
+            try:
+                parsed = json.loads(str(row["result_json"] or ""))
+            except ValueError:
+                continue
+            if not isinstance(parsed, dict):
+                continue
+            approval_id = parsed.get("approval_id")
+            attempt = row["attempt"]
+            if not isinstance(approval_id, str) or not approval_id:
+                continue
+            if isinstance(attempt, bool) or not isinstance(attempt, int) or attempt < 1:
+                continue
+            if (
+                finalize_storyboard_approval(approval_id, job_id=str(row["id"]), attempt=attempt)
+                is None
+            ):
+                finalized += 1
+        return finalized
 
     async def _confirm_safely(
         self,

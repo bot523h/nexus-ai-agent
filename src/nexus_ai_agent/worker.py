@@ -31,8 +31,12 @@ def default_job_handlers() -> dict[str, JobHandler]:
     """
     from nexus_ai_agent.creative.render_jobs import creative_render_job
     from nexus_ai_agent.creative.slideshow.worker_adapter import slideshow_render_job
+    from nexus_ai_agent.creative.storyboard_jobs import storyboard_render_job
 
     return {
+        # NAGAR One V1 vertical slice: screenplay -> verified MP4 + passport.
+        # Configuration is read at call time; missing config fails the job closed.
+        "storyboard_render": storyboard_render_job,
         "pdf_extract": process_pdf_job,
         "story": generate_story_job,
         # Wave 2.5: the Nagar slideshow lane reached through the queue, never inline.

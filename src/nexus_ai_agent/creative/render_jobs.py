@@ -1509,6 +1509,22 @@ async def creative_render_job(payload: dict[str, Any]) -> dict[str, Any]:
                 canonical_execution,
                 pinned_project=pinned_project,
             )
+        # Schema-2 fail-closed authorization fence: the durable evidence must
+        # carry an AUTHORIZED decision before the job may report success. A
+        # missing, degraded or refused status never reaches the caller as a
+        # completed render — the job is rejected instead.
+        if canonical_execution is not None:
+            authorization = (result.get("canonical_execution") or {}).get("authorization")
+            status = str((authorization or {}).get("status", "")).upper()
+            if status != "AUTHORIZED":
+                return {
+                    "success": False,
+                    "error_code": "authorization_refused",
+                    "error_detail": (
+                        "schema 2 execution evidence authorization.status "
+                        f"is {status!r}, not AUTHORIZED"
+                    ),
+                }
     except CreativeRenderError as exc:
         logger.warning("creative_render_typed_failure", code=exc.code, detail=exc.detail)
         return {"success": False, "error_code": exc.code, "error_detail": exc.detail}

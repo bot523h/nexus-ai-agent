@@ -26,8 +26,23 @@ from nexus_ai_agent.nagar.creative import run_free_text_intent
 ROOT = Path(__file__).parents[2]
 CREATIVE = ROOT / "src" / "nexus_ai_agent" / "nagar" / "creative"
 
-#: Top-level modules the slice may import at import time.
-ALLOWED_TOP_LEVEL = {"__future__", "typing", "pydantic", "nexus_ai_agent"}
+#: Top-level modules the slice may import at import time.  Besides the three
+#: "light" bases, the deterministic handoff builders use the stdlib's
+#: fixed-behaviour primitives (``hashlib``/``hmac`` digests, ``math`` bounds,
+#: ``re`` pattern fences, ``collections.abc``/``dataclasses`` typing shapes) —
+#: no I/O, no settings, no providers, no buses.
+ALLOWED_TOP_LEVEL = {
+    "__future__",
+    "typing",
+    "pydantic",
+    "nexus_ai_agent",
+    "hashlib",
+    "hmac",
+    "math",
+    "re",
+    "collections",
+    "dataclasses",
+}
 
 #: Packages a composition root may reach, but only lazily inside a function.
 LAZY_ONLY_PREFIXES = ("nexus_ai_agent.llm", "nexus_ai_agent.config")

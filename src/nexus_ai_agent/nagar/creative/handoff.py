@@ -29,6 +29,12 @@ worker's ``CommandBus``.
 
 from __future__ import annotations
 
+import hashlib
+import hmac
+import math
+import re
+from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -654,9 +660,126 @@ async def run_free_text_intent_durable(
     )
 
 
+#: Queue job type for the V1 vertical slice (storyboard -> verified MP4 + passport).
+STORYBOARD_RENDER_JOB_TYPE = "storyboard_render"
+#: Upper bound on the screenplay that enters the compiler (characters, not bytes).
+MAX_SCREENPLAY_CHARS = 20_000
+_HANDOFF_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
+_HEX64 = re.compile(r"^[0-9a-f]{64}$")
+_PROFILE_KEYS = ("width", "height", "fps", "sample_rate")
+
+
+@dataclass(frozen=True)
+class StoryboardRenderRequest:
+    """A validated, typed ``storyboard.render`` request (shape and digests only).
+
+    Range checks on the render profile belong to the materializer, which owns
+    the profile contract. This layer guarantees types, finiteness and digests.
+    """
+
+    project_id: str
+    job_id: str
+    screenplay_text: str
+    source_sha256: str
+    manifest_sha256: str | None
+    approval_id: str
+    principal_id: str
+    profile: dict[str, Any]
+
+
+def _handoff_id(payload: Mapping[str, Any], key: str) -> str:
+    value = payload.get(key)
+    if not isinstance(value, str) or not _HANDOFF_ID.fullmatch(value):
+        raise HandoffRefusal("invalid_identifier", f"{key} must be a safe identifier")
+    return value
+
+
+def _finite_profile_value(payload: Mapping[str, Any], key: str) -> int | float:
+    """Return the value unchanged (type preserved) once it is a finite real number."""
+    value = payload.get(key)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise HandoffRefusal("invalid_profile", f"{key} must be a number")
+    if not math.isfinite(float(value)):
+        raise HandoffRefusal("invalid_profile", f"{key} must be finite (NaN/Inf refused)")
+    return value
+
+
+def validate_storyboard_render_request(payload: Mapping[str, Any]) -> StoryboardRenderRequest:
+    """Fail closed on any malformed ``storyboard.render`` payload, before compile or enqueue.
+
+    The screenplay digest is recomputed and must equal the supplied
+    ``source_sha256``. A mismatch means the approval would bind to text that was
+    not reviewed, so it is refused.
+    """
+    if not isinstance(payload, Mapping):
+        raise HandoffRefusal("malformed", "payload must be a mapping")
+    project_id = _handoff_id(payload, "project_id")
+    job_id = _handoff_id(payload, "job_id")
+    text = payload.get("screenplay_text")
+    if not isinstance(text, str) or not text.strip():
+        raise HandoffRefusal("invalid_screenplay", "screenplay_text must be a non-empty string")
+    if len(text) > MAX_SCREENPLAY_CHARS or "\x00" in text:
+        raise HandoffRefusal("invalid_screenplay", "screenplay_text is too long or contains NUL")
+    source_sha256 = payload.get("source_sha256")
+    if not isinstance(source_sha256, str) or not _HEX64.fullmatch(source_sha256):
+        raise HandoffRefusal("invalid_digest", "source_sha256 must be 64 lowercase hex")
+    computed = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    if not hmac.compare_digest(computed, source_sha256):
+        raise HandoffRefusal("source_digest_mismatch", "screenplay does not match source_sha256")
+    manifest_sha256 = payload.get("manifest_sha256")
+    if manifest_sha256 is not None and (
+        not isinstance(manifest_sha256, str) or not _HEX64.fullmatch(manifest_sha256)
+    ):
+        raise HandoffRefusal("invalid_digest", "manifest_sha256 must be 64 lowercase hex")
+    approval_id = payload.get("approval_id")
+    if not isinstance(approval_id, str) or not 1 <= len(approval_id) <= 128:
+        raise HandoffRefusal("invalid_approval", "approval_id is required")
+    principal_id = payload.get("principal_id")
+    if not isinstance(principal_id, str) or not 1 <= len(principal_id) <= 128:
+        raise HandoffRefusal("invalid_identity", "principal_id is required")
+    profile = {key: _finite_profile_value(payload, key) for key in _PROFILE_KEYS}
+    return StoryboardRenderRequest(
+        project_id=project_id,
+        job_id=job_id,
+        screenplay_text=text,
+        source_sha256=source_sha256,
+        manifest_sha256=manifest_sha256,
+        approval_id=approval_id,
+        principal_id=principal_id,
+        profile=profile,
+    )
+
+
+def build_storyboard_render_payload(payload: Mapping[str, Any]) -> dict[str, object]:
+    """Validate at enqueue time and return the flat queue payload for ``storyboard_render``.
+
+    The render chain re-validates at execution, but a request that is malformed
+    or whose screenplay does not match ``source_sha256`` must never reach the
+    queue at all. The returned dict is JSON-serialisable and carries exactly the
+    fields the worker reads.
+    """
+    request = validate_storyboard_render_request(payload)
+    flat: dict[str, object] = {
+        "project_id": request.project_id,
+        "job_id": request.job_id,
+        "screenplay_text": request.screenplay_text,
+        "source_sha256": request.source_sha256,
+        "manifest_sha256": request.manifest_sha256,
+        "approval_id": request.approval_id,
+        "principal_id": request.principal_id,
+    }
+    flat.update(request.profile)
+    return flat
+
+
 __all__ = [
     "CREATIVE_RENDER_JOB_TYPE",
     "MAX_INTENT_CHARS",
+    "MAX_SCREENPLAY_CHARS",
+    "STORYBOARD_RENDER_JOB_TYPE",
+    "StoryboardRenderRequest",
+    "build_storyboard_render_payload",
+    "validate_storyboard_render_request",
     "TRIM_COMMAND",
     "TRIM_OPERATION",
     "TRIM_SURFACE_OPERATION",
