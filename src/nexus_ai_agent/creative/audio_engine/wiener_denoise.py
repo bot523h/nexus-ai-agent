@@ -33,6 +33,7 @@ The parts that are easy to get subtly wrong, and what is done here instead:
 from __future__ import annotations
 
 import math
+import numbers
 from dataclasses import dataclass
 
 import numpy as np
@@ -82,6 +83,27 @@ class DenoiseResult:
     frames: int
 
 
+def _require_finite_scalar(name: str, value: object) -> float:
+    """Refuse a non-finite (or non-numeric, or boolean) scalar parameter.
+
+    Range checks do not catch everything: ``nan < 0`` is False and ``nan > 1`` is
+    False, so a naive ``if not 0 <= x <= 1`` happens to reject ``nan`` while
+    ``if x <= 0`` accepts it, and ``inf`` slips through every comparison that only
+    looks at one side. The failure then surfaces *inside* the transform as a matrix
+    of ``nan`` — a destroyed programme reported as a measurement. Checked here, it
+    is a ``ValueError`` at the caller's own line, before any audio is touched.
+
+    ``bool`` is rejected explicitly: ``True`` is an ``int`` in Python, and a boolean
+    where a gain or a frame length belongs is a caller bug, not ``1``.
+    """
+    if isinstance(value, bool) or not isinstance(value, numbers.Real):
+        raise ValueError(f"{name} must be a finite real number")
+    number = float(value)
+    if not math.isfinite(number):
+        raise ValueError(f"{name} must be a finite real number")
+    return number
+
+
 def cola_window(frame_length: int, overlap: float) -> np.ndarray:
     """The **periodic** Hann window, which is the one that is exactly COLA.
 
@@ -98,6 +120,8 @@ def cola_window(frame_length: int, overlap: float) -> np.ndarray:
     refused rather than rounded, because a hop that does not divide the frame
     evenly produces the same hop-rate modulation.
     """
+    _require_finite_scalar("frame_length", frame_length)
+    _require_finite_scalar("overlap", overlap)
     if frame_length <= 0:
         raise ValueError("frame_length must be positive")
     if overlap not in (0.5, 0.75):
@@ -108,6 +132,8 @@ def cola_window(frame_length: int, overlap: float) -> np.ndarray:
 
 
 def _hop_for(frame_length: int, overlap: float) -> int:
+    _require_finite_scalar("frame_length", frame_length)
+    _require_finite_scalar("overlap", overlap)
     hop = int(round(frame_length * (1.0 - overlap)))
     if hop <= 0:
         raise ValueError("overlap leaves no hop")
@@ -196,6 +222,9 @@ def estimate_noise_psd(
     mean of an exponentially distributed periodogram; the value follows the
     distribution, it is not tuned to a test fixture.
     """
+    _require_finite_scalar("percentile", percentile)
+    _require_finite_scalar("bias_correction_db", bias_correction_db)
+    _require_finite_scalar("neighbour_bins", neighbour_bins)
     if power.ndim != 2 or power.size == 0:
         raise ValueError("power must be a non-empty (frames, bins) matrix")
     if not 0.0 < percentile < 100.0:
@@ -221,6 +250,24 @@ def estimate_noise_psd(
     return np.asarray(np.maximum(estimate, NOISE_FLOOR_POWER), dtype=np.float64)
 
 
+def _require_finite(label: str, values: np.ndarray) -> np.ndarray:
+    """Refuse non-finite audio or spectra instead of propagating ``NaN``/``Inf``.
+
+    A single ``NaN`` sample is viral: it survives every ``np.maximum``, the FFT, the
+    gain curve and the overlap-add, so the module would hand back a fully-``NaN``
+    signal while reporting a plausible-looking frame count. ``Inf`` is worse than
+    silent: it poisons a noise estimate into ``0 * inf`` and every downstream
+    measurement becomes meaningless. Both are refused at the boundary, which makes
+    the failure a typed error at the caller's line rather than a mystery three
+    stages later.
+    """
+    array = np.asarray(values, dtype=np.float64)
+    if not np.all(np.isfinite(array)):
+        bad = int(np.size(array) - np.count_nonzero(np.isfinite(array)))
+        raise ValueError(f"{label} contains {bad} non-finite value(s) (NaN or Inf)")
+    return array
+
+
 def wiener_gain(
     frame_power: np.ndarray, noise_psd: np.ndarray, *, floor: float = 0.05
 ) -> np.ndarray:
@@ -228,11 +275,26 @@ def wiener_gain(
 
     A pure per-frame Wiener gain without the decision-directed smoothing in
     :func:`wiener_denoise` is what produces musical noise; this function is the
-    primitive, not the whole algorithm.
+    primitive, not the whole algorithm. Non-finite or negative powers are refused
+    (``ValueError``): the ratio of a ``NaN`` power to a positive PSD is ``NaN``, and
+    ``NaN`` is what the caller would otherwise get back as a "gain".
     """
+    _require_finite_scalar("floor", floor)
     if floor <= 0.0 or floor >= 1.0:
         raise ValueError("floor must be within (0, 1)")
-    posteriori = np.maximum(frame_power / noise_psd - 1.0, 0.0)
+    power = _require_finite("frame_power", frame_power)
+    psd = _require_finite("noise_psd", noise_psd)
+    if power.shape != psd.shape:
+        raise ValueError(
+            f"frame_power shape {power.shape} does not match noise_psd shape {psd.shape}"
+        )
+    if power.size == 0:
+        raise ValueError("frame_power and noise_psd must be non-empty")
+    if float(np.min(power)) < 0.0:
+        raise ValueError("frame_power must be non-negative")
+    if float(np.min(psd)) <= 0.0:
+        raise ValueError("noise_psd must be strictly positive")
+    posteriori = np.maximum(power / psd - 1.0, 0.0)
     gain = posteriori / (1.0 + posteriori)
     return np.asarray(np.maximum(gain, floor), dtype=np.float64)
 
@@ -278,11 +340,21 @@ def wiener_denoise(
     ``clean_reference`` is only for measurement: when supplied, the SNR gain is
     computed against it and reported.  It never influences the estimate.
     """
+    _require_finite_scalar("frame_length", frame_length)
+    _require_finite_scalar("overlap", overlap)
+    _require_finite_scalar("floor", floor)
+    _require_finite_scalar("smoothing", smoothing)
+    _require_finite_scalar("noise_percentile", noise_percentile)
+    _require_finite_scalar("strength", strength)
     if not 0.0 <= strength <= 1.0:
         raise ValueError("strength must be within [0, 1]")
     if not 0.0 < smoothing < 1.0:
         raise ValueError("smoothing must be within (0, 1)")
-    data = np.asarray(samples, dtype=np.float64).reshape(-1)
+    if floor <= 0.0 or floor >= 1.0:
+        raise ValueError("floor must be within (0, 1)")
+    if not 0.0 < noise_percentile < 100.0:
+        raise ValueError("noise_percentile must be within (0, 100)")
+    data = _require_finite("samples", samples).reshape(-1)
     if data.size == 0:
         return DenoiseResult(
             samples=data,
@@ -356,12 +428,30 @@ def wiener_denoise(
 
     snr_gain: float | None = None
     if clean_reference is not None:
-        reference = np.asarray(clean_reference, dtype=np.float64).reshape(-1)[: output.size]
-        if reference.size == output.size:
-            before = _instrumental_snr(reference, data, frame_length=frame_length, hop=hop)
-            after = _instrumental_snr(reference, output, frame_length=frame_length, hop=hop)
-            if math.isfinite(before) and math.isfinite(after):
-                snr_gain = after - before
+        reference = _require_finite("clean_reference", clean_reference).reshape(-1)
+        if reference.size != data.size:
+            # Truncating to the shorter of the two would compare a reference excerpt
+            # against a whole signal and report the difference as "SNR gain". A length
+            # mismatch is a caller bug, so it is refused rather than smoothed over.
+            raise ValueError(
+                f"clean_reference has {reference.size} sample(s) but samples has "
+                f"{data.size}; the SNR gain would compare different signals"
+            )
+        before = _instrumental_snr(reference, data, frame_length=frame_length, hop=hop)
+        after = _instrumental_snr(reference, output, frame_length=frame_length, hop=hop)
+        if math.isfinite(before) and math.isfinite(after):
+            snr_gain = after - before
+
+    # Belt and braces: the guards above make a non-finite output unreachable, and
+    # this makes it *unpublishable*. A denoiser that returns NaN must fail loudly
+    # here rather than silently hand the caller a destroyed programme.
+    if not np.all(np.isfinite(output)):
+        raise ValueError("wiener_denoise produced non-finite output; refusing to return it")
+    if not math.isfinite(reconstruction_error):
+        raise ValueError(
+            "wiener_denoise could not measure its reconstruction error "
+            "(non-finite); refusing to report an unverifiable result"
+        )
 
     return DenoiseResult(
         samples=output,

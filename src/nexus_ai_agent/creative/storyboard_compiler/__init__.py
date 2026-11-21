@@ -115,6 +115,7 @@ from .editorial_cut_solver import (
     solve_eye_trace_transition,
     verify_editorial_timeline,
     verify_manifest_integrity,
+    verify_manifest_integrity_strict,
 )
 
 __all__ = [
@@ -217,6 +218,7 @@ __all__ = [
     "verify_180_degree_rule",
     "verify_editorial_timeline",
     "verify_manifest_integrity",
+    "verify_manifest_integrity_strict",
     "verify_scene_character_blocking",
     "verify_script_provenance",
 ]

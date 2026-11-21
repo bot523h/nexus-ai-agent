@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import itertools
 import struct
 import urllib.error
 import urllib.parse
@@ -253,6 +254,24 @@ def test_aws_sigv4_official_reference_vectors() -> None:
             secret_access_key="s",
             region="us-east-1",
         )
+
+
+_PUT_VERSIONS = itertools.count(1)
+
+
+def _put_headers(req: S3HttpRequest, etag: str) -> dict[str, str]:
+    """Headers a real bucket returns for a successful ``PUT``.
+
+    Two of them are load-bearing for the lease proof, and a fake that omitted either
+    would test a weaker driver than the one that ships: the bucket mints a new
+    ``x-amz-version-id`` for *every* write (a rewrite of identical bytes included) and
+    echoes the caller's ``x-amz-meta-*`` metadata back on ``HEAD``/``GET``.
+    """
+    headers = {"etag": etag, "x-amz-version-id": f"v{next(_PUT_VERSIONS)}"}
+    headers.update(
+        {k.lower(): v for k, v in req.headers.items() if k.lower().startswith("x-amz-meta-")}
+    )
+    return headers
 
 
 class _FakeS3MemoryTransport:
@@ -892,7 +911,8 @@ def test_p1_3_multi_backend_s3_and_bundle_leases_and_chunk_mtime(tmp_path: Path)
             if force_412_once["active"] and req.headers.get("if-none-match") == "*":
                 force_412_once["active"] = False
                 return S3HttpResponse(status_code=412)
-            hdrs = {"last-modified": "Mon, 16 Nov 2026 12:00:00 GMT"}
+            hdrs = _put_headers(req, '"' + hashlib.sha256(req.body).hexdigest()[:32] + '"')
+            hdrs["last-modified"] = "Mon, 16 Nov 2026 12:00:00 GMT"
             objects[obj_key] = (req.body, hdrs)
             return S3HttpResponse(status_code=200)
         if req.method == "GET":
@@ -924,8 +944,10 @@ def test_p1_3_multi_backend_s3_and_bundle_leases_and_chunk_mtime(tmp_path: Path)
     assert s3_a.get_chunk_mtime(c1) is None
     s3_a.put_chunk(c1, b"s3-chunk-1")
     assert s3_a.get_chunk_mtime(c1) == fixed_now.timestamp()
-    # Headerless S3 object populates mtime from ListObjectsV2 <LastModified>
-    objects[f"p13/chunks/{c2}.chk"] = (b"s3-chunk-2", {})
+    # Object without Last-Modified (mtime comes from ListObjectsV2), but with the
+    # version id every real bucket reports: chunk identity is (version, generation,
+    # ETag), and an object that reports none of them is not leaseable any more.
+    objects[f"p13/chunks/{c2}.chk"] = (b"s3-chunk-2", {"x-amz-version-id": "v-seed"})
     assert s3_b.list_chunks() == [c1, c2]
     assert s3_b.get_chunk_mtime(c2) is not None
 
@@ -1083,6 +1105,17 @@ def test_edge_branches_local_s3_and_bundle_fail_closed_paths(
             headers: dict[str, str] = {}
             if state["last_modified"] is not None:
                 headers["last-modified"] = str(state["last_modified"])
+            # A real bucket answers with an ETag and a version id; this transport only
+            # leaves `last-modified` under test control.
+            headers["etag"] = '"' + hashlib.sha256(req.body).hexdigest()[:32] + '"'
+            headers["x-amz-version-id"] = f"v{next(_PUT_VERSIONS)}"
+            headers.update(
+                {
+                    k.lower(): v
+                    for k, v in req.headers.items()
+                    if k.lower().startswith("x-amz-meta-")
+                }
+            )
             objects[key] = (req.body, headers)
             return S3HttpResponse(status_code=200)
         if req.method == "GET":
@@ -1138,9 +1171,12 @@ def test_edge_branches_local_s3_and_bundle_fail_closed_paths(
     )
     assert s3.list_chunks() == [cid]
 
-    # S3 lease probe (HEAD) 500 -> acquire_push_lease fails closed
+    # S3 probe (HEAD) 500 -> acquire_push_lease fails closed. The first HEAD it
+    # issues is now the chunk-generation preflight, which is deliberately ahead of
+    # the lease-object probe: a chunk that vanishes before the lease exists must be
+    # seen *before* the lease is written, not after.
     state["head_status"] = 500
-    with pytest.raises(VaultTransportError, match="lease probe"):
+    with pytest.raises(VaultTransportError, match="probe failed"):
         s3.acquire_push_lease([cid], lease_id="s3-edge")
     state["head_status"] = None
 
@@ -1416,7 +1452,7 @@ def test_f3_s3_staging_journal_and_if_match_lease_updates(
             if state["force_412_update"] and "if-match" in req.headers:
                 return S3HttpResponse(status_code=412)
             etag_counter["n"] += 1
-            objects[key] = (req.body, {"etag": f'"etag-{etag_counter["n"]}"'})
+            objects[key] = (req.body, _put_headers(req, f'"etag-{etag_counter["n"]}"'))
             return S3HttpResponse(status_code=200)
         if req.method == "GET":
             if key in objects:
@@ -1801,7 +1837,7 @@ def test_edge_branches_pid_probe_lock_break_and_backend_probe_failures(
         if req.method == "PUT":
             if "staging/" in key and state["save_status"] is not None:
                 return S3HttpResponse(status_code=int(state["save_status"]))
-            objects[key] = (req.body, {"etag": '"e"'})
+            objects[key] = (req.body, _put_headers(req, '"e"'))
             return S3HttpResponse(status_code=200)
         if req.method == "GET":
             if "staging/" in key and state["load_status"] is not None:
@@ -2020,7 +2056,7 @@ def test_edge_branches_owner_release_races_lock_errors_and_bundle_sweeps(
                 return S3HttpResponse(status_code=200, headers=dict(objects[key][1]))
             return S3HttpResponse(status_code=404)
         if req.method == "PUT":
-            objects[key] = (req.body, {"etag": '"e"'})
+            objects[key] = (req.body, _put_headers(req, '"e"'))
             return S3HttpResponse(status_code=200)
         if req.method == "GET":
             if key in objects:
@@ -2122,7 +2158,7 @@ def test_last_mile_lease_state_shift_before_delete_aborts_s3_deletion(
                 return S3HttpResponse(status_code=200, headers=dict(objects[key][1]))
             return S3HttpResponse(status_code=404)
         if req.method == "PUT":
-            objects[key] = (req.body, {"etag": '"e"'})
+            objects[key] = (req.body, _put_headers(req, '"e"'))
             return S3HttpResponse(status_code=200)
         if req.method == "GET":
             if key in objects:
@@ -2473,7 +2509,7 @@ def _fence_transport(
                 return S3HttpResponse(status_code=200, headers=dict(objects[key][1]))
             return S3HttpResponse(status_code=404)
         if req.method == "PUT":
-            objects[key] = (req.body, {"etag": f'"e-{len(objects)}"'})
+            objects[key] = (req.body, _put_headers(req, f'"e-{len(objects)}"'))
             return S3HttpResponse(status_code=200)
         if req.method == "GET":
             if inject_on_key is not None and key == inject_on_key and not state["get_done"]:
@@ -2481,9 +2517,13 @@ def _fence_transport(
                 lease_id, cid = inject_lease
                 objects[lease_id] = (
                     json.dumps(
-                        {"expires_at_epoch": time.time() + 600.0, "chunk_ids": [cid]}
+                        {
+                            "lease_token": "late-writer-token",
+                            "expires_at_epoch": time.time() + 600.0,
+                            "chunk_ids": [cid],
+                        }
                     ).encode(),
-                    {"etag": '"late"'},
+                    {"etag": '"late"', "x-amz-version-id": f"v{next(_PUT_VERSIONS)}"},
                 )
             if key in objects:
                 return S3HttpResponse(
@@ -2500,9 +2540,13 @@ def _fence_transport(
                 lease_id, cid = inject_lease
                 objects[lease_id] = (
                     json.dumps(
-                        {"expires_at_epoch": time.time() + 600.0, "chunk_ids": [cid]}
+                        {
+                            "lease_token": "late-writer-token",
+                            "expires_at_epoch": time.time() + 600.0,
+                            "chunk_ids": [cid],
+                        }
                     ).encode(),
-                    {"etag": '"late"'},
+                    {"etag": '"late"', "x-amz-version-id": f"v{next(_PUT_VERSIONS)}"},
                 )
             objects.pop(key, None)
             return S3HttpResponse(status_code=204)

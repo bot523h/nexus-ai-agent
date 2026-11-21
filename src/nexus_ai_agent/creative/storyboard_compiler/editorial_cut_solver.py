@@ -37,6 +37,7 @@ from .bilingual_script_parser import (
     DialogueLine,
     EmotionTag,
     ParsedScript,
+    normalize_script_text,
     parse_bilingual_script,
     verify_script_provenance,
 )
@@ -84,6 +85,7 @@ __all__ = [
     "solve_eye_trace_transition",
     "verify_editorial_timeline",
     "verify_manifest_integrity",
+    "verify_manifest_integrity_strict",
 ]
 
 MANIFEST_SCHEMA_VERSION: Final[str] = "nexus.storyboard_compiler.v1"
@@ -1999,6 +2001,98 @@ def verify_manifest_integrity(
         and manifest.cinematography_sha256 == expected_cinema
         and manifest.editorial_sha256 == expected_edit
         and manifest.manifest_sha256 == expected_manifest
+    )
+
+
+def _trusted_source_digest(trusted_source_text: object) -> str | None:
+    """SHA-256 of the *normalized* form of an independently supplied screenplay.
+
+    The digest is computed here, from bytes the caller handed us, and in the same
+    normalization the parser applies (``normalize_script_text``) — so it is directly
+    comparable with ``ParsedScript.source_sha256`` without the caller ever touching
+    a field of the manifest it is asking us to trust. Returns ``None`` (fail-closed)
+    for unusable input rather than raising: this is an untrusted-input boundary.
+    """
+    if isinstance(trusted_source_text, bytes):
+        try:
+            text = trusted_source_text.decode("utf-8")
+        except UnicodeDecodeError:
+            return None
+    elif isinstance(trusted_source_text, str):
+        text = trusted_source_text
+    else:
+        # Annotated ``object``, not ``str | bytes``: this is the untrusted boundary, so
+        # the runtime refusal is the contract — a typing-only union would let mypy
+        # delete the branch that actually rejects the bad value.
+        return None
+    if not text:
+        return None
+    # No ``try/except`` here on purpose: ``text`` is a non-empty ``str`` by the two
+    # branches above, which is exactly what ``normalize_script_text`` accepts, so a
+    # handler would be dead code that hides a real contract break instead of one
+    # more refusal. Unusable *input* is already refused above, and ``str`` cannot
+    # fail to normalise.
+    normalized = normalize_script_text(text)
+    if not normalized.strip():
+        return None
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
+def verify_manifest_integrity_strict(
+    manifest: CompiledStoryboardManifest,
+    *,
+    hmac_key: bytes | str | None = None,
+    expected_source_sha256: str | None = None,
+    trusted_source_text: str | bytes | None = None,
+    expected_max_saccade_limit: float | None = None,
+    expected_initial_axis_side: int | None = None,
+) -> bool:
+    """Production/release gate: :func:`verify_manifest_integrity` with the anchor mandatory.
+
+    ``verify_manifest_integrity`` has to stay callable without a key -- it is the
+    format-level checker, and a manifest that is merely *internally* consistent is a
+    legitimate intermediate state (the compiler's own tests rely on that). The
+    consequence is that its default is ``require_trusted_anchor=False``, and a
+    caller that forgets to pass an anchor silently accepts a fully self-consistent
+    forgery: an attacker who writes a different screenplay, recompiles it honestly
+    and recomputes all four digests produces something keyless verification blesses.
+
+    This wrapper exists so the decision to trust cannot be made by omission. It is
+    fail-closed by construction: ``require_trusted_anchor=True`` is hard-wired, so
+    it refuses unless one of the three anchor routes is supplied:
+
+    * ``hmac_key`` -- the manifest was sealed with a deployment secret;
+    * ``trusted_source_text`` -- **the strongest route for source pinning**: the
+      caller supplies the screenplay bytes it agreed to compile, and *this function*
+      hashes them (after the parser's own normalization) and compares that digest
+      with the manifest. Nothing about the manifest is read before the comparison,
+      so the manifest cannot supply its own answer;
+    * ``expected_source_sha256`` -- a digest the caller holds from elsewhere.
+
+    ``expected_source_sha256`` is the one route the function cannot audit: a caller
+    that lifts it straight out of ``manifest.script.source_sha256`` turns the anchor
+    into a self-attestation and has re-created exactly the hole this wrapper closes
+    (the value always matches, whatever the manifest claims). Prefer
+    ``trusted_source_text`` when the screenplay is the thing being pinned, or
+    ``hmac_key`` when a secret is available. Passing both a text and a digest is
+    allowed only when they agree; a disagreement is a refusal, never a tie-break.
+    """
+    digest: str | None = None
+    if trusted_source_text is not None:
+        digest = _trusted_source_digest(trusted_source_text)
+        if digest is None:
+            return False
+        if expected_source_sha256 is not None and not hmac.compare_digest(
+            digest, expected_source_sha256
+        ):
+            return False
+    return verify_manifest_integrity(
+        manifest,
+        hmac_key=hmac_key,
+        expected_source_sha256=digest if digest is not None else expected_source_sha256,
+        expected_max_saccade_limit=expected_max_saccade_limit,
+        expected_initial_axis_side=expected_initial_axis_side,
+        require_trusted_anchor=True,
     )
 
 

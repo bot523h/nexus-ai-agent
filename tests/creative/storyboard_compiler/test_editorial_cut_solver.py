@@ -35,6 +35,7 @@ from nexus_ai_agent.creative.storyboard_compiler import (
     solve_script_cinematography,
     verify_editorial_timeline,
     verify_manifest_integrity,
+    verify_manifest_integrity_strict,
 )
 
 DIALOGUE_AND_REACTION_SCRIPT = """\
@@ -2096,3 +2097,178 @@ def test_wave7_saccade_policy_values_are_validated_uniformly() -> None:
             solve_editorial_timeline(
                 manifest.cinematography, max_eye_trace_saccade=cast("float", bad_policy)
             )
+
+
+def test_wave8_strict_verifier_makes_the_trust_anchor_mandatory() -> None:
+    """The production gate cannot be talked out of the anchor by simply omitting it.
+
+    ``verify_manifest_integrity`` is the format-level checker and stays keyless by
+    default (the whole compiler test-suite legitimately compiles unsealed), so the
+    trust decision lives in ``verify_manifest_integrity_strict``: no anchor supplied
+    is a refusal, not an acceptance.
+    """
+    legit = compile_storyboard(DIALOGUE_AND_REACTION_SCRIPT)
+    assert verify_manifest_integrity(legit) is True  # internally consistent, keyless
+    # The same, untouched, fully consistent manifest is refused at the delivery gate.
+    assert verify_manifest_integrity_strict(legit) is False
+    # Either external anchor alone is enough to make the gate open.
+    assert (
+        verify_manifest_integrity_strict(legit, expected_source_sha256=legit.script.source_sha256)
+        is True
+    )
+    key = b"ops-key-2026"
+    sealed = compile_storyboard(DIALOGUE_AND_REACTION_SCRIPT, hmac_key=key)
+    assert verify_manifest_integrity_strict(sealed, hmac_key=key) is True
+    assert verify_manifest_integrity_strict(sealed, hmac_key=b"other-secret") is False
+    # An unusable key is a refusal, never an exception and never a pass.
+    for bad_key in ("", b"", 123, True):
+        assert verify_manifest_integrity_strict(sealed, hmac_key=cast("bytes", bad_key)) is False
+    # A key the manifest was never sealed with does not become an anchor by being present.
+    assert verify_manifest_integrity_strict(legit, hmac_key=key) is False
+    # Fail-closed even for a well-formed but wrong source pin.
+    assert verify_manifest_integrity_strict(legit, expected_source_sha256="0" * 64) is False
+    assert verify_manifest_integrity_strict(legit, expected_source_sha256="not-a-hash") is False
+
+
+def test_wave8_strict_verifier_refuses_a_self_consistent_whole_script_substitution() -> None:
+    """The attack the anchor exists for: a genuine, internally perfect rival package."""
+    key = b"ops-key-2026"
+    legit = compile_storyboard(DIALOGUE_AND_REACTION_SCRIPT, hmac_key=key)
+    rival = compile_storyboard("INT. RING - NIGHT\nA\nGo!\n\nB\nNow!\n\nA\nHit!")
+    # The rival is honest work: every internal invariant, including the parser replay, holds.
+    assert verify_manifest_integrity(rival) is True
+    assert verify_manifest_integrity(_reseal_with_recomputed_reports(rival)) is True
+    # Neither anchor route admits it, and stealing the honest seal does not help.
+    assert verify_manifest_integrity_strict(rival, hmac_key=key) is False
+    assert (
+        verify_manifest_integrity_strict(rival, expected_source_sha256=legit.script.source_sha256)
+        is False
+    )
+    stolen = dataclasses.replace(rival, manifest_hmac_sha256=legit.manifest_hmac_sha256)
+    assert verify_manifest_integrity_strict(stolen, hmac_key=key) is False
+    # The legitimate package stays verifiable through the same gate.
+    assert verify_manifest_integrity_strict(legit, hmac_key=key) is True
+    assert (
+        verify_manifest_integrity_strict(legit, expected_source_sha256=legit.script.source_sha256)
+        is True
+    )
+
+
+def test_wave8_strict_verifier_exposes_no_way_to_weaken_the_anchor() -> None:
+    """Fail-closed by construction: there is no ``require_trusted_anchor`` knob to flip.
+
+    A boolean parameter would let a caller (or a future refactor) quietly restore the
+    keyless default at the gate, which is exactly the failure being fixed. Removing
+    the parameter makes the strict path unarguable, and this assertion keeps it that
+    way. The exported name must also be the same object the solver module defines, so
+    the two cannot drift.
+    """
+    import inspect
+
+    from nexus_ai_agent.creative.storyboard_compiler import editorial_cut_solver
+
+    signature = inspect.signature(sb.verify_manifest_integrity_strict)
+    assert "require_trusted_anchor" not in signature.parameters
+    assert (
+        sb.verify_manifest_integrity_strict is editorial_cut_solver.verify_manifest_integrity_strict
+    )
+    assert "verify_manifest_integrity_strict" in sb.__all__
+    with pytest.raises(TypeError):
+        sb.verify_manifest_integrity_strict(
+            compile_storyboard(DIALOGUE_AND_REACTION_SCRIPT), require_trusted_anchor=False
+        )
+
+
+def test_wave8_trusted_source_text_closes_the_self_attestation_hole() -> None:
+    """The anchor must be computable from bytes the caller holds, not from the manifest.
+
+    ``expected_source_sha256`` cannot be audited by this module: a caller that lifts
+    it out of ``manifest.script.source_sha256`` re-creates the hole, because a
+    dynamically recompiled forgery always matches its own digest. This test pins the
+    two properties that make the hole closable: the text route refuses the forgery,
+    and it is checked against text this function hashes itself.
+    """
+    import hashlib
+
+    from nexus_ai_agent.creative.storyboard_compiler import bilingual_script_parser
+
+    legit = compile_storyboard(DIALOGUE_AND_REACTION_SCRIPT)
+    rival_text = "INT. RING - NIGHT\nA\nGo!\n\nB\nNow!\n\nA\nHit!"
+    rival = compile_storyboard(rival_text)
+
+    # Baseline: hashing the trusted text ourselves reproduces the parser's own pin,
+    # so the two routes are comparable rather than merely parallel.
+    normalized = bilingual_script_parser.normalize_script_text(DIALOGUE_AND_REACTION_SCRIPT)
+    assert hashlib.sha256(normalized.encode("utf-8")).hexdigest() == legit.script.source_sha256
+
+    # The hole, demonstrated: the rival is fully self-consistent and its *own* digest
+    # satisfies the digest route — which is why that route needs an independent source.
+    assert verify_manifest_integrity(rival) is True
+    assert (
+        verify_manifest_integrity_strict(rival, expected_source_sha256=rival.script.source_sha256)
+        is True
+    )
+
+    # The fix: the caller supplies the screenplay it agreed to compile.
+    assert verify_manifest_integrity_strict(legit, trusted_source_text=DIALOGUE_AND_REACTION_SCRIPT)
+    assert (
+        verify_manifest_integrity_strict(
+            legit, trusted_source_text=DIALOGUE_AND_REACTION_SCRIPT.encode("utf-8")
+        )
+        is True
+    )
+    assert (
+        verify_manifest_integrity_strict(rival, trusted_source_text=DIALOGUE_AND_REACTION_SCRIPT)
+        is False
+    )
+    # ... and a rival cannot be smuggled past it by quoting its own digest alongside.
+    assert (
+        verify_manifest_integrity_strict(
+            rival,
+            trusted_source_text=DIALOGUE_AND_REACTION_SCRIPT,
+            expected_source_sha256=rival.script.source_sha256,
+        )
+        is False
+    )
+    # Agreement between the two routes is accepted, not merely tolerated.
+    assert (
+        verify_manifest_integrity_strict(
+            legit,
+            trusted_source_text=DIALOGUE_AND_REACTION_SCRIPT,
+            expected_source_sha256=legit.script.source_sha256,
+        )
+        is True
+    )
+    # ... and a matching text never papers over a digest that does not match: the two
+    # anchors are conjunctive, so the weaker one cannot rescue a disagreement.
+    assert (
+        verify_manifest_integrity_strict(
+            legit,
+            trusted_source_text=DIALOGUE_AND_REACTION_SCRIPT,
+            expected_source_sha256="0" * 64,
+        )
+        is False
+    )
+    # The parser's normalization is part of the pin: the same screenplay written with
+    # CRLF line endings is the same screenplay, and the digest route must say so.
+    assert (
+        verify_manifest_integrity_strict(
+            legit, trusted_source_text=DIALOGUE_AND_REACTION_SCRIPT.replace("\n", "\r\n")
+        )
+        is True
+    )
+
+
+@pytest.mark.parametrize(
+    "unusable",
+    ["", "   \n\t", b"", b"\xff\xfe\x00not-utf8", 123, None, True, ["INT. X - DAY"]],
+)
+def test_wave8_trusted_source_text_fails_closed_on_unusable_input(unusable: object) -> None:
+    """Untrusted input is a refusal, never an exception and never an accidental pass."""
+    legit = compile_storyboard(DIALOGUE_AND_REACTION_SCRIPT)
+    assert (
+        verify_manifest_integrity_strict(
+            legit, trusted_source_text=cast("str | bytes | None", unusable)
+        )
+        is False
+    )

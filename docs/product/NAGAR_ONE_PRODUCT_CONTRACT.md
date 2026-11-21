@@ -1,7 +1,8 @@
 # NAGAR One — Product Contract
 
-Status: **living view** (updated in place). Authority: the repository owner's
-mission brief `NAGAR-ONE` (Stage 0). This document is the single product frame
+Status: **living view** (updated in place; last re-anchored 2026-11-19 to `main` @
+`d6876ab378b88b2ccca1187b1f3c51be5bf52657`, v3.13.0). Authority: the repository
+owner's mission brief `NAGAR-ONE` (Stage 0). This document is the single product frame
 the engineering stages build against; when code and this page disagree, the code
 wins and this page is corrected in the same PR.
 
@@ -12,12 +13,41 @@ wins and this page is corrected in the same PR.
 | **NAGAR Studio** | The primary product: the creative workspace where a person states intent, previews, approves and inspects results. | Not a Telegram feature. |
 | **NEXUS** | The engine underneath Studio: intelligence, policy, execution, verification and infrastructure. | Not a UI. |
 | **Telegram** | One **channel adapter** to NEXUS (alongside the CLI and HTTP surfaces). | Not the product identity. |
-| **PWA** | The first user-interface path. | Native mobile is out of scope this mission. |
+| **PWA** | The Studio shell (`GET /studio/`, static, dependency-free) — a *client* of the verified read API, not a delivery channel of its own. | Not a second authority, not an offline write path, and not the delivery contract in Stages 0–3 (see §1.1). |
 
 Canonical identity is a channel-independent `Principal`
 (`AppPrincipal` + `AppChannelBinding`); Telegram/CLI/HTTP are bindings to it.
 Evidence: `storage/models.py` (`AppPrincipal`, `AppChannelBinding`,
 `AppProject`, `AppProjectMembership`), `docs/architecture/PRODUCT_FRAME.md`.
+
+### 1.1 Delivery path vs. interface: which one is authoritative
+
+Earlier revisions of this page said both "the PWA is the first user-interface
+path" (§1) and "a PWA is explicitly out of scope" (§6). Both statements were
+about different things, and leaving them side by side made the contract read as
+self-contradictory — so the split is now explicit:
+
+* **Authoritative delivery in Stages 0–3 = verified HTTP read API + CLI.** A
+  result is delivered when the durable records exist and a reader can fetch and
+  inspect them through the gated read surface (`StudioReadService` behind
+  `/api/studio/projects/{p}/jobs/{j}/state`, plus the CLI entry points). That is
+  what "done" means for this mission; the records, the passport, the evidence
+  tree and the explicit gaps are the product output.
+* **The PWA is the next interface layer on top of that same API.** The shell at
+  `GET /studio/` is real and tested (session cookie, CSP, no secrets in the
+  client) but it is read-only, and it is a *consumer*: it adds no authority, no
+  durability and no delivery guarantee of its own. A full PWA — write paths,
+  per-user identity, approvals, artifact download — is the next step, not the
+  current contract, and every one of those items is gated on a Stage 3
+  capability (durable session/approval) that does not exist yet.
+* **Named gap, stated rather than hidden:** an authorized artifact-download
+  route is currently DEFERRED (`src/nexus_ai_agent/web/README.md`, "What is
+  deliberately not built"). Until it exists, "delivery" means the read API and
+  the CLI — not a download link.
+
+Consequence for reviewers: a change that adds PWA screens is welcome, but it
+cannot be cited as evidence that a Stage 0–3 capability shipped. The evidence for
+that is a record plus a passing test, exactly as §5 requires.
 
 ## 2. The entities a user must be able to name
 
@@ -61,8 +91,11 @@ unbroken; "implemented" without a test and evidence is not done.
 - **Stage 2** — Creative Graph & Passport closure (lineage from valid records).
 - **Stage 3** — production-grade Live Editing (durable session/approval/privacy).
 
-Explicitly out of scope: a full `/v1` API, a new Principal system, a PWA, native
-mobile, and any new provider — these are later roadmap items.
+Explicitly out of scope for Stages 0–3: a full `/v1` API, a new Principal
+system, a **complete** PWA (write paths, per-user identity, approvals,
+authorized artifact download — §1.1), native mobile, and any new provider. These
+are later roadmap items; the existing read-only Studio shell (§1) is not one of
+them and is not a delivery path either.
 
 ## 7. Honesty rule
 

@@ -47,6 +47,17 @@ class VaultTransportError(PersonalVaultError):
     """Raised when storage I/O, HTTP transport, or object lookup fails."""
 
 
+class VaultKeyNotFoundError(VaultTransportError):
+    """Raised when the object a lease operation needs is provably *absent* (HTTP 404).
+
+    Deliberately a subclass of :class:`VaultTransportError`: every caller that already
+    treats "the vault could not be read" as one fail-closed class keeps working, while
+    a caller that can retry a *missing* lease differently (a lease that is gone is not
+    a transient transport fault) can catch the narrower type. Both are refusals — the
+    difference is only which layer gets to decide what "gone" means.
+    """
+
+
 __all__ = [
     "PersonalVaultError",
     "VaultAuthenticationError",
@@ -55,5 +66,6 @@ __all__ = [
     "VaultQuotaExceededError",
     "VaultRevisionConflictError",
     "VaultTamperDetectedError",
+    "VaultKeyNotFoundError",
     "VaultTransportError",
 ]
