@@ -499,9 +499,14 @@ def _superseded_promotion_behaviour(module: ModuleType, root: Path) -> None:
             "final_passport_path": str(final / "out.passport.json"),
         }
         stale_claim = ExecutionClaim(job_id=job_id, attempt=1)
+        renames_started: list[str] = []
+        # The hook fires only once the first rename has begun: a superseded
+        # attempt must be stopped BEFORE it touches the destination at all.
+        queue._between_promote_replaces_hook = lambda: renames_started.append("rename")
         promoted = await asyncio.to_thread(
             queue._promote_staged_artifacts, stale_claim, result, "mutation_probe"
         )
+        assert not renames_started, "a superseded attempt must never start renaming"
         assert promoted is None, "a superseded attempt must not publish"
         assert (staged / "out.mp4").is_file(), "the quarantine must keep the loser's files"
         assert not (final / "out.mp4").exists(), "nothing may reach the final path"
@@ -888,3 +893,134 @@ def test_mutant_idempotent_pair_without_the_identity_check_is_killed(
     _foreign_final_pair_behaviour(queue_module, _tmp_root(), monkeypatch)
     mutant = _load_mutant(MUTATION_TARGETS["queue"], _neuter, "idempotent_no_identity")
     _kill(lambda: _foreign_final_pair_behaviour(mutant, _tmp_root(), monkeypatch))
+
+
+# --------------------------------------------------------------------------- #
+# Mutant 11 (CP4.1): the call-site guard that refuses a ``None`` promotion
+# --------------------------------------------------------------------------- #
+
+
+def _promotion_returns_none_behaviour(module: ModuleType, root: Path) -> None:
+    """A storyboard job whose promotion publishes nothing must never complete."""
+
+    async def scenario() -> JobStatus:
+        async def probe_handler(payload: dict[str, object]) -> dict[str, object]:
+            return {"status": "rendered", "note": "probe"}
+
+        def probe_verifier(payload: dict[str, object], result: dict[str, object]) -> Any:
+            return VerificationOutcome(
+                ok=True,
+                reason_code="pass",
+                summary={"status": "passed", "media_verdict": "PASS"},
+            )
+
+        queue = module.InProcessJobQueue(
+            root / "callsite-queue.sqlite3",
+            handlers={"storyboard_render": probe_handler},
+            artifact_verifiers={"storyboard_render": probe_verifier},
+        )
+        # Instance attribute shadows the method: the promotion silently publishes nothing.
+        queue._promote_staged_artifacts = lambda claim, result, job_type: None  # type: ignore[method-assign]
+        await queue.acquire_ownership()
+        job_id = await queue.enqueue(
+            job_type="storyboard_render", idempotency_key="probe-callsite", payload={}
+        )
+        status = await _drive_queue(queue, job_id)
+        await queue.shutdown()
+        return status
+
+    status = asyncio.run(scenario())
+    assert status is JobStatus.FAILED_TERMINAL, (
+        f"a promotion that published nothing must fail the job closed, got {status}"
+    )
+
+
+def test_mutant_call_site_completing_after_a_none_promotion_is_killed() -> None:
+    """Neuter the ``promoted_result is None or not published`` guard in ``_process_job``:
+    a storyboard job would reach COMPLETED without any published pair."""
+
+    def _neuter(tree: ast.Module) -> None:
+        func = _function(tree, "_process_job")
+        found = False
+        for node in ast.walk(func):
+            if isinstance(node, ast.If) and "promoted_result is None" in ast.unparse(node.test):
+                node.test = ast.Constant(value=False)
+                found = True
+                break
+        assert found, "the call-site promotion guard must exist"
+
+    _promotion_returns_none_behaviour(queue_module, _tmp_root())
+    mutant = _load_mutant(MUTATION_TARGETS["queue"], _neuter, "callsite_no_promotion_guard")
+    _kill(lambda: _promotion_returns_none_behaviour(mutant, _tmp_root()))
+
+
+# --------------------------------------------------------------------------- #
+# Mutant 12 (CP4.1): the rollback after an ownership loss following the replace
+# --------------------------------------------------------------------------- #
+
+
+def _ownership_lost_after_replace_behaviour(module: ModuleType, root: Path) -> None:
+    """A superseded attempt that loses ownership after the rename must roll back."""
+    renders = root / "final"
+    staging = root / "staging"
+    renders.mkdir(parents=True, exist_ok=True)
+    staging.mkdir(parents=True, exist_ok=True)
+    final_out, final_pp = renders / "out.mp4", renders / "out.passport.json"
+    staged_out, staged_pp = staging / "new.mp4", staging / "new.passport.json"
+    final_out.write_bytes(b"previous-mp4")
+    final_pp.write_bytes(b"previous-passport")
+    staged_out.write_bytes(b"superseded-mp4")
+    staged_pp.write_bytes(b"superseded-passport")
+    result = {
+        "status": "rendered",
+        "staged_output_path": str(staged_out),
+        "staged_passport_path": str(staged_pp),
+        "final_output_path": str(final_out),
+        "final_passport_path": str(final_pp),
+    }
+    calls = {"n": 0}
+
+    def _owns(self: Any, claim: Any, expected: Any) -> bool:
+        calls["n"] += 1
+        return calls["n"] == 1  # held for the pre-rename check, lost after the replace
+
+    async def _unused() -> None:
+        return None
+
+    queue = module.InProcessJobQueue(
+        root / "ownership-queue.sqlite3", handlers={}, artifact_verifiers={}
+    )
+    original = module.InProcessJobQueue._owns_execution
+    module.InProcessJobQueue._owns_execution = _owns  # type: ignore[method-assign]
+    try:
+        promoted = queue._promote_staged_artifacts(
+            ExecutionClaim(job_id="qjob-m12", attempt=2), result, "mutation_probe"
+        )
+    finally:
+        module.InProcessJobQueue._owns_execution = original  # type: ignore[method-assign]
+    assert promoted is None, "a superseded promotion must publish nothing"
+    assert final_out.read_bytes() == b"previous-mp4", "the superseded bytes must not stay published"
+    assert final_pp.read_bytes() == b"previous-passport"
+    assert staged_out.is_file(), "the superseded bytes return to the quarantine"
+    assert not list(renders.glob("*.promote-backup"))
+
+
+def test_mutant_ownership_loss_without_rollback_is_killed() -> None:
+    """Remove the ``_rollback_promotion`` call of the post-replace ownership branch:
+    the superseded generation would stay published — the rollback check must kill it."""
+
+    def _neuter(tree: ast.Module) -> None:
+        func = _function(tree, "_promote_staged_artifacts")
+        found = False
+        for node in ast.walk(func):
+            if not isinstance(node, ast.If) or "_owns_execution" not in ast.unparse(node.test):
+                continue
+            for index, stmt in enumerate(node.body):
+                if isinstance(stmt, ast.Expr) and "_rollback_promotion" in ast.unparse(stmt):
+                    node.body[index] = ast.Pass()
+                    found = True
+        assert found, "the post-replace ownership rollback must exist"
+
+    _ownership_lost_after_replace_behaviour(queue_module, _tmp_root())
+    mutant = _load_mutant(MUTATION_TARGETS["queue"], _neuter, "ownership_no_rollback")
+    _kill(lambda: _ownership_lost_after_replace_behaviour(mutant, _tmp_root()))

@@ -37,6 +37,7 @@ from nexus_ai_agent.creative.storyboard_render import (
     approval_identity_for,
     issue_render_approval,
 )
+from nexus_ai_agent.jobs.lifecycle import ExecutionClaim
 from nexus_ai_agent.nagar.creative.handoff import build_storyboard_render_payload
 from nexus_ai_agent.nagar.ibpc.approval import (
     ApprovalAlreadyConsumedError,
@@ -941,3 +942,334 @@ def test_subprocess_crash_between_two_promotion_renames_recovers_cleanly(
         assert reservation[2] is not None, "successor must finalize the reservation"
     finally:
         ledger.close()
+
+
+# --------------------------------------------------------------------------- #
+# CP4.1: generation-aware promotion recovery, fail-closed call site and
+# ownership-loss rollback.
+# --------------------------------------------------------------------------- #
+
+PROFILE_V2 = {"width": 320, "height": 180, "fps": 24, "sample_rate": 16000}
+SECOND_JOB_KEY = "sb-subprocess-between-renames"
+
+
+def _issue_for(workspace: Path, profile: dict[str, object]) -> str:
+    """Issue one more approval for JOB_ID under ``profile`` (a new generation)."""
+    compiled = compile_storyboard(SCRIPT)
+    src = hashlib.sha256(SCRIPT.encode("utf-8")).hexdigest()
+    ledger = DurableApprovalLedger(
+        durable_approval_ledger_path(workspace), now=lambda: "2026-11-19T06:00:00Z"
+    )
+    try:
+        return issue_render_approval(
+            ledger,
+            project_id=PROJECT_ID,
+            job_id=JOB_ID,
+            principal_id=PRINCIPAL_ID,
+            source_sha256=src,
+            script_sha256=compiled.script_sha256,
+            manifest_sha256=compiled.manifest_sha256,
+            render_profile_hash=mz.RenderProfile.from_mapping(profile).profile_hash(),
+        )
+    finally:
+        ledger.close()
+
+
+def _payload_for(approval_id: str, profile: dict[str, object]) -> dict[str, object]:
+    compiled = compile_storyboard(SCRIPT)
+    return build_storyboard_render_payload(
+        {
+            "project_id": PROJECT_ID,
+            "job_id": JOB_ID,
+            "screenplay_text": SCRIPT,
+            "source_sha256": hashlib.sha256(SCRIPT.encode("utf-8")).hexdigest(),
+            "manifest_sha256": compiled.manifest_sha256,
+            "approval_id": approval_id,
+            "principal_id": PRINCIPAL_ID,
+            **profile,
+        }
+    )
+
+
+async def _complete_and_release(db: Path, payload: dict[str, object]) -> JobStatus:
+    """Run one storyboard job to a terminal status, then release the queue lock."""
+    queue = InProcessJobQueue(
+        db, handlers=default_job_handlers(), artifact_verifiers=default_artifact_verifiers()
+    )
+    await queue.acquire_ownership()
+    try:
+        job_id = await queue.enqueue(
+            job_type="storyboard_render", idempotency_key="storyboard-queue-1", payload=payload
+        )
+        deadline = time.monotonic() + 240
+        while True:
+            status = await queue.get_status(job_id)
+            if status in (JobStatus.COMPLETED, JobStatus.FAILED_TERMINAL):
+                return status
+            if time.monotonic() > deadline:
+                raise AssertionError(f"job still {status}")
+            await asyncio.sleep(0.2)
+    finally:
+        await queue.shutdown()
+
+
+def _renders(studio: Path) -> Path:
+    return studio / "projects" / PROJECT_ID / "renders" / JOB_ID
+
+
+def _row_by_key(db: Path, key: str) -> dict[str, object]:
+    import sqlite3
+
+    connection = sqlite3.connect(db)
+    try:
+        connection.row_factory = sqlite3.Row
+        row = connection.execute(
+            "SELECT id, status, attempt, result_json, error FROM nexus_job_queue "
+            "WHERE idempotency_key = ?",
+            (key,),
+        ).fetchone()
+    finally:
+        connection.close()
+    assert row is not None
+    return dict(row)
+
+
+def _direct_queue(db: Path) -> InProcessJobQueue:
+    return InProcessJobQueue(db, handlers={}, artifact_verifiers={})
+
+
+def _staged_render(
+    studio: Path, payload: dict[str, object], queue_job_id: str, attempt: int
+) -> dict[str, object]:
+    """Render one quarantined attempt (no queue, the same handler contract)."""
+    from nexus_ai_agent.creative.storyboard_render import RenderContext, render_storyboard_sync
+
+    ledger = DurableApprovalLedger(
+        durable_approval_ledger_path(studio), now=lambda: "2026-11-19T06:00:00Z"
+    )
+    try:
+        ctx = RenderContext(workspace_root=studio, approval_ledger=ledger, signing_key=SIGNING_KEY)
+        return dict(
+            render_storyboard_sync(payload, ctx, queue_job_id=queue_job_id, attempt=attempt)
+        )
+    finally:
+        ledger.close()
+
+
+@pytest.mark.parametrize(
+    "forged",
+    [
+        None,
+        {
+            "final_output_path": "/nonexistent/x.mp4",
+            "final_passport_path": "/nonexistent/x.passport.json",
+        },
+    ],
+)
+def test_process_job_fails_terminal_when_promotion_publishes_no_pair(
+    studio: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, forged: object
+) -> None:
+    """The call site never completes a storyboard job whose promotion did not publish."""
+
+    def _no_promotion(self: InProcessJobQueue, claim: object, result: object, job_type: str):
+        return forged
+
+    monkeypatch.setattr(InProcessJobQueue, "_promote_staged_artifacts", _no_promotion)
+    db = tmp_path / "callsite-queue.sqlite3"
+    approval_id = _approval_id(studio)
+    status, _ = asyncio.run(_drive_through_queue(db, _payload(approval_id)))
+
+    assert status is JobStatus.FAILED_TERMINAL
+    row = _queue_row(db)
+    assert row["status"] != "completed"
+    assert "promotion_failed:promotion_not_performed" in str(row["error"])
+    ledger = DurableApprovalLedger(
+        durable_approval_ledger_path(studio), now=lambda: "2026-11-19T06:00:00Z"
+    )
+    try:
+        reservation = ledger._read_reservation(approval_id)
+        assert reservation is None or reservation[2] is None, "approval must stay un-finalized"
+    finally:
+        ledger.close()
+
+
+def test_subprocess_crash_during_a_new_generation_restores_the_prior_generation(
+    studio: Path, tmp_path: Path
+) -> None:
+    """A real os._exit(99) while generation 2 replaces generation 1 between the renames.
+
+    Startup recovery must put the verified generation 1 back BEFORE any successor
+    task runs, drop the parked backups, and let attempt 2 publish generation 2.
+    """
+    db = tmp_path / "prior-generation-queue.sqlite3"
+    assert asyncio.run(_complete_and_release(db, _payload(_approval_id(studio)))) is (
+        JobStatus.COMPLETED
+    )
+    renders = _renders(studio)
+    gen1_mp4 = (renders / "storyboard.mp4").read_bytes()
+    gen1_pp = (renders / "storyboard.passport.json").read_bytes()
+
+    payload_file = tmp_path / "payload-v2.json"
+    payload_file.write_text(
+        json.dumps(_payload_for(_issue_for(studio, PROFILE_V2), PROFILE_V2)), encoding="utf-8"
+    )
+    crash = _run_child("die-between-renames", db, payload_file, studio)
+    assert crash.returncode == 99, crash.stderr[-2000:]
+
+    # The crash state: the new MP4 landed, the new passport did not, and the
+    # previous generation is parked beside them.
+    assert (renders / "storyboard.mp4").read_bytes() != gen1_mp4
+    assert not (renders / "storyboard.passport.json").exists()
+    assert (renders / "storyboard.mp4.promote-backup").read_bytes() == gen1_mp4
+    assert (renders / "storyboard.passport.json.promote-backup").read_bytes() == gen1_pp
+
+    async def recover() -> JobStatus:
+        queue = InProcessJobQueue(
+            db,
+            handlers=default_job_handlers(),
+            artifact_verifiers=default_artifact_verifiers(),
+        )
+        await queue.acquire_ownership()
+        await queue.resume_pending()
+        # No await since resume_pending: the destination is settled BEFORE any
+        # recovered execution can start, so generation 1 is what sits there now.
+        assert (renders / "storyboard.mp4").read_bytes() == gen1_mp4
+        assert (renders / "storyboard.passport.json").read_bytes() == gen1_pp
+        assert not list(renders.glob("*.promote-backup"))
+        job_id = str(_row_by_key(db, SECOND_JOB_KEY)["id"])
+        deadline = time.monotonic() + 240
+        try:
+            while True:
+                status = await queue.get_status(job_id)
+                if status in (JobStatus.COMPLETED, JobStatus.FAILED_TERMINAL):
+                    return status
+                if time.monotonic() > deadline:
+                    raise AssertionError(f"successor still {status}")
+                await asyncio.sleep(0.2)
+        finally:
+            await queue.shutdown()
+
+    assert asyncio.run(recover()) is JobStatus.COMPLETED
+    row = _row_by_key(db, SECOND_JOB_KEY)
+    assert row["attempt"] == 2
+    result = json.loads(str(row["result_json"]))
+    assert result["render_profile_hash"] == mz.RenderProfile.from_mapping(PROFILE_V2).profile_hash()
+    assert (renders / "storyboard.mp4").read_bytes() != gen1_mp4
+    assert not list(renders.glob("*.promote-backup"))
+
+
+@pytest.mark.parametrize("prior_generation", [False, True])
+def test_promote_rolls_back_when_ownership_is_lost_after_the_replace(
+    studio: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, prior_generation: bool
+) -> None:
+    """A superseded attempt's verified bytes never stay published after the replace."""
+    db = tmp_path / "ownership-queue.sqlite3"
+    queue = _direct_queue(db)
+    renders = _renders(studio)
+    monkeypatch.setattr(InProcessJobQueue, "_owns_execution", lambda *_a: True)
+    gen1_mp4 = gen1_pp = None
+    if prior_generation:
+        first = _staged_render(studio, _payload(_approval_id(studio)), "qjob-own", 1)
+        assert (
+            queue._promote_staged_artifacts(
+                ExecutionClaim(job_id="qjob-own", attempt=1), first, "storyboard_render"
+            )
+            is not None
+        )
+        gen1_mp4 = (renders / "storyboard.mp4").read_bytes()
+        gen1_pp = (renders / "storyboard.passport.json").read_bytes()
+
+    second_payload = _payload_for(_issue_for(studio, PROFILE_V2), PROFILE_V2)
+    second = _staged_render(studio, second_payload, "qjob-own", 2)
+    # Ownership holds for the pre-rename checks and is lost on the post-replace check.
+    calls = {"n": 0}
+
+    def _lost_after_replace(self: InProcessJobQueue, claim: object, expected: object) -> bool:
+        calls["n"] += 1
+        return calls["n"] == 1
+
+    monkeypatch.setattr(InProcessJobQueue, "_owns_execution", _lost_after_replace)
+    promoted = queue._promote_staged_artifacts(
+        ExecutionClaim(job_id="qjob-own", attempt=2), second, "storyboard_render"
+    )
+
+    assert promoted is None
+    assert calls["n"] >= 2, "the post-replace ownership check must have run"
+    assert Path(str(second["staged_output_path"])).is_file(), "the bytes return to quarantine"
+    assert not list(renders.glob("*.promote-backup"))
+    if prior_generation:
+        assert (renders / "storyboard.mp4").read_bytes() == gen1_mp4
+        assert (renders / "storyboard.passport.json").read_bytes() == gen1_pp
+    else:
+        assert not (renders / "storyboard.mp4").exists()
+        assert not (renders / "storyboard.passport.json").exists()
+
+
+def test_reconcile_keeps_a_verified_new_pair_and_drops_parked_backups(
+    studio: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(InProcessJobQueue, "_owns_execution", lambda *_a: True)
+    queue = _direct_queue(tmp_path / "keep-queue.sqlite3")
+    first = _staged_render(studio, _payload(_approval_id(studio)), "qjob-keep", 1)
+    assert (
+        queue._promote_staged_artifacts(
+            ExecutionClaim(job_id="qjob-keep", attempt=1), first, "storyboard_render"
+        )
+        is not None
+    )
+    renders = _renders(studio)
+    final_mp4, final_pp = renders / "storyboard.mp4", renders / "storyboard.passport.json"
+    new_mp4 = final_mp4.read_bytes()
+    for final in (final_mp4, final_pp):
+        final.with_name(f"{final.name}.promote-backup").write_bytes(b"parked")
+
+    queue._reconcile_interrupted_promotion_backups(final_mp4, final_pp)
+
+    assert final_mp4.read_bytes() == new_mp4
+    assert not list(renders.glob("*.promote-backup"))
+
+
+def test_reconcile_restores_a_parked_generation_over_an_unverified_new_pair(
+    studio: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(InProcessJobQueue, "_owns_execution", lambda *_a: True)
+    queue = _direct_queue(tmp_path / "restore-queue.sqlite3")
+    first = _staged_render(studio, _payload(_approval_id(studio)), "qjob-rest", 1)
+    assert (
+        queue._promote_staged_artifacts(
+            ExecutionClaim(job_id="qjob-rest", attempt=1), first, "storyboard_render"
+        )
+        is not None
+    )
+    renders = _renders(studio)
+    final_mp4, final_pp = renders / "storyboard.mp4", renders / "storyboard.passport.json"
+    gen1_mp4, gen1_pp = final_mp4.read_bytes(), final_pp.read_bytes()
+    # Stage a crash state: generation 1 parked, a complete but unverified generation 2 in place.
+    final_mp4.with_name("storyboard.mp4.promote-backup").write_bytes(gen1_mp4)
+    final_pp.with_name("storyboard.passport.json.promote-backup").write_bytes(gen1_pp)
+    final_pp.write_text("{}", encoding="utf-8")
+
+    queue._reconcile_interrupted_promotion_backups(final_mp4, final_pp)
+
+    assert final_mp4.read_bytes() == gen1_mp4
+    assert final_pp.read_bytes() == gen1_pp
+    assert not list(renders.glob("*.promote-backup"))
+
+
+def test_reconcile_removes_a_pair_it_cannot_restore_whole(
+    studio: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A parked MP4 without its parked passport must never leave a mixed generation."""
+    monkeypatch.setattr(InProcessJobQueue, "_owns_execution", lambda *_a: True)
+    queue = _direct_queue(tmp_path / "partial-queue.sqlite3")
+    renders = _renders(studio)
+    renders.mkdir(parents=True, exist_ok=True)
+    final_mp4, final_pp = renders / "storyboard.mp4", renders / "storyboard.passport.json"
+    final_mp4.write_bytes(b"new-mp4")
+    final_mp4.with_name("storyboard.mp4.promote-backup").write_bytes(b"old-mp4")
+
+    queue._reconcile_interrupted_promotion_backups(final_mp4, final_pp)
+
+    assert not final_mp4.exists()
+    assert not final_pp.exists()
+    assert not list(renders.glob("*.promote-backup"))

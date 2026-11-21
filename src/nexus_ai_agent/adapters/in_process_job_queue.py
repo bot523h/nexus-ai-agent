@@ -1153,6 +1153,18 @@ class InProcessJobQueue:
         ``pending`` rows are always re-scheduled. Rows this very process is
         executing are never taken over. Terminal rows are never touched.
         """
+        # Startup reconciliation runs FIRST, before any pending or in-flight row
+        # is claimed and before any recovered execution is scheduled: interrupted
+        # promotion backups and completed-job approval reservations are settled
+        # while no worker can yet be running. Nothing awaits after the scheduling
+        # loop below, so the scheduled tasks stay registered in ``self._tasks``
+        # until the caller observes them.
+        reconciled = await asyncio.to_thread(self._reconcile_completed_approval_reservations)
+        if reconciled:
+            logger.info("approval_reservations_reconciled count=%d", reconciled)
+        swept = await asyncio.to_thread(self._reconcile_storyboard_promotion_backups)
+        if swept:
+            logger.debug("storyboard_promotion_backups_swept count=%d", swept)
         live = {job_id for job_id, task in self._tasks.items() if not task.done()}
         reset = await asyncio.to_thread(self._reset_unfinished, stale_after, live)
         for job_id, job_type, attempt in reset:
@@ -1179,18 +1191,6 @@ class InProcessJobQueue:
                     )
                 )
             self._schedule(job_id)
-        # Idempotent startup reconciliation: close the approval reservations
-        # of jobs that completed durably but whose finalization never ran
-        # (a crash between the COMPLETED commit and the finalize call).
-        reconciled = await asyncio.to_thread(self._reconcile_completed_approval_reservations)
-        if reconciled:
-            logger.info("approval_reservations_reconciled count=%d", reconciled)
-        # Startup sweep: repair destinations of storyboard promotions that a
-        # crash interrupted between their two renames (rows without a result
-        # yet are repaired by the successor attempt's own promotion).
-        swept = await asyncio.to_thread(self._reconcile_storyboard_promotion_backups)
-        if swept:
-            logger.debug("storyboard_promotion_backups_swept count=%d", swept)
         return [job_id for job_id, _, _ in reset]
 
     async def resume_pending_jobs(self) -> list[str]:
@@ -2649,7 +2649,20 @@ class InProcessJobQueue:
         #    successor's own transactional promote replaces the pair, and the
         #    terminal CAS below refuses COMPLETED for this attempt anyway.
         if not self._owns_execution(claim, JobStatus.VERIFYING):
+            # The ownership was lost while the new pair was in place: this
+            # superseded attempt's bytes must not stay published. The quarantine
+            # gets them back and the previous generation is restored, so the
+            # successor starts from the exact destination it expects.
             self._log_rejected(claim.job_id, claim, JobStatus.COMPLETED)
+            self._rollback_promotion(
+                claim,
+                staged_out_path,
+                staged_pp_path,
+                final_out_path,
+                final_pp_path,
+                backups,
+                moved,
+            )
             return None
         # 5. Success: the previous generation is no longer needed.
         for _final, backup in backups:
@@ -2713,14 +2726,26 @@ class InProcessJobQueue:
     ) -> None:
         """Repair the destination of a promotion that died between its renames.
 
-        A process killed between the two ``os.replace`` calls leaves either a
-        new MP4 whose passport never landed, or the previous generation parked
-        beside it in ``*.promote-backup`` files (or both). Restore a
-        consistent destination: an incomplete generation is discarded and the
-        previous generation put back exactly where it was; a complete pair
-        means the crashed promotion had already landed both files, so only
-        the parked backups are dropped. The directory entry is fsync-ed.
+        :func:`_promote_staged_artifacts` parks BOTH previous files
+        (``*.promote-backup``) before its first rename, so a crash can leave:
+        only parked backups (no new generation landed); a new MP4 without its
+        passport; or a complete new pair that was never verified. Reconciliation
+        never trusts a half-landed pair:
+
+        - a destination pair that is complete AND re-verifies (``PASS``) is the
+          generation that the crashed promotion published: only the parked
+          backups are dropped;
+        - otherwise the parked previous generation is restored file-by-file with
+          :func:`os.replace`, and if the restored destination still does not
+          verify as one complete pair, the destination files are removed so no
+          mixed (chimeric) generation can ever be served.
+
+        The quarantine (``.staging``) is deliberately not touched here: this
+        method receives only the final paths, and the quarantine is the evidence
+        a successor attempt stages against.
         """
+        from nexus_ai_agent.nagar.creative.handoff import STORYBOARD_RENDER_JOB_TYPE
+
         backup_out = final_out_path.with_name(f"{final_out_path.name}.promote-backup")
         backup_pp = final_pp_path.with_name(f"{final_pp_path.name}.promote-backup")
         if not (backup_out.exists() or backup_pp.exists()):
@@ -2730,23 +2755,40 @@ class InProcessJobQueue:
                 final_out_path.unlink(missing_ok=True)
                 _fsync_directory(final_out_path.parent)
             return
-        pair_complete = final_out_path.is_file() and final_pp_path.is_file()
         try:
-            if not pair_complete:
-                # Discard the crashed, incomplete generation and put the
-                # previous generation back exactly where it was.
-                final_out_path.unlink(missing_ok=True)
-                final_pp_path.unlink(missing_ok=True)
-                if backup_out.is_file():
-                    os.replace(backup_out, final_out_path)
-                if backup_pp.is_file():
-                    os.replace(backup_pp, final_pp_path)
-            else:
-                # Both files had landed: keep the pair, drop the parked
-                # previous generation for good.
+            complete = final_out_path.is_file() and final_pp_path.is_file()
+            if complete and (
+                self._verify_promoted_pair(
+                    STORYBOARD_RENDER_JOB_TYPE, final_out_path, final_pp_path
+                )
+                is None
+            ):
+                # The crashed promotion had landed and verified a whole pair:
+                # keep it, and drop only the parked previous generation.
                 backup_out.unlink(missing_ok=True)
                 backup_pp.unlink(missing_ok=True)
+                _fsync_directory(final_out_path.parent)
+                return
+            # Not a verified complete pair: put the previous generation back,
+            # file by file, exactly where each parked file came from.
+            for final, backup in ((final_out_path, backup_out), (final_pp_path, backup_pp)):
+                if backup.is_file():
+                    os.replace(backup, final)
             _fsync_directory(final_out_path.parent)
+            restored = (
+                final_out_path.is_file()
+                and final_pp_path.is_file()
+                and self._verify_promoted_pair(
+                    STORYBOARD_RENDER_JOB_TYPE, final_out_path, final_pp_path
+                )
+                is None
+            )
+            if not restored:
+                # No verifiable pair remains: fail closed by removing what is
+                # left at the destination (downloads then refuse with 409).
+                final_out_path.unlink(missing_ok=True)
+                final_pp_path.unlink(missing_ok=True)
+                _fsync_directory(final_out_path.parent)
         except OSError:  # pragma: no cover - reconciliation is best-effort
             logger.exception("promotion backup reconciliation failed for %s", final_out_path)
 

@@ -275,3 +275,68 @@ def test_a_completed_job_whose_verification_records_a_non_pass_verdict_is_refuse
 
     assert response.status_code == 409
     assert response.json()["detail"] == "artifact_not_verified"
+
+
+def test_the_download_gate_accepts_an_absent_row_for_the_route_to_decide() -> None:
+    """``None`` is the unknown-job spelling: the gate returns and the route answers 404."""
+    studio_api._require_completed_and_verified(None)
+
+
+def test_a_refusal_after_authorization_releases_the_verified_descriptor(
+    rendered: dict[str, object], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from nexus_ai_agent.creative.artifact_download import AuthorizedDownload, DownloadRefused
+
+    closed: list[bool] = []
+    original_close = AuthorizedDownload.close
+
+    def _spy_close(self: AuthorizedDownload) -> None:
+        closed.append(True)
+        original_close(self)
+
+    def _refuse_stream(_authorized: object) -> object:
+        raise DownloadRefused(409, "passport_missing")
+
+    monkeypatch.setattr(AuthorizedDownload, "close", _spy_close)
+    monkeypatch.setattr(studio_api, "iter_authorized_chunks", _refuse_stream)
+    client = _client(monkeypatch, {JOB_ID: _row(rendered["result"])})
+
+    response = client.get(_url())
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "passport_missing"
+    assert closed == [True], "the verified descriptor must be released on refusal"
+
+
+def test_an_unexpected_failure_after_authorization_releases_the_descriptor(
+    rendered: dict[str, object], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from nexus_ai_agent.creative.artifact_download import AuthorizedDownload
+
+    closed: list[bool] = []
+    original_close = AuthorizedDownload.close
+
+    def _spy_close(self: AuthorizedDownload) -> None:
+        closed.append(True)
+        original_close(self)
+
+    def _crash_stream(_authorized: object) -> object:
+        raise RuntimeError("stream construction failed")
+
+    monkeypatch.setattr(AuthorizedDownload, "close", _spy_close)
+    monkeypatch.setattr(studio_api, "iter_authorized_chunks", _crash_stream)
+    monkeypatch.setattr(
+        "nexus_ai_agent.api.app.get_creative_registry",
+        lambda: FakeRegistry({JOB_ID: _row(rendered["result"])}),
+    )
+    app = FastAPI()
+    app.include_router(studio_api.router)
+    client = TestClient(app, raise_server_exceptions=False)
+
+    response = client.get(_url())
+
+    assert response.status_code == 500
+    assert closed == [True], "nothing may outlive a failed request"
