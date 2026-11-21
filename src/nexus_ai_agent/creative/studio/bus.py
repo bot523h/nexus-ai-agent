@@ -58,10 +58,8 @@ for the audit trail; undo records are not themselves undo targets.
 
 from __future__ import annotations
 
-import copy
 import hashlib
 import json
-import marshal
 import threading
 from collections import OrderedDict
 from collections.abc import Callable, Mapping
@@ -234,6 +232,31 @@ def _canonical_hash(payload: Any) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
+def _code_evidence(code: Any) -> Any:
+    """Hash bytecode/constants without importing a serialization runtime."""
+    if not hasattr(code, "co_code"):
+        return code
+    return {
+        "bytecode": code.co_code.hex(),
+        "names": code.co_names,
+        "constants": [_code_evidence(value) for value in code.co_consts],
+    }
+
+
+def _clone_plan_snapshot(source: Mapping[str, Any]) -> dict[str, Any]:
+    """Copy the three typed state containers, including cached result models."""
+    return {
+        "_project": source["_project"].model_copy(deep=True),
+        "_history": [record.model_copy(deep=True) for record in source["_history"]],
+        "_idempotency": {
+            key: _Reservation(
+                value.fingerprint, value.result.model_copy(deep=True) if value.result else None
+            )
+            for key, value in source["_idempotency"].items()
+        },
+    }
+
+
 @dataclass(frozen=True)
 class PlanStepRecord:
     """Immutable audit record for one executed plan step."""
@@ -344,10 +367,7 @@ class PlanTransaction:
                     raise ValueError("plan_id input conflict")
                 bus._plan_cache.move_to_end(self.plan_id)
                 return prior[1]
-            self._snapshot = {
-                name: copy.deepcopy(getattr(bus, name))
-                for name in ("_project", "_history", "_idempotency")
-            }
+            self._snapshot = _clone_plan_snapshot(vars(bus))
             self._bus = bus
             bus._executing = True
             try:
@@ -369,8 +389,8 @@ class PlanTransaction:
 
     def _restore_snapshot(self) -> None:
         if self._bus is not None and self._snapshot is not None:
-            for name, value in self._snapshot.items():
-                setattr(self._bus, name, copy.deepcopy(value))
+            for name, value in _clone_plan_snapshot(self._snapshot).items():
+                setattr(self._bus, name, value)
 
     def _commit_steps(self, bus: CommandBus | None) -> PlanTransaction:
         """Forward execution and compensation while the outer lock is held."""
@@ -523,7 +543,7 @@ class PlanTransaction:
             {
                 "operation": step.operation,
                 "step_index": index,
-                "code": marshal.dumps(code).hex() if code else str(type(fn)),
+                "code": _code_evidence(code) if code else str(type(fn)),
                 "defaults": getattr(fn, "__defaults__", None),
                 "closure": [cell.cell_contents for cell in cells],
             }
