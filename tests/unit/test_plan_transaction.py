@@ -230,6 +230,7 @@ class TestPlanTransactionFailureAndLifoRollback:
         log: list[tuple[str, int]] = []
         tx = PlanTransaction(
             plan_id="plan-skip",
+            require_compensation=False,
             steps=(
                 _recording_step(0, log, with_compensate=False),
                 _recording_step(1, log),
@@ -238,7 +239,7 @@ class TestPlanTransactionFailureAndLifoRollback:
         )
         with pytest.raises(PlanTransactionError):
             tx.commit()
-        assert tx.state is PlanTransactionState.ROLLED_BACK
+        assert tx.state is PlanTransactionState.ROLLBACK_FAILED
         assert log == [("exec", 0), ("exec", 1), ("exec", 2), ("comp", 1)]
         assert [r.step_index for r in tx.rollback_records] == [1]
 
@@ -447,3 +448,79 @@ class TestPlanTransactionBusIntegration:
         bus = CommandBus(state=make_project())
         with pytest.raises(CommandValidationError):
             bus.dispatch_plan({"plan_id": "x"})  # type: ignore[arg-type]
+
+
+def test_strict_compensation_preflight():
+    with pytest.raises(ValueError, match="require compensation"):
+        PlanTransaction(steps=(PlanStep("custom", execute=lambda: None),))
+
+
+def test_operation_mismatch():
+    with pytest.raises(ValueError, match="does not match"):
+        PlanStep("wrong", command=make_command("test.plan_step", "mismatch"))
+
+
+def test_failed_plan_restores_bus_snapshot():
+    executed = []
+    bus = CommandBus(state=make_project(), registry=_plan_test_registry(executed))
+    before = (bus.project, bus.history, dict(bus._idempotency))
+    plan = PlanTransaction(
+        steps=(
+            PlanStep("test.plan_step", command=make_command("test.plan_step", "snapshot1")),
+            PlanStep("test.plan_fail", command=make_command("test.plan_fail", "snapshot2")),
+        )
+    )
+    with pytest.raises(PlanTransactionError):
+        plan.commit(bus)
+    assert (bus.project, bus.history, bus._idempotency) == before
+    assert not bus._executing
+
+
+def test_committed_plan_cache_and_undo():
+    executed = []
+    bus = CommandBus(state=make_project(), registry=_plan_test_registry(executed))
+    step = PlanStep("test.plan_step", command=make_command("test.plan_step", "cached"))
+    plan = PlanTransaction(plan_id="cache", steps=(step,))
+    before = bus.project
+    plan.commit(bus)
+    assert PlanTransaction(plan_id="cache", steps=(step,)).commit(bus) is plan
+    assert executed == ["step"]
+    plan.rollback_committed_plan()
+    assert bus.project == before
+    assert bus.history == ()
+
+
+def test_callback_cannot_dispatch_reentrantly():
+    bus = CommandBus(state=make_project())
+    plan = PlanTransaction(
+        steps=(
+            PlanStep(
+                "custom",
+                execute=lambda: bus.dispatch_plan(
+                    PlanTransaction(
+                        steps=(PlanStep("inner", execute=lambda: None, compensate=lambda _: None),)
+                    )
+                ),
+                compensate=lambda _: None,
+            ),
+        )
+    )
+    with pytest.raises(PlanTransactionError) as error:
+        plan.commit(bus)
+    assert "Re-entrant" in str(error.value.original_error) or "nested" in str(
+        error.value.original_error
+    )
+
+
+def test_compensation_output_hash_is_actual_result():
+    from nexus_ai_agent.creative.studio.bus import _canonical_hash
+
+    plan = PlanTransaction(
+        steps=(
+            PlanStep("one", execute=lambda: 1, compensate=lambda _: {"undone": 1}),
+            PlanStep("two", execute=lambda: False, compensate=lambda _: None),
+        )
+    )
+    with pytest.raises(PlanTransactionError):
+        plan.commit()
+    assert plan.rollback_records[0].output_hash == _canonical_hash({"undone": 1})
