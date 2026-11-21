@@ -62,6 +62,7 @@ automatically) and the queue's own lifecycle lines name it explicitly.
 from __future__ import annotations
 
 import asyncio
+import fcntl
 import hashlib
 import json
 import logging
@@ -352,6 +353,19 @@ class _PromotionRefused(RuntimeError):
         self.reason = reason
 
 
+def _file_identity(path: Path) -> tuple[int, int] | None:
+    """``(st_dev, st_ino)`` of the entry at ``path`` (no symlink follow), or ``None``.
+
+    A rename keeps the inode, so the identity recorded for a quarantined file
+    is the identity of the bytes that land at the final path.
+    """
+    try:
+        status = os.stat(path, follow_symlinks=False)
+    except FileNotFoundError:
+        return None
+    return (status.st_dev, status.st_ino)
+
+
 def _fsync_file(path: Path) -> None:
     """Flush one file's already-written bytes to disk before it is renamed."""
     fd = os.open(path, os.O_RDONLY | getattr(os, "O_CLOEXEC", 0))
@@ -506,6 +520,10 @@ class InProcessJobQueue:
         # artifact pair (after the MP4 lands, before the passport does).
         # Production code never sets it.
         self._between_promote_replaces_hook: Callable[[], None] | None = None
+        # Serializes every promotion/reconciliation of a destination in this
+        # process; the per-path file lock below serializes across processes.
+        self._promotion_lock = threading.RLock()
+        self._held_promotion_locks: dict[str, int] = {}
         self._db_lock = threading.Lock()
         # In-flight artifact publications.  ``asyncio.to_thread`` hands the
         # work to a ThreadPoolExecutor thread; cancelling the awaiting task
@@ -2553,127 +2571,163 @@ class InProcessJobQueue:
                 # means the pair was never quarantined at all.
                 raise _PromotionRefused("staged_artifacts_missing_or_unpromoted")
             return None  # already at its final path
-        if not self._owns_execution(claim, JobStatus.VERIFYING):
-            # Ownership was lost between the PASS verdict and this rename:
-            # a superseded attempt must never publish over a newer owner's
-            # destination. The terminal CAS below refuses it as well.
-            self._log_rejected(claim.job_id, claim, JobStatus.COMPLETED)
-            return None
-        # Repair the destination of any promotion that died between its two
-        # renames (an orphaned MP4, or the previous generation parked in
-        # ``*.promote-backup`` files) before this attempt publishes over it.
-        self._reconcile_interrupted_promotion_backups(final_out_path, final_pp_path)
-        if not staged_out_path.is_file() or not staged_pp_path.is_file():
-            if final_out_path.is_file() and final_pp_path.is_file():
-                # Idempotent re-entry: an earlier pass already promoted this
-                # attempt (e.g. a redelivered completion). The fence is
-                # re-read NOW, and the surviving pair must verify AND be this
-                # exact render's — an older generation sitting at the final
-                # path is a mismatch, never a silent success.
-                if not self._owns_execution(claim, JobStatus.VERIFYING):
-                    self._log_rejected(claim.job_id, claim, JobStatus.COMPLETED)
-                    return None
-                reason = self._verify_idempotent_pair(
-                    job_type, claim, result, final_out_path, final_pp_path
+        with self._promotion_lock, self._acquire_promotion_path_lock(final_out_path):
+            if not self._owns_execution(claim, JobStatus.VERIFYING):
+                # Ownership was lost between the PASS verdict and this rename:
+                # a superseded attempt must never publish over a newer owner's
+                # destination. The terminal CAS below refuses it as well.
+                self._log_rejected(claim.job_id, claim, JobStatus.COMPLETED)
+                return None
+            # Repair the destination of any promotion that died between its two
+            # renames (an orphaned MP4, or the previous generation parked in
+            # ``*.promote-backup`` files) before this attempt publishes over it.
+            self._reconcile_interrupted_promotion_backups(final_out_path, final_pp_path)
+            if not staged_out_path.is_file() or not staged_pp_path.is_file():
+                if final_out_path.is_file() and final_pp_path.is_file():
+                    # Idempotent re-entry: an earlier pass already promoted this
+                    # attempt (e.g. a redelivered completion). The fence is
+                    # re-read NOW, and the surviving pair must verify AND be this
+                    # exact render's — an older generation sitting at the final
+                    # path is a mismatch, never a silent success.
+                    if not self._owns_execution(claim, JobStatus.VERIFYING):
+                        self._log_rejected(claim.job_id, claim, JobStatus.COMPLETED)
+                        return None
+                    reason = self._verify_idempotent_pair(
+                        job_type, claim, result, final_out_path, final_pp_path
+                    )
+                    if reason is not None:
+                        raise _PromotionRefused(reason)
+                    updated = dict(result)
+                    updated["output_path"] = str(final_out_path)
+                    return updated
+                if quarantine_contract:
+                    # Staged files vanished and no complete final pair exists:
+                    # nothing verifiable remains of this attempt — fail closed.
+                    raise _PromotionRefused("staged_artifacts_missing_or_unpromoted")
+                logger.warning(
+                    "staged artifacts missing at promotion job_id=%s attempt=%d",
+                    claim.job_id,
+                    claim.attempt,
                 )
+                return None
+            for final in (final_out_path, final_pp_path):
+                final.parent.mkdir(parents=True, exist_ok=True)
+            # 1. Durability of the quarantined bytes: flush them BEFORE any rename,
+            #    so the promoted generation can never be a partially-written file.
+            _fsync_file(staged_out_path)
+            _fsync_file(staged_pp_path)
+            # Inode fence: the quarantined files' identities, recorded before any
+            # rename, decide which destination entries this attempt may roll back.
+            identities = (_file_identity(staged_out_path), _file_identity(staged_pp_path))
+            # 2. Transactional pair promotion: move any previous generation aside
+            #    (same directory → atomic renames) so a failed second rename, a
+            #    failed fsync or a failed post-promotion verification can restore
+            #    the exact previous pair.
+            backups: list[tuple[Path, Path]] = []
+            try:
+                for final in (final_out_path, final_pp_path):
+                    if final.exists():
+                        backup = final.with_name(f"{final.name}.promote-backup")
+                        os.replace(final, backup)
+                        backups.append((final, backup))
+                os.replace(staged_out_path, final_out_path)
+                # Crash-injection point: the MP4 has landed, the passport has not.
+                if self._between_promote_replaces_hook is not None:
+                    self._between_promote_replaces_hook()
+                os.replace(staged_pp_path, final_pp_path)
+                _fsync_directory(final_out_path.parent)
+                # 3. Post-promotion final verification, BEFORE the row may become
+                #    COMPLETED: the destination pair must re-verify (v2 passport
+                #    seal + shot tree + the destination MP4's own digest).
+                reason = self._verify_promoted_pair(job_type, final_out_path, final_pp_path)
                 if reason is not None:
                     raise _PromotionRefused(reason)
-                updated = dict(result)
-                updated["output_path"] = str(final_out_path)
-                return updated
-            if quarantine_contract:
-                # Staged files vanished and no complete final pair exists:
-                # nothing verifiable remains of this attempt — fail closed.
-                raise _PromotionRefused("staged_artifacts_missing_or_unpromoted")
-            logger.warning(
-                "staged artifacts missing at promotion job_id=%s attempt=%d",
-                claim.job_id,
-                claim.attempt,
-            )
-            return None
-        for final in (final_out_path, final_pp_path):
-            final.parent.mkdir(parents=True, exist_ok=True)
-        # 1. Durability of the quarantined bytes: flush them BEFORE any rename,
-        #    so the promoted generation can never be a partially-written file.
-        _fsync_file(staged_out_path)
-        _fsync_file(staged_pp_path)
-        # 2. Transactional pair promotion: move any previous generation aside
-        #    (same directory → atomic renames) so a failed second rename, a
-        #    failed fsync or a failed post-promotion verification can restore
-        #    the exact previous pair.
-        backups: list[tuple[Path, Path]] = []
-        moved = False
-        try:
-            for final in (final_out_path, final_pp_path):
-                if final.exists():
-                    backup = final.with_name(f"{final.name}.promote-backup")
-                    os.replace(final, backup)
-                    backups.append((final, backup))
-            os.replace(staged_out_path, final_out_path)
-            # Crash-injection point: the MP4 has landed, the passport has not.
-            if self._between_promote_replaces_hook is not None:
-                self._between_promote_replaces_hook()
-            os.replace(staged_pp_path, final_pp_path)
-            moved = True
+            except _PromotionRefused:
+                self._rollback_promotion(
+                    claim,
+                    staged_out_path,
+                    staged_pp_path,
+                    final_out_path,
+                    final_pp_path,
+                    backups,
+                    identities,
+                )
+                raise
+            except OSError as exc:
+                self._rollback_promotion(
+                    claim,
+                    staged_out_path,
+                    staged_pp_path,
+                    final_out_path,
+                    final_pp_path,
+                    backups,
+                    identities,
+                )
+                raise _PromotionRefused(f"promotion_os_error:{type(exc).__name__}") from exc
+            # 4. Ownership AFTER promotion: if the row was taken over in the
+            #    rename window, this attempt must not keep the publication. The
+            #    successor's own transactional promote replaces the pair, and the
+            #    terminal CAS below refuses COMPLETED for this attempt anyway.
+            if not self._owns_execution(claim, JobStatus.VERIFYING):
+                # The ownership was lost while the new pair was in place: this
+                # superseded attempt's bytes must not stay published. The quarantine
+                # gets them back and the previous generation is restored, so the
+                # successor starts from the exact destination it expects.
+                self._log_rejected(claim.job_id, claim, JobStatus.COMPLETED)
+                self._rollback_promotion(
+                    claim,
+                    staged_out_path,
+                    staged_pp_path,
+                    final_out_path,
+                    final_pp_path,
+                    backups,
+                    identities,
+                )
+                return None
+            # 5. Success: the previous generation is no longer needed.
+            for _final, backup in backups:
+                try:
+                    backup.unlink(missing_ok=True)
+                except OSError:  # pragma: no cover - best-effort cleanup
+                    logger.warning("promotion backup could not be removed: %s", backup)
             _fsync_directory(final_out_path.parent)
-            # 3. Post-promotion final verification, BEFORE the row may become
-            #    COMPLETED: the destination pair must re-verify (v2 passport
-            #    seal + shot tree + the destination MP4's own digest).
-            reason = self._verify_promoted_pair(job_type, final_out_path, final_pp_path)
-            if reason is not None:
-                raise _PromotionRefused(reason)
-        except _PromotionRefused:
-            self._rollback_promotion(
-                claim,
-                staged_out_path,
-                staged_pp_path,
-                final_out_path,
-                final_pp_path,
-                backups,
-                moved,
-            )
-            raise
-        except OSError as exc:
-            self._rollback_promotion(
-                claim,
-                staged_out_path,
-                staged_pp_path,
-                final_out_path,
-                final_pp_path,
-                backups,
-                moved,
-            )
-            raise _PromotionRefused(f"promotion_os_error:{type(exc).__name__}") from exc
-        # 4. Ownership AFTER promotion: if the row was taken over in the
-        #    rename window, this attempt must not keep the publication. The
-        #    successor's own transactional promote replaces the pair, and the
-        #    terminal CAS below refuses COMPLETED for this attempt anyway.
-        if not self._owns_execution(claim, JobStatus.VERIFYING):
-            # The ownership was lost while the new pair was in place: this
-            # superseded attempt's bytes must not stay published. The quarantine
-            # gets them back and the previous generation is restored, so the
-            # successor starts from the exact destination it expects.
-            self._log_rejected(claim.job_id, claim, JobStatus.COMPLETED)
-            self._rollback_promotion(
-                claim,
-                staged_out_path,
-                staged_pp_path,
-                final_out_path,
-                final_pp_path,
-                backups,
-                moved,
-            )
-            return None
-        # 5. Success: the previous generation is no longer needed.
-        for _final, backup in backups:
+            updated = dict(result)
+            updated["output_path"] = str(final_out_path)
+            return updated
+
+    @contextmanager
+    def _acquire_promotion_path_lock(self, final_out_path: Path) -> Iterator[None]:
+        """Exclusive lock of one destination, across threads AND processes.
+
+        An ``flock`` on a sibling lock file serializes promoters of the same
+        final path even when they are different processes or different queue
+        instances. Nested use by the same destination (promotion → its own
+        reconciliation) re-enters without re-locking: a second ``flock`` on a
+        new descriptor in the same process would deadlock against the first.
+        """
+        key = str(final_out_path.parent / f".{final_out_path.name}.promote.lock")
+        with self._promotion_lock:
+            depth = self._held_promotion_locks.get(key, 0)
+            if depth:
+                self._held_promotion_locks[key] = depth + 1
+                try:
+                    yield
+                finally:
+                    self._held_promotion_locks[key] -= 1
+                return
             try:
-                backup.unlink(missing_ok=True)
-            except OSError:  # pragma: no cover - best-effort cleanup
-                logger.warning("promotion backup could not be removed: %s", backup)
-        _fsync_directory(final_out_path.parent)
-        updated = dict(result)
-        updated["output_path"] = str(final_out_path)
-        return updated
+                lock_fd = os.open(key, os.O_CREAT | os.O_RDWR | os.O_CLOEXEC | os.O_NOFOLLOW, 0o600)
+            except OSError as exc:
+                raise _PromotionRefused("promotion_lock_unavailable") from exc
+            try:
+                fcntl.flock(lock_fd, fcntl.LOCK_EX)
+                self._held_promotion_locks[key] = 1
+                try:
+                    yield
+                finally:
+                    del self._held_promotion_locks[key]
+            finally:
+                os.close(lock_fd)
 
     def _verify_idempotent_pair(
         self,
@@ -2740,10 +2794,20 @@ class InProcessJobQueue:
           verify as one complete pair, the destination files are removed so no
           mixed (chimeric) generation can ever be served.
 
-        The quarantine (``.staging``) is deliberately not touched here: this
-        method receives only the final paths, and the quarantine is the evidence
-        a successor attempt stages against.
+        Fail-closed: an ``OSError`` during restoration, or a backup that is still
+        parked afterwards, raises :class:`_PromotionRefused` — never a silent
+        return. The quarantine (``.staging``) is not touched here.
         """
+        if not final_out_path.parent.is_dir():
+            return  # no destination directory means no parked generation either
+        try:
+            with self._promotion_lock, self._acquire_promotion_path_lock(final_out_path):
+                self._reconcile_destination_locked(final_out_path, final_pp_path)
+        except OSError as exc:
+            raise _PromotionRefused("reconcile_interrupted_backup_failed") from exc
+
+    def _reconcile_destination_locked(self, final_out_path: Path, final_pp_path: Path) -> None:
+        """The reconciliation body; the caller holds this destination's locks."""
         from nexus_ai_agent.nagar.creative.handoff import STORYBOARD_RENDER_JOB_TYPE
 
         backup_out = final_out_path.with_name(f"{final_out_path.name}.promote-backup")
@@ -2755,20 +2819,16 @@ class InProcessJobQueue:
                 final_out_path.unlink(missing_ok=True)
                 _fsync_directory(final_out_path.parent)
             return
-        try:
-            complete = final_out_path.is_file() and final_pp_path.is_file()
-            if complete and (
-                self._verify_promoted_pair(
-                    STORYBOARD_RENDER_JOB_TYPE, final_out_path, final_pp_path
-                )
-                is None
-            ):
-                # The crashed promotion had landed and verified a whole pair:
-                # keep it, and drop only the parked previous generation.
-                backup_out.unlink(missing_ok=True)
-                backup_pp.unlink(missing_ok=True)
-                _fsync_directory(final_out_path.parent)
-                return
+        complete = final_out_path.is_file() and final_pp_path.is_file()
+        if complete and (
+            self._verify_promoted_pair(STORYBOARD_RENDER_JOB_TYPE, final_out_path, final_pp_path)
+            is None
+        ):
+            # The crashed promotion had landed and verified a whole pair:
+            # keep it, and drop only the parked previous generation.
+            backup_out.unlink(missing_ok=True)
+            backup_pp.unlink(missing_ok=True)
+        else:
             # Not a verified complete pair: put the previous generation back,
             # file by file, exactly where each parked file came from.
             for final, backup in ((final_out_path, backup_out), (final_pp_path, backup_pp)):
@@ -2788,9 +2848,9 @@ class InProcessJobQueue:
                 # left at the destination (downloads then refuse with 409).
                 final_out_path.unlink(missing_ok=True)
                 final_pp_path.unlink(missing_ok=True)
-                _fsync_directory(final_out_path.parent)
-        except OSError:  # pragma: no cover - reconciliation is best-effort
-            logger.exception("promotion backup reconciliation failed for %s", final_out_path)
+        _fsync_directory(final_out_path.parent)
+        if backup_out.exists() or backup_pp.exists():
+            raise _PromotionRefused("reconcile_interrupted_backup_failed")
 
     def _reconcile_storyboard_promotion_backups(self) -> int:
         """Startup sweep of storyboard destinations for interrupted promotions.
@@ -2825,7 +2885,19 @@ class InProcessJobQueue:
                 and final_passport
             ):
                 continue
-            self._reconcile_interrupted_promotion_backups(Path(final_output), Path(final_passport))
+            try:
+                self._reconcile_interrupted_promotion_backups(
+                    Path(final_output), Path(final_passport)
+                )
+            except _PromotionRefused as exc:
+                # Never counted as swept: the destination stays unverified and
+                # its download is refused (the passport gate fails closed).
+                logger.error(
+                    "storyboard promotion backup reconciliation refused reason=%s destination=%s",
+                    exc.reason,
+                    final_output,
+                )
+                continue
             swept += 1
         return swept
 
@@ -2849,21 +2921,35 @@ class InProcessJobQueue:
         final_out_path: Path,
         final_pp_path: Path,
         backups: list[tuple[Path, Path]],
-        moved: bool,
+        identities: tuple[tuple[int, int] | None, tuple[int, int] | None],
     ) -> None:
-        """Undo a half-finished promotion: quarantine back, previous pair back."""
+        """Undo a promotion of THIS attempt, and only what is provably its own.
+
+        A destination entry carrying the quarantined file's recorded
+        ``(st_dev, st_ino)`` is this attempt's bytes and returns to quarantine.
+        An entry with another inode was written by a newer attempt: it is never
+        moved, overwritten or removed, and the previous generation parked for
+        it stays parked for the reconciliation that owns that destination.
+        """
         try:
-            if moved:
-                # The unverified generation goes back to its quarantine...
-                if final_out_path.is_file():
-                    os.replace(final_out_path, staged_out_path)
-                if final_pp_path.is_file():
-                    os.replace(final_pp_path, staged_pp_path)
-                _fsync_directory(final_out_path.parent)
-            # ...and the previous generation is restored to its exact place.
+            for staged, final, expected in (
+                (staged_out_path, final_out_path, identities[0]),
+                (staged_pp_path, final_pp_path, identities[1]),
+            ):
+                if expected is not None and _file_identity(final) == expected:
+                    os.replace(final, staged)
+                elif _file_identity(final) is not None:
+                    logger.warning(
+                        "destination owned by a newer attempt, left untouched: %s", final
+                    )
+            _fsync_directory(final_out_path.parent)
             for final, backup in backups:
-                if backup.is_file():
+                if not backup.is_file():
+                    continue
+                if _file_identity(final) is None:
                     os.replace(backup, final)
+                else:
+                    logger.warning("previous generation kept parked for a newer owner: %s", backup)
             _fsync_directory(final_out_path.parent)
         except OSError:  # pragma: no cover - rollback is best-effort, logged
             logger.exception(

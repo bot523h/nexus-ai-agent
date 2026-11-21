@@ -20,6 +20,7 @@ import pytest
 
 from nexus_ai_agent.adapters.in_process_job_queue import (
     InProcessJobQueue,
+    _PromotionRefused,
     default_artifact_verifiers,
 )
 from nexus_ai_agent.application.ports.job_queue import JobStatus
@@ -1273,3 +1274,107 @@ def test_reconcile_removes_a_pair_it_cannot_restore_whole(
     assert not final_mp4.exists()
     assert not final_pp.exists()
     assert not list(renders.glob("*.promote-backup"))
+
+
+def test_concurrent_stale_rollback_cannot_clobber_successor_promotion(
+    studio: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A superseded attempt that loses ownership after its rename never clobbers a successor.
+
+    Two queue instances share one database and one destination. The stale
+    attempt pauses INSIDE its promotion (holding the destination lock, after
+    its first rename). The successor must block on the cross-instance file
+    lock; once the stale attempt rolls back, the successor promotes its own
+    generation, which must be the final pair on disk and verify as PASS.
+    """
+    monkeypatch.setattr(InProcessJobQueue, "_owns_execution", lambda *_a: True)
+    db = tmp_path / "race-queue.sqlite3"
+    seed = _direct_queue(db)
+    prior = _staged_render(studio, _payload(_approval_id(studio)), "qjob-race", 1)
+    assert (
+        seed._promote_staged_artifacts(
+            ExecutionClaim(job_id="qjob-race", attempt=1), prior, "storyboard_render"
+        )
+        is not None
+    )
+    stale = _staged_render(
+        studio, _payload_for(_issue_for(studio, PROFILE_V2), PROFILE_V2), "qjob-race", 2
+    )
+    successor = _staged_render(
+        studio, _payload_for(_issue_for(studio, PROFILE_V2), PROFILE_V2), "qjob-race", 3
+    )
+    successor_mp4 = Path(str(successor["staged_output_path"])).read_bytes()
+    successor_pp = Path(str(successor["staged_passport_path"])).read_bytes()
+
+    stale_queue, successor_queue = _direct_queue(db), _direct_queue(db)
+    inside, release, lost = threading.Event(), threading.Event(), threading.Event()
+
+    def _pause_between_renames() -> None:
+        inside.set()
+        release.wait(timeout=30)
+
+    stale_queue._between_promote_replaces_hook = _pause_between_renames
+    stale_queue._owns_execution = lambda _claim, _expected: not lost.is_set()  # type: ignore[method-assign]
+    successor_queue._owns_execution = lambda _claim, _expected: True  # type: ignore[method-assign]
+    outcomes: dict[str, object] = {}
+
+    def _run(name: str, queue: InProcessJobQueue, staged: dict[str, object], attempt: int) -> None:
+        try:
+            outcomes[name] = queue._promote_staged_artifacts(
+                ExecutionClaim(job_id="qjob-race", attempt=attempt), staged, "storyboard_render"
+            )
+        except BaseException as exc:  # recorded and asserted below
+            outcomes[f"{name}_exc"] = exc
+
+    stale_thread = threading.Thread(target=_run, args=("stale", stale_queue, stale, 2))
+    stale_thread.start()
+    assert inside.wait(timeout=30), "the stale attempt must reach its promotion window"
+    successor_thread = threading.Thread(
+        target=_run, args=("successor", successor_queue, successor, 3)
+    )
+    successor_thread.start()
+    time.sleep(0.5)
+    assert successor_thread.is_alive(), "the successor must wait on the destination lock"
+    lost.set()
+    release.set()
+    stale_thread.join(timeout=60)
+    successor_thread.join(timeout=60)
+
+    assert not stale_thread.is_alive() and not successor_thread.is_alive()
+    assert "stale_exc" not in outcomes and "successor_exc" not in outcomes, outcomes
+    assert outcomes["stale"] is None, "the superseded attempt must not publish"
+    assert outcomes["successor"] is not None
+    renders = _renders(studio)
+    final_mp4, final_pp = renders / "storyboard.mp4", renders / "storyboard.passport.json"
+    assert final_mp4.read_bytes() == successor_mp4
+    assert final_pp.read_bytes() == successor_pp
+    assert storyboard_jobs.verify_storyboard_final_pair(final_mp4, final_pp) is None
+    assert not list(renders.glob("*.promote-backup"))
+    assert Path(str(stale["staged_output_path"])).is_file(), "the stale bytes return to quarantine"
+
+
+def test_reconcile_interrupted_promotion_backups_fails_closed_on_restore_oserror(
+    studio: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An OSError while restoring a parked generation refuses; it is never swallowed."""
+    queue = _direct_queue(tmp_path / "oserror-queue.sqlite3")
+    renders = _renders(studio)
+    renders.mkdir(parents=True, exist_ok=True)
+    final_mp4, final_pp = renders / "storyboard.mp4", renders / "storyboard.passport.json"
+    final_mp4.write_bytes(b"unverified-new-mp4")
+    final_pp.write_text("{}", encoding="utf-8")
+    parked = final_mp4.with_name("storyboard.mp4.promote-backup")
+    parked.write_bytes(b"parked-previous-mp4")
+    real_replace = os.replace
+
+    def _restore_fails(src: object, dst: object, *args: object, **kwargs: object) -> None:
+        if str(src).endswith(".promote-backup"):
+            raise OSError(5, "injected restore failure")
+        return real_replace(src, dst, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(os, "replace", _restore_fails)
+    with pytest.raises(_PromotionRefused) as refused:
+        queue._reconcile_interrupted_promotion_backups(final_mp4, final_pp)
+
+    assert refused.value.reason == "reconcile_interrupted_backup_failed"
+    assert parked.read_bytes() == b"parked-previous-mp4", "the parked generation is kept"

@@ -340,3 +340,38 @@ def test_an_unexpected_failure_after_authorization_releases_the_descriptor(
 
     assert response.status_code == 500
     assert closed == [True], "nothing may outlive a failed request"
+
+
+def test_a_failure_before_authorization_has_no_descriptor_to_release(
+    rendered: dict[str, object], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An unexpected failure before a descriptor exists returns 500 and closes nothing."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from nexus_ai_agent.creative.artifact_download import AuthorizedDownload
+
+    closed: list[bool] = []
+    original_close = AuthorizedDownload.close
+
+    def _spy_close(self: AuthorizedDownload) -> None:
+        closed.append(True)
+        original_close(self)
+
+    def _fail_before_authorization(*_args: object, **_kwargs: object) -> object:
+        raise RuntimeError("authorization backend unavailable")
+
+    monkeypatch.setattr(AuthorizedDownload, "close", _spy_close)
+    monkeypatch.setattr(studio_api, "authorize_artifact_download", _fail_before_authorization)
+    monkeypatch.setattr(
+        "nexus_ai_agent.api.app.get_creative_registry",
+        lambda: FakeRegistry({JOB_ID: _row(rendered["result"])}),
+    )
+    app = FastAPI()
+    app.include_router(studio_api.router)
+    client = TestClient(app, raise_server_exceptions=False)
+
+    response = client.get(_url())
+
+    assert response.status_code == 500
+    assert closed == [], "no descriptor was ever opened, so none is closed"

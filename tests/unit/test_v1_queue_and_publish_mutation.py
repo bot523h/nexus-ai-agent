@@ -1024,3 +1024,91 @@ def test_mutant_ownership_loss_without_rollback_is_killed() -> None:
     _ownership_lost_after_replace_behaviour(queue_module, _tmp_root())
     mutant = _load_mutant(MUTATION_TARGETS["queue"], _neuter, "ownership_no_rollback")
     _kill(lambda: _ownership_lost_after_replace_behaviour(mutant, _tmp_root()))
+
+
+def _rollback_inode_fence_behaviour(module: ModuleType, root: Path) -> None:
+    """A stale rollback must never move a successor's bytes out of the destination."""
+    case = root / f"inode-fence-{time.monotonic_ns()}"
+    staged, final = case / "staged", case / "final"
+    staged.mkdir(parents=True)
+    final.mkdir()
+    stale_out, stale_pp = staged / "stale.mp4", staged / "stale.passport.json"
+    stale_out.write_bytes(b"stale-mp4")
+    stale_pp.write_bytes(b"stale-passport")
+    identities = (module._file_identity(stale_out), module._file_identity(stale_pp))
+    final_out, final_pp = final / "out.mp4", final / "out.passport.json"
+    final_out.write_bytes(b"successor-mp4")
+    final_pp.write_bytes(b"successor-passport")
+    queue = module.InProcessJobQueue(case / "queue.sqlite3", handlers={}, artifact_verifiers={})
+    queue._rollback_promotion(
+        ExecutionClaim(job_id="stale", attempt=1),
+        stale_out,
+        stale_pp,
+        final_out,
+        final_pp,
+        [],
+        identities,
+    )
+    assert final_out.is_file(), "a successor's MP4 must stay in place"
+    assert final_out.read_bytes() == b"successor-mp4"
+    assert final_pp.is_file(), "a successor's passport must stay in place"
+    assert final_pp.read_bytes() == b"successor-passport"
+
+
+def test_mutant_rollback_without_the_inode_fence_is_killed() -> None:
+    """Remove the (st_dev, st_ino) identity test of ``_rollback_promotion``: a stale
+    attempt would move the successor's published pair back to quarantine."""
+
+    def _neuter(tree: ast.Module) -> None:
+        func = _function(tree, "_rollback_promotion")
+        found = False
+        for node in ast.walk(func):
+            if isinstance(node, ast.If) and "_file_identity(final) == expected" in ast.unparse(
+                node.test
+            ):
+                node.test = ast.Constant(value=True)
+                found = True
+        assert found, "the inode identity test must exist"
+
+    _rollback_inode_fence_behaviour(queue_module, _tmp_root())
+    mutant = _load_mutant(MUTATION_TARGETS["queue"], _neuter, "rollback_no_inode_fence")
+    _kill(lambda: _rollback_inode_fence_behaviour(mutant, _tmp_root()))
+
+
+def _reconcile_fail_closed_behaviour(module: ModuleType, root: Path) -> None:
+    """An OSError while restoring a parked generation refuses; it is never swallowed."""
+    case = root / f"reconcile-{time.monotonic_ns()}"
+    case.mkdir(parents=True)
+    # The destination MP4 path is a directory: restoring the parked file onto it fails.
+    final_out = case / "out.mp4"
+    final_out.mkdir()
+    (case / "out.mp4.promote-backup").write_bytes(b"parked")
+    final_pp = case / "out.passport.json"
+    queue = module.InProcessJobQueue(case / "queue.sqlite3", handlers={}, artifact_verifiers={})
+    _refuses(
+        lambda: queue._reconcile_interrupted_promotion_backups(final_out, final_pp),
+        module._PromotionRefused,
+        contains="reconcile_interrupted_backup_failed",
+    )
+
+
+def test_mutant_reconcile_swallowing_restore_oserror_is_killed() -> None:
+    """Replace the OSError handler of the reconciliation wrapper with ``pass``: the
+    failed restore would be reported as success and the destination would be served."""
+
+    def _neuter(tree: ast.Module) -> None:
+        func = _function(tree, "_reconcile_interrupted_promotion_backups")
+        found = False
+        for node in ast.walk(func):
+            if (
+                isinstance(node, ast.ExceptHandler)
+                and node.type is not None
+                and ast.unparse(node.type) == "OSError"
+            ):
+                node.body = [ast.Pass()]
+                found = True
+        assert found, "the OSError handler must exist"
+
+    _reconcile_fail_closed_behaviour(queue_module, _tmp_root())
+    mutant = _load_mutant(MUTATION_TARGETS["queue"], _neuter, "reconcile_swallows_oserror")
+    _kill(lambda: _reconcile_fail_closed_behaviour(mutant, _tmp_root()))
