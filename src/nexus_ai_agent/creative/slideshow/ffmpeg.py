@@ -473,7 +473,9 @@ def resolve_ffmpeg_bin(explicit: str | None = None) -> str:
     try:
         import imageio_ffmpeg  # type: ignore[import-untyped]
 
-        return imageio_ffmpeg.get_ffmpeg_exe()
+        # ``str()`` because the package ships no type information: its helper is
+        # ``Any`` to mypy, and the caller is promised a path string.
+        return str(imageio_ffmpeg.get_ffmpeg_exe())
     except Exception as error:  # pragma: no cover - depends on the environment
         raise FfmpegUnavailableError(
             "no FFmpeg binary found: install ffmpeg, set NEXUS_FFMPEG_BIN, or "

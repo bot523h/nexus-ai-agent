@@ -2,7 +2,12 @@
 
 **Status:** Living document
 **Scope:** the end-to-end paths that matter — message handling, creative jobs, the render lane, checkpoint lifecycle, schema bootstrap, webhook/cold-start
-**Verified against:** `arena/94286869-nexus-ai-agent` (base `main` @ `d7bbd147`)
+**Verified against:** `main` @ `d6876ab378b88b2ccca1187b1f3c51be5bf52657` (2026-11-19).
+The previous revision was written on `arena/94286869-nexus-ai-agent` (base `main`
+@ `d7bbd147`). That branch is an ancestor of `main` (the GitHub compare API reports `0`
+commits ahead / `729` behind on 2026-11-19), so anchoring the flows to
+`main` loses nothing and stops the page from pointing at a stale head. A flow
+that depends on a specific commit names that commit inline.
 
 Each flow below is written from the code, and each has a **failure contract** — what the user/operator sees when it breaks. "It works" without a failure path is not a flow, it is a hope.
 
