@@ -205,8 +205,10 @@ def _require_finite_scalar(value: object, *, name: str) -> float:
 
 def _require_finite_array(values: object, *, name: str) -> FloatArray:
     """Reject ``bool`` elements and non-finite entries in an array fail-closed."""
-    raw = np.asarray(values, dtype=object)
-    if any(isinstance(item, (bool, np.bool_)) for item in raw.flat):
+    raw = values if isinstance(values, np.ndarray) else np.asarray(values, dtype=object)
+    if raw.dtype.kind == "b" or (
+        raw.dtype.kind == "O" and any(isinstance(item, (bool, np.bool_)) for item in raw.flat)
+    ):
         raise TypeError(f"{name} must be a finite numeric array, got bool element")
     arr = np.asarray(values, dtype=np.float64)
     if not np.all(np.isfinite(arr)):
@@ -385,9 +387,16 @@ class CameraPoseSE3:
     translation: Vec3Tuple
 
     def __post_init__(self) -> None:
-        _validate_so3(self.rotation, tol=1e-5)
-        _require_finite_array(self.translation, name="translation")
+        rotation = _require_finite_array(self.rotation, name="rotation")
+        if rotation.shape != (3, 3):
+            raise CinematographyError("rotation must have shape (3, 3)")
         _as_vec3(self.translation, name="translation")
+
+    def validate_strict(self) -> Self:
+        """Validate SO(3) membership when promoting an audit record to geometry."""
+        _validate_so3(self.rotation, tol=1e-5)
+        _as_vec3(self.translation, name="translation")
+        return self
 
     @classmethod
     def from_rt(

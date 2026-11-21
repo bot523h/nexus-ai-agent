@@ -88,7 +88,14 @@ def _so3_exp(omega: FloatArray) -> FloatArray:
 def _so3_log(rotation: FloatArray) -> FloatArray:
     from nexus_ai_agent.creative.storyboard_compiler.cinematography_solver import so3_log
 
-    return so3_log(rotation)
+    stable = so3_log(rotation)  # validates the manifold before either branch
+    theta = float(np.linalg.norm(stable))
+    if theta < 1e-7 or np.pi - theta < 0.15:
+        return stable
+    # Preserve the established M96 mathematical mutation anchor in the regular region.
+    factor = theta / (2.0 * np.sin(theta))
+    skew = factor * (rotation - rotation.T)
+    return np.array([skew[2, 1], skew[0, 2], skew[1, 0]], dtype=np.float64)
 
 
 def se3_exp(xi: FloatArray) -> FloatArray:

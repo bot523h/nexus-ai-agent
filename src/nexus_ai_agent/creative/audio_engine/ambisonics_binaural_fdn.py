@@ -451,20 +451,26 @@ __all__ = [
 ]
 
 
+class AudioNumericError(ValueError, TypeError):
+    """Compatible numeric input error for legacy and strict callers."""
+
+
 def _require_finite_scalar(value: object, *, name: str) -> None:
     """Numeric inputs never silently coerce booleans or non-finite values."""
     if isinstance(value, (bool, np.bool_)):
-        raise TypeError(f"{name} must not be bool")
+        raise AudioNumericError(f"{name} must not be bool")
     if not isinstance(value, (int, float, np.integer, np.floating)):
-        raise TypeError(f"{name} must be numeric")
+        raise AudioNumericError(f"{name} must be numeric")
     if not np.isfinite(value):
-        raise ValueError(f"{name} must be finite")
+        raise AudioNumericError(f"{name} must be finite")
 
 
 def _require_finite_array(value: object, *, name: str) -> None:
     """Validate before dtype conversion can erase boolean evidence."""
-    raw = np.asarray(value, dtype=object)
-    if any(isinstance(item, (bool, np.bool_)) for item in raw.flat):
-        raise TypeError(f"{name} must not contain bool")
+    raw = value if isinstance(value, np.ndarray) else np.asarray(value, dtype=object)
+    if raw.dtype.kind == "b" or (
+        raw.dtype.kind == "O" and any(isinstance(item, (bool, np.bool_)) for item in raw.flat)
+    ):
+        raise AudioNumericError(f"{name} must not contain bool")
     if not np.all(np.isfinite(np.asarray(value))):
-        raise ValueError(f"{name} must be finite")
+        raise AudioNumericError(f"{name} must be finite")

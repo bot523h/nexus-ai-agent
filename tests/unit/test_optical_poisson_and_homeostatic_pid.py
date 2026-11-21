@@ -92,3 +92,12 @@ def test_pid_dt_guards(bad):
 def test_pid_config_guards(field):
     with pytest.raises(ValueError):
         HomeostaticPIDConfig(**{field: -1.0})
+
+
+def test_pid_negative_energy_and_poisson_bad_shape():
+    from nexus_ai_agent.selfhood.vitals import HomeostaticPIDState
+
+    with pytest.raises(ValueError, match="nonnegative"):
+        HomeostaticPIDState(lyapunov=-1.0)
+    with pytest.raises(ValueError, match="2-D"):
+        solve_screened_poisson_neumann(np.ones(3), 1.0)

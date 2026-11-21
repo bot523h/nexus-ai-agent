@@ -90,6 +90,7 @@ from nexus_ai_agent.creative.studio.models import (
     ExecutionPolicyError,
     IdempotencyConflictError,
     NagarError,
+    PermissionLevel,
     Playhead,
     PreconditionError,
     Preconditions,
@@ -167,6 +168,7 @@ class _Reservation:
 
 
 MAX_COMMITTED_PLANS = 256
+MAX_PLAN_SUMMARIES = 4096
 
 
 class PlanTransactionState(Enum):
@@ -243,6 +245,18 @@ def _code_evidence(code: Any) -> Any:
     }
 
 
+def _callable_evidence(fn: Callable[..., Any] | None) -> Any:
+    if fn is None:
+        return None
+    code = getattr(fn, "__code__", None)
+    cells = getattr(fn, "__closure__", None) or ()
+    return {
+        "code": _code_evidence(code) if code else str(type(fn)),
+        "defaults": getattr(fn, "__defaults__", None),
+        "closure": [cell.cell_contents for cell in cells],
+    }
+
+
 def _clone_plan_snapshot(source: Mapping[str, Any]) -> dict[str, Any]:
     """Copy the three typed state containers, including cached result models."""
     return {
@@ -309,6 +323,16 @@ class PlanStep:
             raise ValueError("step operation does not match command.operation")
 
 
+@dataclass(frozen=True)
+class PlanResultSummary:
+    """Lightweight redelivery tombstone: no snapshots, callbacks or bus references."""
+
+    plan_id: str
+    state: PlanTransactionState
+    step_records: tuple[PlanStepRecord, ...]
+    committed_revision: int
+
+
 @dataclass
 class PlanTransaction:
     """An ordered multi-step transaction with compensating rollback.
@@ -349,7 +373,7 @@ class PlanTransaction:
 
     # -- execution ------------------------------------------------------- #
 
-    def commit(self, bus: CommandBus | None = None) -> PlanTransaction:
+    def commit(self, bus: CommandBus | None = None) -> PlanTransaction | PlanResultSummary:
         """Execute under the bus lock, retaining its complete pre-plan snapshot."""
         if bus is None:
             return self._commit_steps(None)
@@ -361,11 +385,19 @@ class PlanTransaction:
             fingerprint = _canonical_hash(
                 [self._step_input_hash(i, step) for i, step in enumerate(self.steps)]
             )
-            prior = bus._plan_cache.get(self.plan_id) if self.plan_id else None
+            prior = bus._plan_summaries.get(self.plan_id)
+            if prior is not None:
+                for step in self.steps:
+                    if step.command is not None:
+                        bus._validate_dispatch(_parse(step.command))
             if prior is not None:
                 if prior[0] != fingerprint:
                     raise ValueError("plan_id input conflict")
-                bus._plan_cache.move_to_end(self.plan_id)
+                bus._plan_summaries.move_to_end(self.plan_id)
+                cached = bus._plan_cache.get(self.plan_id)
+                if cached is not None:
+                    bus._plan_cache.move_to_end(self.plan_id)
+                    return cached[1]
                 return prior[1]
             self._snapshot = _clone_plan_snapshot(vars(bus))
             self._bus = bus
@@ -376,10 +408,22 @@ class PlanTransaction:
                 self._committed_revision = bus.state_revision
                 self._committed_history_len = len(bus._history)
                 self._committed_last_id = bus._history[-1].transaction_id if bus._history else None
-                if self.plan_id:
-                    bus._plan_cache[self.plan_id] = (fingerprint, self)
-                    while len(bus._plan_cache) > MAX_COMMITTED_PLANS:
-                        bus._plan_cache.popitem(last=False)
+                bus._plan_cache[self.plan_id] = (fingerprint, self)
+                bus._plan_summaries[self.plan_id] = (
+                    fingerprint,
+                    PlanResultSummary(
+                        self.plan_id,
+                        self.state,
+                        tuple(self.step_records),
+                        self._committed_revision,
+                    ),
+                )
+                while len(bus._plan_cache) > MAX_COMMITTED_PLANS:
+                    _, (_, evicted) = bus._plan_cache.popitem(last=False)
+                    evicted._snapshot = None
+                    evicted._step_results.clear()
+                while len(bus._plan_summaries) > MAX_PLAN_SUMMARIES:
+                    bus._plan_summaries.popitem(last=False)
                 return result
             except BaseException:
                 self._restore_snapshot()
@@ -469,14 +513,23 @@ class PlanTransaction:
         ) from failed_error
 
     def rollback(self) -> PlanTransaction:
-        """Compensate every succeeded step in LIFO order (manual rollback)."""
+        """Only an idle pending plan may be rolled back through this entry point."""
+        if self._bus is None:
+            return self._rollback_pending()
+        with self._bus._lock:
+            if self._bus._executing:
+                raise PlanTransactionError("Re-entrant execution: rollback during execution")
+            return self._rollback_pending()
+
+    def _rollback_pending(self) -> PlanTransaction:
+        """Manual pending rollback, called under the bus lock when attached."""
         if self.state in _FINISHED_PLAN_STATES:
             raise PlanTransactionError(
                 f"plan {self.plan_id!r} already finished in state {self.state.value}; "
                 "re-rollback is forbidden",
                 plan_id=self.plan_id,
             )
-        if self.state == PlanTransactionState.ROLLING_BACK:
+        if self.state in (PlanTransactionState.EXECUTING, PlanTransactionState.ROLLING_BACK):
             raise PlanTransactionError(
                 f"plan {self.plan_id!r} is already ROLLING_BACK; re-entrant rollback is forbidden",
                 plan_id=self.plan_id,
@@ -514,16 +567,42 @@ class PlanTransaction:
                 raise PlanTransactionError(
                     "bus changed after plan commit (ABA or revision drift detected)"
                 )
+            if self._snapshot is None:
+                raise PlanTransactionError("rollback snapshot evicted; undo is unavailable")
             bus._executing = True
             try:
                 self.state = PlanTransactionState.ROLLING_BACK
                 errors = self._run_compensations()
+                before = bus._project.model_copy(deep=True)
+                before_history = list(bus._history)
                 self._restore_snapshot()
+                restored = bus._project.model_dump(mode="json")
+                restored["state_revision"] = before.state_revision + 1
+                bus._project = Project.model_validate(restored)
+                bus._history = [
+                    *before_history,
+                    EditTransaction(
+                        transaction_id=uuid4().hex,
+                        command_id=self.plan_id,
+                        operation="plan.rollback_committed",
+                        permission_level=PermissionLevel.IMMEDIATE,
+                        parent_revision=before.state_revision,
+                        previous_state_hash=before.state_hash,
+                        new_state_hash=bus.state_hash,
+                        state_before=before.model_dump(mode="json"),
+                    ),
+                ]
                 bus._plan_cache.pop(self.plan_id, None)
                 self.state = (
                     PlanTransactionState.ROLLBACK_FAILED
                     if errors
                     else PlanTransactionState.ROLLED_BACK
+                )
+                bus._plan_summaries[self.plan_id] = (
+                    bus._plan_summaries[self.plan_id][0],
+                    PlanResultSummary(
+                        self.plan_id, self.state, tuple(self.step_records), bus.state_revision
+                    ),
                 )
                 if errors:
                     raise PlanRollbackError("committed undo failed", rollback_errors=tuple(errors))
@@ -534,18 +613,14 @@ class PlanTransaction:
     # -- internals ------------------------------------------------------- #
 
     def _step_input_hash(self, index: int, step: PlanStep) -> str:
-        if step.command is not None:
-            return _fingerprint(_parse(step.command))
-        fn = step.execute
-        code = getattr(fn, "__code__", None)
-        cells = getattr(fn, "__closure__", None) or ()
         return _canonical_hash(
             {
                 "operation": step.operation,
                 "step_index": index,
-                "code": _code_evidence(code) if code else str(type(fn)),
-                "defaults": getattr(fn, "__defaults__", None),
-                "closure": [cell.cell_contents for cell in cells],
+                "command": _fingerprint(_parse(step.command)) if step.command is not None else None,
+                "execute": _callable_evidence(step.execute),
+                "compensate": _callable_evidence(step.compensate),
+                "rollback_on_self_error": step.rollback_on_self_error,
             }
         )
 
@@ -645,6 +720,7 @@ class CommandBus:
         self._idempotency: dict[tuple[str, str, str], _Reservation] = {}
         self._executing = False
         self._plan_cache: OrderedDict[str, tuple[str, PlanTransaction]] = OrderedDict()
+        self._plan_summaries: OrderedDict[str, tuple[str, PlanResultSummary]] = OrderedDict()
 
     @property
     def project(self) -> Project:
@@ -685,7 +761,7 @@ class CommandBus:
                 raise CommandExecutionError("nested command dispatch during execution is forbidden")
             return self._dispatch_locked(parsed)
 
-    def dispatch_plan(self, plan: PlanTransaction) -> PlanTransaction:
+    def dispatch_plan(self, plan: PlanTransaction) -> PlanTransaction | PlanResultSummary:
         """Execute a :class:`PlanTransaction` atomically under the bus lock.
 
         Steps run in order; the first failure stops forward progress and every
@@ -700,11 +776,12 @@ class CommandBus:
                 raise CommandExecutionError("nested plan dispatch during execution is forbidden")
             return self._dispatch_plan_locked(plan)
 
-    def _dispatch_plan_locked(self, plan: PlanTransaction) -> PlanTransaction:
+    def _dispatch_plan_locked(self, plan: PlanTransaction) -> PlanTransaction | PlanResultSummary:
         """Transactional plan execution (see :meth:`dispatch_plan`)."""
         return plan.commit(self)
 
-    def _dispatch_locked(self, command: TypedCommand) -> CommandResult:
+    def _validate_dispatch(self, command: TypedCommand) -> tuple[OperationSpec, Any, str]:
+        """Pure policy/schema preflight shared by execution and plan redelivery."""
         if command.protocol_version != PROTOCOL_VERSION:
             raise CommandValidationError(
                 f"unsupported protocol_version: {command.protocol_version!r}"
@@ -776,6 +853,11 @@ class CommandBus:
         decision = self._registry.check_permission(command.operation, confirmed=command.confirmed)
         if not decision.allowed:
             raise ExecutionPolicyError(f"{command.operation}: {decision.reason}")
+
+        return spec, validated, project_id
+
+    def _dispatch_locked(self, command: TypedCommand) -> CommandResult:
+        spec, validated, project_id = self._validate_dispatch(command)
 
         # 6. All declared input_refs and semantic time references are validated
         # against the authorized current project before any reservation/handler.

@@ -459,8 +459,10 @@ def _require_finite_scalar(value: object, *, name: str) -> None:
 
 def _require_finite_array(value: object, *, name: str) -> None:
     """Validate before dtype conversion can erase boolean evidence."""
-    raw = np.asarray(value, dtype=object)
-    if any(isinstance(item, (bool, np.bool_)) for item in raw.flat):
+    raw = value if isinstance(value, np.ndarray) else np.asarray(value, dtype=object)
+    if raw.dtype.kind == "b" or (
+        raw.dtype.kind == "O" and any(isinstance(item, (bool, np.bool_)) for item in raw.flat)
+    ):
         raise TypeError(f"{name} must not contain bool")
     if not np.all(np.isfinite(np.asarray(value))):
         raise ValueError(f"{name} must be finite")

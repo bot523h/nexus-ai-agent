@@ -83,11 +83,19 @@ class MasterCinemaAudioPipeline:
         record("restored", restored)
         denoised = wiener.wiener_denoise(restored, sample_rate=sr).samples
         record("wiener", denoised)
-        separated = hpss.hpss_separate(music, sample_rate=sr)
-        if separated.mask_sum_error > 1e-12 or separated.reconstruction_error > 1e-8:
-            raise ValueError("HPSS partition/reconstruction failed")
-        record("harmonic", separated.harmonic)
-        record("percussive", separated.percussive)
+        if music.ndim not in (1, 2) or (music.ndim == 2 and music.shape[0] != 2):
+            raise ValueError("music must be mono or channel-first stereo")
+        separated_channels = [
+            hpss.hpss_separate(channel, sample_rate=sr)
+            for channel in ((music,) if music.ndim == 1 else music)
+        ]
+        for separated in separated_channels:
+            if separated.mask_sum_error > 1e-12 or separated.reconstruction_error > 1e-8:
+                raise ValueError("HPSS partition/reconstruction failed")
+        harmonic = np.vstack([item.harmonic for item in separated_channels])
+        percussive = np.vstack([item.percussive for item in separated_channels])
+        record("harmonic", harmonic)
+        record("percussive", percussive)
         aligned = sync.synchronize_audio_to_visual(
             foley,
             visual_motion,
@@ -109,9 +117,9 @@ class MasterCinemaAudioPipeline:
         wet = ambi.fdn_reverb(aligned, sample_rate=sr, room=room).samples
         spatial = direct + 0.2 * wet[:, : direct.shape[-1]]
         record("binaural_room", spatial)
-        music_sum = separated.harmonic + separated.percussive
-        if music_sum.ndim == 1:
-            music_sum = np.vstack((music_sum, music_sum))
+        music_sum = harmonic + percussive
+        if music_sum.shape[0] == 1:
+            music_sum = np.vstack((music_sum[0], music_sum[0]))
         master = bark.master_dialogue_music_sfx(
             np.vstack((denoised, denoised)),
             music_sum,
@@ -138,7 +146,7 @@ class MasterCinemaAudioPipeline:
         payloads = [json.dumps(item, separators=(",", ":")).encode() for item in stages]
         count = len(payloads)
         leaves = [lineage.merkle_leaf_hash(data, total_leaves=count) for data in payloads]
-        root = lineage.merkle_root(leaves)
+        root = lineage.merkle_root(leaves, strict=True)
         proofs = tuple(lineage.merkle_inclusion_proof(leaves, i) for i in range(count))
         for i, proof in enumerate(proofs):
             if not lineage.verify_merkle_inclusion(

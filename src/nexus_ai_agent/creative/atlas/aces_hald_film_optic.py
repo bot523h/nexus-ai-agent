@@ -120,7 +120,7 @@ MAX_LEVEL: Final[int] = 16
 MAX_IMAGE_PIXELS: Final[int] = 64_000_000
 
 
-class FilmOpticError(ValueError):
+class FilmOpticError(ValueError, TypeError):
     """Raised for malformed colours, images, or out-of-range parameters."""
 
 
@@ -410,19 +410,25 @@ def film_grain(
 def _require_finite_scalar(value: object, *, name: str) -> None:
     """Numeric inputs never silently coerce booleans or non-finite values."""
     if isinstance(value, (bool, np.bool_)):
-        raise TypeError(f"{name} must not be bool")
+        raise FilmOpticError(f"{name} must not be bool")
     if not isinstance(value, (int, float, np.integer, np.floating)):
-        raise TypeError(f"{name} must be numeric")
+        raise FilmOpticError(f"{name} must be numeric")
     if not np.isfinite(value):
         raise FilmOpticError(f"{name} must be finite")
 
 
 def _require_finite_array(value: object, *, name: str) -> None:
     """Validate before dtype conversion can erase boolean evidence."""
-    raw = np.asarray(value, dtype=object)
-    if any(isinstance(item, (bool, np.bool_)) for item in raw.flat):
-        raise TypeError(f"{name} must not contain bool")
-    if not np.all(np.isfinite(np.asarray(value))):
+    try:
+        raw = value if isinstance(value, np.ndarray) else np.asarray(value, dtype=object)
+        numeric = np.asarray(value, dtype=np.float64)
+    except (ValueError, TypeError) as exc:
+        raise FilmOpticError(f"{name} must be numeric") from exc
+    if raw.dtype.kind == "b" or (
+        raw.dtype.kind == "O" and any(isinstance(item, (bool, np.bool_)) for item in raw.flat)
+    ):
+        raise FilmOpticError(f"{name} must not contain bool")
+    if not np.all(np.isfinite(numeric)):
         raise FilmOpticError(f"{name} must be finite")
 
 

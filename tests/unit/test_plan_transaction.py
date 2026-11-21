@@ -485,9 +485,11 @@ def test_committed_plan_cache_and_undo():
     plan.commit(bus)
     assert PlanTransaction(plan_id="cache", steps=(step,)).commit(bus) is plan
     assert executed == ["step"]
+    committed_revision = bus.state_revision
     plan.rollback_committed_plan()
-    assert bus.project == before
-    assert bus.history == ()
+    assert bus.state_hash == before.state_hash
+    assert bus.state_revision == committed_revision + 1
+    assert bus.history[-1].operation == "plan.rollback_committed"
 
 
 def test_callback_cannot_dispatch_reentrantly():
@@ -593,3 +595,194 @@ def test_failing_step_emergency_compensation_runs_first():
     with pytest.raises(PlanTransactionError):
         plan.commit()
     assert log == ["fail", "ok"]
+
+
+def test_rollback_cannot_interrupt_forward_execution():
+    plan = None
+
+    def execute():
+        with pytest.raises(PlanTransactionError):
+            plan.rollback()
+        return True
+
+    plan = PlanTransaction(steps=(PlanStep("closure", execute=execute, compensate=lambda _: None),))
+    plan.commit()
+    assert plan.state is PlanTransactionState.COMMITTED
+
+
+def test_attached_rollback_obeys_bus_execution_guard():
+    bus = CommandBus(state=make_project())
+    plan = PlanTransaction(
+        steps=(PlanStep("closure", execute=lambda: 1, compensate=lambda _: None),)
+    )
+    plan._bus = bus
+    bus._executing = True
+    with pytest.raises(PlanTransactionError, match="Re-entrant"):
+        plan.rollback()
+    bus._executing = False
+    assert plan.rollback().state is PlanTransactionState.ROLLED_BACK
+
+
+def test_replay_revalidates_current_permissions(monkeypatch):
+    from types import SimpleNamespace
+
+    bus = CommandBus(state=make_project(), registry=_plan_test_registry([]))
+    step = PlanStep("test.plan_step", command=make_command("test.plan_step", "policy"))
+    PlanTransaction(plan_id="policy", steps=(step,)).commit(bus)
+    monkeypatch.setattr(
+        bus.registry,
+        "check_permission",
+        lambda *a, **k: SimpleNamespace(allowed=False, reason="permission revoked"),
+    )
+    from nexus_ai_agent.creative.studio.models import ExecutionPolicyError
+
+    with pytest.raises(ExecutionPolicyError, match="revoked"):
+        PlanTransaction(plan_id="policy", steps=(step,)).commit(bus)
+
+
+def test_replay_revalidates_current_registry(monkeypatch):
+    from nexus_ai_agent.creative.studio.models import CapabilityError
+
+    bus = CommandBus(state=make_project(), registry=_plan_test_registry([]))
+    step = PlanStep("test.plan_step", command=make_command("test.plan_step", "removed"))
+    PlanTransaction(plan_id="removed", steps=(step,)).commit(bus)
+
+    def removed(_):
+        raise CapabilityError("operation removed")
+
+    monkeypatch.setattr(bus.registry, "get_spec", removed)
+    with pytest.raises(CapabilityError, match="removed"):
+        PlanTransaction(plan_id="removed", steps=(step,)).commit(bus)
+
+
+def test_step_fingerprint_binds_compensation_and_self_error_flag():
+    def execute():
+        return 1
+
+    def undo_one(_):
+        return 1
+
+    def undo_two(_):
+        return 2
+
+    tx = PlanTransaction(steps=(PlanStep("step", execute=execute, compensate=undo_one),))
+    first = tx._step_input_hash(0, tx.steps[0])
+    assert tx._step_input_hash(0, PlanStep("step", execute=execute, compensate=undo_two)) != first
+    assert (
+        tx._step_input_hash(
+            0, PlanStep("step", execute=execute, compensate=undo_one, rollback_on_self_error=True)
+        )
+        != first
+    )
+
+
+def test_lru_eviction_preserves_lightweight_redelivery(monkeypatch):
+    from nexus_ai_agent.creative.studio import bus as module
+
+    monkeypatch.setattr(module, "MAX_COMMITTED_PLANS", 1)
+    monkeypatch.setattr(module, "MAX_PLAN_SUMMARIES", 2)
+    executed = []
+    bus = CommandBus(state=make_project(), registry=_plan_test_registry(executed))
+    step = PlanStep("test.plan_step", command=make_command("test.plan_step", "evicted"))
+    first = PlanTransaction(plan_id="first", steps=(step,)).commit(bus)
+    PlanTransaction(plan_id="second", steps=(step,)).commit(bus)
+    assert first._snapshot is None
+    revision = bus.state_revision
+    replay = PlanTransaction(plan_id="first", steps=(step,)).commit(bus)
+    assert isinstance(replay, module.PlanResultSummary)
+    assert replay.state is PlanTransactionState.COMMITTED
+    assert executed == ["step", "step"]
+    assert bus.state_revision == revision
+    PlanTransaction(plan_id="third", steps=(step,)).commit(bus)
+    assert list(bus._plan_summaries) == ["first", "third"]
+    assert len(bus._plan_cache) == 1
+
+
+def test_committed_undo_records_revision_without_reexecution():
+    executed = []
+    bus = CommandBus(state=make_project(), registry=_plan_test_registry(executed))
+    step = PlanStep("test.plan_step", command=make_command("test.plan_step", "undo-revision"))
+    plan = PlanTransaction(plan_id="undo-revision", steps=(step,)).commit(bus)
+    committed = bus.state_revision
+    plan.rollback_committed_plan()
+    assert bus.state_revision == committed + 1
+    assert len(bus.history) == 2
+    assert bus.history[-1].parent_revision == committed
+    replay = PlanTransaction(plan_id="undo-revision", steps=(step,)).commit(bus)
+    assert replay.state is PlanTransactionState.ROLLED_BACK
+    assert executed == ["step"]
+
+
+def test_plan_guard_error_paths_and_snapshot_absence(monkeypatch):
+    from nexus_ai_agent.creative.studio import bus as module
+
+    assert len(module._canonical_hash(float("nan"))) == 64
+    with pytest.raises(PlanTransactionError, match="non-empty"):
+        PlanStep("", execute=lambda: 1)
+    step = PlanStep("closure", execute=lambda: 1, compensate=lambda _: None)
+    plan = PlanTransaction(steps=(step,))
+    plan._restore_snapshot()
+    with pytest.raises(PlanTransactionError, match="requires a bus"):
+        plan.rollback_committed_plan()
+    bus = CommandBus(state=make_project())
+    bus._executing = True
+    with pytest.raises(module.CommandExecutionError, match="Re-entrant"):
+        plan.commit(bus)
+    bus._executing = False
+    for state in (PlanTransactionState.EXECUTING, PlanTransactionState.ROLLING_BACK):
+        plan.state = state
+        with pytest.raises(PlanTransactionError):
+            plan.commit()
+    plan.state = PlanTransactionState.PENDING
+    plan.commit(bus)
+    with pytest.raises(PlanTransactionError, match="finished"):
+        plan.commit(bus)
+    bus._executing = True
+    with pytest.raises(module.CommandExecutionError, match="Re-entrant"):
+        plan.rollback_committed_plan()
+    bus._executing = False
+    plan._snapshot = None
+    with pytest.raises(PlanTransactionError, match="evicted"):
+        plan.rollback_committed_plan()
+    plan.state = PlanTransactionState.PENDING
+    with pytest.raises(PlanTransactionError, match="not committed"):
+        plan.rollback_committed_plan()
+
+
+def test_replay_closure_plan_and_no_bus_command_error():
+    step = PlanStep("closure", execute=lambda: 1, compensate=lambda _: None)
+    bus = CommandBus(state=make_project())
+    plan = PlanTransaction(plan_id="closure-replay", steps=(step,))
+    plan.commit(bus)
+    assert PlanTransaction(plan_id="closure-replay", steps=(step,)).commit(bus) is plan
+    command = PlanStep("test.plan_step", command=make_command("test.plan_step", "no-bus"))
+    with pytest.raises(PlanTransactionError) as error:
+        PlanTransaction(steps=(command,)).commit()
+    assert "no bus" in str(error.value.original_error)
+
+
+def test_committed_undo_compensation_failure_is_audited():
+    def fail(_):
+        raise ValueError("emergency")
+
+    bus = CommandBus(state=make_project())
+    plan = PlanTransaction(steps=(PlanStep("closure", execute=lambda: 1, compensate=fail),))
+    plan.commit(bus)
+    with pytest.raises(PlanRollbackError):
+        plan.rollback_committed_plan()
+    assert plan.state is PlanTransactionState.ROLLBACK_FAILED
+    assert bus.state_revision == 1
+    assert bus._plan_summaries[plan.plan_id][1].state is PlanTransactionState.ROLLBACK_FAILED
+
+
+def test_manual_pending_rollback_collects_compensation_errors():
+    from nexus_ai_agent.creative.studio.bus import PlanStepRecord
+
+    def fail(_):
+        raise ValueError("undo")
+
+    plan = PlanTransaction(steps=(PlanStep("closure", execute=lambda: 1, compensate=fail),))
+    plan.step_records.append(PlanStepRecord(0, "closure", "succeeded", "a" * 64, "b" * 64))
+    with pytest.raises(PlanRollbackError):
+        plan.rollback()
+    assert plan.state is PlanTransactionState.ROLLBACK_FAILED

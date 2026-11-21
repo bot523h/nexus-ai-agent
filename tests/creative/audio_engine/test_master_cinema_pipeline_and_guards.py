@@ -72,7 +72,7 @@ def test_merkle_size_binding_and_invalid_hashes():
     )
     for invalid in ([], [b"bad"]):
         with pytest.raises(ValueError):
-            lineage.merkle_root(invalid)
+            lineage.merkle_root(invalid, strict=True)
 
 
 def _stems():
@@ -106,3 +106,97 @@ def test_pipeline_qc_fail_closed(monkeypatch):
     monkeypatch.setattr(qc, "analyze_forensic_audio_qc", violated)
     with pytest.raises(ValueError, match="VIOLATED"):
         MasterCinemaAudioPipeline(sample_rate=24000).run(*_stems())
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"sample_rate": 8000},
+        {"sample_rate": 24000.5},
+        {"room_dims_m": (1.0, 2.0)},
+        {"room_dims_m": (0.0, 2.0, 3.0)},
+    ],
+)
+def test_pipeline_config_boundaries(kwargs):
+    with pytest.raises(ValueError):
+        MasterCinemaAudioPipeline(**kwargs)
+
+
+def test_pipeline_shape_hpss_lineage_guards(monkeypatch):
+    from dataclasses import replace
+
+    from nexus_ai_agent.creative.audio_engine import master_cinema_pipeline as module
+
+    d, m, f, v = _stems()
+    pipeline = MasterCinemaAudioPipeline(sample_rate=24000)
+    for invalid in (
+        (d[:100], m, f, v),
+        (d, m, f[:-1], v),
+        (d, m[:-1], f, v),
+        (d[None, :], m, f, v),
+        (d, m, f[None, :], v),
+    ):
+        with pytest.raises(ValueError):
+            pipeline.run(*invalid)
+    original = hpss.hpss_separate
+    for field in ("mask_sum_error", "reconstruction_error"):
+        with monkeypatch.context() as patch:
+            patch.setattr(
+                hpss,
+                "hpss_separate",
+                lambda *a, _field=field, **k: replace(original(*a, **k), **{_field: 0.1}),
+            )
+            with pytest.raises(ValueError, match="HPSS"):
+                pipeline.run(d, m, f, v)
+    with monkeypatch.context() as patch:
+        patch.setattr(lineage, "verify_merkle_inclusion", lambda **k: False)
+        with pytest.raises(ValueError, match="inclusion"):
+            pipeline.run(d, m, f, v)
+    result = module.run_master_cinema_audio_pipeline(d, np.vstack((m, m)), f, v, sample_rate=24000)
+    assert result.status == "PASS"
+
+
+def test_fdn_unitarity_and_contractive_feedback_checks(monkeypatch):
+    from nexus_ai_agent.creative.audio_engine import ambisonics_binaural_fdn as ambi
+
+    with monkeypatch.context() as patch:
+        patch.setattr(ambi.np.linalg, "norm", lambda *a, **k: 1.0)
+        with pytest.raises(ValueError, match="unitary"):
+            ambi.householder_matrix()
+
+    class UnsafeRoom:
+        rt60_low = float("inf")
+        rt60_mid = float("inf")
+        rt60_high = float("inf")
+        volume_m3 = 120.0
+        surface_area_m2 = 150.0
+
+    with pytest.raises(ValueError, match="feedback"):
+        ambi.fdn_reverb(np.zeros(100), sample_rate=24000, room=UnsafeRoom(), tail_seconds=0.0)
+
+
+def test_legacy_merkle_primitives_and_strict_root():
+    import hashlib
+
+    assert lineage.merkle_root([]) == hashlib.sha256(b"").digest()
+    assert lineage.merkle_node_hash(b"raw", b"") == hashlib.sha256(b"\x01raw").digest()
+    assert len(lineage.merkle_root([b"x" * 32], strict=True)) == 32
+
+
+def test_qc_boolean_input_is_rejected():
+    with pytest.raises(TypeError):
+        qc.analyze_forensic_audio_qc(np.ones(5, dtype=bool), sample_rate=48000)
+
+
+def test_pipeline_rejects_multichannel_music_before_hpss():
+    d, m, f, v = _stems()
+    with pytest.raises(ValueError, match="music"):
+        MasterCinemaAudioPipeline(sample_rate=24000).run(d, np.vstack((m, m, m)), f, v)
+
+
+def test_aces_conversion_errors_remain_domain_specific():
+    from nexus_ai_agent.creative.atlas import aces_hald_film_optic as aces
+
+    for value in (["invalid"], [[1.0], [2.0, 3.0]], object()):
+        with pytest.raises(aces.FilmOpticError):
+            aces._require_finite_array(value, name="input")

@@ -100,12 +100,12 @@ def test_veritas_rejects_invalid_se3(matrix):
         veritas.se3_log(matrix)
 
 
-def test_direct_pose_constructor_enforces_so3():
+def test_direct_pose_strict_validation_enforces_so3():
     with pytest.raises(ValueError, match="orthogonality"):
         solver.CameraPoseSE3(
             rotation=((2.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 0.5)),
             translation=(0.0, 0.0, 0.0),
-        )
+        ).validate_strict()
 
 
 def test_strict_trace_factory_rejects_raw_audit_nan():
@@ -136,3 +136,61 @@ def test_independent_calculus_detects_inconsistent_derivative(monkeypatch):
     result = solver.verify_minimum_jerk_calculus_invariants()
     assert result["derivative_2_max_error"] > 0.09
     assert not result["verified"]
+
+
+def test_strict_geometry_factory_boundaries():
+    from dataclasses import fields, replace
+
+    from nexus_ai_agent.creative.storyboard_compiler.bilingual_script_parser import (
+        parse_bilingual_script,
+    )
+
+    scene = parse_bilingual_script("INT. ROOM - NIGHT\nREZA\nOne.\n\nSARA\nTwo.").scenes[0]
+    shot = solver.solve_scene_cinematography(scene).shots[0]
+    payload = {f.name: getattr(shot, f.name) for f in fields(shot)}
+    assert solver.CameraShotSpec.from_validated(**payload) == shot
+    assert shot.start_axis_trace.validate_strict() is shot.start_axis_trace
+    trace = shot.start_axis_trace
+    trace_payload = {f.name: getattr(trace, f.name) for f in fields(trace)}
+    assert solver.AxisEnforcementTrace.from_validated(**trace_payload) == trace
+    with pytest.raises(ValueError, match="duration_sec"):
+        replace(shot, duration_sec=0.0).validate_strict()
+    for name in ("focal_length_mm", "f_stop", "focus_distance_m", "hyperfocal_distance_m"):
+        with pytest.raises(ValueError, match=name):
+            replace(shot.lens, **{name: 0.0})
+    with pytest.raises(ValueError, match="duration_sec"):
+        replace(shot.trajectory, duration_sec=0.0)
+    for shape in ((4, 4), (3,)):
+        with pytest.raises(ValueError, match="shape"):
+            solver.CameraPoseSE3(np.ones(shape), (0.0, 0.0, 0.0))
+    assert shot.pose.validate_strict() is shot.pose
+
+
+@pytest.mark.parametrize("steps", [True, "1000", 99])
+def test_calculus_steps_guard(steps):
+    with pytest.raises((TypeError, ValueError)):
+        solver.verify_minimum_jerk_calculus_invariants(steps)
+
+
+def test_lie_shape_and_tolerance_and_sensor_boundaries():
+    for tolerance in (0.0, -1.0, 1.0):
+        with pytest.raises(ValueError, match="tol"):
+            solver.so3_log(np.eye(3), tol=tolerance)
+    with pytest.raises(ValueError, match="twist"):
+        solver.se3_exp(np.ones(5))
+    for transform in (np.eye(3), np.ones((4, 4))):
+        with pytest.raises(ValueError, match="transform"):
+            solver.se3_log(transform)
+    with pytest.raises(ValueError, match="eps"):
+        solver.axis_side_sign((0.0, 0.0, 1.0), (0.0, 0.0, 0.0), (1.0, 0.0, 0.0), eps=-1.0)
+    with pytest.raises(ValueError, match="sensor"):
+        solver.build_rule_of_thirds_pose(
+            (0.0, -2.0, 1.0),
+            (0.0, 0.0, 1.0),
+            focal_length_mm=50.0,
+            target_uv=(1 / 3, 1 / 3),
+            sensor_width_mm=0.0,
+        )
+    from nexus_ai_agent.creative.veritas import se3_object_permanence as veritas
+
+    np.testing.assert_array_equal(veritas._so3_log(np.eye(3)), np.zeros(3))

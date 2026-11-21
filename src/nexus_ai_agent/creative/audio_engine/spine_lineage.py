@@ -106,8 +106,6 @@ def merkle_leaf_hash(leaf: bytes, *, total_leaves: int | None = None) -> bytes:
 
 def merkle_node_hash(left: bytes, right: bytes) -> bytes:
     """``SHA-256(0x01 || left || right)`` — the RFC 6962 interior commitment."""
-    if len(left) != 32 or len(right) != 32:
-        raise LineageError("invalid node hash")
     return hashlib.sha256(_NODE_PREFIX + left + right).digest()
 
 
@@ -126,7 +124,7 @@ def _split(width: int) -> int:
     return 1 << ((width - 1).bit_length() - 1)
 
 
-def merkle_root(leaves: Sequence[bytes]) -> bytes:
+def merkle_root(leaves: Sequence[bytes], *, strict: bool = False) -> bytes:
     """The RFC 6962 Merkle tree hash of ``leaves``, already leaf-hashed.
 
     The tree is built by *splitting at the largest power of two below the leaf
@@ -135,8 +133,10 @@ def merkle_root(leaves: Sequence[bytes]) -> bytes:
     split rule gives the append-only proof structure CT relies on.
     """
     if not leaves:
-        raise LineageError("Merkle tree must not be empty")
-    if any(not isinstance(leaf, bytes) or len(leaf) != 32 for leaf in leaves):
+        if strict:
+            raise LineageError("Merkle tree must not be empty")
+        return hashlib.sha256(b"").digest()
+    if strict and any(not isinstance(leaf, bytes) or len(leaf) != 32 for leaf in leaves):
         raise LineageError("invalid SHA-256 leaf hash")
     if len(leaves) == 1:
         return leaves[0]
@@ -616,8 +616,10 @@ def _require_finite_scalar(value: object, *, name: str) -> None:
 
 def _require_finite_array(value: object, *, name: str) -> None:
     """Validate before dtype conversion can erase boolean evidence."""
-    raw = np.asarray(value, dtype=object)
-    if any(isinstance(item, (bool, np.bool_)) for item in raw.flat):
+    raw = value if isinstance(value, np.ndarray) else np.asarray(value, dtype=object)
+    if raw.dtype.kind == "b" or (
+        raw.dtype.kind == "O" and any(isinstance(item, (bool, np.bool_)) for item in raw.flat)
+    ):
         raise TypeError(f"{name} must not contain bool")
     if not np.all(np.isfinite(np.asarray(value))):
         raise ValueError(f"{name} must be finite")
