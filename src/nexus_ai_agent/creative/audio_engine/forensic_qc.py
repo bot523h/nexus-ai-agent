@@ -90,6 +90,10 @@ class ForensicAudioQCReport:
     codes: tuple[str, ...] = ()
 
     @property
+    def status(self) -> str:
+        return "UNOBSERVED" if self.frames == 0 else "PASS" if self.ok else "VIOLATED"
+
+    @property
     def ok(self) -> bool:
         return not self.codes
 
@@ -104,6 +108,8 @@ MIN_DROPOUT_RUN = 8
 
 def _mono_ratio(left: np.ndarray, right: np.ndarray) -> float:
     """Level of a mono fold-down relative to the stereo programme, in dB."""
+    _require_finite_array(left, name="left")
+    _require_finite_array(right, name="right")
     stereo_energy = float(np.sum(left**2) + np.sum(right**2))
     folded = (left + right) / 2.0
     # A fold-down of a stereo pair carries the same *total* energy when
@@ -129,8 +135,14 @@ def analyze_forensic_audio_qc(
     here is inferred from metadata: every field is computed from the samples, so
     a file that claims to be clean and is not cannot pass.
     """
+    _require_finite_scalar(sample_rate, name="sample_rate")
+    if channels is not None:
+        _require_finite_scalar(channels, name="channels")
+    _require_finite_scalar(clip_threshold, name="clip_threshold")
     if sample_rate <= 0:
         raise ValueError("sample_rate must be positive")
+    if any(isinstance(x, (bool, np.bool_)) for x in np.asarray(samples, dtype=object).flat):
+        raise TypeError("samples must not contain bool")
     data = np.asarray(samples, dtype=np.float64)
     if data.ndim == 1:
         data = data.reshape(1, -1)
@@ -141,6 +153,23 @@ def analyze_forensic_audio_qc(
         raise ValueError(f"channels={channel_count} does not match the array shape")
     frames = int(data.shape[1])
     codes: list[str] = []
+    if not np.all(np.isfinite(data)):
+        return ForensicAudioQCReport(
+            None,
+            0.0,
+            False,
+            0.0,
+            None,
+            0,
+            0,
+            0,
+            0,
+            sample_rate,
+            channel_count,
+            frames,
+            None,
+            ("audio_qc_nonfinite",),
+        )
     if frames == 0:
         return ForensicAudioQCReport(
             stereo_phase_correlation=None,
@@ -264,6 +293,10 @@ def _envelope(
     signal: np.ndarray, sample_rate: int, *, attack_ms: float, release_ms: float
 ) -> np.ndarray:
     """One-pole attack/release envelope follower over a magnitude curve."""
+    _require_finite_array(signal, name="signal")
+    _require_finite_scalar(sample_rate, name="sample_rate")
+    _require_finite_scalar(attack_ms, name="attack_ms")
+    _require_finite_scalar(release_ms, name="release_ms")
     attack = math.exp(-1.0 / max(1e-9, attack_ms * 1e-3 * sample_rate))
     release = math.exp(-1.0 / max(1e-9, release_ms * 1e-3 * sample_rate))
     envelope = np.empty_like(signal)
@@ -299,6 +332,13 @@ def deess_sibilance_band(
     1 ms attack / 40 ms release, and the gain is applied to the high band only,
     so nothing below 4.5 kHz is touched.
     """
+    _require_finite_array(samples, name="samples")
+    _require_finite_scalar(sample_rate, name="sample_rate")
+    _require_finite_scalar(threshold_db, name="threshold_db")
+    _require_finite_scalar(max_reduction_db, name="max_reduction_db")
+    _require_finite_scalar(attack_ms, name="attack_ms")
+    _require_finite_scalar(release_ms, name="release_ms")
+    _require_finite_scalar(frame_length, name="frame_length")
     if sample_rate <= 0:
         raise ValueError("sample_rate must be positive")
     if not 0.0 < attack_ms:
@@ -410,3 +450,22 @@ def deess_sibilance_band(
         low_hz=SIBILANCE_LOW_HZ,
         high_hz=SIBILANCE_HIGH_HZ,
     )
+
+
+def _require_finite_scalar(value: object, *, name: str) -> None:
+    """Numeric inputs never silently coerce booleans or non-finite values."""
+    if isinstance(value, (bool, np.bool_)):
+        raise TypeError(f"{name} must not be bool")
+    if not isinstance(value, (int, float, np.integer, np.floating)):
+        raise TypeError(f"{name} must be numeric")
+    if not np.isfinite(value):
+        raise ValueError(f"{name} must be finite")
+
+
+def _require_finite_array(value: object, *, name: str) -> None:
+    """Validate before dtype conversion can erase boolean evidence."""
+    raw = np.asarray(value, dtype=object)
+    if any(isinstance(item, (bool, np.bool_)) for item in raw.flat):
+        raise TypeError(f"{name} must not contain bool")
+    if not np.all(np.isfinite(np.asarray(value))):
+        raise ValueError(f"{name} must be finite")

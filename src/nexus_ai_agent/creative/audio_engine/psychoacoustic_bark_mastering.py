@@ -65,6 +65,7 @@ TRUE_PEAK_LIMIT_DBTP = -1.0
 
 
 def zwicker_bark(frequency_hz: np.ndarray) -> np.ndarray:
+    _require_finite_array(frequency_hz, name="frequency_hz")
     frequency = np.asarray(frequency_hz, dtype=np.float64)
     if not np.isfinite(frequency).all() or np.any(frequency < 0):
         raise ValueError("Bark frequency must be finite and nonnegative")
@@ -80,6 +81,7 @@ def bark_band_weights(frequencies_hz: np.ndarray) -> np.ndarray:
     The top critical band includes the >15500 Hz remainder, which is protected
     from carving regardless. No input bin disappears between rounded edges.
     """
+    _require_finite_array(frequencies_hz, name="frequencies_hz")
     frequencies = np.asarray(frequencies_hz, dtype=np.float64)
     zwicker_bark(frequencies)  # validate; coordinates below use the fixed bands
     if frequencies.ndim != 1:
@@ -92,6 +94,9 @@ def spreading_db(
     target_bark: np.ndarray, masker_bark: np.ndarray, masker_level_db_spl: np.ndarray
 ) -> np.ndarray:
     """Asymmetric spreading: a lower target loses 25 dB per Bark distance."""
+    _require_finite_array(target_bark, name="target_bark")
+    _require_finite_array(masker_bark, name="masker_bark")
+    _require_finite_array(masker_level_db_spl, name="masker_level_db_spl")
     target, masker, level = np.broadcast_arrays(
         np.asarray(target_bark, float),
         np.asarray(masker_bark, float),
@@ -111,6 +116,7 @@ def spreading_db(
 
 
 def _matrix(samples: np.ndarray) -> np.ndarray:
+    _require_finite_array(samples, name="samples")
     data = np.asarray(samples, dtype=np.float64)
     if data.ndim == 1:
         data = data[None, :]
@@ -150,6 +156,14 @@ def carve_speech_masking(
     Frequencies outside 800..4500 Hz retain gain one, even if that makes the
     requested +6 dB margin impossible. WOLA does not introduce hard block seams.
     """
+    _require_finite_array(dialogue, name="dialogue")
+    _require_finite_array(music, name="music")
+    _require_finite_array(sfx_foley, name="sfx_foley")
+    _require_finite_scalar(sample_rate, name="sample_rate")
+    _require_finite_scalar(margin_db, name="margin_db")
+    _require_finite_scalar(max_cut_db, name="max_cut_db")
+    _require_finite_scalar(spl_at_full_scale_db, name="spl_at_full_scale_db")
+    _require_finite_scalar(frame_length, name="frame_length")
     stems = [_matrix(x) for x in (dialogue, music, sfx_foley)]
     if any(stem.shape != stems[0].shape for stem in stems) or stems[0].shape[1] == 0:
         raise ValueError("stems must be nonempty, aligned and have identical channel geometry")
@@ -240,6 +254,9 @@ def carve_speech_masking(
 
 def _linked_peak_limit(samples: np.ndarray, *, sample_rate: int, ceiling: float) -> np.ndarray:
     """Offline lookahead peak envelope, instantaneous attack, 30 ms release."""
+    _require_finite_array(samples, name="samples")
+    _require_finite_scalar(sample_rate, name="sample_rate")
+    _require_finite_scalar(ceiling, name="ceiling")
     peak = np.max(np.abs(samples), axis=0)
     radius = max(1, round(sample_rate * 0.001))
     padded = np.pad(peak, (radius, radius))
@@ -275,6 +292,10 @@ def master_dialogue_music_sfx(
     integrated loudness; a target is never copied into a measurement field.
     A final, independent post-encode passport check is the execution layer's job.
     """
+    _require_finite_array(dialogue, name="dialogue")
+    _require_finite_array(music, name="music")
+    _require_finite_array(sfx_foley, name="sfx_foley")
+    _require_finite_scalar(sample_rate, name="sample_rate")
     masking = carve_speech_masking(dialogue, music, sfx_foley, sample_rate=sample_rate)
     output = masking.dialogue + masking.music + masking.sfx_foley
     if output.shape[1] < math.ceil(0.4 * sample_rate):
@@ -316,3 +337,22 @@ __all__ = [
     "spreading_db",
     "zwicker_bark",
 ]
+
+
+def _require_finite_scalar(value: object, *, name: str) -> None:
+    """Numeric inputs never silently coerce booleans or non-finite values."""
+    if isinstance(value, (bool, np.bool_)):
+        raise TypeError(f"{name} must not be bool")
+    if not isinstance(value, (int, float, np.integer, np.floating)):
+        raise TypeError(f"{name} must be numeric")
+    if not np.isfinite(value):
+        raise ValueError(f"{name} must be finite")
+
+
+def _require_finite_array(value: object, *, name: str) -> None:
+    """Validate before dtype conversion can erase boolean evidence."""
+    raw = np.asarray(value, dtype=object)
+    if any(isinstance(item, (bool, np.bool_)) for item in raw.flat):
+        raise TypeError(f"{name} must not contain bool")
+    if not np.all(np.isfinite(np.asarray(value))):
+        raise ValueError(f"{name} must be finite")
