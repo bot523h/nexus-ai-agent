@@ -136,7 +136,7 @@ class TestPlanTransactionSuccess:
         assert log == [("exec", 0), ("exec", 1), ("exec", 2)]
         assert [r.step_index for r in tx.step_records] == [0, 1, 2]
         assert all(r.status == "succeeded" for r in tx.step_records)
-        assert tx.rollback_records == []
+        assert tx.rollback_records == ()
 
     def test_step_records_carry_sha256_hashes(self) -> None:
         log: list[tuple[str, int]] = []
@@ -145,7 +145,18 @@ class TestPlanTransactionSuccess:
             steps=(_recording_step(0, log), _recording_step(1, log)),
         )
         tx.commit()
-        for record in tx.step_records:
+        import hashlib
+        import json
+
+        for index, record in enumerate(tx.step_records):
+            canonical = json.dumps(
+                f"result-{index}",
+                ensure_ascii=True,
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            )
+            assert record.output_hash == hashlib.sha256(canonical.encode("utf-8")).hexdigest()
             assert len(record.input_hash) == 64
             assert len(record.output_hash) == 64
             int(record.input_hash, 16)
@@ -224,7 +235,7 @@ class TestPlanTransactionFailureAndLifoRollback:
             tx.commit()
         assert tx.state is PlanTransactionState.ROLLED_BACK
         assert log == [("exec", 0)]
-        assert tx.rollback_records == []
+        assert tx.rollback_records == ()
 
     def test_step_without_compensate_is_skipped(self) -> None:
         log: list[tuple[str, int]] = []
@@ -782,7 +793,7 @@ def test_manual_pending_rollback_collects_compensation_errors():
         raise ValueError("undo")
 
     plan = PlanTransaction(steps=(PlanStep("closure", execute=lambda: 1, compensate=fail),))
-    plan.step_records.append(PlanStepRecord(0, "closure", "succeeded", "a" * 64, "b" * 64))
+    plan._step_records.append(PlanStepRecord(0, "closure", "succeeded", "a" * 64, "b" * 64))
     with pytest.raises(PlanRollbackError):
         plan.rollback()
     assert plan.state is PlanTransactionState.ROLLBACK_FAILED

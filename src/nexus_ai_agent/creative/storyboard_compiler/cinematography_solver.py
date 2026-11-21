@@ -26,7 +26,7 @@ import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, fields
 from enum import Enum
-from typing import Any, Final, Self
+from typing import Any, Final
 
 import numpy as np
 import numpy.typing as npt
@@ -205,7 +205,14 @@ def _require_finite_scalar(value: object, *, name: str) -> float:
 
 def _require_finite_array(values: object, *, name: str) -> FloatArray:
     """Reject ``bool`` elements and non-finite entries in an array fail-closed."""
+    if isinstance(values, (str, bytes, complex)):
+        raise TypeError(f"{name} must contain real numbers, not strings/complex")
     raw = values if isinstance(values, np.ndarray) else np.asarray(values, dtype=object)
+    if raw.dtype.kind in "USVc" or (
+        raw.dtype.kind == "O"
+        and any(isinstance(item, (str, bytes, complex, np.complexfloating)) for item in raw.flat)
+    ):
+        raise TypeError(f"{name} must contain real numbers, not strings/complex")
     if raw.dtype.kind == "b" or (
         raw.dtype.kind == "O" and any(isinstance(item, (bool, np.bool_)) for item in raw.flat)
     ):
@@ -214,6 +221,31 @@ def _require_finite_array(values: object, *, name: str) -> FloatArray:
     if not np.all(np.isfinite(arr)):
         raise CinematographyError(f"{name} must be finite, got non-finite entries")
     return arr
+
+
+def _validate_metadata(record: Any) -> None:
+    """Validate declared integer, boolean and Enum fields without coercion."""
+    for item in fields(record):
+        value = getattr(record, item.name)
+        if item.type == "int":
+            if type(value) is not int:
+                raise TypeError(f"{item.name} must be int, not bool")
+            if "side" in item.name and value not in (-1, 0, 1):
+                raise CinematographyError(f"{item.name} must lie in {{-1, 0, 1}}")
+            if (item.name.endswith("index") or item.name == "shot_in_scene") and value < 0:
+                raise CinematographyError(f"{item.name} must be nonnegative")
+        elif item.type == "bool" and type(value) is not bool:
+            raise TypeError(f"{item.name} must be bool")
+        enum_type = globals().get(str(item.type))
+        if isinstance(enum_type, type) and issubclass(enum_type, Enum):
+            if not isinstance(value, enum_type):
+                raise TypeError(f"{item.name} must be a {enum_type.__name__}")
+
+
+def _validate_uv(values: object, name: str) -> None:
+    array = _require_finite_array(values, name=name)
+    if array.shape != (2,):
+        raise CinematographyError(f"{name} must have shape (2,)")
 
 
 def _as_vec3(vec: Sequence[float] | FloatArray, *, name: str) -> FloatArray:
@@ -390,9 +422,11 @@ class CameraPoseSE3:
         rotation = _require_finite_array(self.rotation, name="rotation")
         if rotation.shape != (3, 3):
             raise CinematographyError("rotation must have shape (3, 3)")
-        _as_vec3(self.translation, name="translation")
+        translation = _as_vec3(self.translation, name="translation")
+        object.__setattr__(self, "rotation", _to_mat3_tuple(rotation))
+        object.__setattr__(self, "translation", _to_vec3_tuple(translation))
 
-    def validate_strict(self) -> Self:
+    def validate_strict(self) -> CameraPoseSE3:
         """Validate SO(3) membership when promoting an audit record to geometry."""
         _validate_so3(self.rotation, tol=1e-5)
         _as_vec3(self.translation, name="translation")
@@ -701,7 +735,7 @@ class AxisEnforcementTrace:
     enforced_signed_distance_m: float
     was_axis_reflected: bool
 
-    def validate_strict(self) -> Self:
+    def validate_strict(self) -> AxisEnforcementTrace:
         """Validate trusted geometry, while the raw constructor remains audit-safe."""
         for item in fields(self):
             value = getattr(self, item.name)
@@ -709,10 +743,13 @@ class AxisEnforcementTrace:
                 _require_finite_scalar(value, name=item.name)
             elif item.type in ("Vec3Tuple", "Mat3Tuple"):
                 _require_finite_array(value, name=item.name)
+        _validate_metadata(self)
+        _as_vec3(self.adjusted_position, name="adjusted_position")
+        _as_vec3(self.original_position, name="original_position")
         return self
 
     @classmethod
-    def from_validated(cls, **kwargs: Any) -> Self:
+    def from_validated(cls, **kwargs: Any) -> AxisEnforcementTrace:
         """Construct validated geometry, not an untrusted audit record."""
         return cls(**kwargs).validate_strict()
 
@@ -850,6 +887,12 @@ class LensSettings:
             raise CinematographyError("hyperfocal_distance_m must be positive")
         _require_finite_scalar(self.dof_near_m, name="dof_near_m")
         _require_finite_scalar(self.dof_far_m, name="dof_far_m")
+
+        _validate_metadata(self)
+        if not 0 < self.horizontal_fov_deg < 180 or not 0 < self.vertical_fov_deg < 180:
+            raise CinematographyError("lens field of view must lie in (0, 180)")
+        if not 0 < self.dof_near_m <= self.focus_distance_m <= self.dof_far_m:
+            raise CinematographyError("lens depth of field must enclose the focus distance")
 
 
 @dataclass(frozen=True)
@@ -1265,7 +1308,7 @@ class CameraShotSpec:
     original_axis_side: int = 1
     was_axis_reflected: bool = False
 
-    def validate_strict(self) -> Self:
+    def validate_strict(self) -> CameraShotSpec:
         """Validate trusted geometry, while the raw constructor remains audit-safe."""
         for item in fields(self):
             value = getattr(self, item.name)
@@ -1273,6 +1316,11 @@ class CameraShotSpec:
                 _require_finite_scalar(value, name=item.name)
             elif item.type in ("Vec3Tuple", "Mat3Tuple"):
                 _require_finite_array(value, name=item.name)
+        _validate_metadata(self)
+        _as_vec3(self.subject_position, name="subject_position")
+        _validate_metadata(self.framing)
+        for name in ("target_uv", "projected_start_uv", "projected_end_uv"):
+            _validate_uv(getattr(self.framing, name), name)
         if self.duration_sec <= 0:
             raise CinematographyError("duration_sec must be positive")
         for pose in (self.pose, self.end_pose):
@@ -1284,7 +1332,7 @@ class CameraShotSpec:
         return self
 
     @classmethod
-    def from_validated(cls, **kwargs: Any) -> Self:
+    def from_validated(cls, **kwargs: Any) -> CameraShotSpec:
         """Construct validated geometry, not an untrusted audit record."""
         return cls(**kwargs).validate_strict()
 

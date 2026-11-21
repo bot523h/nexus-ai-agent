@@ -98,7 +98,7 @@ def _so3_log(rotation: FloatArray) -> FloatArray:
     return np.array([skew[2, 1], skew[0, 2], skew[1, 0]], dtype=np.float64)
 
 
-def se3_exp(xi: FloatArray) -> FloatArray:
+def _se3_exp_validated(xi: FloatArray) -> FloatArray:
     """Exponential map from se(3) to SE(3)."""
     from nexus_ai_agent.creative.storyboard_compiler.cinematography_solver import (
         _require_finite_array,
@@ -114,7 +114,7 @@ def se3_exp(xi: FloatArray) -> FloatArray:
     return cinema_exp(np.concatenate((twist[3:], twist[:3])))
 
 
-def se3_log(transform: FloatArray) -> FloatArray:
+def _se3_log_validated(transform: FloatArray) -> FloatArray:
     """Logarithm map with full manifold validation; result is (omega, velocity)."""
     from nexus_ai_agent.creative.storyboard_compiler.cinematography_solver import (
         _require_finite_array,
@@ -132,6 +132,22 @@ def se3_log(transform: FloatArray) -> FloatArray:
     validated[3] = [0, 0, 0, 1]
     twist = cinema_log(validated)
     return np.concatenate((twist[3:], twist[:3]))
+
+
+def se3_exp(xi: FloatArray) -> FloatArray:
+    """Public Veritas exponential with a stable domain-specific error contract."""
+    try:
+        return _se3_exp_validated(xi)
+    except (TypeError, ValueError) as exc:
+        raise ObjectPermanenceError(str(exc)) from exc
+
+
+def se3_log(transform: FloatArray) -> FloatArray:
+    """Public Veritas logarithm with a stable domain-specific error contract."""
+    try:
+        return _se3_log_validated(transform)
+    except (TypeError, ValueError) as exc:
+        raise ObjectPermanenceError(str(exc)) from exc
 
 
 def propagate_occluded_object(
