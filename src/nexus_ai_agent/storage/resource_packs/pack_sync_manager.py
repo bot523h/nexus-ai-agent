@@ -770,10 +770,20 @@ class _StorageLock:
                 if moved_state is not None and moved_state[2] is not None
                 else None
             )
+            if moved_state is None:
+                # A rival contender's quarantine sweep already retired the
+                # moved record (it proves removal by inode + token): the
+                # stale lock is gone and the break is complete.  Deciding
+                # anything further would reason about vanished evidence.
+                return
             # An inode can be reused immediately after an unlink, so the token
             # is the second half of the fence: either mismatch proves that a
             # different lock was moved.
-            if os.stat(trash).st_ino != target_ino or moved_token != target_token:
+            try:
+                moved_ino = os.stat(trash).st_ino
+            except FileNotFoundError:
+                return  # the rival retired the moved record between the reads
+            if moved_ino != target_ino or moved_token != target_token:
                 # TOCTOU: the stale owner released the lock and a new live
                 # owner installed a fresh lock between the last fencing check
                 # and os.replace.  os.replace moved THEIR lock, not ours: put

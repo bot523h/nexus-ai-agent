@@ -62,7 +62,6 @@ automatically) and the queue's own lifecycle lines name it explicitly.
 from __future__ import annotations
 
 import asyncio
-import fcntl
 import hashlib
 import json
 import logging
@@ -520,9 +519,12 @@ class InProcessJobQueue:
         # artifact pair (after the MP4 lands, before the passport does).
         # Production code never sets it.
         self._between_promote_replaces_hook: Callable[[], None] | None = None
-        # Serializes every promotion/reconciliation of a destination in this
-        # process; the per-path file lock below serializes across processes.
+        # Serializes promotion/reconciliation per DESTINATION in this process
+        # (a per-path re-entrant lock, so two jobs with different final paths
+        # never block each other); the per-path file lock below serializes
+        # across processes.  ``_promotion_lock`` guards only the dictionary.
         self._promotion_lock = threading.RLock()
+        self._promotion_path_locks: dict[str, threading.RLock] = {}
         self._held_promotion_locks: dict[str, int] = {}
         self._db_lock = threading.Lock()
         # In-flight artifact publications.  ``asyncio.to_thread`` hands the
@@ -2571,7 +2573,7 @@ class InProcessJobQueue:
                 # means the pair was never quarantined at all.
                 raise _PromotionRefused("staged_artifacts_missing_or_unpromoted")
             return None  # already at its final path
-        with self._promotion_lock, self._acquire_promotion_path_lock(final_out_path):
+        with self._acquire_promotion_path_lock(final_out_path):
             if not self._owns_execution(claim, JobStatus.VERIFYING):
                 # Ownership was lost between the PASS verdict and this rename:
                 # a superseded attempt must never publish over a newer owner's
@@ -2699,35 +2701,51 @@ class InProcessJobQueue:
     def _acquire_promotion_path_lock(self, final_out_path: Path) -> Iterator[None]:
         """Exclusive lock of one destination, across threads AND processes.
 
-        An ``flock`` on a sibling lock file serializes promoters of the same
-        final path even when they are different processes or different queue
-        instances. Nested use by the same destination (promotion → its own
+        The in-process half is a per-path re-entrant lock keyed by the final
+        path, so promotions of two DIFFERENT destinations never serialize each
+        other, while two attempts on the SAME destination are fully ordered.
+        The cross-process half — taken only on platforms that provide
+        ``fcntl`` — is an ``flock`` on a sibling lock file, which serializes
+        promoters of the same final path even when they are different
+        processes or different queue instances. A platform without ``fcntl``
+        still gets the in-process mutual exclusion; the queue's exclusive
+        process ownership (``acquire_ownership``) already refuses to start
+        there, so no second process can be promoting in parallel anyway.
+        Nested use by the same destination (promotion → its own
         reconciliation) re-enters without re-locking: a second ``flock`` on a
         new descriptor in the same process would deadlock against the first.
         """
         key = str(final_out_path.parent / f".{final_out_path.name}.promote.lock")
-        with self._promotion_lock:
+        with self._promotion_lock:  # guards only the per-path lock dictionary
+            path_lock = self._promotion_path_locks.setdefault(key, threading.RLock())
+        with path_lock:
             depth = self._held_promotion_locks.get(key, 0)
             if depth:
                 self._held_promotion_locks[key] = depth + 1
                 try:
                     yield
                 finally:
-                    self._held_promotion_locks[key] -= 1
+                    self._held_promotion_locks[key] = depth
                 return
+            lock_fd: int | None = None
+            if _HAS_FCNTL and fcntl is not None:
+                try:
+                    lock_fd = os.open(
+                        key, os.O_CREAT | os.O_RDWR | os.O_CLOEXEC | os.O_NOFOLLOW, 0o600
+                    )
+                except OSError as exc:
+                    raise _PromotionRefused("promotion_lock_unavailable") from exc
             try:
-                lock_fd = os.open(key, os.O_CREAT | os.O_RDWR | os.O_CLOEXEC | os.O_NOFOLLOW, 0o600)
-            except OSError as exc:
-                raise _PromotionRefused("promotion_lock_unavailable") from exc
-            try:
-                fcntl.flock(lock_fd, fcntl.LOCK_EX)
+                if lock_fd is not None:
+                    fcntl.flock(lock_fd, fcntl.LOCK_EX)
                 self._held_promotion_locks[key] = 1
                 try:
                     yield
                 finally:
                     del self._held_promotion_locks[key]
             finally:
-                os.close(lock_fd)
+                if lock_fd is not None:
+                    os.close(lock_fd)
 
     def _verify_idempotent_pair(
         self,
@@ -2801,7 +2819,7 @@ class InProcessJobQueue:
         if not final_out_path.parent.is_dir():
             return  # no destination directory means no parked generation either
         try:
-            with self._promotion_lock, self._acquire_promotion_path_lock(final_out_path):
+            with self._acquire_promotion_path_lock(final_out_path):
                 self._reconcile_destination_locked(final_out_path, final_pp_path)
         except OSError as exc:
             raise _PromotionRefused("reconcile_interrupted_backup_failed") from exc
