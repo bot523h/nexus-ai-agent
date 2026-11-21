@@ -1016,13 +1016,20 @@ mgr = PackSyncManager(
     root, [], LocalDirectoryPackSource(mirror),
     lock_backend="exclusive_file",
     lock_timeout_seconds=10.0,
-    lock_stale_after_seconds=0.05,
+    # The stale-lease TTL must exceed the WORST-CASE critical section (the
+    # in-section sleep plus spawn/import/scheduling jitter on a loaded CI
+    # runner). A lease that expires while its live owner is still inside the
+    # section lets a rival break a LIVE lock and enter concurrently — exactly
+    # the mutual-exclusion violation this test exists to forbid. The seeded
+    # lock is still broken here: its own expires_at was planted in the past,
+    # independent of this TTL.
+    lock_stale_after_seconds=3.0,
 )
 with mgr._storage_lock() as lock:
     # Record entry and verify mutual exclusion via exclusive active_flag
     fd = os.open(active_flag, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
     os.close(fd)
-    time.sleep(0.03)
+    time.sleep(0.05)
     on_disk = json.loads((root / ".sync_gc.lock.excl").read_text())
     assert on_disk["owner_token"] == lock._owner_token, (on_disk, lock._owner_token)
     active_flag.unlink()
@@ -1156,7 +1163,7 @@ log = Path(sys.argv[3])
 mgr = ResourcePackSyncManager(
     root, [], LocalDirectoryPackSource(mirror),
     allow_unsigned=True, disk_free_probe=lambda _: 10**12,
-    lock_backend="exclusive_file", lock_timeout_seconds=10.0, lock_stale_after_seconds=0.05,
+    lock_backend="exclusive_file", lock_timeout_seconds=10.0, lock_stale_after_seconds=3.0,
 )
 with mgr._storage_lock():
     with open(log, "a") as fh:

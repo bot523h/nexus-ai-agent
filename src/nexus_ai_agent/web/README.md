@@ -1,4 +1,6 @@
-# NAGAR Studio web app
+# NAGAR One — Local-First Creative Studio (web app)
+
+The NAGAR Studio web app is the first user-interface path of NAGAR One. The product frame lives in [product contract](../../../docs/product/NAGAR_ONE_PRODUCT_CONTRACT.md).
 
 Status: first vertical slice (`task-nagar-studio-web-01`). The architecture decision is
 recorded in the last section of this document (ADR-style). It lives next to the code, not under
@@ -20,16 +22,23 @@ job view (status stepper with polling until terminal, intent, plan, artifact
 passport, evidence tree, lineage with explicit gaps, contract gaps), capabilities,
 settings (theme, sign out, build id).
 
-## What is deliberately not built (and why)
+## Capability truth (mirrors `api/studio_web.py`)
 
-| Capability | Status | Missing contract |
+Statuses are copied from the capability matrix served at `GET /api/studio/overview`.
+If this table and the code disagree, the code wins and this table is corrected in the same change.
+
+| Capability | Status | Reason (from the matrix) |
 | --- | --- | --- |
-| Per-user identity | BLOCKED | no HTTP login bound to `AppPrincipal` |
-| Job listing | DEFERRED | `JobRegistry` only has `get_job(job_id)` |
-| Intent submit / preview | DEFERRED | IBPC sessions are in-process (NAGAR-ONE Stage 3) |
-| Approvals | DEFERRED | not durable / cross-process |
-| Asset library | DEFERRED | no HTTP surface |
-| Artifact download | DEFERRED | no authorized download route |
+| Session | VERIFIED | Cookie session derived from the deployment token. |
+| Job state | VERIFIED | Read-only state of one job by id. |
+| Project scope | VERIFIED_WITH_LIMITATIONS | Projects are a deployment policy (`NEXUS_STUDIO_PROJECT_IDS`), not per-user membership. |
+| Per-user identity | BLOCKED | No HTTP login binds to `AppPrincipal`; every browser session is the single operator credential. |
+| Job listing | DEFERRED | `JobRegistry` only exposes `get_job(job_id)`. |
+| Intent submit | VERIFIED_WITH_LIMITATIONS | `POST /api/studio/projects/{id}/renders` admits one HMAC-signed intent into the queue and answers 202. No preview or approval session; IBPC approval stays in-process. |
+| Approvals | DEFERRED | Approval persistence and cross-process single use are not durable yet. |
+| Asset library | DEFERRED | No HTTP surface. |
+| Resource packs | VERIFIED_WITH_LIMITATIONS | `GET /api/studio/resource-packs` re-verifies installed packs read-only; it cannot install, repair or activate one. |
+| Artifact download | VERIFIED | `GET /api/studio/projects/{project_id}/jobs/{job_id}/artifact` streams the MP4 (64 KiB chunks) only after `authorize_artifact_download` passes: passport seal, PASS verdict and on-disk digest. Cross-project jobs return 404; traversal 403; malformed path 422; passport or byte mismatch 409; unconfigured studio 503. Evidence: `tests/integration/test_studio_artifact_download.py`. |
 
 ## Security properties (each has a test)
 

@@ -60,7 +60,11 @@ def test_studio_api_exposes_exactly_one_read_and_one_submission_route() -> None:
                 if decorator.args and isinstance(decorator.args[0], ast.Constant):
                     path = str(decorator.args[0].value)
                 routes.append((func.attr, path))
+    # NAGAR One V1 added one authorized, read-only, streaming download route
+    # (passport-first; see tests/integration/test_studio_artifact_download.py).
+    # Any further route must be added here with its own justification.
     assert sorted(routes) == [
+        ("get", "/projects/{project_id}/jobs/{job_id}/artifact"),
         ("get", "/projects/{project_id}/jobs/{job_id}/state"),
         ("post", "/projects/{project_id}/renders"),
     ]
