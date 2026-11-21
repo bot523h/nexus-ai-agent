@@ -524,3 +524,72 @@ def test_compensation_output_hash_is_actual_result():
     with pytest.raises(PlanTransactionError):
         plan.commit()
     assert plan.rollback_records[0].output_hash == _canonical_hash({"undone": 1})
+
+
+def test_rollback_committed_plan_detects_aba_revision_drift_after_intervening_do_and_undo():
+    bus = CommandBus(state=make_project(), registry=_plan_test_registry([]))
+    step = PlanStep("test.plan_step", command=make_command("test.plan_step", "aba1"))
+    plan = PlanTransaction(steps=(step,))
+    plan.commit(bus)
+    # Same-content operations advance the audit history/revision (ABA).
+    bus.dispatch(make_command("test.plan_step", "aba2"))
+    assert bus.state_hash == plan._committed_hash
+    before = (bus.project, bus.history)
+    with pytest.raises(PlanTransactionError, match="ABA or revision drift"):
+        plan.rollback_committed_plan()
+    assert (bus.project, bus.history) == before
+
+
+def test_plan_replay_ignores_transient_command_id_and_trace_id_differences():
+    executed = []
+    bus = CommandBus(state=make_project(), registry=_plan_test_registry(executed))
+    first = make_command("test.plan_step", "transport1")
+    second = make_command("test.plan_step", "transport2")
+    plan = PlanTransaction(plan_id="logical", steps=(PlanStep(first.operation, command=first),))
+    plan.commit(bus)
+    replay = PlanTransaction(plan_id="logical", steps=(PlanStep(second.operation, command=second),))
+    assert replay.commit(bus) is plan
+    assert executed == ["step"]
+    changed = make_command("test.plan_fail", "transport3")
+    conflict = PlanTransaction(
+        plan_id="logical", steps=(PlanStep(changed.operation, command=changed),)
+    )
+    with pytest.raises(ValueError, match="input conflict"):
+        conflict.commit(bus)
+
+
+@pytest.mark.parametrize("bad", ["", " ", "\n\t", None, 12])
+def test_empty_or_whitespace_plan_id_is_rejected(bad):
+    with pytest.raises(ValueError, match="plan_id must be a non-empty string"):
+        PlanTransaction(plan_id=bad, steps=())
+
+
+def test_committed_plan_cache_enforces_bounded_lru_capacity(monkeypatch):
+    from nexus_ai_agent.creative.studio import bus as module
+
+    monkeypatch.setattr(module, "MAX_COMMITTED_PLANS", 2)
+    bus = CommandBus(state=make_project(), registry=_plan_test_registry([]))
+    step = PlanStep("test.plan_step", command=make_command("test.plan_step", "lru"))
+    a = PlanTransaction(plan_id="a", steps=(step,)).commit(bus)
+    PlanTransaction(plan_id="b", steps=(step,)).commit(bus)
+    assert PlanTransaction(plan_id="a", steps=(step,)).commit(bus) is a
+    PlanTransaction(plan_id="c", steps=(step,)).commit(bus)
+    assert list(bus._plan_cache) == ["a", "c"]
+
+
+def test_failing_step_emergency_compensation_runs_first():
+    log = []
+    plan = PlanTransaction(
+        steps=(
+            PlanStep("ok", execute=lambda: 1, compensate=lambda _: log.append("ok")),
+            PlanStep(
+                "fail",
+                execute=lambda: False,
+                compensate=lambda _: log.append("fail"),
+                rollback_on_self_error=True,
+            ),
+        )
+    )
+    with pytest.raises(PlanTransactionError):
+        plan.commit()
+    assert log == ["fail", "ok"]

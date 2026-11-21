@@ -63,6 +63,7 @@ import hashlib
 import json
 import marshal
 import threading
+from collections import OrderedDict
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from enum import Enum
@@ -167,6 +168,9 @@ class _Reservation:
 # can never be re-committed or re-rolled-back: the idempotency guard raises.
 
 
+MAX_COMMITTED_PLANS = 256
+
+
 class PlanTransactionState(Enum):
     """Explicit state machine for a :class:`PlanTransaction`."""
 
@@ -259,13 +263,17 @@ class PlanStep:
     Exactly one of ``command`` (dispatched through the bus) or ``execute``
     (a caller closure) must be supplied. ``compensate`` is the rollback
     closure invoked with the step's result when a later step fails; it is
-    optional, and a step without one is simply skipped during rollback.
+    optional for internal bus-only commands. Custom closures require one by
+    default. ``rollback_on_self_error`` opts into emergency compensation of a
+    partially executed failing step; it receives None when no result exists.
+    Internal bus state is always restored from the pre-plan snapshot on failure.
     """
 
     operation: str
     command: TypedCommand | dict[str, Any] | str | bytes | None = None
     execute: Callable[[], Any] | None = None
     compensate: Callable[[Any], Any] | None = None
+    rollback_on_self_error: bool = False
 
     def __post_init__(self) -> None:
         if not self.operation:
@@ -292,7 +300,7 @@ class PlanTransaction:
     transaction raises :class:`PlanTransactionError`.
     """
 
-    plan_id: str = ""
+    plan_id: str = field(default_factory=lambda: uuid4().hex)
     steps: tuple[PlanStep, ...] = ()
     require_compensation: bool = True
     _snapshot: dict[str, Any] | None = field(default=None, repr=False)
@@ -301,9 +309,14 @@ class PlanTransaction:
     step_records: list[PlanStepRecord] = field(default_factory=list)
     rollback_records: list[PlanRollbackRecord] = field(default_factory=list)
     _committed_hash: str = field(default="", repr=False)
+    _committed_revision: int = field(default=-1, repr=False)
+    _committed_history_len: int = field(default=0, repr=False)
+    _committed_last_id: str | None = field(default=None, repr=False)
     _step_results: dict[int, Any] = field(default_factory=dict, repr=False)
 
     def __post_init__(self) -> None:
+        if not isinstance(self.plan_id, str) or not self.plan_id.strip():
+            raise ValueError("plan_id must be a non-empty string")
         if self.require_compensation and any(
             step.execute is not None and step.compensate is None for step in self.steps
         ):
@@ -329,6 +342,7 @@ class PlanTransaction:
             if prior is not None:
                 if prior[0] != fingerprint:
                     raise ValueError("plan_id input conflict")
+                bus._plan_cache.move_to_end(self.plan_id)
                 return prior[1]
             self._snapshot = {
                 name: copy.deepcopy(getattr(bus, name))
@@ -339,8 +353,13 @@ class PlanTransaction:
             try:
                 result = self._commit_steps(bus)
                 self._committed_hash = bus.state_hash
+                self._committed_revision = bus.state_revision
+                self._committed_history_len = len(bus._history)
+                self._committed_last_id = bus._history[-1].transaction_id if bus._history else None
                 if self.plan_id:
                     bus._plan_cache[self.plan_id] = (fingerprint, self)
+                    while len(bus._plan_cache) > MAX_COMMITTED_PLANS:
+                        bus._plan_cache.popitem(last=False)
                 return result
             except BaseException:
                 self._restore_snapshot()
@@ -465,8 +484,16 @@ class PlanTransaction:
                 raise CommandExecutionError("Re-entrant execution is forbidden")
             if self.state is not PlanTransactionState.COMMITTED:
                 raise PlanTransactionError("plan is not committed")
-            if bus.state_hash != self._committed_hash:
-                raise PlanTransactionError("bus changed after plan commit")
+            if (
+                bus.state_hash != self._committed_hash
+                or bus.state_revision != self._committed_revision
+                or len(bus._history) != self._committed_history_len
+                or (bus._history[-1].transaction_id if bus._history else None)
+                != self._committed_last_id
+            ):
+                raise PlanTransactionError(
+                    "bus changed after plan commit (ABA or revision drift detected)"
+                )
             bus._executing = True
             try:
                 self.state = PlanTransactionState.ROLLING_BACK
@@ -488,17 +515,7 @@ class PlanTransaction:
 
     def _step_input_hash(self, index: int, step: PlanStep) -> str:
         if step.command is not None:
-            if isinstance(step.command, TypedCommand):
-                payload: Any = step.command.model_dump(mode="json")
-            elif isinstance(step.command, (str, bytes)):
-                payload = (
-                    step.command.decode("utf-8", errors="replace")
-                    if isinstance(step.command, bytes)
-                    else step.command
-                )
-            else:
-                payload = step.command
-            return _canonical_hash(payload)
+            return _fingerprint(_parse(step.command))
         fn = step.execute
         code = getattr(fn, "__code__", None)
         cells = getattr(fn, "__closure__", None) or ()
@@ -526,7 +543,14 @@ class PlanTransaction:
     def _run_compensations(self) -> list[BaseException]:
         """Compensate succeeded steps in exact LIFO order; collect all errors."""
         errors: list[BaseException] = []
-        succeeded = [r for r in self.step_records if r.status == "succeeded"]
+        # The failing step may have external partial effects. Opt in explicitly
+        # to emergency compensation (its result is None if execution raised).
+        succeeded = [
+            r
+            for r in self.step_records
+            if r.status == "succeeded"
+            or (r.status == "failed" and self.steps[r.step_index].rollback_on_self_error)
+        ]
         for record in reversed(succeeded):
             step = self.steps[record.step_index]
             if step.compensate is None:
@@ -600,7 +624,7 @@ class CommandBus:
         self._history: list[EditTransaction] = []
         self._idempotency: dict[tuple[str, str, str], _Reservation] = {}
         self._executing = False
-        self._plan_cache: dict[str, tuple[str, PlanTransaction]] = {}
+        self._plan_cache: OrderedDict[str, tuple[str, PlanTransaction]] = OrderedDict()
 
     @property
     def project(self) -> Project:

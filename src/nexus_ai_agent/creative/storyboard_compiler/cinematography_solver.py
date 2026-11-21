@@ -24,9 +24,9 @@ from __future__ import annotations
 
 import math
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from enum import Enum
-from typing import Final
+from typing import Any, Final, Self
 
 import numpy as np
 import numpy.typing as npt
@@ -385,9 +385,8 @@ class CameraPoseSE3:
     translation: Vec3Tuple
 
     def __post_init__(self) -> None:
-        _require_finite_array(self.rotation, name="rotation")
+        _validate_so3(self.rotation, tol=1e-5)
         _require_finite_array(self.translation, name="translation")
-        _require_finite_array(self.rotation, name="rotation")
         _as_vec3(self.translation, name="translation")
 
     @classmethod
@@ -692,6 +691,21 @@ class AxisEnforcementTrace:
     original_signed_distance_m: float
     enforced_signed_distance_m: float
     was_axis_reflected: bool
+
+    def validate_strict(self) -> Self:
+        """Validate trusted geometry, while the raw constructor remains audit-safe."""
+        for item in fields(self):
+            value = getattr(self, item.name)
+            if item.type in ("float", "int"):
+                _require_finite_scalar(value, name=item.name)
+            elif item.type in ("Vec3Tuple", "Mat3Tuple"):
+                _require_finite_array(value, name=item.name)
+        return self
+
+    @classmethod
+    def from_validated(cls, **kwargs: Any) -> Self:
+        """Construct validated geometry, not an untrusted audit record."""
+        return cls(**kwargs).validate_strict()
 
 
 def enforce_axis_of_action_with_trace(
@@ -1241,6 +1255,29 @@ class CameraShotSpec:
     end_was_reflected: bool = False
     original_axis_side: int = 1
     was_axis_reflected: bool = False
+
+    def validate_strict(self) -> Self:
+        """Validate trusted geometry, while the raw constructor remains audit-safe."""
+        for item in fields(self):
+            value = getattr(self, item.name)
+            if item.type in ("float", "int"):
+                _require_finite_scalar(value, name=item.name)
+            elif item.type in ("Vec3Tuple", "Mat3Tuple"):
+                _require_finite_array(value, name=item.name)
+        if self.duration_sec <= 0:
+            raise CinematographyError("duration_sec must be positive")
+        for pose in (self.pose, self.end_pose):
+            _validate_so3(pose.rotation, tol=1e-5)
+            _as_vec3(pose.translation, name="translation")
+        for trace in (self.start_axis_trace, self.end_axis_trace):
+            trace.validate_strict()
+        self.lens.__post_init__()
+        return self
+
+    @classmethod
+    def from_validated(cls, **kwargs: Any) -> Self:
+        """Construct validated geometry, not an untrusted audit record."""
+        return cls(**kwargs).validate_strict()
 
 
 #: Alias for per-shot camera plan carrying 180-degree reflection provenance.
@@ -2326,12 +2363,33 @@ def verify_minimum_jerk_calculus_invariants(num_steps: int = 1000) -> dict[str, 
     boundary_ok = bool(
         np.allclose(profile[[0, -1], :3], [[0, 0, 0], [1, 0, 0]], atol=1e-12, rtol=0)
     )
+    # Independent nine-point central differences on position alone. The
+    # stencil is exact through degree eight, avoiding cancellation/truncation
+    # tradeoffs in the third derivative of this quintic.
+    offsets = np.arange(-4.0, 5.0)
+    moments = np.vstack([offsets**power for power in range(9)])
+    h = 0.01
+    errors = []
+    for derivative in (1, 2, 3):
+        rhs = np.zeros(9)
+        rhs[derivative] = math.factorial(derivative)
+        weights = np.linalg.solve(moments, rhs) / h**derivative
+        error = 0.0
+        for tau in np.linspace(0.05, 0.95, min(n, 101)):
+            positions = np.array([minimum_jerk_scalar(float(tau + h * x))[0] for x in offsets])
+            numerical = float(weights @ positions)
+            error = max(error, abs(numerical - minimum_jerk_scalar(float(tau))[derivative]))
+        errors.append(error)
     return {
+        "derivative_1_max_error": errors[0],
+        "derivative_2_max_error": errors[1],
+        "derivative_3_max_error": errors[2],
         "boundary_ok": boundary_ok,
         "velocity_integral": velocity_integral,
         "action": action,
         "perturbed_action": perturbed_action,
         "verified": boundary_ok
+        and max(errors) < 1e-5
         and abs(velocity_integral - 1) < 1e-6
         and abs(action - 720) < 1e-3
         and perturbed_action > action,

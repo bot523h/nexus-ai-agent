@@ -98,3 +98,41 @@ def test_veritas_rejects_invalid_se3(matrix):
 
     with pytest.raises((ValueError, TypeError)):
         veritas.se3_log(matrix)
+
+
+def test_direct_pose_constructor_enforces_so3():
+    with pytest.raises(ValueError, match="orthogonality"):
+        solver.CameraPoseSE3(
+            rotation=((2.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 0.5)),
+            translation=(0.0, 0.0, 0.0),
+        )
+
+
+def test_strict_trace_factory_rejects_raw_audit_nan():
+    values = dict(
+        adjusted_position=(0.0, 0.0, 0.0),
+        original_position=(float("nan"), 0.0, 0.0),
+        original_axis_side=1,
+        enforced_axis_side=1,
+        original_signed_distance_m=1.0,
+        enforced_signed_distance_m=1.0,
+        was_axis_reflected=False,
+    )
+    raw = solver.AxisEnforcementTrace(**values)
+    with pytest.raises(ValueError):
+        raw.validate_strict()
+    with pytest.raises(ValueError):
+        solver.AxisEnforcementTrace.from_validated(**values)
+
+
+def test_independent_calculus_detects_inconsistent_derivative(monkeypatch):
+    original = solver.minimum_jerk_scalar
+
+    def altered(tau):
+        s, v, a, j = original(tau)
+        return s, v, a + 0.1, j
+
+    monkeypatch.setattr(solver, "minimum_jerk_scalar", altered)
+    result = solver.verify_minimum_jerk_calculus_invariants()
+    assert result["derivative_2_max_error"] > 0.09
+    assert not result["verified"]
