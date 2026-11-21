@@ -171,3 +171,87 @@ __all__ = [
     "latest_readings",
     "setpoints_from",
 ]
+
+
+# Independent cybernetic controller. Existing ledger/interoception classes above
+# remain unchanged: this class never modifies charter setpoints or the ledger.
+def _pid_finite(value: float, name: str) -> None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise TypeError(f"{name} must be numeric, not bool")
+    if not math.isfinite(value):
+        raise ValueError(f"{name} must be finite")
+
+
+@dataclass(frozen=True)
+class HomeostaticPIDConfig:
+    kp: float = 1.0
+    ki: float = 0.0
+    kd: float = 0.0
+    setpoint: float = 0.0
+    integral_limit: float = 10.0
+    tau_d: float = 0.1
+    output_min: float = -100.0
+    output_max: float = 100.0
+
+    def __post_init__(self) -> None:
+        for name, value in vars(self).items():
+            _pid_finite(value, name)
+        if min(self.kp, self.ki, self.kd, self.tau_d) < 0:
+            raise ValueError("PID gains and derivative time must be nonnegative")
+        if self.integral_limit <= 0 or self.output_min >= self.output_max:
+            raise ValueError("positive integral limit and ordered output bounds required")
+
+
+@dataclass(frozen=True)
+class HomeostaticPIDState:
+    error: float = 0.0
+    integral: float = 0.0
+    derivative: float = 0.0
+    lyapunov: float = 0.0
+
+    def __post_init__(self) -> None:
+        for name, value in vars(self).items():
+            _pid_finite(value, name)
+        if self.lyapunov < 0:
+            raise ValueError("Lyapunov energy must be nonnegative")
+
+
+@dataclass(frozen=True)
+class HomeostaticStepResult:
+    output: float
+    state: HomeostaticPIDState
+    delta_v: float
+    is_lyapunov_stable: bool
+
+
+class HomeostaticPIDController:
+    """Trapezoidal anti-windup PID with a measured energy-change indicator.
+
+    A nonincreasing candidate on a measured step is not a general proof of
+    stability for an unknown plant; the flag describes this step only.
+    """
+
+    def __init__(self, config: HomeostaticPIDConfig | None = None) -> None:
+        self.config = config or HomeostaticPIDConfig()
+        self.state = HomeostaticPIDState()
+
+    def step(self, measurement: float, dt: float) -> HomeostaticStepResult:
+        _pid_finite(measurement, "measurement")
+        _pid_finite(dt, "dt")
+        if dt <= 0:
+            raise ValueError("dt must be positive")
+        c, previous = self.config, self.state
+        error = c.setpoint - measurement
+        integral = max(
+            -c.integral_limit,
+            min(c.integral_limit, previous.integral + 0.5 * dt * (error + previous.error)),
+        )
+        derivative = (c.tau_d * previous.derivative + error - previous.error) / (c.tau_d + dt)
+        output = max(
+            c.output_min, min(c.output_max, c.kp * error + c.ki * integral + c.kd * derivative)
+        )
+        energy = 0.5 * max(c.kp, 1e-6) * error**2 + 0.5 * max(c.ki, 0.0) * integral**2
+        delta = energy - previous.lyapunov
+        state = HomeostaticPIDState(error, integral, derivative, energy)
+        self.state = state
+        return HomeostaticStepResult(output, state, delta, delta <= 1e-9 or energy <= 1e-9)
