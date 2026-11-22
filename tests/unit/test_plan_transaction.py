@@ -15,7 +15,7 @@ Proves the transactional contract of ``PlanTransaction`` on ``CommandBus``:
 from __future__ import annotations
 
 from dataclasses import FrozenInstanceError
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -36,6 +36,7 @@ from nexus_ai_agent.creative.studio.capabilities import (
 )
 from nexus_ai_agent.creative.studio.models import (
     Clip,
+    CommandExecutionError,
     CommandValidationError,
     MediaRef,
     PermissionLevel,
@@ -103,8 +104,14 @@ def _recording_step(
     compensate_fails: bool = False,
     with_compensate: bool = True,
 ) -> PlanStep:
+    # The log is an opaque observation sink, not a mutable callback parameter.
+    # Shared mutable behavioral state is deliberately rejected by preflight.
+    from types import SimpleNamespace
+
+    sink = SimpleNamespace(append=log.append)
+
     def execute() -> Any:
-        log.append(("exec", index))
+        sink.append(("exec", index))
         if fail:
             raise ValueError(f"step {index} boom")
         if unsuccessful:
@@ -112,7 +119,7 @@ def _recording_step(
         return f"result-{index}"
 
     def compensate(result: Any) -> None:
-        log.append(("comp", index))
+        sink.append(("comp", index))
         if compensate_fails:
             raise RuntimeError(f"compensation {index} boom")
 
@@ -148,7 +155,27 @@ class TestPlanTransactionSuccess:
         import hashlib
         import json
 
+        from nexus_ai_agent.creative.studio.bus import _callable_evidence
+
         for index, record in enumerate(tx.step_records):
+            step = tx.steps[index]
+            expected_input = {
+                "operation": f"op.step{index}",
+                "step_index": index,
+                "command": None,
+                "execute": _callable_evidence(step.execute),
+                "compensate": _callable_evidence(step.compensate),
+                "rollback_on_self_error": False,
+                "external_effects": False,
+            }
+            canonical_input = json.dumps(
+                expected_input,
+                ensure_ascii=True,
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            )
+            assert record.input_hash == hashlib.sha256(canonical_input.encode("utf-8")).hexdigest()
             canonical = json.dumps(
                 f"result-{index}",
                 ensure_ascii=True,
@@ -461,18 +488,18 @@ class TestPlanTransactionBusIntegration:
             bus.dispatch_plan({"plan_id": "x"})  # type: ignore[arg-type]
 
 
-def test_strict_compensation_preflight():
+def test_strict_compensation_preflight() -> None:
     with pytest.raises(ValueError, match="require compensation"):
         PlanTransaction(steps=(PlanStep("custom", execute=lambda: None),))
 
 
-def test_operation_mismatch():
+def test_operation_mismatch() -> None:
     with pytest.raises(ValueError, match="does not match"):
         PlanStep("wrong", command=make_command("test.plan_step", "mismatch"))
 
 
-def test_failed_plan_restores_bus_snapshot():
-    executed = []
+def test_failed_plan_restores_bus_snapshot() -> None:
+    executed: list[str] = []
     bus = CommandBus(state=make_project(), registry=_plan_test_registry(executed))
     before = (bus.project, bus.history, dict(bus._idempotency))
     plan = PlanTransaction(
@@ -487,8 +514,8 @@ def test_failed_plan_restores_bus_snapshot():
     assert not bus._executing
 
 
-def test_committed_plan_cache_and_undo():
-    executed = []
+def test_committed_plan_cache_and_undo() -> None:
+    executed: list[str] = []
     bus = CommandBus(state=make_project(), registry=_plan_test_registry(executed))
     step = PlanStep("test.plan_step", command=make_command("test.plan_step", "cached"))
     plan = PlanTransaction(plan_id="cache", steps=(step,))
@@ -503,7 +530,7 @@ def test_committed_plan_cache_and_undo():
     assert bus.history[-1].operation == "plan.rollback_committed"
 
 
-def test_callback_cannot_dispatch_reentrantly():
+def test_callback_cannot_dispatch_reentrantly() -> None:
     bus = CommandBus(state=make_project())
     plan = PlanTransaction(
         steps=(
@@ -525,7 +552,7 @@ def test_callback_cannot_dispatch_reentrantly():
     )
 
 
-def test_compensation_output_hash_is_actual_result():
+def test_compensation_output_hash_is_actual_result() -> None:
     from nexus_ai_agent.creative.studio.bus import _canonical_hash
 
     plan = PlanTransaction(
@@ -539,7 +566,7 @@ def test_compensation_output_hash_is_actual_result():
     assert plan.rollback_records[0].output_hash == _canonical_hash({"undone": 1})
 
 
-def test_rollback_committed_plan_detects_aba_revision_drift_after_intervening_do_and_undo():
+def test_rollback_committed_plan_detects_aba_revision_drift_after_intervening_do_and_undo() -> None:
     bus = CommandBus(state=make_project(), registry=_plan_test_registry([]))
     step = PlanStep("test.plan_step", command=make_command("test.plan_step", "aba1"))
     plan = PlanTransaction(steps=(step,))
@@ -553,8 +580,8 @@ def test_rollback_committed_plan_detects_aba_revision_drift_after_intervening_do
     assert (bus.project, bus.history) == before
 
 
-def test_plan_replay_ignores_transient_command_id_and_trace_id_differences():
-    executed = []
+def test_plan_replay_ignores_transient_command_id_and_trace_id_differences() -> None:
+    executed: list[str] = []
     bus = CommandBus(state=make_project(), registry=_plan_test_registry(executed))
     first = make_command("test.plan_step", "transport1")
     second = make_command("test.plan_step", "transport2")
@@ -572,12 +599,14 @@ def test_plan_replay_ignores_transient_command_id_and_trace_id_differences():
 
 
 @pytest.mark.parametrize("bad", ["", " ", "\n\t", None, 12])
-def test_empty_or_whitespace_plan_id_is_rejected(bad):
+def test_empty_or_whitespace_plan_id_is_rejected(bad: Any) -> None:
     with pytest.raises(ValueError, match="plan_id must be a non-empty string"):
         PlanTransaction(plan_id=bad, steps=())
 
 
-def test_committed_plan_cache_enforces_bounded_lru_capacity(monkeypatch):
+def test_committed_plan_cache_enforces_bounded_lru_capacity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from nexus_ai_agent.creative.studio import bus as module
 
     monkeypatch.setattr(module, "MAX_COMMITTED_PLANS", 2)
@@ -590,7 +619,7 @@ def test_committed_plan_cache_enforces_bounded_lru_capacity(monkeypatch):
     assert list(bus._plan_cache) == ["a", "c"]
 
 
-def test_failing_step_emergency_compensation_runs_first():
+def test_failing_step_emergency_compensation_runs_first() -> None:
     log = []
     plan = PlanTransaction(
         steps=(
@@ -608,10 +637,10 @@ def test_failing_step_emergency_compensation_runs_first():
     assert log == ["fail", "ok"]
 
 
-def test_rollback_cannot_interrupt_forward_execution():
-    plan = None
+def test_rollback_cannot_interrupt_forward_execution() -> None:
+    plan: PlanTransaction
 
-    def execute():
+    def execute() -> Any:
         with pytest.raises(PlanTransactionError):
             plan.rollback()
         return True
@@ -621,7 +650,7 @@ def test_rollback_cannot_interrupt_forward_execution():
     assert plan.state is PlanTransactionState.COMMITTED
 
 
-def test_attached_rollback_obeys_bus_execution_guard():
+def test_attached_rollback_obeys_bus_execution_guard() -> None:
     bus = CommandBus(state=make_project())
     plan = PlanTransaction(
         steps=(PlanStep("closure", execute=lambda: 1, compensate=lambda _: None),)
@@ -634,7 +663,7 @@ def test_attached_rollback_obeys_bus_execution_guard():
     assert plan.rollback().state is PlanTransactionState.ROLLED_BACK
 
 
-def test_replay_revalidates_current_permissions(monkeypatch):
+def test_replay_revalidates_current_permissions(monkeypatch: pytest.MonkeyPatch) -> None:
     from types import SimpleNamespace
 
     bus = CommandBus(state=make_project(), registry=_plan_test_registry([]))
@@ -651,14 +680,14 @@ def test_replay_revalidates_current_permissions(monkeypatch):
         PlanTransaction(plan_id="policy", steps=(step,)).commit(bus)
 
 
-def test_replay_revalidates_current_registry(monkeypatch):
+def test_replay_revalidates_current_registry(monkeypatch: pytest.MonkeyPatch) -> None:
     from nexus_ai_agent.creative.studio.models import CapabilityError
 
     bus = CommandBus(state=make_project(), registry=_plan_test_registry([]))
     step = PlanStep("test.plan_step", command=make_command("test.plan_step", "removed"))
     PlanTransaction(plan_id="removed", steps=(step,)).commit(bus)
 
-    def removed(_):
+    def removed(_: Any) -> Any:
         raise CapabilityError("operation removed")
 
     monkeypatch.setattr(bus.registry, "get_spec", removed)
@@ -666,14 +695,14 @@ def test_replay_revalidates_current_registry(monkeypatch):
         PlanTransaction(plan_id="removed", steps=(step,)).commit(bus)
 
 
-def test_step_fingerprint_binds_compensation_and_self_error_flag():
-    def execute():
+def test_step_fingerprint_binds_compensation_and_self_error_flag() -> None:
+    def execute() -> Any:
         return 1
 
-    def undo_one(_):
+    def undo_one(_: Any) -> Any:
         return 1
 
-    def undo_two(_):
+    def undo_two(_: Any) -> Any:
         return 2
 
     tx = PlanTransaction(steps=(PlanStep("step", execute=execute, compensate=undo_one),))
@@ -687,16 +716,17 @@ def test_step_fingerprint_binds_compensation_and_self_error_flag():
     )
 
 
-def test_lru_eviction_preserves_lightweight_redelivery(monkeypatch):
+def test_lru_eviction_preserves_lightweight_redelivery(monkeypatch: pytest.MonkeyPatch) -> None:
     from nexus_ai_agent.creative.studio import bus as module
 
     monkeypatch.setattr(module, "MAX_COMMITTED_PLANS", 1)
     monkeypatch.setattr(module, "MAX_PLAN_SUMMARIES", 2)
-    executed = []
+    executed: list[str] = []
     bus = CommandBus(state=make_project(), registry=_plan_test_registry(executed))
     step = PlanStep("test.plan_step", command=make_command("test.plan_step", "evicted"))
     first = PlanTransaction(plan_id="first", steps=(step,)).commit(bus)
     PlanTransaction(plan_id="second", steps=(step,)).commit(bus)
+    assert isinstance(first, PlanTransaction)
     assert first._snapshot is None
     revision = bus.state_revision
     replay = PlanTransaction(plan_id="first", steps=(step,)).commit(bus)
@@ -709,12 +739,13 @@ def test_lru_eviction_preserves_lightweight_redelivery(monkeypatch):
     assert len(bus._plan_cache) == 1
 
 
-def test_committed_undo_records_revision_without_reexecution():
-    executed = []
+def test_committed_undo_records_revision_without_reexecution() -> None:
+    executed: list[str] = []
     bus = CommandBus(state=make_project(), registry=_plan_test_registry(executed))
     step = PlanStep("test.plan_step", command=make_command("test.plan_step", "undo-revision"))
     plan = PlanTransaction(plan_id="undo-revision", steps=(step,)).commit(bus)
     committed = bus.state_revision
+    assert isinstance(plan, PlanTransaction)
     plan.rollback_committed_plan()
     assert bus.state_revision == committed + 1
     assert len(bus.history) == 2
@@ -724,7 +755,7 @@ def test_committed_undo_records_revision_without_reexecution():
     assert executed == ["step"]
 
 
-def test_plan_guard_error_paths_and_snapshot_absence(monkeypatch):
+def test_plan_guard_error_paths_and_snapshot_absence(monkeypatch: pytest.MonkeyPatch) -> None:
     from nexus_ai_agent.creative.studio import bus as module
 
     assert len(module._canonical_hash(float("nan"))) == 64
@@ -737,7 +768,7 @@ def test_plan_guard_error_paths_and_snapshot_absence(monkeypatch):
         plan.rollback_committed_plan()
     bus = CommandBus(state=make_project())
     bus._executing = True
-    with pytest.raises(module.CommandExecutionError, match="Re-entrant"):
+    with pytest.raises(CommandExecutionError, match="Re-entrant"):
         plan.commit(bus)
     bus._executing = False
     for state in (PlanTransactionState.EXECUTING, PlanTransactionState.ROLLING_BACK):
@@ -749,7 +780,7 @@ def test_plan_guard_error_paths_and_snapshot_absence(monkeypatch):
     with pytest.raises(PlanTransactionError, match="finished"):
         plan.commit(bus)
     bus._executing = True
-    with pytest.raises(module.CommandExecutionError, match="Re-entrant"):
+    with pytest.raises(CommandExecutionError, match="Re-entrant"):
         plan.rollback_committed_plan()
     bus._executing = False
     plan._snapshot = None
@@ -760,7 +791,7 @@ def test_plan_guard_error_paths_and_snapshot_absence(monkeypatch):
         plan.rollback_committed_plan()
 
 
-def test_replay_closure_plan_and_no_bus_command_error():
+def test_replay_closure_plan_and_no_bus_command_error() -> None:
     step = PlanStep("closure", execute=lambda: 1, compensate=lambda _: None)
     bus = CommandBus(state=make_project())
     plan = PlanTransaction(plan_id="closure-replay", steps=(step,))
@@ -772,8 +803,8 @@ def test_replay_closure_plan_and_no_bus_command_error():
     assert "no bus" in str(error.value.original_error)
 
 
-def test_committed_undo_compensation_failure_is_audited():
-    def fail(_):
+def test_committed_undo_compensation_failure_is_audited() -> None:
+    def fail(_: Any) -> Any:
         raise ValueError("emergency")
 
     bus = CommandBus(state=make_project())
@@ -786,10 +817,10 @@ def test_committed_undo_compensation_failure_is_audited():
     assert bus._plan_summaries[plan.plan_id][1].state is PlanTransactionState.ROLLBACK_FAILED
 
 
-def test_manual_pending_rollback_collects_compensation_errors():
+def test_manual_pending_rollback_collects_compensation_errors() -> None:
     from nexus_ai_agent.creative.studio.bus import PlanStepRecord
 
-    def fail(_):
+    def fail(_: Any) -> Any:
         raise ValueError("undo")
 
     plan = PlanTransaction(steps=(PlanStep("closure", execute=lambda: 1, compensate=fail),))
@@ -797,3 +828,130 @@ def test_manual_pending_rollback_collects_compensation_errors():
     with pytest.raises(PlanRollbackError):
         plan.rollback()
     assert plan.state is PlanTransactionState.ROLLBACK_FAILED
+
+
+@pytest.mark.parametrize("attached", [False, True])
+@pytest.mark.parametrize("change", ["execute", "compensate", "closure"])
+def test_mid_plan_callback_toctou_refuses_changed_step_and_compensates_prior(
+    attached: bool,
+    change: str,
+) -> None:
+    events: list[str] = []
+    state = {"value": 1}
+
+    class Callback:
+        def __init__(self) -> None:
+            self.value = 1
+
+        def __call__(self, *_: Any) -> int:
+            events.append("later-ran")
+            return self.value
+
+    execute, compensate = Callback(), Callback()
+
+    def later_closure() -> int:
+        events.append("later-ran")
+        return state["value"]
+
+    def mutate() -> int:
+        if change == "closure":
+            state["value"] = 99
+        else:
+            (execute if change == "execute" else compensate).value = 99
+        return 7
+
+    def undo(value: Any) -> None:
+        assert value == 7
+        events.append("prior-compensated")
+
+    # The second callback's output sink is opaque; its behavioral state is not.
+    # The closure case intentionally also detects the mutable shared event list.
+    later = PlanStep(
+        "later",
+        execute=later_closure if change == "closure" else execute,
+        compensate=compensate,
+        rollback_on_self_error=True,
+    )
+    plan = PlanTransaction(steps=(PlanStep("mutate", execute=mutate, compensate=undo), later))
+    bus = CommandBus(make_project()) if attached else None
+    with pytest.raises(PlanTransactionError) as error:
+        plan.commit(bus)
+    assert "TOCTOU" in str(error.value.original_error)
+    assert events == ["prior-compensated"]
+    assert plan.state is PlanTransactionState.ROLLED_BACK
+    assert [record.step_index for record in plan.rollback_records] == [0]
+    if bus is not None:
+        assert not bus._executing
+        assert bus.state_revision == 0
+
+
+@pytest.mark.parametrize("declaration", ["spec", "handler"])
+@pytest.mark.parametrize("compensated", [False, True])
+def test_command_external_effect_declaration_enforced_in_preflight(
+    declaration: str,
+    compensated: bool,
+) -> None:
+    from dataclasses import replace
+
+    executed: list[str] = []
+    registry = _plan_test_registry(executed)
+    spec = registry.get_spec("test.plan_step")
+    if declaration == "spec":
+        registry = CapabilityRegistry()
+        registry.register_operation("test", "plan", replace(spec, external_effects=True))
+    else:
+        cast(Any, spec.handler).external_effects = True
+    bus = CommandBus(make_project(), registry=registry)
+    from types import SimpleNamespace
+
+    events: list[str] = []
+    sink = SimpleNamespace(append=events.append)
+    step = PlanStep(
+        "test.plan_step",
+        command=make_command("test.plan_step", "external"),
+        compensate=(lambda _: sink.append("compensated")) if compensated else None,
+    )
+    plan = PlanTransaction(
+        steps=(
+            PlanStep("prior", execute=lambda: sink.append("prior"), compensate=lambda _: None),
+            step,
+        )
+    )
+    if compensated:
+        plan.commit(bus)
+        plan.rollback_committed_plan()
+        assert executed == ["step"]
+        assert events == ["prior", "compensated"]
+    else:
+        with pytest.raises(PlanTransactionError, match="external effects require"):
+            plan.commit(bus)
+        assert executed == []
+        assert events == []
+        assert plan.state is PlanTransactionState.PENDING
+        assert not bus._executing
+        assert bus.history == ()
+
+
+def test_inferred_external_effect_partial_failure_is_compensated() -> None:
+    from dataclasses import replace
+
+    executed: list[str] = []
+    registry = _plan_test_registry(executed)
+    spec = registry.get_spec("test.plan_fail")
+    registry = CapabilityRegistry()
+    registry.register_operation("test", "plan", replace(spec, external_effects=True))
+    bus = CommandBus(make_project(), registry=registry)
+    plan = PlanTransaction(
+        steps=(
+            PlanStep(
+                "test.plan_fail",
+                command=make_command("test.plan_fail", "partial"),
+                compensate=lambda _: executed.clear(),
+            ),
+        )
+    )
+    with pytest.raises(PlanTransactionError):
+        plan.commit(bus)
+    assert executed == []
+    assert plan.state is PlanTransactionState.ROLLED_BACK
+    assert len(plan.rollback_records) == 1

@@ -10,8 +10,12 @@ import copy
 import hashlib
 import inspect
 import runpy
+import subprocess
+import sys
 import textwrap
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
 
 import numpy as np
 import pytest
@@ -31,18 +35,19 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class Mutate(ast.NodeTransformer):
-    def __init__(self, kind):
+    def __init__(self, kind: str) -> None:
         self.kind = kind
         self.changed = 0
 
-    def visit(self, node):
+    def visit(self, node: Any) -> Any:
         result = self.change(node)
         if result is not None:
             self.changed += 1
             return ast.copy_location(result, node)
         return super().visit(node)
 
-    def change(self, node):
+    def change(self, node: Any) -> Any:
+        result: Any
         k = self.kind
         text = ast.unparse(node)
         if k == "M01" and isinstance(node, ast.Call) and text == "reversed(succeeded)":
@@ -109,7 +114,7 @@ class Mutate(ast.NodeTransformer):
         return None
 
 
-def _bus_witness(kind):
+def _bus_witness(kind: str) -> Any:
     helpers = runpy.run_path(str(ROOT / "tests/unit/test_plan_transaction.py"))
     if kind == "M04":
         helpers["test_failed_plan_restores_bus_snapshot"]()
@@ -119,17 +124,18 @@ def _bus_witness(kind):
             "test_rollback_committed_plan_detects_aba_revision_drift_after_intervening_do_and_undo"
         ]()
         return
-    order = []
+    order: list[tuple[str, int]] = []
+    sink = SimpleNamespace(append=order.append)
 
-    def step(index, fail=False, undo_fail=False):
-        def execute():
-            order.append(("execute", index))
+    def step(index: int, fail: bool = False, undo_fail: bool = False) -> Any:
+        def execute() -> Any:
+            sink.append(("execute", index))
             if fail:
                 raise ValueError("forward")
             return index
 
-        def compensate(_):
-            order.append(("undo", index))
+        def compensate(_: Any) -> Any:
+            sink.append(("undo", index))
             if undo_fail:
                 raise ValueError("undo")
 
@@ -151,7 +157,7 @@ def _bus_witness(kind):
     assert plan.state is expected
 
 
-def witness(kind):
+def witness(kind: str) -> Any:
     if kind in ("M01", "M02", "M03", "M04", "M05"):
         return _bus_witness(kind)
     if kind == "M06":
@@ -231,7 +237,27 @@ TARGETS = [
 
 
 @pytest.mark.parametrize("index", range(20), ids=[f"M{i:02d}_KILLED" for i in range(1, 21)])
-def test_wave2_ast_mutant_is_killed(index, monkeypatch):
+def test_wave2_ast_mutant_is_killed(index: int, monkeypatch: pytest.MonkeyPatch) -> None:
+    # These five targets are class objects captured at collection. A previous
+    # module reload/replacement can leave that class disconnected from the
+    # facade classes imported by the behavioral witnesses. A fresh interpreter
+    # binds the class, helpers and all direct-import consumers consistently;
+    # no extension module is ever removed from sys.modules.
+    if index < 5:
+        result = subprocess.run(
+            [sys.executable, str(Path(__file__).resolve()), str(index)],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert f"M{index + 1:02d} KILLED" in result.stdout
+        return
+    _assert_mutant_killed(index, monkeypatch)
+
+
+def _assert_mutant_killed(index: int, monkeypatch: pytest.MonkeyPatch) -> Any:
     kind = f"M{index + 1:02d}"
     owner, name = TARGETS[index]
     original = getattr(owner, name)
@@ -249,3 +275,26 @@ def test_wave2_ast_mutant_is_killed(index, monkeypatch):
     except (AssertionError, ValueError, TypeError, ZeroDivisionError, pytest.fail.Exception):
         return
     pytest.fail(f"{kind} SURVIVED")
+
+
+@pytest.mark.parametrize("index", range(5), ids=[f"M{i:02d}_STALE_ALIAS" for i in range(1, 6)])
+def test_bus_mutations_ignore_preexisting_cached_class_methods(
+    index: int,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Reproduce an anchorless cached class without changing any import table.
+
+    The old in-process harness would inspect this replacement and report
+    'mutation did not apply'. The child must test disk code and its witnesses,
+    not this parent's cached class or direct-import aliases.
+    """
+    owner, name = TARGETS[index]
+    monkeypatch.setattr(owner, name, lambda *args, **kwargs: None)
+    test_wave2_ast_mutant_is_killed(index, monkeypatch)
+
+
+if __name__ == "__main__":
+    selected = int(sys.argv[1])
+    with pytest.MonkeyPatch.context() as patch:
+        _assert_mutant_killed(selected, patch)
+    print(f"M{selected + 1:02d} KILLED")

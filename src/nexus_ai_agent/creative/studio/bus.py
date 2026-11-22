@@ -480,6 +480,9 @@ class PlanTransaction:
     _rollback_records: list[PlanRollbackRecord] = field(
         default_factory=list, init=False, repr=False
     )
+    _accepted_callbacks: tuple[str, ...] = field(default=(), init=False, repr=False)
+    _external_step_indices: set[int] = field(default_factory=set, init=False, repr=False)
+    _started_steps: set[int] = field(default_factory=set, init=False, repr=False)
     _replay_safe: bool = field(default=True, init=False, repr=False)
     _commit_epoch: int = field(default=-1, init=False, repr=False)
     _committed_hash: str = field(default="", repr=False)
@@ -506,6 +509,39 @@ class PlanTransaction:
     def rollback_records(self) -> tuple[PlanRollbackRecord, ...]:
         return tuple(self._rollback_records)
 
+    @staticmethod
+    def _callback_hash(step: PlanStep) -> str:
+        return _canonical_hash(
+            {
+                "execute": _callable_evidence(step.execute),
+                "compensate": _callable_evidence(step.compensate),
+            }
+        )
+
+    def _preflight(self, bus: CommandBus | None) -> None:
+        """Accept callback state and authoritative external-effect declarations.
+
+        This runs before any forward effect and, for attached plans, under the
+        same bus lock as execution. Opaque evidence cannot authorize replay.
+        """
+        self._external_step_indices.clear()
+        for index, step in enumerate(self.steps):
+            external = step.external_effects
+            if bus is not None and step.command is not None:
+                spec = bus.registry.get_spec(_parse(step.command).operation)
+                external = (
+                    external
+                    or spec.external_effects
+                    or bool(getattr(spec.handler, "external_effects", False))
+                )
+            if external:
+                if not callable(step.compensate):
+                    raise PlanTransactionError(
+                        f"plan step {index} external effects require callable compensation"
+                    )
+                self._external_step_indices.add(index)
+        self._accepted_callbacks = tuple(self._callback_hash(step) for step in self.steps)
+
     # -- execution ------------------------------------------------------- #
 
     def commit(self, bus: CommandBus | None = None) -> PlanTransaction | PlanResultSummary:
@@ -517,6 +553,7 @@ class PlanTransaction:
                 raise CommandExecutionError("Re-entrant execution is forbidden")
             if self.state is not PlanTransactionState.PENDING:
                 raise PlanTransactionError("transaction already finished")
+            self._preflight(bus)
             fingerprint = _canonical_hash(
                 [self._step_input_hash(i, step) for i, step in enumerate(self.steps)]
             )
@@ -597,6 +634,8 @@ class PlanTransaction:
                 "re-entrant commit is forbidden",
                 plan_id=self.plan_id,
             )
+        if not self._accepted_callbacks:
+            self._preflight(bus)
         self.state = PlanTransactionState.EXECUTING
         failed_index: int | None = None
         failed_error: BaseException | None = None
@@ -604,6 +643,11 @@ class PlanTransaction:
             input_hash = ""
             try:
                 input_hash = self._step_input_hash(index, step)
+                if self._callback_hash(step) != self._accepted_callbacks[index]:
+                    raise PlanTransactionError(
+                        f"plan step {index} callback state changed after preflight (TOCTOU)"
+                    )
+                self._started_steps.add(index)
                 result = self._execute_step(step, bus)
                 self._step_results[index] = result
                 output_hash = _canonical_hash(result)
@@ -823,9 +867,10 @@ class PlanTransaction:
             if r.status == "succeeded"
             or (
                 r.status == "failed"
+                and r.step_index in self._started_steps
                 and (
                     self.steps[r.step_index].rollback_on_self_error
-                    or self.steps[r.step_index].external_effects
+                    or r.step_index in self._external_step_indices
                 )
             )
         ]
