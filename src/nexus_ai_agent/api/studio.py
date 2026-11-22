@@ -15,13 +15,23 @@ from __future__ import annotations
 
 import os
 import re
+from collections.abc import Mapping
 from typing import Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import ValidationError
+from starlette.background import BackgroundTask
 
 from nexus_ai_agent.api.studio_session import authenticate_studio_caller
+from nexus_ai_agent.creative.artifact_download import (
+    AuthorizedDownload,
+    DownloadRefused,
+    artifact_rel_path_for_job,
+    authorize_artifact_download,
+    iter_authorized_chunks,
+)
+from nexus_ai_agent.creative.storyboard_jobs import StoryboardJobConfigError, studio_settings
 from nexus_ai_agent.product.studio_read import ProjectReadDenied, StudioReadService
 from nexus_ai_agent.product.studio_submit import (
     StudioRenderSubmission,
@@ -96,6 +106,90 @@ def get_studio_submission_service() -> StudioRenderSubmissionService:
         registry.queue,
         resolve_studio_facts_from_env(),
         revision_store=SqlProjectRevisionStore(),
+    )
+
+
+def _require_completed_and_verified(row: Mapping[str, object] | None) -> None:
+    """Fail-closed download gate: a COMPLETED row with a recorded PASS verdict.
+
+    Project ownership alone is not enough: a job that is still running, was
+    reopened or failed must never serve bytes, and neither may a row whose
+    durable result lacks the queue's independent ``artifact_verification``
+    PASS block — a handler's own "rendered" claim is never download authority.
+    """
+    if row is None:
+        return  # the unknown/foreign-project spelling is decided below (404)
+    status = str(row.get("canonical_status") or row.get("status") or "")
+    if status.lower() not in {"completed", "done"}:
+        raise DownloadRefused(409, "job_not_completed")
+    result = row.get("result")
+    block = result.get("artifact_verification") if isinstance(result, Mapping) else None
+    if not isinstance(block, Mapping):
+        raise DownloadRefused(409, "artifact_not_verified")
+    media_verdict = block.get("media_verdict")
+    # The single verification gate: the queue's independent block must record
+    # ``PASS`` — a ``media_verdict`` when it carries one, otherwise the block's
+    # own ``verified`` status. Anything else (VIOLATED, UNOBSERVED, missing)
+    # is refused: an unverified artifact is never downloadable.
+    if (media_verdict is not None and media_verdict != "PASS") or (
+        media_verdict is None and block.get("status") != "verified"
+    ):
+        raise DownloadRefused(409, "artifact_not_verified")
+
+
+@router.get(
+    "/projects/{project_id}/jobs/{job_id}/artifact",
+    dependencies=[Depends(require_studio_project)],
+)
+async def download_studio_artifact(project_id: str, job_id: str) -> StreamingResponse:
+    """Stream the verified MP4 of one authorized project job.
+
+    Passport first, bytes second: the artifact is authorized (passport seal,
+    PASS verdict, digest of the bytes on disk) before a single byte is sent. A
+    job of another project, or an unknown job, is a ``404``. The row must
+    moreover be ``COMPLETED`` with the queue's independent verification block
+    recording ``PASS`` — anything else is a ``409`` (``job_not_completed`` /
+    ``artifact_not_verified`` / ``artifact_not_ready``). Status codes come
+    from the authorization gate: ``403`` traversal/symlink/outside workspace,
+    ``404`` no artifact, ``409`` passport missing or stale, ``422`` malformed path.
+    """
+    if not job_id or len(job_id) > 128 or "/" in job_id or ".." in job_id:
+        raise HTTPException(status_code=400, detail="invalid job id")
+    from nexus_ai_agent.api.app import get_creative_registry
+
+    authorized: AuthorizedDownload | None = None
+    try:
+        row = await get_creative_registry().get_job(job_id)
+        rel = artifact_rel_path_for_job(row, project_id)
+        _require_completed_and_verified(row)
+        workspace, signing_key = studio_settings(os.environ)
+        authorized = authorize_artifact_download(workspace, rel, signing_key)
+        # The stream reads from the descriptor that was verified — the same
+        # inode and bytes (BytesVerified == BytesStreamed), never a second
+        # path-based open. Ownership of the descriptor moves into the stream
+        # AT CALL TIME (it is a plain iterator, not a generator).
+        stream = iter_authorized_chunks(authorized)
+    except DownloadRefused as exc:
+        if authorized is not None:
+            authorized.close()  # never leak the verified descriptor on refusal
+        raise HTTPException(status_code=exc.status_code, detail=exc.reason) from None
+    except StoryboardJobConfigError:
+        if authorized is not None:  # pragma: no cover - refused before opening
+            authorized.close()
+        raise HTTPException(status_code=503, detail="studio not configured") from None
+    except BaseException:
+        if authorized is not None:
+            authorized.close()  # belt and braces: nothing may outlive the request
+        raise
+    return StreamingResponse(
+        stream,
+        media_type="video/mp4",
+        background=BackgroundTask(stream.close),
+        headers={
+            "Content-Length": str(authorized.size_bytes),
+            "Content-Disposition": 'attachment; filename="storyboard.mp4"',
+            "X-Artifact-SHA256": authorized.sha256,
+        },
     )
 
 

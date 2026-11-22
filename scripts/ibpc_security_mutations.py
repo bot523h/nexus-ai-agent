@@ -129,9 +129,12 @@ MUTATIONS: tuple[Mutation, ...] = (
         IBPC / "approval.py",
         (
             (
-                "            if binding.state is ApprovalState.CONSUMED:\n"
-                '                raise ApprovalError("replay", "approval already consumed — execution is single-use")',
-                "            if False:\n                pass",
+                "                    or reservation[1] != identity.identity_digest()\n"
+                "                ):\n"
+                '                    raise ApprovalError("replay", "approval already consumed")',
+                "                    or reservation[1] != identity.identity_digest()\n"
+                "                ):\n"
+                "                    return binding",
             ),
         ),
         "a consumed approval must never be consumed again (replay refusal)",
