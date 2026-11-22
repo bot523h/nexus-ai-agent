@@ -58,8 +58,32 @@ from nexus_ai_agent.creative.science.physical_optics_radiometry import (
     wien_max_wavelength,
     wien_temperature,
 )
+from nexus_ai_agent.creative.science.symplectic_hamiltonian_pipeline import (
+    HamiltonianSpec,
+    ScientificPipelineReceipt,
+    UnifiedCinemaScienceInputs,
+    UnifiedCinemaSciencePipeline,
+    default_reference_inputs,
+    gradient_potential,
+    hamiltonian,
+    integrate_verlet,
+    jacobian_of_step,
+    stormer_verlet_step,
+    symplectic_volume_preservation_error,
+)
 
 __all__ = [
+    "HamiltonianSpec",
+    "ScientificPipelineReceipt",
+    "UnifiedCinemaScienceInputs",
+    "UnifiedCinemaSciencePipeline",
+    "default_reference_inputs",
+    "gradient_potential",
+    "hamiltonian",
+    "integrate_verlet",
+    "jacobian_of_step",
+    "stormer_verlet_step",
+    "symplectic_volume_preservation_error",
     "bures_wasserstein_2",
     "matrix_inverse",
     "matrix_square_root",
