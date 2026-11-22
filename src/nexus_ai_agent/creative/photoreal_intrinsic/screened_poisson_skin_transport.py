@@ -26,6 +26,8 @@ class ScreenedPoissonSkinTransport:
     @staticmethod
     def solve_single_scale(source: np.ndarray, diffusion_length: float) -> np.ndarray:
         """Solve one Neumann-DCT scale; ``diffusion_length`` uses image coordinates."""
+        _require_finite_array(source, name="source")
+        _require_finite_scalar(diffusion_length, name="diffusion_length")
         field = np.asarray(source, dtype=np.float64)
         if field.ndim != 2 or min(field.shape, default=0) < 2:
             raise ValueError("source must be a 2-D field with dimensions at least 2x2")
@@ -44,6 +46,8 @@ class ScreenedPoissonSkinTransport:
         self, irradiance: np.ndarray, radii: tuple[float, ...] = default_radii
     ) -> np.ndarray:
         """Return the three unweighted scale fields as ``(scale,H,W,C)`` float64."""
+        _require_finite_array(irradiance, name="irradiance")
+        _require_finite_array(radii, name="radii")
         source = np.asarray(irradiance, dtype=np.float64)
         if source.ndim != 3 or source.shape[-1] < 1:
             raise ValueError("source must have shape (H,W,C) with at least one channel")
@@ -75,6 +79,8 @@ class ScreenedPoissonSkinTransport:
 
     def transport(self, source: np.ndarray, radii: tuple[float, ...] = default_radii) -> np.ndarray:
         """Return the weighted three-scale transport; Neumann boundaries preserve mean flux."""
+        _require_finite_array(source, name="source")
+        _require_finite_array(radii, name="radii")
         components = self.transport_with_scale_components(source, radii)
         combined = components[0]
         combined *= self.weights[0]
@@ -92,6 +98,12 @@ class ScreenedPoissonSkinTransport:
         blood_oxygenation: float = 0.97,
         radii: tuple[float, ...] = default_radii,
     ) -> np.ndarray:
+        _require_finite_array(source, name="source")
+        _require_finite_scalar(heart_rate_bpm, name="heart_rate_bpm")
+        _require_finite_scalar(t, name="t")
+        _require_finite_scalar(sympathetic_flush, name="sympathetic_flush")
+        _require_finite_scalar(blood_oxygenation, name="blood_oxygenation")
+        _require_finite_array(radii, name="radii")
         validate_physiology(heart_rate_bpm, t, sympathetic_flush, blood_oxygenation)
         source_array = np.asarray(source)
         if source_array.ndim != 3 or source_array.shape[0] < 2 or source_array.shape[1] < 2:
@@ -113,6 +125,9 @@ class ScreenedPoissonSkinTransport:
 
     @staticmethod
     def spherical_harmonic(normals: np.ndarray, light: np.ndarray | None = None) -> np.ndarray:
+        _require_finite_array(normals, name="normals")
+        if light is not None:
+            _require_finite_array(light, name="light")
         n = np.asarray(normals, dtype=np.float32)
         if n.ndim < 1 or n.shape[-1] != 3:
             raise ValueError("normals must end in three components")
@@ -135,3 +150,65 @@ class ScreenedPoissonSkinTransport:
         return cast(
             np.ndarray, np.einsum("...i,ij,...j->...", homogeneous, light_matrix, homogeneous)
         )
+
+
+def _require_finite_scalar(value: object, *, name: str) -> None:
+    """Numeric inputs never silently coerce booleans or non-finite values."""
+    if isinstance(value, (bool, np.bool_)):
+        raise TypeError(f"{name} must not be bool")
+    if not isinstance(value, (int, float, np.integer, np.floating)):
+        raise TypeError(f"{name} must be numeric")
+    if not np.isfinite(value):
+        raise ValueError(f"{name} must be finite")
+
+
+def _require_finite_array(value: object, *, name: str) -> None:
+    """Validate before dtype conversion can erase boolean evidence."""
+    raw = value if isinstance(value, np.ndarray) else np.asarray(value, dtype=object)
+    if raw.dtype.kind == "b" or (
+        raw.dtype.kind == "O" and any(isinstance(item, (bool, np.bool_)) for item in raw.flat)
+    ):
+        raise TypeError(f"{name} must not contain bool")
+    try:
+        finite = np.all(np.isfinite(np.asarray(value, dtype=np.float64)))
+    except (ValueError, TypeError) as exc:
+        raise ValueError(f"{name} must be a one-dimensional sequence of numbers") from exc
+    if not finite:
+        raise ValueError(f"{name} must be finite")
+
+
+def solve_screened_poisson_neumann(source: np.ndarray, screening_lambda: float) -> np.ndarray:
+    """DCT-II solve of (I-lambda*Delta_N)u=f, with unit pixel spacing."""
+    _require_finite_scalar(screening_lambda, name="screening_lambda")
+    _require_finite_array(source, name="source")
+    if screening_lambda < 0:
+        raise ValueError("screening_lambda must be nonnegative")
+    field = np.asarray(source, dtype=np.float64)
+    if field.ndim != 2 or min(field.shape, default=0) < 2:
+        raise ValueError("source must be a 2-D field at least 2x2")
+    height, width = field.shape
+    mu_y = -4 * np.sin(np.pi * np.arange(height) / (2 * height)) ** 2
+    mu_x = -4 * np.sin(np.pi * np.arange(width) / (2 * width)) ** 2
+    denominator = 1 - screening_lambda * (mu_y[:, None] + mu_x[None, :])
+    return idctn(dctn(field) / denominator)
+
+
+def verify_screened_poisson_conservation(
+    source: np.ndarray,
+    screening_lambda: float,
+) -> dict[str, float | bool]:
+    """DC preservation and graph-Dirichlet dissipation for Neumann boundaries."""
+    solution = solve_screened_poisson_neumann(source, screening_lambda)
+    field = np.asarray(source, dtype=np.float64)
+
+    def energy(value: np.ndarray) -> float:
+        return float(np.sum(np.diff(value, axis=0) ** 2) + np.sum(np.diff(value, axis=1) ** 2))
+
+    dc_error = abs(float(solution.mean() - field.mean()))
+    before, after = energy(field), energy(solution)
+    return {
+        "dc_error": dc_error,
+        "source_energy": before,
+        "solution_energy": after,
+        "verified": dc_error < 1e-10 and after <= before + 1e-10,
+    }

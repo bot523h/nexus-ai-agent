@@ -150,6 +150,9 @@ class OperationSpec:
     #: the same composition-root opt-in explicitly. The flag is a property of the
     #: registered capability, never of a command, a queue row or a request.
     requires_opt_in: bool = False
+    #: Handler writes outside the bus snapshot: plans must supply compensation.
+    #: This registry declaration is authoritative even when PlanStep omits it.
+    external_effects: bool = False
 
     @property
     def effective_permissions(self) -> tuple[str, ...]:

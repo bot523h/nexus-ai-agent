@@ -54,6 +54,8 @@ class StereoImage:
 
 
 def _as_stereo_pair(left: np.ndarray, right: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    _require_finite_array(left, name="left")
+    _require_finite_array(right, name="right")
     left_data = np.asarray(left, dtype=np.float64).reshape(-1)
     right_data = np.asarray(right, dtype=np.float64).reshape(-1)
     if left_data.size != right_data.size:
@@ -69,18 +71,24 @@ def to_mid_side(left: np.ndarray, right: np.ndarray) -> tuple[np.ndarray, np.nda
     fold-down — which matters because a compressor or meter downstream should see
     the programme at its real level, not +6 dB.
     """
+    _require_finite_array(left, name="left")
+    _require_finite_array(right, name="right")
     left_data, right_data = _as_stereo_pair(left, right)
     return (left_data + right_data) / 2.0, (left_data - right_data) / 2.0
 
 
 def from_mid_side(mid: np.ndarray, side: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """Exact inverse: ``L = M + S``, ``R = M - S``."""
+    _require_finite_array(mid, name="mid")
+    _require_finite_array(side, name="side")
     mid_data, side_data = _as_stereo_pair(mid, side)
     return mid_data + side_data, mid_data - side_data
 
 
 def measure_stereo_image(left: np.ndarray, right: np.ndarray) -> StereoImage:
     """Split into M/S, prove the round trip, and report the side energy."""
+    _require_finite_array(left, name="left")
+    _require_finite_array(right, name="right")
     mid, side = to_mid_side(left, right)
     recovered_left, recovered_right = from_mid_side(mid, side)
     left_data, right_data = _as_stereo_pair(left, right)
@@ -117,6 +125,8 @@ class HpssResult:
 
 def _smoothness(values: np.ndarray, axis: int) -> np.ndarray:
     """Sum of absolute differences along ``axis`` — a cheap structure measure."""
+    _require_finite_array(values, name="values")
+    _require_finite_scalar(axis, name="axis")
     if values.shape[axis] < 2:
         return np.zeros_like(values)
     difference = np.diff(values, axis=axis)
@@ -141,6 +151,9 @@ def hpss_masks(
     two central values, which smooths differently and breaks the symmetry between
     the two passes.
     """
+    _require_finite_array(magnitude, name="magnitude")
+    _require_finite_scalar(kernel_harmonic, name="kernel_harmonic")
+    _require_finite_scalar(kernel_percussive, name="kernel_percussive")
     if magnitude.ndim != 2:
         raise ValueError("magnitude must be a (frames, bins) matrix")
     if magnitude.shape[0] < 2 or magnitude.shape[1] < 2:
@@ -195,6 +208,11 @@ def hpss_separate(
     of "vocal removal", which cannot actually remove a vocal.  It is reported in
     dB and never presented as a stem.
     """
+    _require_finite_array(samples, name="samples")
+    _require_finite_scalar(sample_rate, name="sample_rate")
+    _require_finite_scalar(frame_length, name="frame_length")
+    _require_finite_scalar(kernel_harmonic, name="kernel_harmonic")
+    _require_finite_scalar(kernel_percussive, name="kernel_percussive")
     from nexus_ai_agent.creative.audio_engine.wiener_denoise import (
         _frame_signal,
         _hop_for,
@@ -259,3 +277,24 @@ def hpss_separate(
         frame_length=frame_length,
         hop_length=hop,
     )
+
+
+def _require_finite_scalar(value: object, *, name: str) -> None:
+    """Numeric inputs never silently coerce booleans or non-finite values."""
+    if isinstance(value, (bool, np.bool_)):
+        raise TypeError(f"{name} must not be bool")
+    if not isinstance(value, (int, float, np.integer, np.floating)):
+        raise TypeError(f"{name} must be numeric")
+    if not np.isfinite(value):
+        raise ValueError(f"{name} must be finite")
+
+
+def _require_finite_array(value: object, *, name: str) -> None:
+    """Validate before dtype conversion can erase boolean evidence."""
+    raw = value if isinstance(value, np.ndarray) else np.asarray(value, dtype=object)
+    if raw.dtype.kind == "b" or (
+        raw.dtype.kind == "O" and any(isinstance(item, (bool, np.bool_)) for item in raw.flat)
+    ):
+        raise TypeError(f"{name} must not contain bool")
+    if not np.all(np.isfinite(np.asarray(value))):
+        raise ValueError(f"{name} must be finite")

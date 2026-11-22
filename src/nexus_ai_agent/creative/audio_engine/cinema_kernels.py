@@ -104,8 +104,11 @@ def _require_signal(samples: np.ndarray, *, label: str, sample_rate: int) -> np.
     into a NaN that propagates silently through the whole chain and only shows
     up as "the master sounds odd".
     """
+    _require_finite_array(samples, name="samples")
+    _require_finite_scalar(sample_rate, name="sample_rate")
     if not isinstance(sample_rate, (int, np.integer)) or sample_rate <= 0:
         raise KernelError(f"{label}: sample_rate must be a positive integer, got {sample_rate!r}")
+    _require_finite_array(samples, name="samples")
     data = np.asarray(samples, dtype=np.float64)
     if data.size == 0:
         raise KernelError(f"{label}: buffer is empty")
@@ -117,6 +120,8 @@ def _require_signal(samples: np.ndarray, *, label: str, sample_rate: int) -> np.
 
 
 def _require_finite(name: str, value: float, *, positive: bool = False) -> float:
+    _require_finite_scalar(value, name="value")
+    _require_finite_scalar(value, name=name)
     if not math.isfinite(value):
         raise KernelError(f"{name} must be finite, got {value!r}")
     if positive and value <= 0.0:
@@ -134,6 +139,7 @@ def _to_mono(data: np.ndarray) -> np.ndarray:
     The axis is chosen by which dimension is smaller, since a stereo pair is
     always narrower than the frame count for any real buffer.
     """
+    _require_finite_array(data, name="data")
     if data.ndim == 1:
         return data
     axis = 0 if data.shape[0] <= data.shape[1] else 1
@@ -192,6 +198,8 @@ class Hoa3RoomResult:
 
 def _factorial_ratio(degree: int, m: int) -> float:
     """``(l-m)! / (l+m)!`` as used by the SN3D normalisation."""
+    _require_finite_scalar(degree, name="degree")
+    _require_finite_scalar(m, name="m")
     return float(math.factorial(degree - m)) / float(math.factorial(degree + m))
 
 
@@ -210,6 +218,9 @@ def _assoc_legendre(degree: int, m: int, x: float) -> float:
     first version of this function reported ``Σ|Y_n|²`` falling from 4.0 at the
     horizon to 2.6 at 60° — a source that fades as it rises.
     """
+    _require_finite_scalar(degree, name="degree")
+    _require_finite_scalar(m, name="m")
+    _require_finite_scalar(x, name="x")
     absolute = abs(m)
     if absolute > degree:
         return 0.0
@@ -241,6 +252,9 @@ def _real_sh_basis(azimuth: float, elevation: float, *, order: int = 3) -> np.nd
     ``elevation`` is the angle above the horizontal plane. Returns ``(order+1)²``
     values, channel 0 being the omnidirectional ``1.0``.
     """
+    _require_finite_scalar(azimuth, name="azimuth")
+    _require_finite_scalar(elevation, name="elevation")
+    _require_finite_scalar(order, name="order")
     sin_el = math.sin(elevation)
     values: list[float] = []
     for degree in range(order + 1):
@@ -266,6 +280,7 @@ def _real_sh_basis(azimuth: float, elevation: float, *, order: int = 3) -> np.nd
 
 def acn_labels(order: int = 3) -> tuple[str, ...]:
     """``Y_l^m`` labels in ACN order — the convention, written down."""
+    _require_finite_scalar(order, name="order")
     names: list[str] = []
     for degree in range(order + 1):
         for m in range(-degree, degree + 1):
@@ -287,6 +302,10 @@ def _shoebox_early_reflections(
     a sign error in the mirroring produces a reflection that arrives *before*
     the direct sound and is inaudible on a waveform but wrong in space.
     """
+    _require_finite_array(room_dims_m, name="room_dims_m")
+    _require_finite_array(source_pos_m, name="source_pos_m")
+    _require_finite_array(listener_pos_m, name="listener_pos_m")
+    _require_finite_scalar(absorption, name="absorption")
     lx, ly, lz = room_dims_m
     sx, sy, sz = source_pos_m
     rx, ry, rz = listener_pos_m
@@ -311,6 +330,7 @@ def _shoebox_early_reflections(
 
 def _householder_matrix(channels: int) -> np.ndarray:
     """``H = I − (2/M)·11ᵀ`` — orthogonal *and* symmetric, hence unitary."""
+    _require_finite_scalar(channels, name="channels")
     if channels < 2:
         raise KernelError(f"FDN needs at least 2 delay lines, got {channels}")
     ones = np.ones((channels, channels), dtype=np.float64)
@@ -319,12 +339,18 @@ def _householder_matrix(channels: int) -> np.ndarray:
 
 def _sabine_t60(volume_m3: float, surface_m2: float, absorption: float) -> float:
     """Sabine reverberation time, ``T60 = 0.161 V / (S α)``."""
+    _require_finite_scalar(volume_m3, name="volume_m3")
+    _require_finite_scalar(surface_m2, name="surface_m2")
+    _require_finite_scalar(absorption, name="absorption")
     if volume_m3 <= 0.0 or surface_m2 <= 0.0:
         raise KernelError("room volume and surface area must be positive")
+    if not 0 < absorption < 1:
+        raise KernelError("absorption must lie in (0, 1)")
     return 0.161 * volume_m3 / (surface_m2 * absorption)
 
 
 def _is_prime(value: int) -> bool:
+    _require_finite_scalar(value, name="value")
     if value < 2:
         return False
     if value % 2 == 0:
@@ -348,6 +374,8 @@ def _prime_delays(count: int, base: int = 997) -> tuple[int, ...]:
     {0,1,2,...}`` gives 998 and 1000 (both even), and even a hand-picked coprime
     offset list produced 1009 and 1023, which share 11.
     """
+    _require_finite_scalar(count, name="count")
+    _require_finite_scalar(base, name="base")
     if count < 1:
         raise KernelError(f"need at least one delay line, got {count}")
     delays: list[int] = []
@@ -372,6 +400,10 @@ def _fdn_late_field(
     it per sample keeps the feedback exact, and the cost is acceptable for a
     kernel whose job is determinism rather than throughput.
     """
+    _require_finite_array(excitation, name="excitation")
+    _require_finite_scalar(sample_rate, name="sample_rate")
+    _require_finite_scalar(t60_s, name="t60_s")
+    _require_finite_scalar(channels, name="channels")
     delays = _prime_delays(channels)
     # Per-sample attenuation to reach -60 dB over T60, per delay line.
     attenuation = np.asarray(
@@ -403,10 +435,12 @@ def _woodworth_itd(azimuth: float) -> float:
     the median plane. The formula is monotone on that interval, so it never
     reports the same delay for two different directions.
     """
+    _require_finite_scalar(azimuth, name="azimuth")
     return (HEAD_RADIUS_M / SPEED_OF_SOUND_M_S) * (math.sin(azimuth) + azimuth)
 
 
 def _woodworth_itd_deg(azimuth_from_front: float) -> float:
+    _require_finite_scalar(azimuth_from_front, name="azimuth_from_front")
     clipped = max(-math.pi / 2, min(math.pi / 2, azimuth_from_front))
     return _woodworth_itd(clipped)
 
@@ -429,6 +463,13 @@ def synthesize_hoa3_binaural_room(
     kernel reports the azimuth it used so a caller that models head rotation can
     verify the value it got.
     """
+    _require_finite_array(mono, name="mono")
+    _require_finite_scalar(sample_rate, name="sample_rate")
+    _require_finite_array(room_dims_m, name="room_dims_m")
+    _require_finite_array(source_pos_m, name="source_pos_m")
+    _require_finite_array(listener_pos_m, name="listener_pos_m")
+    _require_finite_scalar(absorption, name="absorption")
+    _require_finite_scalar(fdn_channels, name="fdn_channels")
     data = _require_signal(mono, label="hoa3", sample_rate=sample_rate)
     if data.ndim != 1:
         raise KernelError("hoa3: the source must be mono (1-D)")
@@ -594,6 +635,7 @@ def _robust_sigma(values: np.ndarray) -> float:
     used to find. A plain ``std`` is inflated by the clicks themselves and stops
     detecting them — the threshold rises with the thing it is meant to catch.
     """
+    _require_finite_array(values, name="values")
     if values.size == 0:
         return 0.0
     median = float(np.median(values))
@@ -602,6 +644,8 @@ def _robust_sigma(values: np.ndarray) -> float:
 
 def _detect_click_spans(mono: np.ndarray, *, threshold: float) -> tuple[tuple[int, int], ...]:
     """Contiguous spans where ``|Δ²x| > threshold · σ_MAD``."""
+    _require_finite_array(mono, name="mono")
+    _require_finite_scalar(threshold, name="threshold")
     if mono.size < 3:
         return ()
     second = np.diff(mono, n=2)
@@ -660,6 +704,7 @@ def _interpolate_spans(
     mono: np.ndarray, spans: Sequence[tuple[int, int]]
 ) -> tuple[np.ndarray, int]:
     """Replace each span by a straight line between its clean neighbours."""
+    _require_finite_array(mono, name="mono")
     restored = mono.copy()
     applied = 0
     for start, end in spans:
@@ -683,6 +728,8 @@ def _declip(mono: np.ndarray, *, tau: float) -> tuple[np.ndarray, tuple[int, ...
     sample back to its measured value. Clamping is what makes this a projection
     rather than a filter: the signal we *know* must not change, does not.
     """
+    _require_finite_array(mono, name="mono")
+    _require_finite_scalar(tau, name="tau")
     magnitude = np.abs(mono)
     clipped = magnitude >= tau
     indices = tuple(int(index) for index in np.flatnonzero(clipped))
@@ -725,6 +772,9 @@ def _stft(mono: np.ndarray, *, size: int, hop: int) -> np.ndarray:
     and the inverse transform then returns a shorter signal than it was given —
     which silently breaks every length-dependent comparison downstream.
     """
+    _require_finite_array(mono, name="mono")
+    _require_finite_scalar(size, name="size")
+    _require_finite_scalar(hop, name="hop")
     window = np.hanning(size)
     if mono.size < size:
         padded = np.concatenate((mono, np.zeros(size - mono.size)))
@@ -754,6 +804,12 @@ def _istft(
     recover what its own window zeroed, and the alternative (a flatter window)
     trades a correct interior for a correct edge.
     """
+    _require_finite_array(spectra, name="spectra")
+    _require_finite_scalar(size, name="size")
+    _require_finite_scalar(hop, name="hop")
+    _require_finite_scalar(length, name="length")
+    if original is not None:
+        _require_finite_array(original, name="original")
     window = np.hanning(size)
     frames = spectra.shape[0]
     time = np.fft.irfft(spectra, n=size, axis=1) * window
@@ -794,6 +850,8 @@ def _noise_psd(power: np.ndarray, *, bias: float = 1.0) -> np.ndarray:
     approximation. It is chosen because it degrades toward "leave the signal
     alone" rather than toward "delete the signal".
     """
+    _require_finite_array(power, name="power")
+    _require_finite_scalar(bias, name="bias")
     frames, bins = power.shape
     alpha = 0.85
     smoothed = np.empty_like(power)
@@ -842,6 +900,9 @@ def _wiener_gain(magnitude: np.ndarray, *, smoothing: float, floor: float) -> np
     gain produced. Feeding the emitted power back adds a second feedback path
     and the loop winds up.
     """
+    _require_finite_array(magnitude, name="magnitude")
+    _require_finite_scalar(smoothing, name="smoothing")
+    _require_finite_scalar(floor, name="floor")
     frames, bins = magnitude.shape
     gain = np.ones((frames, bins), dtype=np.float64)
     previous_gain = np.ones(bins, dtype=np.float64)
@@ -869,6 +930,8 @@ def _wiener_gain(magnitude: np.ndarray, *, smoothing: float, floor: float) -> np
 
 def _snr_db(reference: np.ndarray, estimate: np.ndarray) -> float:
     """SNR of ``estimate`` against ``reference``; 0 dB when the error dominates."""
+    _require_finite_array(reference, name="reference")
+    _require_finite_array(estimate, name="estimate")
     if reference.size != estimate.size or reference.size == 0:
         return 0.0
     signal = float(np.sum(reference**2))
@@ -899,6 +962,16 @@ def restore_spectral_audio(
     restoration whose estimate is tuned against ground truth is not a
     restoration, it is a fit.
     """
+    _require_finite_array(noisy, name="noisy")
+    _require_finite_scalar(sample_rate, name="sample_rate")
+    if reference is not None:
+        _require_finite_array(reference, name="reference")
+    _require_finite_scalar(click_threshold, name="click_threshold")
+    _require_finite_scalar(clip_threshold, name="clip_threshold")
+    _require_finite_scalar(smoothing, name="smoothing")
+    _require_finite_scalar(gain_floor, name="gain_floor")
+    _require_finite_scalar(frame_size, name="frame_size")
+    _require_finite_scalar(hop, name="hop")
     data = _require_signal(noisy, label="restore", sample_rate=sample_rate)
     mono = _to_mono(data)
     if frame_size < 16 or frame_size & (frame_size - 1):
@@ -1087,6 +1160,8 @@ def hertzian_amplitude(effective_mass_kg: float, rel_velocity_m_s: float) -> flo
     instead makes a light fast tap sound as loud as a heavy slow one, which is
     the single most common way synthetic impacts read as fake.
     """
+    _require_finite_scalar(effective_mass_kg, name="effective_mass_kg")
+    _require_finite_scalar(rel_velocity_m_s, name="rel_velocity_m_s")
     if effective_mass_kg <= 0.0 or rel_velocity_m_s <= 0.0:
         raise KernelError("Hertzian amplitude needs positive mass and velocity")
     return float((effective_mass_kg**0.6) * (rel_velocity_m_s**1.2))
@@ -1095,6 +1170,9 @@ def hertzian_amplitude(effective_mass_kg: float, rel_velocity_m_s: float) -> flo
 def _modal_event(
     *, modes: MaterialModes, amplitude: float, sample_rate: int, length: int
 ) -> np.ndarray:
+    _require_finite_scalar(amplitude, name="amplitude")
+    _require_finite_scalar(sample_rate, name="sample_rate")
+    _require_finite_scalar(length, name="length")
     time = np.arange(length, dtype=np.float64) / sample_rate
     out = np.zeros(length, dtype=np.float64)
     for partial, decay, weight in zip(
@@ -1129,6 +1207,9 @@ def _friction_noise(*, sample_rate: int, duration_samples: int, seed: int = 2026
     foley render that differs between two runs cannot be fingerprinted, and an
     artifact that cannot be fingerprinted cannot be audited.
     """
+    _require_finite_scalar(sample_rate, name="sample_rate")
+    _require_finite_scalar(duration_samples, name="duration_samples")
+    _require_finite_scalar(seed, name="seed")
     if duration_samples <= 0:
         return np.zeros(0, dtype=np.float64)
     generator = np.random.default_rng(seed)
@@ -1176,6 +1257,9 @@ def synthesize_modal_foley(
     own onset error: the peak of the single-event buffer is unambiguous, while
     the peak of the mix belongs to whichever event happened to be loudest.
     """
+    _require_finite_scalar(duration_sec, name="duration_sec")
+    _require_finite_scalar(sample_rate, name="sample_rate")
+    _require_finite_scalar(master_gain, name="master_gain")
     if sample_rate <= 0:
         raise KernelError(f"sample_rate must be positive, got {sample_rate!r}")
     _require_finite("duration_sec", duration_sec, positive=True)
@@ -1275,6 +1359,7 @@ def zwicker_bark_hz(frequency_hz: float) -> float:
     produces at low frequency (where speech intelligibility lives) are the ones
     the masking model needs to be right about.
     """
+    _require_finite_scalar(frequency_hz, name="frequency_hz")
     if not math.isfinite(frequency_hz):
         raise KernelError(f"frequency_hz must be finite, got {frequency_hz!r}")
     if frequency_hz < 0.0:
@@ -1284,6 +1369,8 @@ def zwicker_bark_hz(frequency_hz: float) -> float:
 
 def bark_band_edges(sample_rate: int, *, bands: int = BARK_BANDS) -> tuple[float, ...]:
     """The Bark values of the 25 band edges, uniformly spaced in Bark."""
+    _require_finite_scalar(sample_rate, name="sample_rate")
+    _require_finite_scalar(bands, name="bands")
     del sample_rate  # the scale itself is rate-independent
     top = 24.0
     return tuple(band * top / bands for band in range(bands + 1))
@@ -1296,6 +1383,8 @@ def bark_edges_hz(sample_rate: int, *, bands: int = BARK_BANDS) -> tuple[float, 
     clean algebraic inverse, and an approximation would put the band edges in
     slightly different places each time somebody re-derived it.
     """
+    _require_finite_scalar(sample_rate, name="sample_rate")
+    _require_finite_scalar(bands, name="bands")
     edges = bark_band_edges(sample_rate, bands=bands)
     nyquist = sample_rate / 2.0
     result: list[float] = []
@@ -1322,6 +1411,7 @@ def _spreading_gain(delta_bark: float) -> float:
     spreads energy toward the apex. A symmetric kernel under-predicts upward
     masking and the mastering stage then boosts exactly what is already masked.
     """
+    _require_finite_scalar(delta_bark, name="delta_bark")
     if delta_bark >= 0.0:
         return -12.0 * delta_bark
     return -27.0 * abs(delta_bark)
@@ -1331,6 +1421,9 @@ def _bark_powers(
     mono: np.ndarray, *, sample_rate: int, bands: int = BARK_BANDS
 ) -> tuple[np.ndarray, np.ndarray]:
     """Per-band power and the band-edge frequencies for ``mono``."""
+    _require_finite_array(mono, name="mono")
+    _require_finite_scalar(sample_rate, name="sample_rate")
+    _require_finite_scalar(bands, name="bands")
     size = 2048
     hop = size // 2
     if mono.size < size:
@@ -1358,6 +1451,7 @@ def _bark_powers(
 
 def _masking_threshold(band_power: np.ndarray) -> np.ndarray:
     """Simultaneous masking threshold across bands, in linear power."""
+    _require_finite_array(band_power, name="band_power")
     bands = band_power.size
     threshold = np.full(bands, 1e-20, dtype=np.float64)
     for source in range(bands):
@@ -1410,6 +1504,8 @@ SPEECH_BANDS: Final[tuple[int, ...]] = tuple(range(4, 17))
 
 
 def _lufs_of(mono: np.ndarray, sample_rate: int) -> float:
+    _require_finite_array(mono, name="mono")
+    _require_finite_scalar(sample_rate, name="sample_rate")
     blocks = _block_mean_squares(
         mono.reshape(1, -1), sample_rate=sample_rate, block_seconds=0.4, hop_seconds=0.1
     )
@@ -1435,6 +1531,10 @@ def _apply_true_peak_limiter(
     at all. A real limiter reduces only where the envelope exceeds the ceiling,
     holds the reduction for the look-ahead, and releases smoothly.
     """
+    _require_finite_array(stereo, name="stereo")
+    _require_finite_scalar(sample_rate, name="sample_rate")
+    _require_finite_scalar(ceiling_dbtp, name="ceiling_dbtp")
+    _require_finite_scalar(oversample, name="oversample")
     ceiling_linear = 10.0 ** (ceiling_dbtp / 20.0)
     peak = true_peak_dbtp(stereo, oversample=oversample)
     if peak is None:
@@ -1519,6 +1619,10 @@ def _bark_presence_eq(
     "clearer dialogue" pass ends up with sibilance that masks more than it
     clarifies.
     """
+    _require_finite_array(mono, name="mono")
+    _require_finite_scalar(sample_rate, name="sample_rate")
+    _require_finite_scalar(target_smr_db, name="target_smr_db")
+    _require_finite_scalar(max_boost_db, name="max_boost_db")
     band_power, edges_hz = _bark_powers(mono, sample_rate=sample_rate)
     threshold = _masking_threshold(band_power)
     floor = np.maximum(band_power, 1e-20)
@@ -1586,6 +1690,13 @@ def master_bark_psychoacoustic(
     destroying the peaks the limiter just shaped; normalising after limiting is
     the only order where the delivered peak ceiling still holds.
     """
+    _require_finite_array(stereo, name="stereo")
+    _require_finite_scalar(sample_rate, name="sample_rate")
+    _require_finite_scalar(target_lufs, name="target_lufs")
+    _require_finite_scalar(max_true_peak_dbfs, name="max_true_peak_dbfs")
+    _require_finite_scalar(target_smr_db, name="target_smr_db")
+    _require_finite_scalar(max_boost_db, name="max_boost_db")
+    _require_finite_scalar(allow_lufs_tolerance_lu, name="allow_lufs_tolerance_lu")
     data = _require_signal(stereo, label="master", sample_rate=sample_rate)
     if data.ndim == 1:
         data = np.stack((data, data), axis=-1)
@@ -1652,3 +1763,33 @@ def master_bark_psychoacoustic(
         limiter_gr_db=float(gr),
         presets_applied=presets,
     )
+
+
+def _require_finite_scalar(value: object, *, name: str) -> None:
+    """Numeric inputs never silently coerce booleans or non-finite values."""
+    if isinstance(value, (bool, np.bool_)):
+        raise TypeError(f"{name} must not be bool")
+    if not isinstance(value, (int, float, np.integer, np.floating)):
+        raise TypeError(f"{name} must be numeric")
+    if not np.isfinite(value):
+        raise KernelError(f"{name} contains non-finite values")
+
+
+def _require_finite_array(value: object, *, name: str) -> None:
+    """Validate before dtype conversion can erase boolean evidence."""
+    raw = value if isinstance(value, np.ndarray) else np.asarray(value, dtype=object)
+    if raw.dtype.kind == "b" or (
+        raw.dtype.kind == "O" and any(isinstance(item, (bool, np.bool_)) for item in raw.flat)
+    ):
+        raise TypeError(f"{name} must not contain bool")
+    if not np.all(np.isfinite(np.asarray(value))):
+        raise KernelError(f"{name} contains non-finite values")
+
+
+def eyring_t60(volume_m3: float, surface_m2: float, alpha_bar: float) -> float:
+    """Eyring decay time; the logarithmic endpoint is excluded."""
+    for name, value in (("volume", volume_m3), ("surface", surface_m2), ("alpha", alpha_bar)):
+        _require_finite_scalar(value, name=name)
+    if volume_m3 <= 0 or surface_m2 <= 0 or not 0 < alpha_bar < 1:
+        raise KernelError("positive room geometry and absorption in (0, 1) required")
+    return 0.161 * volume_m3 / (-surface_m2 * math.log1p(-alpha_bar))

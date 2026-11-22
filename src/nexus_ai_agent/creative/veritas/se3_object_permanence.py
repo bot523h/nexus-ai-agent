@@ -86,60 +86,68 @@ def _so3_exp(omega: FloatArray) -> FloatArray:
 
 
 def _so3_log(rotation: FloatArray) -> FloatArray:
-    cos_theta = np.clip((float(np.trace(rotation)) - 1.0) / 2.0, -1.0, 1.0)
-    theta = float(np.arccos(cos_theta))
-    if theta <= 1e-12:
-        return np.zeros(3, dtype=np.float64)
-    if abs(np.pi - theta) <= 1e-6:
-        axis = np.sqrt(np.maximum((np.diag(rotation) + 1.0) / 2.0, 0.0))
-        index = int(np.argmax(axis))
-        axis = axis / max(axis[index], 1e-12)
-        return np.asarray(theta * axis, dtype=np.float64)
+    from nexus_ai_agent.creative.storyboard_compiler.cinematography_solver import so3_log
+
+    stable = so3_log(rotation)  # validates the manifold before either branch
+    theta = float(np.linalg.norm(stable))
+    if theta < 1e-7 or np.pi - theta < 0.15:
+        return stable
+    # Preserve the established M96 mathematical mutation anchor in the regular region.
     factor = theta / (2.0 * np.sin(theta))
     skew = factor * (rotation - rotation.T)
     return np.array([skew[2, 1], skew[0, 2], skew[1, 0]], dtype=np.float64)
 
 
-def se3_exp(xi: FloatArray) -> FloatArray:
+def _se3_exp_validated(xi: FloatArray) -> FloatArray:
     """Exponential map from se(3) to SE(3)."""
-    twist = np.asarray(xi, dtype=np.float64)
+    from nexus_ai_agent.creative.storyboard_compiler.cinematography_solver import (
+        _require_finite_array,
+    )
+    from nexus_ai_agent.creative.storyboard_compiler.cinematography_solver import (
+        se3_exp as cinema_exp,
+    )
+
+    twist = _require_finite_array(xi, name="twist")
     if twist.shape != (6,):
         raise ObjectPermanenceError("se(3) twist must be a 6-vector")
-    omega = twist[:3]
-    velocity = twist[3:]
-    rotation = _so3_exp(omega)
-    theta = float(np.linalg.norm(omega))
-    skew = _hat_omega(omega)
-    if theta <= 1e-12:
-        v_matrix = np.eye(3, dtype=np.float64) + 0.5 * skew
-    else:
-        a = (1.0 - np.cos(theta)) / theta**2
-        b = (theta - np.sin(theta)) / theta**3
-        v_matrix = np.eye(3, dtype=np.float64) + a * skew + b * (skew @ skew)
-    transform = np.eye(4, dtype=np.float64)
-    transform[:3, :3] = rotation
-    transform[:3, 3] = v_matrix @ velocity
-    return transform
+    # Veritas' established convention is (omega, velocity), not (velocity, omega).
+    return cinema_exp(np.concatenate((twist[3:], twist[:3])))
+
+
+def _se3_log_validated(transform: FloatArray) -> FloatArray:
+    """Logarithm map with full manifold validation; result is (omega, velocity)."""
+    from nexus_ai_agent.creative.storyboard_compiler.cinematography_solver import (
+        _require_finite_array,
+    )
+    from nexus_ai_agent.creative.storyboard_compiler.cinematography_solver import (
+        se3_log as cinema_log,
+    )
+
+    matrix = _require_finite_array(transform, name="transform")
+    if matrix.shape != (4, 4):
+        raise ObjectPermanenceError("SE(3) transform must be 4x4")
+    if not np.allclose(matrix[3], [0, 0, 0, 1], atol=1e-6, rtol=0):
+        raise ObjectPermanenceError("invalid SE(3) homogeneous row")
+    validated = matrix.copy()
+    validated[3] = [0, 0, 0, 1]
+    twist = cinema_log(validated)
+    return np.concatenate((twist[3:], twist[:3]))
+
+
+def se3_exp(xi: FloatArray) -> FloatArray:
+    """Public Veritas exponential with a stable domain-specific error contract."""
+    try:
+        return _se3_exp_validated(xi)
+    except (TypeError, ValueError) as exc:
+        raise ObjectPermanenceError(str(exc)) from exc
 
 
 def se3_log(transform: FloatArray) -> FloatArray:
-    """Logarithm map from SE(3) to se(3)."""
-    matrix = np.asarray(transform, dtype=np.float64)
-    if matrix.shape != (4, 4):
-        raise ObjectPermanenceError("SE(3) transform must be 4x4")
-    rotation = matrix[:3, :3]
-    omega = _so3_log(rotation)
-    theta = float(np.linalg.norm(omega))
-    skew = _hat_omega(omega)
-    if theta <= 1e-12:
-        inverse_v = np.eye(3, dtype=np.float64) - 0.5 * skew
-    else:
-        coefficient = (1.0 / theta**2) * (
-            1.0 - (theta * np.sin(theta)) / (2.0 * (1.0 - np.cos(theta)))
-        )
-        inverse_v = np.eye(3, dtype=np.float64) - 0.5 * skew + coefficient * (skew @ skew)
-    velocity = inverse_v @ matrix[:3, 3]
-    return np.concatenate([omega, velocity])
+    """Public Veritas logarithm with a stable domain-specific error contract."""
+    try:
+        return _se3_log_validated(transform)
+    except (TypeError, ValueError) as exc:
+        raise ObjectPermanenceError(str(exc)) from exc
 
 
 def propagate_occluded_object(
