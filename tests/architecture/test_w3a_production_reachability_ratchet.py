@@ -33,6 +33,8 @@ ORPHAN_CEILING: dict[str, frozenset[str]] = {
             "nexus_ai_agent.creative.audio_engine.av_subframe_foley_sync",
             "nexus_ai_agent.creative.audio_engine.cinema_kernels",
             "nexus_ai_agent.creative.audio_engine.forensic_qc",
+            # Merged from PR #353; still an explicit orphan until production wiring lands.
+            "nexus_ai_agent.creative.audio_engine.master_cinema_pipeline",
             "nexus_ai_agent.creative.audio_engine.psychoacoustic_bark_mastering",
             "nexus_ai_agent.creative.audio_engine.spectral_voice_restoration",
             "nexus_ai_agent.creative.audio_engine.spine_lineage",
@@ -188,6 +190,8 @@ def test_worker_ast_registers_storyboard_render_job() -> None:
 def test_reachability_inventory_is_measurable_and_roots_are_not_stubs() -> None:
     modules, graph = _import_graph()
     reachable = _production_reachable(graph)
-    assert len(modules) >= 600
-    assert len(reachable) >= 409
+    # Post-#353 census on base main 1c1cb293: pin the measured tree so future
+    # module additions trigger an explicit inventory review, not silent drift.
+    assert len(modules) == 601
+    assert len(reachable) == 409
     assert all(graph[root] for root in PRODUCTION_ROOTS)

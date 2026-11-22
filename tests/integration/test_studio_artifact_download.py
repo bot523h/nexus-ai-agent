@@ -130,6 +130,12 @@ def _row(result: Mapping[str, object] | None, project: str = PROJECT_ID) -> dict
     return row
 
 
+def _result_dict(rendered: Mapping[str, object]) -> dict[str, object]:
+    result = rendered.get("result")
+    assert isinstance(result, Mapping)
+    return dict(result)
+
+
 def _url(job_id: str = JOB_ID) -> str:
     return f"/api/studio/projects/{PROJECT_ID}/jobs/{job_id}/artifact"
 
@@ -154,10 +160,89 @@ def test_authorized_download_streams_the_verified_bytes(
     assert "attachment" in response.headers["content-disposition"]
 
 
+def test_real_verified_descriptor_streams_and_background_closes_fd(
+    rendered: dict[str, object], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """REAL-DISK: exercise the route, passport verifier, stream, and descriptor lease."""
+    import json
+    import os
+
+    from nexus_ai_agent.creative.artifact_passport import PASSPORT_SUFFIX
+
+    result = rendered["result"]
+    assert isinstance(result, dict)
+    workspace = rendered["workspace"]
+    assert isinstance(workspace, Path)
+    mp4 = workspace / str(result["output_rel_path"])
+    passport_path = mp4.with_name(f"{mp4.stem}{PASSPORT_SUFFIX}")
+    passport = json.loads(passport_path.read_text(encoding="utf-8"))
+    assert passport["passport_version"] == 2
+    assert len(passport["hmac_sha256"]) == 64
+    assert durable_approval_ledger_path(workspace).is_file()
+    registry = FakeRegistry({JOB_ID: _row(result)})
+    monkeypatch.setattr("nexus_ai_agent.api.app.get_creative_registry", lambda: registry)
+
+    fd_dir = Path("/proc/self/fd")
+    before = set(fd_dir.iterdir())
+    response = asyncio.run(studio_api.download_studio_artifact(PROJECT_ID, JOB_ID))
+    opened_for_artifact = [
+        candidate
+        for candidate in set(fd_dir.iterdir()) - before
+        if candidate.is_symlink() and candidate.resolve() == mp4.resolve()
+    ]
+    assert len(opened_for_artifact) == 1
+    fd = int(opened_for_artifact[0].name)
+    assert response.headers["x-artifact-sha256"] == hashlib.sha256(mp4.read_bytes()).hexdigest()
+
+    # Consume exactly Content-Length bytes without requesting the EOF sentinel:
+    # the descriptor remains open until the response's BackgroundTask runs.
+    async def read_exact_response_body() -> bytes:
+        remaining = int(response.headers["content-length"])
+        chunks: list[bytes] = []
+        async for chunk in response.body_iterator:
+            chunk_bytes = chunk.encode() if isinstance(chunk, str) else bytes(chunk)
+            chunks.append(chunk_bytes)
+            remaining -= len(chunk_bytes)
+            if remaining <= 0:
+                break
+        assert remaining == 0
+        return b"".join(chunks)
+
+    body = asyncio.run(read_exact_response_body())
+    assert body == mp4.read_bytes()
+    assert hashlib.sha256(body).hexdigest() == response.headers["x-artifact-sha256"]
+    os.fstat(fd)
+
+    assert response.background is not None
+    asyncio.run(response.background())
+    with pytest.raises(OSError):
+        os.fstat(fd)
+
+
+def test_real_symlinked_mp4_is_refused_by_the_download_route(
+    rendered: dict[str, object], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """REAL-DISK: the verifier refuses a symlink swapped onto the artifact path."""
+    result = rendered["result"]
+    assert isinstance(result, dict)
+    workspace = rendered["workspace"]
+    assert isinstance(workspace, Path)
+    mp4 = workspace / str(result["output_rel_path"])
+    original = mp4.with_name("original-real-artifact.mp4")
+    mp4.rename(original)
+    mp4.symlink_to(original.name)
+    client = _client(monkeypatch, {JOB_ID: _row(result)})
+
+    response = client.get(_url())
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "symlink_refused"
+
+
 def test_another_projects_job_is_hidden_as_not_found(
     rendered: dict[str, object], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    client = _client(monkeypatch, {JOB_ID: _row(rendered["result"], project="someone-else")})  # type: ignore[arg-type]
+    client = _client(monkeypatch, {JOB_ID: _row(_result_dict(rendered), project="someone-else")})
 
     response = client.get(_url())
 
@@ -203,7 +288,7 @@ def test_bytes_changed_after_render_are_refused_with_409(
 def test_traversal_is_refused_with_403(
     rendered: dict[str, object], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    result = dict(rendered["result"])  # type: ignore[arg-type]
+    result = _result_dict(rendered)
     result["output_rel_path"] = "projects/../escape.mp4"
     client = _client(monkeypatch, {JOB_ID: _row(result)})
 
@@ -216,7 +301,7 @@ def test_traversal_is_refused_with_403(
 def test_malformed_path_is_refused_with_422(
     rendered: dict[str, object], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    result = dict(rendered["result"])  # type: ignore[arg-type]
+    result = _result_dict(rendered)
     result["output_rel_path"] = "/etc/passwd"
     client = _client(monkeypatch, {JOB_ID: _row(result)})
 
@@ -227,7 +312,7 @@ def test_unconfigured_studio_fails_closed_with_503(
     rendered: dict[str, object], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.delenv(ENV_WORKSPACE)
-    client = _client(monkeypatch, {JOB_ID: _row(rendered["result"])})  # type: ignore[arg-type]
+    client = _client(monkeypatch, {JOB_ID: _row(_result_dict(rendered))})
 
     assert client.get(_url()).status_code == 503
 
@@ -236,7 +321,7 @@ def test_a_job_that_is_not_completed_is_refused(
     rendered: dict[str, object], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Ownership of the project is not enough: only COMPLETED may serve bytes."""
-    row = _row(rendered["result"])  # type: ignore[arg-type]
+    row = _row(_result_dict(rendered))
     row["status"] = "processing"
     row["canonical_status"] = "processing"
     client = _client(monkeypatch, {JOB_ID: row})
@@ -252,7 +337,7 @@ def test_a_completed_job_without_a_recorded_pass_verification_is_refused(
 ) -> None:
     """A handler's own "rendered" claim is never download authority."""
     row = _row(None)
-    row["result"] = dict(rendered["result"])  # type: ignore[arg-type]
+    row["result"] = _result_dict(rendered)
     client = _client(monkeypatch, {JOB_ID: row})
 
     response = client.get(_url())
@@ -264,10 +349,15 @@ def test_a_completed_job_without_a_recorded_pass_verification_is_refused(
 def test_a_completed_job_whose_verification_records_a_non_pass_verdict_is_refused(
     rendered: dict[str, object], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    row = _row(rendered["result"])  # type: ignore[arg-type]
-    result = dict(row["result"])  # type: ignore[arg-type]
-    result["artifact_verification"] = dict(result["artifact_verification"])  # type: ignore[arg-type]
-    result["artifact_verification"]["media_verdict"] = "VIOLATED"  # type: ignore[index]
+    row = _row(_result_dict(rendered))
+    row_result = row.get("result")
+    assert isinstance(row_result, Mapping)
+    result = dict(row_result)
+    verification = result.get("artifact_verification")
+    assert isinstance(verification, Mapping)
+    verification = dict(verification)
+    verification["media_verdict"] = "VIOLATED"
+    result["artifact_verification"] = verification
     row["result"] = result
     client = _client(monkeypatch, {JOB_ID: row})
 
@@ -299,7 +389,7 @@ def test_a_refusal_after_authorization_releases_the_verified_descriptor(
 
     monkeypatch.setattr(AuthorizedDownload, "close", _spy_close)
     monkeypatch.setattr(studio_api, "iter_authorized_chunks", _refuse_stream)
-    client = _client(monkeypatch, {JOB_ID: _row(rendered["result"])})
+    client = _client(monkeypatch, {JOB_ID: _row(_result_dict(rendered))})
 
     response = client.get(_url())
 
@@ -330,7 +420,7 @@ def test_an_unexpected_failure_after_authorization_releases_the_descriptor(
     monkeypatch.setattr(studio_api, "iter_authorized_chunks", _crash_stream)
     monkeypatch.setattr(
         "nexus_ai_agent.api.app.get_creative_registry",
-        lambda: FakeRegistry({JOB_ID: _row(rendered["result"])}),
+        lambda: FakeRegistry({JOB_ID: _row(_result_dict(rendered))}),
     )
     app = FastAPI()
     app.include_router(studio_api.router)
@@ -365,7 +455,7 @@ def test_a_failure_before_authorization_has_no_descriptor_to_release(
     monkeypatch.setattr(studio_api, "authorize_artifact_download", _fail_before_authorization)
     monkeypatch.setattr(
         "nexus_ai_agent.api.app.get_creative_registry",
-        lambda: FakeRegistry({JOB_ID: _row(rendered["result"])}),
+        lambda: FakeRegistry({JOB_ID: _row(_result_dict(rendered))}),
     )
     app = FastAPI()
     app.include_router(studio_api.router)
