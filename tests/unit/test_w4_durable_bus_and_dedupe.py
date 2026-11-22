@@ -11,9 +11,9 @@ from typing import Any, cast
 
 import pytest
 
-from nexus_ai_agent.creative.studio import durable_dedupe as store_module
+from nexus_ai_agent.adapters import durable_plan_dedupe as store_module
+from nexus_ai_agent.adapters.durable_plan_dedupe import DurablePlanDedupeStore
 from nexus_ai_agent.creative.studio.durable_dedupe import (
-    DurablePlanDedupeStore,
     PlanInDoubtQuarantineError,
     PlanReplayConflictError,
     PlanStoreCapacityError,
@@ -457,3 +457,82 @@ def test_store_lock_timeout_fails_closed(
     monkeypatch.setattr(store_module, "fcntl", SimpleNamespace(LOCK_EX=2, LOCK_NB=4, flock=locked))
     with pytest.raises(PlanStoreStateError, match="lock timed out"), store._store_lock():
         pytest.fail("unreachable")
+
+
+def test_evidence_precheck_rejects_oversized_string_before_encoder(
+    store: DurablePlanDedupeStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store.reserve("p", HASH, external_effects=False)
+    store.start("p", HASH, nonce="n")
+
+    def unexpected_encoder(*_args: Any, **_kwargs: Any) -> Any:
+        raise AssertionError("encoder should not be invoked")
+
+    monkeypatch.setattr(json, "JSONEncoder", unexpected_encoder)
+    with pytest.raises(ValueError, match="byte limit"):
+        store.finish("p", HASH, evidence="x" * (store_module.MAX_EVIDENCE_BYTES + 1))
+    with sqlite3.connect(store.path) as conn:
+        assert conn.execute("SELECT status FROM plans").fetchone()[0] == "EXECUTING"
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
+def test_precheck_nonfinite(value: float) -> None:
+    with pytest.raises(ValueError, match="finite"):
+        store_module._precheck_evidence_bounds({"x": value})
+
+
+@pytest.mark.parametrize(
+    "value",
+    [object(), b"binary", {1: "bad"}, "\ud800", 1 << 300_000],
+    ids=["object", "bytes", "key", "surrogate", "large-integer"],
+)
+def test_precheck_refuses_invalid_types_or_sizes(value: Any) -> None:
+    with pytest.raises(ValueError):
+        store_module._precheck_evidence_bounds(value)
+
+
+def test_precheck_depth_cycle_unicode_and_json_booleans() -> None:
+    store_module._precheck_evidence_bounds({"text": "aé中🙂", "yes": True, "no": False})
+    recursive: list[Any] = []
+    recursive.append(recursive)
+    with pytest.raises(ValueError, match="depth limit"):
+        store_module._precheck_evidence_bounds(recursive)
+    with pytest.raises(ValueError, match="byte limit"):
+        store_module._precheck_evidence_bounds([""] * 100, max_bytes=10)
+    with pytest.raises(ValueError, match="byte limit"):
+        store_module._precheck_evidence_bounds("é" * 10, max_bytes=15)
+
+
+def test_symlink_parent_is_refused(tmp_path: Path) -> None:
+    original = tmp_path / "original"
+    original.mkdir()
+    link = tmp_path / "link"
+    link.symlink_to(original, target_is_directory=True)
+    with pytest.raises(ValueError, match="parent path must not contain a symlink"):
+        DurablePlanDedupeStore(link / "db")
+    assert not (original / "db").exists()
+
+
+def test_group_writable_parent_is_refused(tmp_path: Path) -> None:
+    parent = tmp_path / "unsafe"
+    parent.mkdir(mode=0o700)
+    parent.chmod(0o770)
+    with pytest.raises(ValueError, match="not group/world writable"):
+        DurablePlanDedupeStore(parent / "db")
+    assert not (parent / "db").exists()
+
+
+def test_precheck_accepts_finite_and_empty_containers() -> None:
+    store_module._precheck_evidence_bounds({"value": 1.5, "empty": (), "absent": None})
+
+
+@pytest.mark.parametrize("evidence", ["中" * 11000, ["中" * 6000, "中" * 6000]])
+def test_encoder_escaped_output_cannot_exceed_limit(
+    store: DurablePlanDedupeStore, evidence: Any
+) -> None:
+    store.reserve("p", HASH, external_effects=False)
+    store.start("p", HASH, nonce="n")
+    with pytest.raises(ValueError, match="byte limit"):
+        store.finish("p", HASH, evidence=evidence)
+    with sqlite3.connect(store.path) as conn:
+        assert conn.execute("SELECT status FROM plans").fetchone()[0] == "EXECUTING"
