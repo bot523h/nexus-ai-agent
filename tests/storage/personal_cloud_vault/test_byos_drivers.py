@@ -29,6 +29,7 @@ from nexus_ai_agent.storage.personal_cloud_vault import (
     S3SigV4Config,
     VaultAuthenticationError,
     VaultQuotaExceededError,
+    VaultRevisionConflictError,
     VaultTamperDetectedError,
     VaultTransportError,
     compute_sigv4_signature,
@@ -2609,3 +2610,28 @@ def test_p1_2_fence_aborts_before_delete_when_lease_lands_after_fence_write() ->
     assert s3.delete_chunk_if_unleased(cid) is False
     assert s3.has_chunk(cid)
     assert f"fence/gc-fences/{cid}.fence" not in objects
+
+
+def test_s3_lease_refresh_and_release_require_a_proven_owner_etag() -> None:
+    """A peer without the owner's ETag can neither refresh nor delete the S3 lease."""
+    objects: dict[str, tuple[bytes, dict[str, str]]] = {}
+    transport = _fence_transport(
+        objects,
+        bucket="fence-bkt",
+        inject_lease=("fence/leases/unused.json", "c" * 64),
+    )
+    owner = _fence_driver(transport)
+    peer = _fence_driver(transport)
+    lease_id = owner.acquire_push_lease([], lease_id="s3-owner")
+    key = "fence/leases/s3-owner.json"
+    before = objects[key]
+
+    with pytest.raises(VaultTransportError):
+        peer.update_push_lease(lease_id, [], expected_etag="   ")
+    with pytest.raises(VaultRevisionConflictError):
+        peer.update_push_lease(lease_id, [])
+    with pytest.raises(VaultRevisionConflictError):
+        peer.update_push_lease(lease_id, [], expected_etag="0" * 64)
+    with pytest.raises(VaultRevisionConflictError):
+        peer.release_push_lease(lease_id)
+    assert objects[key] == before, "a refused peer must leave the owner's lease untouched"

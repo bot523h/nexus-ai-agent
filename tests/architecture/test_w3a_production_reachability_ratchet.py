@@ -126,9 +126,12 @@ def test_production_reachability_ratchet_has_no_new_scientific_orphans() -> None
             f"{sorted(unexpected)}; wire them to a production root or justify and ratchet "
             "the reviewed ceiling explicitly."
         )
-        assert actual_orphans <= ceiling, (
+        # Exact ratchet: a module that gets wired must also leave the ceiling,
+        # otherwise the reviewed inventory silently over-states the orphans.
+        assert actual_orphans == ceiling, (
             f"W3-A ratchet inventory mismatch for {subsystem}: "
-            f"actual={sorted(actual_orphans)} ceiling={sorted(ceiling)}"
+            f"actual={sorted(actual_orphans)} ceiling={sorted(ceiling)}; "
+            "remove wired modules from ORPHAN_CEILING"
         )
 
 
