@@ -120,11 +120,12 @@ MAX_LEVEL: Final[int] = 16
 MAX_IMAGE_PIXELS: Final[int] = 64_000_000
 
 
-class FilmOpticError(ValueError):
+class FilmOpticError(ValueError, TypeError):
     """Raised for malformed colours, images, or out-of-range parameters."""
 
 
 def _check_colour(rgb: np.ndarray, name: str = "rgb") -> np.ndarray:
+    _require_finite_array(rgb, name="rgb")
     arr = np.asarray(rgb, dtype=np.float64)
     if arr.shape[-1] != 3:
         raise FilmOpticError(f"{name} must have a trailing dimension of 3")
@@ -135,6 +136,7 @@ def _check_colour(rgb: np.ndarray, name: str = "rgb") -> np.ndarray:
 
 def srgb_eotf_to_linear(srgb: np.ndarray) -> np.ndarray:
     """IEC 61966-2-1 sRGB EOTF: display-encoded ``srgb`` in ``[0, 1]`` -> linear light."""
+    _require_finite_array(srgb, name="srgb")
     arr = np.asarray(srgb, dtype=np.float64)
     if not np.all(np.isfinite(arr)):
         raise FilmOpticError("srgb input contains NaN/Inf")
@@ -150,6 +152,7 @@ def srgb_eotf_to_linear(srgb: np.ndarray) -> np.ndarray:
 
 def linear_to_srgb_oetf(linear: np.ndarray) -> np.ndarray:
     """IEC 61966-2-1 sRGB OETF (inverse EOTF): linear values -> display-encoded ``[0, 1]``."""
+    _require_finite_array(linear, name="linear")
     arr = np.asarray(linear, dtype=np.float64)
     if not np.all(np.isfinite(arr)):
         raise FilmOpticError("linear input contains NaN/Inf")
@@ -166,6 +169,7 @@ def linear_to_srgb_oetf(linear: np.ndarray) -> np.ndarray:
 
 def linear_srgb_d65_to_aces_ap0_d60(rgb_linear: np.ndarray) -> np.ndarray:
     """Convert linear sRGB/Rec.709 (D65) values to ACES2065-1 AP0 (D60) via Bradford CAT."""
+    _require_finite_array(rgb_linear, name="rgb_linear")
     arr = _check_colour(rgb_linear, "rgb_linear")
     out: np.ndarray = np.asarray(arr @ SRGB_D65_TO_AP0_D60.T, dtype=np.float64)
     return out
@@ -173,6 +177,7 @@ def linear_srgb_d65_to_aces_ap0_d60(rgb_linear: np.ndarray) -> np.ndarray:
 
 def aces_ap0_to_acescg(rgb: np.ndarray) -> np.ndarray:
     """Convert ACES2065-1 (AP0) linear values to ACEScg (AP1)."""
+    _require_finite_array(rgb, name="rgb")
     arr = _check_colour(rgb, "ap0")
     out: np.ndarray = np.asarray(arr @ AP0_TO_AP1.T, dtype=np.float64)
     return out
@@ -180,6 +185,7 @@ def aces_ap0_to_acescg(rgb: np.ndarray) -> np.ndarray:
 
 def acescg_to_ap0(rgb: np.ndarray) -> np.ndarray:
     """Convert ACEScg (AP1) linear values back to ACES2065-1 (AP0)."""
+    _require_finite_array(rgb, name="rgb")
     arr = _check_colour(rgb, "ap1")
     out: np.ndarray = np.asarray(arr @ AP1_TO_AP0.T, dtype=np.float64)
     return out
@@ -199,6 +205,12 @@ def aces_tone_map(
     Input is linear scene radiance; output is display-referred in ``[0, 1]``.
     The fit is monotonic and ``f(0) = 0``.
     """
+    _require_finite_array(linear, name="linear")
+    _require_finite_scalar(a, name="a")
+    _require_finite_scalar(b, name="b")
+    _require_finite_scalar(c, name="c")
+    _require_finite_scalar(d, name="d")
+    _require_finite_scalar(e, name="e")
     arr = np.asarray(linear, dtype=np.float64)
     if not np.all(np.isfinite(arr)):
         raise FilmOpticError("linear input contains NaN/Inf")
@@ -219,6 +231,7 @@ def scene_linear_srgb_to_display_linear(rgb_linear: np.ndarray) -> np.ndarray:
     (D60, Bradford) -> AP1 -> one ACES tone-map in AP1 -> AP1 -> sRGB(D65) output
     transform -> clip to gamut. The caller applies the sRGB OETF exactly once.
     """
+    _require_finite_array(rgb_linear, name="rgb_linear")
     ap0 = linear_srgb_d65_to_aces_ap0_d60(rgb_linear)
     ap1 = np.maximum(aces_ap0_to_acescg(ap0), 0.0)
     mapped = aces_tone_map(ap1)
@@ -233,6 +246,7 @@ def hald_identity_clut(level: int = 8) -> np.ndarray:
     convention: the first axis is the blue index, then green, then red (so the
     RGB value at index ``(r, g, b)`` is ``(r, g, b)/(level-1)``).
     """
+    _require_finite_scalar(level, name="level")
     if level < 2 or level > MAX_LEVEL:
         raise FilmOpticError(f"level must be in [2, {MAX_LEVEL}]")
     n = level
@@ -246,6 +260,9 @@ def hald_identity_clut(level: int = 8) -> np.ndarray:
 
 
 def _trilinear_sample(clut: np.ndarray, level: int, coords: np.ndarray) -> np.ndarray:
+    _require_finite_array(clut, name="clut")
+    _require_finite_scalar(level, name="level")
+    _require_finite_array(coords, name="coords")
     n = level
     # coords in [0, 1]^3 -> continuous lattice position
     pos = np.clip(coords, 0.0, 1.0) * (n - 1)
@@ -259,6 +276,9 @@ def _trilinear_sample(clut: np.ndarray, level: int, coords: np.ndarray) -> np.nd
     fb = frac[..., 2]
 
     def idx(r: np.ndarray, g: np.ndarray, b: np.ndarray) -> np.ndarray:
+        _require_finite_array(r, name="r")
+        _require_finite_array(g, name="g")
+        _require_finite_array(b, name="b")
         out: np.ndarray = (b * n + g) * n + r
         return out
 
@@ -285,6 +305,9 @@ def _trilinear_sample(clut: np.ndarray, level: int, coords: np.ndarray) -> np.nd
 
 def apply_hald_clut(image: np.ndarray, clut: np.ndarray, level: int) -> np.ndarray:
     """Apply a HALD CLUT to an ``(..., 3)`` image in ``[0, 1]``."""
+    _require_finite_array(image, name="image")
+    _require_finite_array(clut, name="clut")
+    _require_finite_scalar(level, name="level")
     arr = _check_colour(image, "image")
     c = np.asarray(clut, dtype=np.float64)
     if c.shape != (level**3, 3):
@@ -311,6 +334,10 @@ def halation(
     The kernel is a normalised 2-D Gaussian; each channel is blurred and mixed
     back with a channel-dependent weight (red scatters most).
     """
+    _require_finite_array(image, name="image")
+    _require_finite_scalar(radius, name="radius")
+    _require_finite_scalar(strength, name="strength")
+    _require_finite_array(red_bias, name="red_bias")
     arr = _check_colour(image, "image")
     if arr.ndim != 3:
         raise FilmOpticError("image must be (h, w, 3)")
@@ -350,6 +377,10 @@ def film_grain(
     image: np.ndarray, *, amount: float = 0.05, seed: int = 0, low_pass: int = 1
 ) -> np.ndarray:
     """Multiplicative band-limited film grain (deterministic in ``seed``)."""
+    _require_finite_array(image, name="image")
+    _require_finite_scalar(amount, name="amount")
+    _require_finite_scalar(seed, name="seed")
+    _require_finite_scalar(low_pass, name="low_pass")
     arr = _check_colour(image, "image")
     if arr.ndim != 3:
         raise FilmOpticError("image must be (h, w, 3)")
@@ -374,3 +405,45 @@ def film_grain(
     noise = noise / (noise.std() + 1e-12)
     out: np.ndarray = np.clip(arr * (1.0 + amount * noise), 0.0, None)
     return out
+
+
+def _require_finite_scalar(value: object, *, name: str) -> None:
+    """Numeric inputs never silently coerce booleans or non-finite values."""
+    if isinstance(value, (bool, np.bool_)):
+        raise FilmOpticError(f"{name} must not be bool")
+    if not isinstance(value, (int, float, np.integer, np.floating)):
+        raise FilmOpticError(f"{name} must be numeric")
+    if not np.isfinite(value):
+        raise FilmOpticError(f"{name} must be finite")
+
+
+def _require_finite_array(value: object, *, name: str) -> None:
+    """Validate before dtype conversion can erase boolean evidence."""
+    try:
+        raw = value if isinstance(value, np.ndarray) else np.asarray(value, dtype=object)
+        numeric = np.asarray(value, dtype=np.float64)
+    except (ValueError, TypeError) as exc:
+        raise FilmOpticError(f"{name} must be numeric") from exc
+    if raw.dtype.kind == "b" or (
+        raw.dtype.kind == "O" and any(isinstance(item, (bool, np.bool_)) for item in raw.flat)
+    ):
+        raise FilmOpticError(f"{name} must not contain bool")
+    if not np.all(np.isfinite(numeric)):
+        raise FilmOpticError(f"{name} must be finite")
+
+
+def verify_aces_colorimetric_invariants() -> dict[str, float | bool]:
+    """Check AP0/XYZ/AP1 inverses and the sampled Narkowicz response."""
+    errors = [
+        float(np.linalg.norm(matrix @ np.linalg.inv(matrix) - np.eye(3)))
+        for matrix in (AP0_TO_XYZ, XYZ_TO_AP1, AP0_TO_AP1)
+    ]
+    errors.append(float(np.linalg.norm(AP0_TO_AP1 @ AP1_TO_AP0 - np.eye(3))))
+    x = np.linspace(0.0, 100.0, 10001)
+    mapped = aces_tone_map(x)
+    monotonic = bool(np.all(np.diff(mapped) >= -1e-12))
+    return {
+        "inverse_error": max(errors),
+        "monotonic": monotonic,
+        "verified": max(errors) < 1e-10 and monotonic,
+    }

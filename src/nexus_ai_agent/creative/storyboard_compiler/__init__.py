@@ -79,6 +79,8 @@ from .cinematography_solver import (
     minimum_jerk_profile,
     minimum_jerk_scalar,
     project_world_point,
+    se3_exp,
+    se3_log,
     select_lens_and_aperture,
     select_rule_of_thirds,
     skew_symmetric,
@@ -87,6 +89,7 @@ from .cinematography_solver import (
     solve_scene_cinematography,
     solve_script_cinematography,
     verify_180_degree_rule,
+    verify_minimum_jerk_calculus_invariants,
     verify_scene_character_blocking,
 )
 from .editorial_cut_solver import (
@@ -206,6 +209,8 @@ __all__ = [
     "parse_bilingual_script",
     "parse_scene_heading",
     "project_world_point",
+    "se3_exp",
+    "se3_log",
     "select_lens_and_aperture",
     "select_rule_of_thirds",
     "skew_symmetric",
@@ -219,6 +224,7 @@ __all__ = [
     "verify_editorial_timeline",
     "verify_manifest_integrity",
     "verify_manifest_integrity_strict",
+    "verify_minimum_jerk_calculus_invariants",
     "verify_scene_character_blocking",
     "verify_script_provenance",
 ]

@@ -33,6 +33,7 @@ class WolaFrames:
 
 
 def _mono(samples: np.ndarray) -> np.ndarray:
+    _require_finite_array(samples, name="samples")
     data = np.asarray(samples, dtype=np.float64)
     if data.ndim != 1 or not np.isfinite(data).all():
         raise ValueError("restoration requires finite one-dimensional PCM")
@@ -42,6 +43,9 @@ def _mono(samples: np.ndarray) -> np.ndarray:
 def wola_analyse(
     samples: np.ndarray, *, frame_length: int = 1024, overlap: float = 0.75
 ) -> WolaFrames:
+    _require_finite_array(samples, name="samples")
+    _require_finite_scalar(frame_length, name="frame_length")
+    _require_finite_scalar(overlap, name="overlap")
     data = _mono(samples)
     if not 16 <= frame_length <= 16384 or frame_length % 4:
         raise ValueError("frame_length must be a multiple of four in [16, 16384]")
@@ -53,6 +57,7 @@ def wola_analyse(
 
 
 def wola_synthesise(spectrum: np.ndarray, frames: WolaFrames) -> np.ndarray:
+    _require_finite_array(spectrum, name="spectrum")
     transformed = np.asarray(spectrum, dtype=np.complex128)
     if transformed.shape != frames.spectrum.shape or not np.isfinite(transformed).all():
         raise ValueError("synthesis spectrum must match the finite analysis geometry")
@@ -78,6 +83,7 @@ def exponential_integral_e1(values: np.ndarray) -> np.ndarray:
     float64, and the independently tabulated error is <3e-13 relative at the
     transition. exp(-x) underflow for x>~745 is the correct limiting zero.
     """
+    _require_finite_array(values, name="values")
     x = np.asarray(values, dtype=np.float64)
     if not np.isfinite(x).all() or np.any(x <= 0):
         raise ValueError("E1 requires finite positive arguments")
@@ -113,6 +119,9 @@ def exponential_integral_e1(values: np.ndarray) -> np.ndarray:
 def mmse_lsa_gain(
     prior_snr: np.ndarray, posterior_snr: np.ndarray, *, floor: float = 0.03
 ) -> np.ndarray:
+    _require_finite_array(prior_snr, name="prior_snr")
+    _require_finite_array(posterior_snr, name="posterior_snr")
+    _require_finite_scalar(floor, name="floor")
     if not 0 < floor < 1:
         raise ValueError("LSA musical-noise gain floor must be in (0, 1)")
     xi, gamma = np.broadcast_arrays(np.asarray(prior_snr, float), np.asarray(posterior_snr, float))
@@ -154,6 +163,14 @@ def mmse_lsa_denoise(
     initializes the noise PSD. Quiet-bin updates track a slowly varying floor
     without learning loud speech peaks as noise.
     """
+    _require_finite_array(samples, name="samples")
+    _require_finite_scalar(sample_rate, name="sample_rate")
+    if noise_reference is not None:
+        _require_finite_array(noise_reference, name="noise_reference")
+    _require_finite_scalar(frame_length, name="frame_length")
+    _require_finite_scalar(floor, name="floor")
+    _require_finite_scalar(smoothing, name="smoothing")
+    _require_finite_scalar(strength, name="strength")
     data = _mono(samples)
     if sample_rate <= 0 or not 0 < smoothing < 1 or not 0 <= strength <= 1 or not 0 < floor < 1:
         raise ValueError("invalid sample rate, smoothing, strength or gain floor")
@@ -212,6 +229,12 @@ def consistent_declip(
     state a plausible bandwidth; destroyed information is not invented by
     feeding a clean reference to the reconstruction.
     """
+    _require_finite_array(samples, name="samples")
+    _require_finite_scalar(sample_rate, name="sample_rate")
+    _require_finite_scalar(threshold, name="threshold")
+    if bandwidth_hz is not None:
+        _require_finite_scalar(bandwidth_hz, name="bandwidth_hz")
+    _require_finite_scalar(iterations, name="iterations")
     data = _mono(samples)
     cutoff = min(7000.0, sample_rate * 0.4) if bandwidth_hz is None else bandwidth_hz
     if sample_rate <= 0 or not 0 < threshold <= 1 or not 0 < cutoff < sample_rate / 2:
@@ -274,6 +297,13 @@ def wpe_dereverberate(
     Frame power is re-estimated from the residual each iteration; no inverse
     reverberation filter or clean reference is smuggled in as prior evidence.
     """
+    _require_finite_array(samples, name="samples")
+    _require_finite_scalar(sample_rate, name="sample_rate")
+    _require_finite_scalar(taps, name="taps")
+    _require_finite_scalar(prediction_delay_ms, name="prediction_delay_ms")
+    _require_finite_scalar(iterations, name="iterations")
+    _require_finite_scalar(frame_length, name="frame_length")
+    _require_finite_scalar(regularization, name="regularization")
     data = np.asarray(samples, dtype=np.float64)
     was_mono = data.ndim == 1
     if was_mono:
@@ -340,12 +370,15 @@ class RestorationMetrics:
 
 
 def _snr(clean: np.ndarray, estimate: np.ndarray) -> float:
+    _require_finite_array(clean, name="clean")
+    _require_finite_array(estimate, name="estimate")
     signal = float(np.sum(clean**2))
     error = float(np.sum((clean - estimate) ** 2))
     return 10 * math.log10(max(signal, 1e-30) / max(error, 1e-30))
 
 
 def _crest(samples: np.ndarray) -> float:
+    _require_finite_array(samples, name="samples")
     rms = math.sqrt(float(np.mean(samples**2)))
     return 20 * math.log10(max(float(np.max(np.abs(samples))), 1e-20) / max(rms, 1e-20))
 
@@ -353,6 +386,9 @@ def _crest(samples: np.ndarray) -> float:
 def modulation_correlation(
     reference: np.ndarray, estimate: np.ndarray, *, sample_rate: int
 ) -> float:
+    _require_finite_array(reference, name="reference")
+    _require_finite_array(estimate, name="estimate")
+    _require_finite_scalar(sample_rate, name="sample_rate")
     clean, output = _mono(reference), _mono(estimate)
     if clean.shape != output.shape or clean.size == 0 or sample_rate <= 0:
         raise ValueError(
@@ -373,6 +409,10 @@ def restoration_metrics(
     reference: np.ndarray, degraded: np.ndarray, restored: np.ndarray, *, sample_rate: int
 ) -> RestorationMetrics:
     """Evaluation only. This reference is never forwarded into a processing path."""
+    _require_finite_array(reference, name="reference")
+    _require_finite_array(degraded, name="degraded")
+    _require_finite_array(restored, name="restored")
+    _require_finite_scalar(sample_rate, name="sample_rate")
     clean, before, after = _mono(reference), _mono(degraded), _mono(restored)
     if clean.size == 0 or clean.shape != before.shape or clean.shape != after.shape:
         raise ValueError("restoration metrics require aligned non-empty signals")
@@ -405,3 +445,24 @@ __all__ = [
     "wola_synthesise",
     "wpe_dereverberate",
 ]
+
+
+def _require_finite_scalar(value: object, *, name: str) -> None:
+    """Numeric inputs never silently coerce booleans or non-finite values."""
+    if isinstance(value, (bool, np.bool_)):
+        raise TypeError(f"{name} must not be bool")
+    if not isinstance(value, (int, float, np.integer, np.floating)):
+        raise TypeError(f"{name} must be numeric")
+    if not np.isfinite(value):
+        raise ValueError(f"{name} must be finite")
+
+
+def _require_finite_array(value: object, *, name: str) -> None:
+    """Validate before dtype conversion can erase boolean evidence."""
+    raw = value if isinstance(value, np.ndarray) else np.asarray(value, dtype=object)
+    if raw.dtype.kind == "b" or (
+        raw.dtype.kind == "O" and any(isinstance(item, (bool, np.bool_)) for item in raw.flat)
+    ):
+        raise TypeError(f"{name} must not contain bool")
+    if not np.all(np.isfinite(np.asarray(value))):
+        raise ValueError(f"{name} must be finite")

@@ -25,6 +25,7 @@ Material = Literal["wood", "metal", "glass", "stone", "leather_footstep", "cloth
 
 
 def _pcm(samples: np.ndarray, *, matrix: bool = False) -> np.ndarray:
+    _require_finite_array(samples, name="samples")
     data = np.asarray(samples, dtype=np.float64)
     if (
         data.ndim not in ((1, 2) if matrix else (1,))
@@ -57,6 +58,11 @@ def gcc_phat(
     are excluded, not whitened into infinite noise. FFT padding holds the full
     linear correlation; the bounded search cannot wrap the end to the start.
     """
+    _require_finite_array(reference, name="reference")
+    _require_finite_array(observed, name="observed")
+    _require_finite_scalar(sample_rate, name="sample_rate")
+    _require_finite_scalar(max_lag_seconds, name="max_lag_seconds")
+    _require_finite_scalar(interpolation, name="interpolation")
     a, b = _pcm(reference), _pcm(observed)
     if (
         min(a.size, b.size) < 8
@@ -112,6 +118,10 @@ def interpolate_visual_features(
     exact at the actual frame timestamps and uses zero outside their support.
     Sub-frame estimation cannot reconstruct events above the visual Nyquist.
     """
+    _require_finite_array(features, name="features")
+    _require_finite_scalar(frame_rate, name="frame_rate")
+    _require_finite_scalar(envelope_rate, name="envelope_rate")
+    _require_finite_scalar(length, name="length")
     data = _pcm(features)
     if data.size < 4 or not np.isfinite([frame_rate, envelope_rate]).all():
         raise ValueError("at least four finite visual frames and finite rates are required")
@@ -141,6 +151,11 @@ def estimate_av_offset(
     envelope_rate: float = 1000.0,
     max_lag_seconds: float = 0.25,
 ) -> OffsetEstimate:
+    _require_finite_array(visual_motion, name="visual_motion")
+    _require_finite_array(audio_envelope, name="audio_envelope")
+    _require_finite_scalar(frame_rate, name="frame_rate")
+    _require_finite_scalar(envelope_rate, name="envelope_rate")
+    _require_finite_scalar(max_lag_seconds, name="max_lag_seconds")
     envelope = _pcm(audio_envelope)
     visual = interpolate_visual_features(
         visual_motion, frame_rate=frame_rate, envelope_rate=envelope_rate, length=envelope.size
@@ -149,6 +164,7 @@ def estimate_av_offset(
 
 
 def within_itu_window(offset_ms: float) -> bool:
+    _require_finite_scalar(offset_ms, name="offset_ms")
     if not math.isfinite(offset_ms):
         raise ValueError("offset must be finite milliseconds")
     return ITU_MIN_MS <= offset_ms <= ITU_MAX_MS
@@ -156,6 +172,8 @@ def within_itu_window(offset_ms: float) -> bool:
 
 def fractional_time_shift(samples: np.ndarray, delay_samples: float) -> np.ndarray:
     """Symmetric windowed-sinc interpolation with zero extension, never roll()."""
+    _require_finite_array(samples, name="samples")
+    _require_finite_scalar(delay_samples, name="delay_samples")
     data = _pcm(samples, matrix=True)
     if not math.isfinite(delay_samples):
         raise ValueError("time shift must be finite")
@@ -181,6 +199,9 @@ def rms_envelope(
     samples: np.ndarray, *, sample_rate: int, envelope_rate: float = 1000.0
 ) -> np.ndarray:
     """Centered RMS windows timestamped at their centers (no hidden hop delay)."""
+    _require_finite_array(samples, name="samples")
+    _require_finite_scalar(sample_rate, name="sample_rate")
+    _require_finite_scalar(envelope_rate, name="envelope_rate")
     data = np.atleast_2d(_pcm(samples, matrix=True))
     if not 0 < envelope_rate <= sample_rate or data.shape[1] == 0:
         raise ValueError("non-empty PCM and 0 < envelope_rate <= sample_rate are required")
@@ -224,6 +245,13 @@ def synchronize_audio_to_visual(
     not a clean sound reference. With none, centered RMS is extracted from PCM.
     The residual is measured again; it is not `estimate - correction` by fiat.
     """
+    _require_finite_array(samples, name="samples")
+    _require_finite_array(visual_motion, name="visual_motion")
+    _require_finite_scalar(sample_rate, name="sample_rate")
+    _require_finite_scalar(frame_rate, name="frame_rate")
+    _require_finite_scalar(envelope_rate, name="envelope_rate")
+    if audio_feature is not None:
+        _require_finite_array(audio_feature, name="audio_feature")
     if sample_rate <= 0:
         raise ValueError("sample rate must be positive")
     feature = (
@@ -296,6 +324,11 @@ def synthesize_modal_foley(
     seed: int = 0,
 ) -> np.ndarray:
     """Impulse/contact force convolved with damped modal displacement responses."""
+    _require_finite_scalar(sample_rate, name="sample_rate")
+    _require_finite_scalar(impulse_ns, name="impulse_ns")
+    _require_finite_scalar(contact_seconds, name="contact_seconds")
+    _require_finite_scalar(duration_seconds, name="duration_seconds")
+    _require_finite_scalar(seed, name="seed")
     if material not in MATERIALS:
         raise ValueError("unknown Foley material")
     if (
@@ -345,6 +378,8 @@ def render_collision_foley(
     collisions: tuple[FoleyCollision, ...], *, length_samples: int, sample_rate: int = 48000
 ) -> np.ndarray:
     """Place each collision at its integer sample; overlap-add, never normalize."""
+    _require_finite_scalar(length_samples, name="length_samples")
+    _require_finite_scalar(sample_rate, name="sample_rate")
     if length_samples < 0 or len(collisions) > 1000 or not 16000 <= sample_rate <= 192000:
         raise ValueError("invalid timeline length/rate or too many Foley collisions")
     output = np.zeros(length_samples)
@@ -384,3 +419,24 @@ __all__ = [
     "synthesize_modal_foley",
     "within_itu_window",
 ]
+
+
+def _require_finite_scalar(value: object, *, name: str) -> None:
+    """Numeric inputs never silently coerce booleans or non-finite values."""
+    if isinstance(value, (bool, np.bool_)):
+        raise TypeError(f"{name} must not be bool")
+    if not isinstance(value, (int, float, np.integer, np.floating)):
+        raise TypeError(f"{name} must be numeric")
+    if not np.isfinite(value):
+        raise ValueError(f"{name} must be finite")
+
+
+def _require_finite_array(value: object, *, name: str) -> None:
+    """Validate before dtype conversion can erase boolean evidence."""
+    raw = value if isinstance(value, np.ndarray) else np.asarray(value, dtype=object)
+    if raw.dtype.kind == "b" or (
+        raw.dtype.kind == "O" and any(isinstance(item, (bool, np.bool_)) for item in raw.flat)
+    ):
+        raise TypeError(f"{name} must not contain bool")
+    if not np.all(np.isfinite(np.asarray(value))):
+        raise ValueError(f"{name} must be finite")
