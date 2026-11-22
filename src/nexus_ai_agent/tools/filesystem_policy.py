@@ -19,6 +19,7 @@ import ntpath
 import os
 import secrets
 import stat
+import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -29,6 +30,10 @@ class FilesystemBoundaryError(ValueError):
     """A path cannot be proven to remain inside the configured root."""
 
 
+class FilesystemIntegrityError(FilesystemBoundaryError):
+    """A publication candidate or destination failed integrity checks."""
+
+
 class ContentLimitExceeded(FilesystemBoundaryError):
     """A bounded stream exceeded the caller's declared maximum size."""
 
@@ -37,6 +42,7 @@ _NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
 _DIRECTORY = getattr(os, "O_DIRECTORY", 0)
 _CLOEXEC = getattr(os, "O_CLOEXEC", 0)
 _NONBLOCK = getattr(os, "O_NONBLOCK", 0)
+_PUBLICATION_LOCK = threading.RLock()
 
 
 def _open_directory(name: str | Path, *, dir_fd: int | None = None) -> int:
@@ -541,6 +547,191 @@ class WorkspaceFilesystem:
         if not stat.S_ISREG(info.st_mode):
             raise FilesystemBoundaryError("path is not a regular file")
         return resolved
+
+    @contextmanager
+    def _publication_lock(self) -> Iterator[None]:
+        """Serialize cooperating publishers; non-cooperating writers are not fenced."""
+        import fcntl
+
+        with _PUBLICATION_LOCK:
+            root_fd = self._root_fd()
+            try:
+                fd = os.open(
+                    ".blob_publish.lock",
+                    os.O_CREAT | os.O_RDWR | _NOFOLLOW | _CLOEXEC | _NONBLOCK,
+                    0o600,
+                    dir_fd=root_fd,
+                )
+                try:
+                    if not stat.S_ISREG(os.fstat(fd).st_mode):
+                        raise FilesystemBoundaryError("publication lock is not regular")
+                    fcntl.flock(fd, fcntl.LOCK_EX)
+                    try:
+                        yield
+                    finally:
+                        fcntl.flock(fd, fcntl.LOCK_UN)
+                finally:
+                    os.close(fd)
+            finally:
+                os.close(root_fd)
+
+    @staticmethod
+    @contextmanager
+    def _candidate_directory(parent_fd: int, name: str) -> Iterator[int]:
+        fd = _open_directory(name, dir_fd=parent_fd)
+        try:
+            yield fd
+        finally:
+            os.close(fd)
+
+    @staticmethod
+    def _fd_digest(fd: int) -> tuple[str, int]:
+        os.lseek(fd, 0, os.SEEK_SET)
+        digest = hashlib.sha256()
+        size = 0
+        while chunk := os.read(fd, 1 << 20):
+            digest.update(chunk)
+            size += len(chunk)
+        return digest.hexdigest(), size
+
+    def _promote_candidate(
+        self,
+        candidate_fd: int,
+        candidate_dir_fd: int,
+        dest_dir_fd: int,
+        dest_name: str,
+        *,
+        sha256: str,
+        size: int,
+    ) -> bool:
+        """Verify and publish under a cooperative lock, rolling back our inode only.
+
+        The inode comparison and unlink are separate syscalls; the safety of
+        rollback requires all namespace writers to hold the publication lock.
+        """
+        with self._publication_lock():
+            candidate_stat = os.fstat(candidate_fd)
+            identity = (candidate_stat.st_dev, candidate_stat.st_ino)
+            name_stat = os.stat("candidate", dir_fd=candidate_dir_fd, follow_symlinks=False)
+            if (name_stat.st_dev, name_stat.st_ino) != identity or self._fd_digest(
+                candidate_fd
+            ) != (sha256, size):
+                raise FilesystemIntegrityError("publication candidate failed validation")
+            try:
+                os.link(
+                    "candidate",
+                    dest_name,
+                    src_dir_fd=candidate_dir_fd,
+                    dst_dir_fd=dest_dir_fd,
+                    follow_symlinks=False,
+                )
+                published = True
+            except FileExistsError:
+                published = False
+            try:
+                fd = os.open(
+                    dest_name, os.O_RDONLY | _NOFOLLOW | _CLOEXEC | _NONBLOCK, dir_fd=dest_dir_fd
+                )
+                try:
+                    info = os.fstat(fd)
+                    valid = stat.S_ISREG(info.st_mode) and self._fd_digest(fd) == (sha256, size)
+                    if published:
+                        valid = valid and (info.st_dev, info.st_ino) == identity
+                finally:
+                    os.close(fd)
+                if not valid:
+                    raise FilesystemIntegrityError("published or existing blob failed validation")
+            except (OSError, FilesystemIntegrityError) as exc:
+                if published:
+                    try:
+                        current = os.stat(dest_name, dir_fd=dest_dir_fd, follow_symlinks=False)
+                    except FileNotFoundError:
+                        pass
+                    else:
+                        if (current.st_dev, current.st_ino) == identity:
+                            os.unlink(dest_name, dir_fd=dest_dir_fd)
+                raise FilesystemIntegrityError(
+                    "published or existing blob failed validation"
+                ) from exc
+            return published
+
+    def link_within_if_absent(
+        self, source: str, destination: str, *, sha256: str, size: int
+    ) -> bool:
+        """Publish a verified independent candidate without replacing a name.
+
+        The destination workspace must be private to the service identity;
+        filesystem permissions do not isolate mutually hostile same-UID processes.
+        """
+        src_parts = _validate_relative(source)
+        dst_parts = _validate_relative(destination)
+        self.resolve(source)
+        try:
+            with self._parent_fd(src_parts) as (src_fd, src_name):
+                with self._parent_fd(dst_parts, create=True) as (dst_fd, dst_name):
+                    assert src_name is not None and dst_name is not None
+                    source_fd = os.open(
+                        src_name, os.O_RDONLY | _NOFOLLOW | _CLOEXEC | _NONBLOCK, dir_fd=src_fd
+                    )
+                    try:
+                        info = os.fstat(source_fd)
+                        if not stat.S_ISREG(info.st_mode):
+                            raise FilesystemBoundaryError("source is not a regular file")
+                        candidate_dir = ".pub_" + secrets.token_hex(16)
+                        os.mkdir(candidate_dir, 0o700, dir_fd=dst_fd)
+                        try:
+                            with self._candidate_directory(dst_fd, candidate_dir) as candidate_fd:
+                                flags = os.O_RDWR | os.O_CREAT | os.O_EXCL | _NOFOLLOW | _CLOEXEC
+                                candidate_file = os.open(
+                                    "candidate", flags, 0o600, dir_fd=candidate_fd
+                                )
+                                try:
+                                    length = 0
+                                    while chunk := os.read(source_fd, 1 << 20):
+                                        length += len(chunk)
+                                        if length > size:
+                                            raise FilesystemBoundaryError(
+                                                "source grew during publication"
+                                            )
+                                        remaining = memoryview(chunk)
+                                        while remaining:
+                                            written = os.write(candidate_file, remaining)
+                                            if written == 0:
+                                                raise FilesystemBoundaryError(
+                                                    "candidate write failed"
+                                                )
+                                            remaining = remaining[written:]
+                                    os.fsync(candidate_file)
+                                    os.fchmod(candidate_file, 0o400)
+                                    return self._promote_candidate(
+                                        candidate_file,
+                                        candidate_fd,
+                                        dst_fd,
+                                        dst_name,
+                                        sha256=sha256,
+                                        size=size,
+                                    )
+                                finally:
+                                    info = os.fstat(candidate_file)
+                                    try:
+                                        current = os.stat(
+                                            "candidate", dir_fd=candidate_fd, follow_symlinks=False
+                                        )
+                                        if (current.st_dev, current.st_ino) == (
+                                            info.st_dev,
+                                            info.st_ino,
+                                        ):
+                                            os.unlink("candidate", dir_fd=candidate_fd)
+                                    except FileNotFoundError:
+                                        pass
+                                    finally:
+                                        os.close(candidate_file)
+                        finally:
+                            os.rmdir(candidate_dir, dir_fd=dst_fd)
+                    finally:
+                        os.close(source_fd)
+        except OSError as exc:
+            raise FilesystemBoundaryError("link failed inside the workspace") from exc
 
     def rename_within(self, source: str, destination: str, *, create_parents: bool = True) -> Path:
         """Atomically rename one contained path to another inside this workspace.

@@ -25,6 +25,7 @@ from nexus_ai_agent.creative.assets.errors import (
 from nexus_ai_agent.tools.filesystem_policy import (
     ContentLimitExceeded,
     FilesystemBoundaryError,
+    FilesystemIntegrityError,
     WorkspaceFilesystem,
 )
 
@@ -97,7 +98,7 @@ class LocalContentAddressedBlobStore:
 
         The staged digest is re-measured, the key is proven to match it, and an
         existing blob is verified before reuse (never silently overwritten with
-        mismatched bytes).  A successful move is atomic within the filesystem.
+        mismatched bytes). Publication is an atomic no-overwrite hard link.
         """
         try:
             sha256, size = self._fs.hash_file(staging_key)
@@ -105,23 +106,16 @@ class LocalContentAddressedBlobStore:
             raise BlobStoreError("staged content is missing or unreadable") from exc
         if blob_key != self.blob_key_for(sha256):
             raise BlobStoreError("blob key does not match the measured staged content")
-        if self._fs.exists(blob_key):
-            try:
-                existing = self._fs.hash_file(blob_key)
-            except (FilesystemBoundaryError, OSError) as exc:
-                raise ContentIntegrityError("existing blob is unreadable") from exc
-            if existing != (sha256, size):
-                raise ContentIntegrityError("existing blob does not match its content key")
-            self._fs.unlink(staging_key)
-            return sha256, size, True
         try:
-            self._fs.rename_within(staging_key, blob_key)
-            final = self._fs.hash_file(blob_key)
+            published = self._fs.link_within_if_absent(
+                staging_key, blob_key, sha256=sha256, size=size
+            )
+        except FilesystemIntegrityError as exc:
+            raise ContentIntegrityError("publication failed integrity verification") from exc
         except (FilesystemBoundaryError, OSError) as exc:
             raise BlobStoreError("blob publication failed inside the boundary") from exc
-        if final != (sha256, size):
-            raise ContentIntegrityError("published blob does not match the staged bytes")
-        return sha256, size, False
+        self._fs.unlink(staging_key)
+        return sha256, size, not published
 
     def verify(self, blob_key: str, *, sha256: str, size_bytes: int) -> bool:
         """True iff the stored blob exists and matches the recorded identity."""
