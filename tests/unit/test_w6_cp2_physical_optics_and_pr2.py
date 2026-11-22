@@ -60,6 +60,15 @@ class TestPlanck:
         # Low T, long wavelength: finite intensity.
         assert planck_blackbody_spectral_radiance(1e-3, 100.0) > 0.0
 
+    def test_blackbody_known_answer_value(self):
+        # Known-answer: numerical evaluation of the Planck law at the given point.
+        assert planck_blackbody_spectral_radiance(550e-9, 5778.0) == pytest.approx(
+            2.5857643225158427e13, rel=1e-6
+        )
+        assert planck_blackbody_spectral_radiance(550e-9, 1000.0) == pytest.approx(
+            10307.489906877401, rel=1e-12
+        )
+
     def test_wien_peak_wavelength_matches(self):
         lam = wien_max_wavelength(5778.0)
         assert lam == pytest.approx(2.897_771_955e-3 / 5778.0, rel=1e-9)

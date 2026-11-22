@@ -8,28 +8,25 @@ and the character capsule re-engineered from old PR #326.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import math
-from datetime import datetime, timezone
 
 import numpy as np
 import pytest
 
 from nexus_ai_agent.creative.assets.mime import detect_media_type
 from nexus_ai_agent.creative.assets.models import (
+    SUPPORTED_MEDIA_TYPES,
     IngestState,
     MediaKind,
-    SUPPORTED_MEDIA_TYPES,
 )
 from nexus_ai_agent.creative.character import (
     CHARACTER_ID_RE,
-    FaceModule,
-    Scope,
-    ScopeViolation,
-    ValidationError,
     CharacterCapsule,
     ContinuityThreshold,
+    FaceModule,
+    ScopeViolation,
+    ValidationError,
     VerificationState,
     verify_dimensions,
 )
@@ -46,7 +43,6 @@ from nexus_ai_agent.creative.science.symplectic_hamiltonian_pipeline import (
     stormer_verlet_step,
     symplectic_volume_preservation_error,
 )
-
 
 # ---------------------------------------------------------------------------
 # Symplectic Störmer–Verlet
@@ -96,9 +92,7 @@ class TestSymplectic:
         spec = HamiltonianSpec()
         q0 = np.array([1.0, 0.5])
         p0 = np.array([0.0, 0.0])
-        traj_q, traj_p, traj_h = integrate_verlet(
-            q0, p0, 0.05, 400, spec, rayleigh_damping=0.05
-        )
+        traj_q, traj_p, traj_h = integrate_verlet(q0, p0, 0.05, 400, spec, rayleigh_damping=0.05)
         assert traj_h[-1] < traj_h[0]
         assert np.linalg.norm(traj_q[-1]) < np.linalg.norm(traj_q[0])
         # Monotone energy decrease (within tolerance) for Lyapunov convergence.
@@ -325,9 +319,7 @@ class TestCharacterCapsuleSupersession:
             "face": ContinuityThreshold("face", 0.2, 0.6),
             "body": ContinuityThreshold("body", 0.2, 0.6),
         }
-        report = verify_dimensions(
-            {"face": 0.10, "body": 0.40}, thresholds
-        )
+        report = verify_dimensions({"face": 0.10, "body": 0.40}, thresholds)
         assert report.verdict == VerificationState.REVIEW_REQUIRED
         assert report.dimensions["face"].state == VerificationState.VERIFIED
         assert report.dimensions["body"].state == VerificationState.REVIEW_REQUIRED
@@ -337,9 +329,7 @@ class TestCharacterCapsuleSupersession:
             "face": ContinuityThreshold("face", 0.2, 0.6),
             "body": ContinuityThreshold("body", 0.2, 0.6),
         }
-        report = verify_dimensions(
-            {"face": 0.05, "body": 0.75}, thresholds
-        )
+        report = verify_dimensions({"face": 0.05, "body": 0.75}, thresholds)
         assert report.verdict == VerificationState.IDENTITY_DRIFT
 
     def test_continuity_verifier_not_measured_is_not_scored(self):

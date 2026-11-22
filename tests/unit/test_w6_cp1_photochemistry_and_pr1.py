@@ -168,6 +168,14 @@ class TestDirReactionDiffusion:
         assert final.max() <= 3.0
         assert final.min() >= 0.0
 
+    def test_reaction_term_moves_in_right_direction_and_clips(self):
+        grid = np.array([0.0, 1.0, 0.0, 1.0, 0.0])
+        # interior Laplacian at index 2 = 1 - 0 + 1 = 2; reaction decreases it (2 * 0.2 = 0.4)
+        final = dir_reaction_diffusion(grid, 0.2, 0.0, 3.0)
+        assert final[2] == pytest.approx(0.0)  # 0 - 0.2*2 clipped to [0, 3]
+        assert final[1] == pytest.approx(1.0 - 0.2 * (0.0 - 2.0 * 1.0 + 0.0))  # 1.4
+        assert final[2] < final[1]
+
     def test_1d_laplacian_interior(self):
         grid = np.array([0.0, 1.0, 0.0, 1.0, 0.0])
         state = dir_film_state(grid, 0.2, 0.0, 3.0)
