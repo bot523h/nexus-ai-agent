@@ -15,16 +15,20 @@ import json
 import math
 import os
 import re
+import secrets
 import sqlite3
 import stat
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
 from nexus_ai_agent.creative.studio.durable_dedupe import (
     DurablePlanRecord,
+    ExecutionLease,
+    PlanExecutionInProgressError,
+    PlanFencingTokenMismatchError,
     PlanInDoubtQuarantineError,
     PlanReplayConflictError,
     PlanStoreCapacityError,
@@ -98,17 +102,44 @@ def _precheck_evidence_bounds(
     visit(obj, 0)
 
 
+def _encode_evidence(evidence: Any) -> str:
+    """Encode bounded JSON without materializing an unbounded input."""
+    _precheck_evidence_bounds(evidence, max_bytes=MAX_EVIDENCE_BYTES)
+    encoder = json.JSONEncoder(sort_keys=True, separators=(",", ":"), allow_nan=False)
+    pieces: list[str] = []
+    size = 0
+    for piece in encoder.iterencode(evidence):
+        if len(piece) > MAX_EVIDENCE_BYTES:
+            raise ValueError("evidence exceeds the byte limit")
+        size += len(piece.encode("utf-8"))
+        if size > MAX_EVIDENCE_BYTES:
+            raise ValueError("evidence exceeds the byte limit")
+        pieces.append(piece)
+    return "".join(pieces)
+
+
 class DurablePlanDedupeStore:
     """One SQLite connection per operation, with atomic state transitions.
 
     Records and consumed nonces are never evicted: exhaustion fails closed.
-    An ``EXECUTING`` identity observed by a competing/restarted reservation is
-    changed to ``IN_DOUBT``. This may also quarantine a still-running executor;
-    that conservative result is intentional because this store has no lease or
-    external-effect fencing authority. Quarantine resolution is not provided.
+    Live leases refuse duplicates without mutating the owner. Expired or legacy
+    executions are quarantined. Fencing protects database transitions only; it
+    cannot fence arbitrary external effects, which need their own authority.
     """
 
-    def __init__(self, path: str | Path) -> None:
+    def __init__(
+        self,
+        path: str | Path,
+        *,
+        clock: Callable[[], float] = time.time,
+        repair_authorizer: Callable[[str, str], bool] | None = None,
+    ) -> None:
+        if not callable(clock):
+            raise ValueError("clock must be callable")
+        if repair_authorizer is not None and not callable(repair_authorizer):
+            raise ValueError("repair_authorizer must be callable")
+        self._clock = clock
+        self._repair_authorizer = repair_authorizer
         if str(path) == ":memory:":
             raise ValueError("a persistent SQLite path is required")
         candidate = Path(path).expanduser().absolute()
@@ -160,6 +191,11 @@ class DurablePlanDedupeStore:
             "CREATE TABLE IF NOT EXISTS consumed_nonces ("
             "project_id TEXT NOT NULL, nonce TEXT NOT NULL, PRIMARY KEY(project_id, nonce))"
         )
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS plan_repair_events ("
+            "event_id INTEGER PRIMARY KEY, project_id TEXT NOT NULL, plan_id TEXT NOT NULL, "
+            "plan_hash TEXT NOT NULL, evidence_json TEXT NOT NULL)"
+        )
         if plans and "project_id" not in plans:
             conn.execute(
                 "INSERT INTO plans SELECT 'default', plan_id, plan_hash, status, "
@@ -171,6 +207,17 @@ class DurablePlanDedupeStore:
                 "INSERT INTO consumed_nonces SELECT 'default', nonce FROM consumed_nonces_legacy"
             )
             conn.execute("DROP TABLE consumed_nonces_legacy")
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(plans)")}
+        for name, definition in (
+            ("attempt", "INTEGER NOT NULL DEFAULT 0"),
+            ("owner_token", "TEXT"),
+            ("lease_expires_at", "REAL"),
+            ("compensation_status", "TEXT"),
+            ("compensation_evidence_json", "TEXT"),
+            ("repair_evidence_json", "TEXT"),
+        ):
+            if name not in columns:
+                conn.execute(f"ALTER TABLE plans ADD COLUMN {name} {definition}")
 
     def _protect_sidecars(self) -> None:
         flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
@@ -267,6 +314,18 @@ class DurablePlanDedupeStore:
         if not isinstance(plan_hash, str) or _HASH.fullmatch(plan_hash) is None:
             raise ValueError("plan_hash must be lowercase SHA-256 hex")
 
+    def _now(self) -> float:
+        value = self._clock()
+        if isinstance(value, bool) or not isinstance(value, (float, int)):
+            raise PlanStoreStateError("clock must return a finite epoch value")
+        try:
+            result = float(value)
+        except OverflowError as exc:
+            raise PlanStoreStateError("clock must return a finite epoch value") from exc
+        if not math.isfinite(result):
+            raise PlanStoreStateError("clock must return a finite epoch value")
+        return result
+
     def reserve(
         self, plan_id: str, plan_hash: str, *, external_effects: bool, project_id: str = "default"
     ) -> DurablePlanRecord:
@@ -282,7 +341,7 @@ class DurablePlanDedupeStore:
         result: DurablePlanRecord | None = None
         with self._transaction() as conn:
             row = conn.execute(
-                "SELECT plan_hash, status, external_effects, evidence_json "
+                "SELECT plan_hash, status, external_effects, evidence_json, lease_expires_at "
                 "FROM plans WHERE project_id=? AND plan_id=?",
                 (project_id, plan_id),
             ).fetchone()
@@ -291,18 +350,22 @@ class DurablePlanDedupeStore:
                 if count >= MAX_RECORDS:
                     raise PlanStoreCapacityError("plan record capacity reached")
                 conn.execute(
-                    "INSERT INTO plans VALUES (?, ?, ?, 'RESERVED', ?, NULL)",
+                    "INSERT INTO plans (project_id, plan_id, plan_hash, status, external_effects) "
+                    "VALUES (?, ?, ?, 'RESERVED', ?)",
                     (project_id, plan_id, plan_hash, int(external_effects)),
                 )
                 result = DurablePlanRecord(plan_id, plan_hash, "RESERVED", external_effects, None)
             else:
-                stored_hash, status, effects, evidence = row
+                stored_hash, status, effects, evidence, expiry = row
                 if stored_hash != plan_hash or bool(effects) != external_effects:
                     raise PlanReplayConflictError("plan identity differs from stored identity")
-                if status == "EXECUTING":
+                if status in ("EXECUTING", "COMPENSATING"):
+                    if expiry is not None and self._now() < expiry:
+                        raise PlanExecutionInProgressError("plan execution is still live")
                     conn.execute(
-                        "UPDATE plans SET status='IN_DOUBT' WHERE project_id=? AND plan_id=?",
-                        (project_id, plan_id),
+                        "UPDATE plans SET status='IN_DOUBT' WHERE project_id=? AND plan_id=? "
+                        "AND plan_hash=? AND status=? AND lease_expires_at IS ?",
+                        (project_id, plan_id, plan_hash, status, expiry),
                     )
                     quarantine = True
                 elif status == "COMMITTED":
@@ -316,63 +379,298 @@ class DurablePlanDedupeStore:
         assert result is not None
         return result
 
+    @staticmethod
+    def _expiry(now: float, ttl: float) -> float:
+        if isinstance(ttl, bool) or not isinstance(ttl, (int, float)) or not 0 < ttl <= 86400:
+            raise ValueError("lease_ttl_seconds must be finite and within (0, 86400]")
+        expires = now + ttl
+        if not math.isfinite(expires) or expires <= now:
+            raise ValueError("lease expiry is not finite and increasing")
+        return expires
+
     def start(
-        self, plan_id: str, plan_hash: str, *, nonce: str, project_id: str = "default"
-    ) -> None:
-        """Atomically consume a nonce and transition RESERVED to EXECUTING."""
+        self,
+        plan_id: str,
+        plan_hash: str,
+        *,
+        nonce: str,
+        project_id: str = "default",
+        lease_ttl_seconds: float = 30.0,
+    ) -> ExecutionLease:
+        """Consume a nonce and issue a fenced, persistent execution lease."""
         self._validate_identity(plan_id, plan_hash, project_id)
         if not isinstance(nonce, str) or not 1 <= len(nonce.encode("utf-8")) <= 256:
             raise ValueError("nonce must contain 1 to 256 UTF-8 bytes")
+        # Validate before taking the database lock, without consulting the clock.
+        self._expiry(0.0, lease_ttl_seconds)
+        expired = False
+        lease: ExecutionLease | None = None
         with self._transaction() as conn:
             row = conn.execute(
-                "SELECT plan_hash, status FROM plans WHERE project_id=? AND plan_id=?",
+                "SELECT plan_hash, status, attempt, lease_expires_at FROM plans "
+                "WHERE project_id=? AND plan_id=?",
                 (project_id, plan_id),
             ).fetchone()
-            if row is None or row[0] != plan_hash or row[1] != "RESERVED":
+            if row is None or row[0] != plan_hash:
                 raise PlanStoreStateError("plan is not reserved for this fingerprint")
-            try:
-                conn.execute("INSERT INTO consumed_nonces VALUES (?, ?)", (project_id, nonce))
-            except sqlite3.IntegrityError as exc:
-                raise PlanStoreStateError("nonce already consumed") from exc
-            conn.execute(
-                "UPDATE plans SET status='EXECUTING' WHERE project_id=? AND plan_id=?",
+            now = self._now()
+            if row[1] in ("EXECUTING", "COMPENSATING"):
+                if row[3] is not None and now < row[3]:
+                    raise PlanExecutionInProgressError("plan execution is still live")
+                conn.execute(
+                    "UPDATE plans SET status='IN_DOUBT' WHERE project_id=? AND plan_id=? "
+                    "AND plan_hash=? AND status=? AND attempt=?",
+                    (project_id, plan_id, plan_hash, row[1], row[2]),
+                )
+                expired = True
+            elif row[1] != "RESERVED":
+                raise PlanStoreStateError("plan is not reserved for this fingerprint")
+            else:
+                if row[2] < 0 or row[2] >= 2**63 - 1:
+                    raise PlanStoreStateError("execution attempt counter exhausted")
+                expires = self._expiry(now, lease_ttl_seconds)
+                try:
+                    conn.execute("INSERT INTO consumed_nonces VALUES (?, ?)", (project_id, nonce))
+                except sqlite3.IntegrityError as exc:
+                    raise PlanStoreStateError("nonce already consumed") from exc
+                attempt = row[2] + 1
+                owner = secrets.token_hex(32)
+                changed = conn.execute(
+                    "UPDATE plans SET status='EXECUTING', attempt=?, owner_token=?, "
+                    "lease_expires_at=? WHERE project_id=? AND plan_id=? AND plan_hash=? "
+                    "AND status='RESERVED' AND attempt=?",
+                    (attempt, owner, expires, project_id, plan_id, plan_hash, row[2]),
+                ).rowcount
+                if changed != 1:
+                    raise PlanStoreStateError("reservation changed while starting")
+                lease = ExecutionLease(project_id, plan_id, plan_hash, attempt, owner, expires)
+        if expired:
+            raise PlanInDoubtQuarantineError("expired execution is quarantined")
+        assert lease is not None
+        return lease
+
+    @staticmethod
+    def _validate_fence(attempt: int, owner_token: str) -> None:
+        if (
+            isinstance(attempt, bool)
+            or not isinstance(attempt, int)
+            or not 1 <= attempt <= 2**63 - 1
+            or not isinstance(owner_token, str)
+            or _HASH.fullmatch(owner_token) is None
+        ):
+            raise PlanFencingTokenMismatchError("invalid execution fence")
+
+    def heartbeat(
+        self,
+        plan_id: str,
+        plan_hash: str,
+        *,
+        attempt: int,
+        owner_token: str,
+        project_id: str = "default",
+        lease_ttl_seconds: float = 30.0,
+    ) -> ExecutionLease:
+        """Check ownership and extend a live execution without reviving an expired lease."""
+        self._validate_identity(plan_id, plan_hash, project_id)
+        self._validate_fence(attempt, owner_token)
+        self._expiry(0.0, lease_ttl_seconds)
+        with self._transaction() as conn:
+            now = self._now()
+            expiry = self._expiry(now, lease_ttl_seconds)
+            changed = conn.execute(
+                "UPDATE plans SET lease_expires_at=MAX(lease_expires_at, ?) "
+                "WHERE project_id=? AND plan_id=? AND plan_hash=? AND status='EXECUTING' "
+                "AND attempt=? AND owner_token=? AND lease_expires_at>?",
+                (expiry, project_id, plan_id, plan_hash, attempt, owner_token, now),
+            ).rowcount
+            if changed != 1:
+                raise PlanFencingTokenMismatchError(
+                    "execution is stale or its owner does not match"
+                )
+            row = conn.execute(
+                "SELECT lease_expires_at FROM plans WHERE project_id=? AND plan_id=?",
                 (project_id, plan_id),
-            )
+            ).fetchone()
+            assert row is not None
+            return ExecutionLease(project_id, plan_id, plan_hash, attempt, owner_token, row[0])
 
     def finish(
-        self, plan_id: str, plan_hash: str, *, evidence: Any, project_id: str = "default"
+        self,
+        plan_id: str,
+        plan_hash: str,
+        *,
+        attempt: int,
+        owner_token: str,
+        evidence: Any,
+        project_id: str = "default",
     ) -> None:
-        """Record canonical bounded JSON only for the executing identity."""
+        """Record bounded evidence only for the current, unexpired owner."""
         self._validate_identity(plan_id, plan_hash, project_id)
-        _precheck_evidence_bounds(evidence, max_bytes=MAX_EVIDENCE_BYTES)
-        encoder = json.JSONEncoder(sort_keys=True, separators=(",", ":"), allow_nan=False)
-        pieces: list[str] = []
-        size = 0
-        for piece in encoder.iterencode(evidence):
-            if len(piece) > MAX_EVIDENCE_BYTES:
-                raise ValueError("evidence exceeds the byte limit")
-            size += len(piece.encode("utf-8"))
-            if size > MAX_EVIDENCE_BYTES:
-                raise ValueError("evidence exceeds the byte limit")
-            pieces.append(piece)
-        body = "".join(pieces)
+        self._validate_fence(attempt, owner_token)
+        body = _encode_evidence(evidence)
         with self._transaction() as conn:
             changed = conn.execute(
                 "UPDATE plans SET status='COMMITTED', evidence_json=? "
-                "WHERE project_id=? AND plan_id=? AND plan_hash=? AND status='EXECUTING'",
-                (body, project_id, plan_id, plan_hash),
+                "WHERE project_id=? AND plan_id=? AND plan_hash=? AND status='EXECUTING' "
+                "AND attempt=? AND owner_token=? AND lease_expires_at>?",
+                (body, project_id, plan_id, plan_hash, attempt, owner_token, self._now()),
             ).rowcount
             if changed != 1:
-                raise PlanStoreStateError("plan is not executing for this fingerprint")
+                raise PlanFencingTokenMismatchError(
+                    "execution is stale or its owner does not match"
+                )
 
-    def quarantine(self, plan_id: str, plan_hash: str, *, project_id: str = "default") -> None:
-        """Persist a tombstone for a failed or uncertain executing plan."""
+    def quarantine(
+        self,
+        plan_id: str,
+        plan_hash: str,
+        *,
+        attempt: int,
+        owner_token: str,
+        project_id: str = "default",
+    ) -> None:
+        """Persist a tombstone only for the matching execution owner."""
         self._validate_identity(plan_id, plan_hash, project_id)
+        self._validate_fence(attempt, owner_token)
         with self._transaction() as conn:
             changed = conn.execute(
                 "UPDATE plans SET status='IN_DOUBT' "
-                "WHERE project_id=? AND plan_id=? AND plan_hash=? AND status='EXECUTING'",
-                (project_id, plan_id, plan_hash),
+                "WHERE project_id=? AND plan_id=? AND plan_hash=? "
+                "AND status IN ('EXECUTING', 'COMPENSATING') "
+                "AND attempt=? AND owner_token=? AND lease_expires_at>?",
+                (project_id, plan_id, plan_hash, attempt, owner_token, self._now()),
             ).rowcount
             if changed != 1:
-                raise PlanStoreStateError("plan is not executing for this fingerprint")
+                raise PlanFencingTokenMismatchError(
+                    "execution is stale or its owner does not match"
+                )
+
+    def mark_compensating(
+        self,
+        plan_id: str,
+        plan_hash: str,
+        *,
+        attempt: int,
+        owner_token: str,
+        project_id: str = "default",
+    ) -> None:
+        """Persist the start of compensation under the current live fence."""
+        self._validate_identity(plan_id, plan_hash, project_id)
+        self._validate_fence(attempt, owner_token)
+        with self._transaction() as conn:
+            changed = conn.execute(
+                "UPDATE plans SET status='COMPENSATING', compensation_status='STARTED' "
+                "WHERE project_id=? AND plan_id=? AND plan_hash=? AND status='EXECUTING' "
+                "AND attempt=? AND owner_token=? AND lease_expires_at>?",
+                (project_id, plan_id, plan_hash, attempt, owner_token, self._now()),
+            ).rowcount
+            if changed != 1:
+                raise PlanFencingTokenMismatchError(
+                    "execution is stale or its owner does not match"
+                )
+
+    def record_compensation(
+        self,
+        plan_id: str,
+        plan_hash: str,
+        *,
+        attempt: int,
+        owner_token: str,
+        succeeded: bool,
+        evidence: Any,
+        project_id: str = "default",
+    ) -> None:
+        """Record the outcome of a matching live compensation attempt."""
+        self._validate_identity(plan_id, plan_hash, project_id)
+        self._validate_fence(attempt, owner_token)
+        if not isinstance(succeeded, bool):
+            raise ValueError("succeeded must be boolean")
+        body = _encode_evidence(evidence)
+        result = "ROLLED_BACK" if succeeded else "ROLLBACK_FAILED"
+        with self._transaction() as conn:
+            changed = conn.execute(
+                "UPDATE plans SET status=?, compensation_status=?, compensation_evidence_json=? "
+                "WHERE project_id=? AND plan_id=? AND plan_hash=? AND status='COMPENSATING' "
+                "AND attempt=? AND owner_token=? AND lease_expires_at>?",
+                (
+                    result,
+                    result,
+                    body,
+                    project_id,
+                    plan_id,
+                    plan_hash,
+                    attempt,
+                    owner_token,
+                    self._now(),
+                ),
+            ).rowcount
+            if changed != 1:
+                raise PlanFencingTokenMismatchError(
+                    "compensation is stale or its owner does not match"
+                )
+
+    def repair_in_doubt(
+        self,
+        project_id: str,
+        plan_id: str,
+        plan_hash: str,
+        *,
+        expected_status: str,
+        operator_id: str,
+        resolution_action: str,
+        reason: str,
+    ) -> None:
+        """Record an authorized, audited resolution of a quarantined plan.
+
+        ``authorize_takeover`` explicitly permits a new attempt, but only after
+        the operator has investigated uncertain external effects and stopped the
+        old worker. SQLite fencing alone cannot revoke a running external effect.
+        The injected authorizer must bind operator_id to the authenticated actor.
+        """
+        self._validate_identity(plan_id, plan_hash, project_id)
+        validate_plan_identity(operator_id, name="operator_id")
+        if expected_status not in ("IN_DOUBT", "ROLLBACK_FAILED"):
+            raise ValueError("unsupported expected status")
+        if resolution_action not in ("confirm_rolled_back", "authorize_takeover"):
+            raise ValueError("unsupported repair action")
+        if not isinstance(reason, str) or not reason.strip() or len(reason) > 2048:
+            raise ValueError("repair reason must contain 1 to 2048 characters")
+        with self._transaction() as conn:
+            if (
+                self._repair_authorizer is None
+                or self._repair_authorizer(project_id, operator_id) is not True
+            ):
+                raise PlanStoreStateError("repair authorization denied")
+            row = conn.execute(
+                "SELECT status, attempt FROM plans WHERE project_id=? AND plan_id=? "
+                "AND plan_hash=?",
+                (project_id, plan_id, plan_hash),
+            ).fetchone()
+            if row is None or row[0] != expected_status:
+                raise PlanStoreStateError("plan is not eligible for repair at expected status")
+            if conn.execute("SELECT count(*) FROM plan_repair_events").fetchone()[0] >= MAX_RECORDS:
+                raise PlanStoreCapacityError("repair audit capacity reached")
+            evidence = _encode_evidence(
+                {
+                    "operator_id": operator_id,
+                    "action": resolution_action,
+                    "reason": reason,
+                    "previous_status": row[0],
+                    "previous_attempt": row[1],
+                    "resolved_at": self._now(),
+                }
+            )
+            target = "ROLLED_BACK" if resolution_action == "confirm_rolled_back" else "RESERVED"
+            changed = conn.execute(
+                "UPDATE plans SET status=?, repair_evidence_json=?, owner_token=NULL, "
+                "lease_expires_at=NULL WHERE project_id=? AND plan_id=? AND plan_hash=? "
+                "AND status=?",
+                (target, evidence, project_id, plan_id, plan_hash, expected_status),
+            ).rowcount
+            if changed != 1:
+                raise PlanStoreStateError("plan changed while repairing")
+            conn.execute(
+                "INSERT INTO plan_repair_events (project_id, plan_id, plan_hash, evidence_json) "
+                "VALUES (?, ?, ?, ?)",
+                (project_id, plan_id, plan_hash, evidence),
+            )

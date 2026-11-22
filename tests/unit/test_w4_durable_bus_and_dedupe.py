@@ -33,8 +33,10 @@ def test_wal_and_durable_redelivery(tmp_path: Path) -> None:
     path = tmp_path / "plans.sqlite"
     first = DurablePlanDedupeStore(path)
     assert first.reserve("p", HASH, external_effects=True).status == "RESERVED"
-    first.start("p", HASH, nonce="n")
-    first.finish("p", HASH, evidence={"z": 2, "a": 1})
+    lease = first.start("p", HASH, nonce="n")
+    first.finish(
+        "p", HASH, attempt=lease.attempt, owner_token=lease.owner_token, evidence={"z": 2, "a": 1}
+    )
     replay = DurablePlanDedupeStore(path).reserve("p", HASH, external_effects=True)
     assert replay.status == "COMMITTED"
     assert replay.evidence_json is not None
@@ -45,26 +47,28 @@ def test_wal_and_durable_redelivery(tmp_path: Path) -> None:
 
 def test_in_doubt_survives_restart(tmp_path: Path) -> None:
     path = tmp_path / "db"
-    first = DurablePlanDedupeStore(path)
+    first = DurablePlanDedupeStore(path, clock=lambda: 1.0)
     first.reserve("p", HASH, external_effects=True)
-    first.start("p", HASH, nonce="n")
+    lease = first.start("p", HASH, nonce="n")
     for _ in range(2):
         with pytest.raises(PlanInDoubtQuarantineError):
-            DurablePlanDedupeStore(path).reserve("p", HASH, external_effects=True)
+            DurablePlanDedupeStore(path, clock=lambda: 31.0).reserve(
+                "p", HASH, external_effects=True
+            )
     with sqlite3.connect(path) as conn:
         assert conn.execute("SELECT status FROM plans").fetchone()[0] == "IN_DOUBT"
     with pytest.raises(PlanStoreStateError):
-        first.finish("p", HASH, evidence={})
+        first.finish("p", HASH, attempt=lease.attempt, owner_token=lease.owner_token, evidence={})
 
 
 def test_explicit_quarantine_is_permanent(store: DurablePlanDedupeStore) -> None:
     store.reserve("p", HASH, external_effects=True)
-    store.start("p", HASH, nonce="n")
-    store.quarantine("p", HASH)
+    lease = store.start("p", HASH, nonce="n")
+    store.quarantine("p", HASH, attempt=lease.attempt, owner_token=lease.owner_token)
     with pytest.raises(PlanInDoubtQuarantineError):
         store.reserve("p", HASH, external_effects=True)
     with pytest.raises(PlanStoreStateError):
-        store.quarantine("p", HASH)
+        store.quarantine("p", HASH, attempt=lease.attempt, owner_token=lease.owner_token)
 
 
 def test_conflicting_hash_and_effect_scope(store: DurablePlanDedupeStore) -> None:
@@ -83,8 +87,8 @@ def test_reserved_identity_does_not_replay(store: DurablePlanDedupeStore) -> Non
 
 def test_nonce_consumption_is_durable(store: DurablePlanDedupeStore) -> None:
     store.reserve("p", HASH, external_effects=False)
-    store.start("p", HASH, nonce="same")
-    store.finish("p", HASH, evidence={})
+    lease = store.start("p", HASH, nonce="same")
+    store.finish("p", HASH, attempt=lease.attempt, owner_token=lease.owner_token, evidence={})
     store.reserve("q", HASH, external_effects=False)
     with pytest.raises(PlanStoreStateError, match="nonce already consumed"):
         store.start("q", HASH, nonce="same")
@@ -96,8 +100,8 @@ def test_capacity_fails_closed_without_evicting_tombstone(
 ) -> None:
     monkeypatch.setattr(store_module, "MAX_RECORDS", 1)
     store.reserve("p", HASH, external_effects=True)
-    store.start("p", HASH, nonce="n")
-    store.quarantine("p", HASH)
+    lease = store.start("p", HASH, nonce="n")
+    store.quarantine("p", HASH, attempt=lease.attempt, owner_token=lease.owner_token)
     with pytest.raises(PlanStoreCapacityError):
         store.reserve("q", HASH, external_effects=False)
     with pytest.raises(PlanInDoubtQuarantineError):
@@ -146,14 +150,28 @@ def test_finish_rejects_invalid_evidence_and_preserves_execution(
     store: DurablePlanDedupeStore,
 ) -> None:
     store.reserve("p", HASH, external_effects=False)
-    store.start("p", HASH, nonce="n")
+    lease = store.start("p", HASH, nonce="n")
     with pytest.raises(ValueError):
-        store.finish("p", HASH, evidence={"bad": float("nan")})
+        store.finish(
+            "p",
+            HASH,
+            attempt=lease.attempt,
+            owner_token=lease.owner_token,
+            evidence={"bad": float("nan")},
+        )
     with pytest.raises(ValueError, match="byte limit"):
-        store.finish("p", HASH, evidence="x" * (store_module.MAX_EVIDENCE_BYTES + 1))
-    store.finish("p", HASH, evidence={"ok": True})
+        store.finish(
+            "p",
+            HASH,
+            attempt=lease.attempt,
+            owner_token=lease.owner_token,
+            evidence="x" * (store_module.MAX_EVIDENCE_BYTES + 1),
+        )
+    store.finish(
+        "p", HASH, attempt=lease.attempt, owner_token=lease.owner_token, evidence={"ok": True}
+    )
     with pytest.raises(PlanStoreStateError):
-        store.finish("p", HASH, evidence={})
+        store.finish("p", HASH, attempt=lease.attempt, owner_token=lease.owner_token, evidence={})
 
 
 def test_competing_reservations_are_fail_closed(tmp_path: Path) -> None:
@@ -233,8 +251,15 @@ def test_symlink_database_refused(tmp_path: Path) -> None:
 def test_distinct_projects_isolate_plans_evidence_and_nonces(store: DurablePlanDedupeStore) -> None:
     for project, value in (("project-a", "secret-a"), ("project-b", "secret-b")):
         store.reserve("same-plan", HASH, external_effects=True, project_id=project)
-        store.start("same-plan", HASH, nonce="same-nonce", project_id=project)
-        store.finish("same-plan", HASH, evidence={"value": value}, project_id=project)
+        lease = store.start("same-plan", HASH, nonce="same-nonce", project_id=project)
+        store.finish(
+            "same-plan",
+            HASH,
+            attempt=lease.attempt,
+            owner_token=lease.owner_token,
+            evidence={"value": value},
+            project_id=project,
+        )
     for project, value in (("project-a", "secret-a"), ("project-b", "secret-b")):
         record = store.reserve("same-plan", HASH, external_effects=True, project_id=project)
         assert record.evidence_json is not None
@@ -273,9 +298,15 @@ def test_oversized_incremental_evidence_leaves_execution_state(
     store: DurablePlanDedupeStore,
 ) -> None:
     store.reserve("p", HASH, external_effects=False)
-    store.start("p", HASH, nonce="n")
+    lease = store.start("p", HASH, nonce="n")
     with pytest.raises(ValueError, match="byte limit"):
-        store.finish("p", HASH, evidence=["x" * 1024] * 100)
+        store.finish(
+            "p",
+            HASH,
+            attempt=lease.attempt,
+            owner_token=lease.owner_token,
+            evidence=["x" * 1024] * 100,
+        )
     with sqlite3.connect(store.path) as conn:
         assert conn.execute("SELECT status, evidence_json FROM plans").fetchone() == (
             "EXECUTING",
@@ -463,14 +494,20 @@ def test_evidence_precheck_rejects_oversized_string_before_encoder(
     store: DurablePlanDedupeStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     store.reserve("p", HASH, external_effects=False)
-    store.start("p", HASH, nonce="n")
+    lease = store.start("p", HASH, nonce="n")
 
     def unexpected_encoder(*_args: Any, **_kwargs: Any) -> Any:
         raise AssertionError("encoder should not be invoked")
 
     monkeypatch.setattr(json, "JSONEncoder", unexpected_encoder)
     with pytest.raises(ValueError, match="byte limit"):
-        store.finish("p", HASH, evidence="x" * (store_module.MAX_EVIDENCE_BYTES + 1))
+        store.finish(
+            "p",
+            HASH,
+            attempt=lease.attempt,
+            owner_token=lease.owner_token,
+            evidence="x" * (store_module.MAX_EVIDENCE_BYTES + 1),
+        )
     with sqlite3.connect(store.path) as conn:
         assert conn.execute("SELECT status FROM plans").fetchone()[0] == "EXECUTING"
 
@@ -531,8 +568,453 @@ def test_encoder_escaped_output_cannot_exceed_limit(
     store: DurablePlanDedupeStore, evidence: Any
 ) -> None:
     store.reserve("p", HASH, external_effects=False)
-    store.start("p", HASH, nonce="n")
+    lease = store.start("p", HASH, nonce="n")
     with pytest.raises(ValueError, match="byte limit"):
-        store.finish("p", HASH, evidence=evidence)
+        store.finish(
+            "p", HASH, attempt=lease.attempt, owner_token=lease.owner_token, evidence=evidence
+        )
     with sqlite3.connect(store.path) as conn:
         assert conn.execute("SELECT status FROM plans").fetchone()[0] == "EXECUTING"
+
+
+def test_live_lease_duplicate_is_refused_without_disrupting_owner(tmp_path: Path) -> None:
+    from nexus_ai_agent.creative.studio.durable_dedupe import PlanExecutionInProgressError
+
+    clock = [100.0]
+    path = tmp_path / "leases.db"
+    first = DurablePlanDedupeStore(path, clock=lambda: clock[0])
+    first.reserve("p", HASH, external_effects=True)
+    lease = first.start("p", HASH, nonce="n", lease_ttl_seconds=10)
+    second = DurablePlanDedupeStore(path, clock=lambda: clock[0])
+    with pytest.raises(PlanExecutionInProgressError):
+        second.reserve("p", HASH, external_effects=True)
+    with pytest.raises(PlanExecutionInProgressError):
+        second.start("p", HASH, nonce="another")
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("SELECT status, attempt, owner_token FROM plans").fetchone() == (
+            "EXECUTING",
+            lease.attempt,
+            lease.owner_token,
+        )
+    first.finish("p", HASH, attempt=lease.attempt, owner_token=lease.owner_token, evidence={})
+    assert second.reserve("p", HASH, external_effects=True).status == "COMMITTED"
+
+
+def test_expired_lease_quarantines_and_fences_owner(tmp_path: Path) -> None:
+    from nexus_ai_agent.creative.studio.durable_dedupe import PlanFencingTokenMismatchError
+
+    clock = [100.0]
+    path = tmp_path / "leases.db"
+    store = DurablePlanDedupeStore(path, clock=lambda: clock[0])
+    store.reserve("p", HASH, external_effects=True)
+    lease = store.start("p", HASH, nonce="n", lease_ttl_seconds=10)
+    with pytest.raises(PlanFencingTokenMismatchError):
+        store.finish("p", HASH, attempt=lease.attempt, owner_token="f" * 64, evidence={})
+    with pytest.raises(PlanFencingTokenMismatchError):
+        store.quarantine("p", HASH, attempt=lease.attempt + 1, owner_token=lease.owner_token)
+    clock[0] = 110.0
+    with pytest.raises(PlanFencingTokenMismatchError):
+        store.finish("p", HASH, attempt=lease.attempt, owner_token=lease.owner_token, evidence={})
+    with pytest.raises(PlanInDoubtQuarantineError):
+        store.reserve("p", HASH, external_effects=True)
+    with pytest.raises(PlanFencingTokenMismatchError):
+        store.quarantine("p", HASH, attempt=lease.attempt, owner_token=lease.owner_token)
+
+
+@pytest.mark.parametrize("ttl", [True, 0, -1, float("nan"), float("inf"), 86401, "3"])
+def test_invalid_lease_ttl_is_refused(store: DurablePlanDedupeStore, ttl: Any) -> None:
+    store.reserve("p", HASH, external_effects=False)
+    with pytest.raises(ValueError, match="lease_ttl_seconds"):
+        store.start("p", HASH, nonce="n", lease_ttl_seconds=ttl)
+    lease = store.start("p", HASH, nonce="n")
+    assert lease.attempt == 1
+
+
+def test_expired_duplicate_start_commits_quarantine(tmp_path: Path) -> None:
+    clock = [100.0]
+    store = DurablePlanDedupeStore(tmp_path / "db", clock=lambda: clock[0])
+    store.reserve("p", HASH, external_effects=False)
+    store.start("p", HASH, nonce="n", lease_ttl_seconds=1)
+    clock[0] = 101.0
+    with pytest.raises(PlanInDoubtQuarantineError):
+        store.start("p", HASH, nonce="new")
+    with sqlite3.connect(store.path) as conn:
+        assert conn.execute("SELECT status FROM plans").fetchone()[0] == "IN_DOUBT"
+
+
+@pytest.mark.parametrize("succeeded,status", [(True, "ROLLED_BACK"), (False, "ROLLBACK_FAILED")])
+def test_compensation_outcome_persists_under_fence(
+    tmp_path: Path, succeeded: bool, status: str
+) -> None:
+    from nexus_ai_agent.creative.studio.durable_dedupe import PlanFencingTokenMismatchError
+
+    path = tmp_path / "db"
+    store = DurablePlanDedupeStore(path, clock=lambda: 1.0)
+    store.reserve("p", HASH, external_effects=True)
+    lease = store.start("p", HASH, nonce="n")
+    with pytest.raises(PlanFencingTokenMismatchError):
+        store.mark_compensating("p", HASH, attempt=lease.attempt, owner_token="e" * 64)
+    store.mark_compensating("p", HASH, attempt=lease.attempt, owner_token=lease.owner_token)
+    with pytest.raises(PlanFencingTokenMismatchError):
+        store.record_compensation(
+            "p",
+            HASH,
+            attempt=lease.attempt + 1,
+            owner_token=lease.owner_token,
+            succeeded=succeeded,
+            evidence={"undo": status},
+        )
+    store.record_compensation(
+        "p",
+        HASH,
+        attempt=lease.attempt,
+        owner_token=lease.owner_token,
+        succeeded=succeeded,
+        evidence={"undo": status},
+    )
+    with sqlite3.connect(path) as conn:
+        row = conn.execute(
+            "SELECT status, compensation_status, compensation_evidence_json FROM plans"
+        ).fetchone()
+    assert row[:2] == (status, status)
+    assert json.loads(row[2]) == {"undo": status}
+    with pytest.raises(PlanInDoubtQuarantineError):
+        DurablePlanDedupeStore(path).reserve("p", HASH, external_effects=True)
+
+
+def test_expired_compensation_quarantines(tmp_path: Path) -> None:
+    clock = [1.0]
+    store = DurablePlanDedupeStore(tmp_path / "db", clock=lambda: clock[0])
+    store.reserve("p", HASH, external_effects=True)
+    lease = store.start("p", HASH, nonce="n", lease_ttl_seconds=1)
+    store.mark_compensating("p", HASH, attempt=lease.attempt, owner_token=lease.owner_token)
+    clock[0] = 2.0
+    with pytest.raises(PlanInDoubtQuarantineError):
+        store.reserve("p", HASH, external_effects=True)
+    with sqlite3.connect(store.path) as conn:
+        assert conn.execute("SELECT status FROM plans").fetchone()[0] == "IN_DOUBT"
+
+
+@pytest.mark.parametrize("status", ["IN_DOUBT", "ROLLBACK_FAILED"])
+def test_repair_requires_authorization_and_persists_resolution(tmp_path: Path, status: str) -> None:
+    path = tmp_path / "db"
+    clock = [10.0]
+    store = DurablePlanDedupeStore(path, clock=lambda: clock[0])
+    store.reserve("p", HASH, external_effects=True)
+    lease = store.start("p", HASH, nonce="n")
+    if status == "IN_DOUBT":
+        store.quarantine("p", HASH, attempt=lease.attempt, owner_token=lease.owner_token)
+    else:
+        store.mark_compensating("p", HASH, attempt=lease.attempt, owner_token=lease.owner_token)
+        store.record_compensation(
+            "p",
+            HASH,
+            attempt=lease.attempt,
+            owner_token=lease.owner_token,
+            succeeded=False,
+            evidence={"error": "failed"},
+        )
+    kwargs = {
+        "operator_id": "admin",
+        "resolution_action": "confirm_rolled_back",
+        "reason": "checked",
+        "expected_status": status,
+    }
+    with pytest.raises(PlanStoreStateError, match="authorization"):
+        store.repair_in_doubt("default", "p", HASH, **kwargs)
+    authorized = DurablePlanDedupeStore(
+        path,
+        clock=lambda: clock[0],
+        repair_authorizer=lambda project, operator: project == "default" and operator == "admin",
+    )
+    with pytest.raises(PlanStoreStateError, match="authorization"):
+        authorized.repair_in_doubt("default", "p", HASH, **{**kwargs, "operator_id": "other"})
+    authorized.repair_in_doubt("default", "p", HASH, **kwargs)
+    with sqlite3.connect(path) as conn:
+        actual_status, evidence = conn.execute(
+            "SELECT status, repair_evidence_json FROM plans"
+        ).fetchone()
+    assert actual_status == "ROLLED_BACK"
+    assert json.loads(evidence) == {
+        "operator_id": "admin",
+        "action": "confirm_rolled_back",
+        "reason": "checked",
+        "previous_status": status,
+        "previous_attempt": 1,
+        "resolved_at": 10.0,
+    }
+    with pytest.raises(PlanStoreStateError, match="eligible"):
+        authorized.repair_in_doubt("default", "p", HASH, **kwargs)
+    with pytest.raises(PlanInDoubtQuarantineError):
+        authorized.reserve("p", HASH, external_effects=True)
+
+
+def test_upgrade_tenant_database_quarantines_legacy_executing(tmp_path: Path) -> None:
+    path = tmp_path / "legacy.db"
+    with sqlite3.connect(path) as conn:
+        conn.executescript(
+            "CREATE TABLE plans (project_id TEXT NOT NULL, plan_id TEXT NOT NULL, "
+            "plan_hash TEXT NOT NULL, status TEXT NOT NULL, external_effects INTEGER NOT NULL, "
+            "evidence_json TEXT, PRIMARY KEY(project_id, plan_id));"
+            "CREATE TABLE consumed_nonces (project_id TEXT NOT NULL, nonce TEXT NOT NULL, "
+            "PRIMARY KEY(project_id, nonce));"
+        )
+        conn.execute(
+            "INSERT INTO plans VALUES (?, ?, ?, 'EXECUTING', 1, NULL)", ("default", "p", HASH)
+        )
+        conn.execute("INSERT INTO consumed_nonces VALUES ('default', 'old')")
+    store = DurablePlanDedupeStore(path, clock=lambda: 1.0)
+    with pytest.raises(PlanInDoubtQuarantineError):
+        store.reserve("p", HASH, external_effects=True)
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("SELECT status, attempt, owner_token FROM plans").fetchone() == (
+            "IN_DOUBT",
+            0,
+            None,
+        )
+        assert conn.execute("SELECT nonce FROM consumed_nonces").fetchone()[0] == "old"
+
+
+@pytest.mark.parametrize("value", [True, None, "1", float("nan"), float("inf"), 10**400])
+def test_invalid_clock_fails_closed_and_does_not_consume_nonce(tmp_path: Path, value: Any) -> None:
+    path = tmp_path / "db"
+    store = DurablePlanDedupeStore(path, clock=lambda: value)
+    store.reserve("p", HASH, external_effects=False)
+    with pytest.raises(PlanStoreStateError, match="clock"):
+        store.start("p", HASH, nonce="n")
+    healthy = DurablePlanDedupeStore(path, clock=lambda: 1.0)
+    assert healthy.start("p", HASH, nonce="n").attempt == 1
+
+
+def test_extreme_clock_and_attempt_counter_refused(tmp_path: Path) -> None:
+    path = tmp_path / "db"
+    store = DurablePlanDedupeStore(path, clock=lambda: 1e300)
+    store.reserve("p", HASH, external_effects=False)
+    with pytest.raises(ValueError, match="lease expiry"):
+        store.start("p", HASH, nonce="n")
+    with sqlite3.connect(path) as conn:
+        conn.execute("UPDATE plans SET attempt=?", (2**63 - 1,))
+    with pytest.raises(PlanStoreStateError, match="counter exhausted"):
+        store.start("p", HASH, nonce="n")
+
+
+@pytest.mark.parametrize(
+    "attempt,token",
+    [(True, "a" * 64), ("1", "a" * 64), (0, "a" * 64), (2**63, "a" * 64), (1, None), (1, "x")],
+)
+def test_invalid_fences_fail_closed(
+    store: DurablePlanDedupeStore, attempt: Any, token: Any
+) -> None:
+    from nexus_ai_agent.creative.studio.durable_dedupe import PlanFencingTokenMismatchError
+
+    store.reserve("p", HASH, external_effects=False)
+    lease = store.start("p", HASH, nonce="n")
+    with pytest.raises(PlanFencingTokenMismatchError):
+        store.finish("p", HASH, attempt=attempt, owner_token=token, evidence={})
+    store.finish("p", HASH, attempt=lease.attempt, owner_token=lease.owner_token, evidence={})
+    with pytest.raises(PlanStoreStateError):
+        store.start("p", HASH, nonce="new")
+
+
+def test_repair_validation_and_compensation_validation(store: DurablePlanDedupeStore) -> None:
+    store.reserve("p", HASH, external_effects=True)
+    lease = store.start("p", HASH, nonce="n")
+    store.mark_compensating("p", HASH, attempt=lease.attempt, owner_token=lease.owner_token)
+    with pytest.raises(ValueError, match="boolean"):
+        store.record_compensation(
+            "p",
+            HASH,
+            attempt=lease.attempt,
+            owner_token=lease.owner_token,
+            succeeded=1,  # type: ignore[arg-type]
+            evidence={},
+        )
+    with pytest.raises(ValueError, match="action"):
+        store.repair_in_doubt(
+            "default",
+            "p",
+            HASH,
+            operator_id="op",
+            expected_status="IN_DOUBT",
+            resolution_action="replay",
+            reason="x",
+        )
+    for notes in ("", " ", "x" * 2049):
+        with pytest.raises(ValueError, match="reason"):
+            store.repair_in_doubt(
+                "default",
+                "p",
+                HASH,
+                operator_id="op",
+                resolution_action="confirm_rolled_back",
+                expected_status="IN_DOUBT",
+                reason=notes,
+            )
+
+
+def test_invalid_injected_dependencies(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="clock"):
+        DurablePlanDedupeStore(tmp_path / "a", clock=1)  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="repair_authorizer"):
+        DurablePlanDedupeStore(tmp_path / "b", repair_authorizer=1)  # type: ignore[arg-type]
+
+
+def test_competing_live_starts_issue_exactly_one_lease(tmp_path: Path) -> None:
+    from nexus_ai_agent.creative.studio.durable_dedupe import PlanExecutionInProgressError
+
+    path = tmp_path / "db"
+    store = DurablePlanDedupeStore(path, clock=lambda: 1.0)
+    store.reserve("p", HASH, external_effects=True)
+
+    def start(nonce: str) -> str:
+        other = DurablePlanDedupeStore(path, clock=lambda: 1.0)
+        try:
+            return other.start("p", HASH, nonce=nonce).owner_token
+        except PlanExecutionInProgressError:
+            return "live"
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(start, ["n1", "n2"]))
+    assert results.count("live") == 1
+    owner = next(value for value in results if value != "live")
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("SELECT status, attempt, owner_token FROM plans").fetchone() == (
+            "EXECUTING",
+            1,
+            owner,
+        )
+        assert conn.execute("SELECT count(*) FROM consumed_nonces").fetchone()[0] == 1
+
+
+def test_authorized_takeover_fences_old_worker_and_preserves_new_owner(tmp_path: Path) -> None:
+    from nexus_ai_agent.creative.studio.durable_dedupe import PlanFencingTokenMismatchError
+
+    now = [100.0]
+    path = tmp_path / "lease.db"
+    store = DurablePlanDedupeStore(
+        path, clock=lambda: now[0], repair_authorizer=lambda p, o: p == "default" and o == "admin"
+    )
+    store.reserve("p", HASH, external_effects=True)
+    old = store.start("p", HASH, nonce="old", lease_ttl_seconds=5)
+    now[0] = 104.0
+    renewed = store.heartbeat(
+        "p", HASH, attempt=old.attempt, owner_token=old.owner_token, lease_ttl_seconds=5
+    )
+    assert renewed.lease_expires_at == 109.0
+    now[0] = 109.0
+    with pytest.raises(PlanFencingTokenMismatchError):
+        store.heartbeat("p", HASH, attempt=old.attempt, owner_token=old.owner_token)
+    with pytest.raises(PlanInDoubtQuarantineError):
+        store.reserve("p", HASH, external_effects=True)
+    with pytest.raises(PlanStoreStateError, match="expected status"):
+        store.repair_in_doubt(
+            "default",
+            "p",
+            HASH,
+            expected_status="ROLLBACK_FAILED",
+            operator_id="admin",
+            resolution_action="authorize_takeover",
+            reason="old worker stopped",
+        )
+    store.repair_in_doubt(
+        "default",
+        "p",
+        HASH,
+        expected_status="IN_DOUBT",
+        operator_id="admin",
+        resolution_action="authorize_takeover",
+        reason="old worker stopped",
+    )
+    with pytest.raises(PlanStoreStateError, match="nonce already consumed"):
+        store.start("p", HASH, nonce="old")
+    new = store.start("p", HASH, nonce="new")
+    assert new.fencing_epoch == old.fencing_epoch + 1
+    assert new.owner_token != old.owner_token
+    with sqlite3.connect(path) as conn:
+        before = conn.execute("SELECT * FROM plans").fetchone()
+    for action in (
+        lambda: store.finish(
+            "p", HASH, attempt=old.attempt, owner_token=old.owner_token, evidence={}
+        ),
+        lambda: store.heartbeat("p", HASH, attempt=old.attempt, owner_token=old.owner_token),
+        lambda: store.mark_compensating(
+            "p", HASH, attempt=old.attempt, owner_token=old.owner_token
+        ),
+        lambda: store.quarantine("p", HASH, attempt=old.attempt, owner_token=old.owner_token),
+        lambda: store.record_compensation(
+            "p", HASH, attempt=old.attempt, owner_token=old.owner_token, succeeded=True, evidence={}
+        ),
+    ):
+        with pytest.raises(PlanFencingTokenMismatchError):
+            action()
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("SELECT * FROM plans").fetchone() == before
+        event = conn.execute("SELECT evidence_json FROM plan_repair_events").fetchone()[0]
+        assert json.loads(event)["previous_attempt"] == old.attempt
+    store.finish(
+        "p", HASH, attempt=new.attempt, owner_token=new.owner_token, evidence={"new": True}
+    )
+    assert store.reserve("p", HASH, external_effects=True).status == "COMMITTED"
+
+
+def test_full_legacy_migration_preserves_all_rows_and_nonces(tmp_path: Path) -> None:
+    path = tmp_path / "old.db"
+    old_rows = [
+        ("done", HASH, "COMMITTED", 1, '{"legacy":true}'),
+        ("pending", OTHER, "RESERVED", 0, None),
+        ("running", HASH, "EXECUTING", 1, None),
+    ]
+    with sqlite3.connect(path) as conn:
+        conn.execute(
+            "CREATE TABLE plans (plan_id TEXT PRIMARY KEY, plan_hash TEXT NOT NULL, "
+            "status TEXT NOT NULL, external_effects INTEGER NOT NULL, evidence_json TEXT)"
+        )
+        conn.execute("CREATE TABLE consumed_nonces (nonce TEXT PRIMARY KEY)")
+        conn.executemany("INSERT INTO plans VALUES (?, ?, ?, ?, ?)", old_rows)
+        conn.executemany("INSERT INTO consumed_nonces VALUES (?)", [("n1",), ("n2",)])
+    DurablePlanDedupeStore(path)
+    with sqlite3.connect(path) as conn:
+        assert conn.execute(
+            "SELECT plan_id, plan_hash, status, external_effects, evidence_json "
+            "FROM plans ORDER BY plan_id"
+        ).fetchall() == sorted(old_rows)
+        assert conn.execute(
+            "SELECT project_id, nonce FROM consumed_nonces ORDER BY nonce"
+        ).fetchall() == [("default", "n1"), ("default", "n2")]
+        assert conn.execute(
+            "SELECT DISTINCT project_id, attempt, owner_token, lease_expires_at FROM plans"
+        ).fetchall() == [("default", 0, None, None)]
+
+
+def test_repair_requires_valid_expected_status_and_bounded_audit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "db"
+    store = DurablePlanDedupeStore(path, clock=lambda: 1.0, repair_authorizer=lambda _p, _o: True)
+    store.reserve("p", HASH, external_effects=True)
+    lease = store.start("p", HASH, nonce="n")
+    store.quarantine("p", HASH, attempt=lease.attempt, owner_token=lease.owner_token)
+    with pytest.raises(ValueError, match="expected status"):
+        store.repair_in_doubt(
+            "default",
+            "p",
+            HASH,
+            expected_status="EXECUTING",
+            operator_id="admin",
+            resolution_action="authorize_takeover",
+            reason="investigated",
+        )
+    monkeypatch.setattr(store_module, "MAX_RECORDS", 0)
+    with pytest.raises(PlanStoreCapacityError, match="audit capacity"):
+        store.repair_in_doubt(
+            "default",
+            "p",
+            HASH,
+            expected_status="IN_DOUBT",
+            operator_id="admin",
+            resolution_action="authorize_takeover",
+            reason="investigated",
+        )
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("SELECT status FROM plans").fetchone()[0] == "IN_DOUBT"
+        assert conn.execute("SELECT count(*) FROM plan_repair_events").fetchone()[0] == 0
