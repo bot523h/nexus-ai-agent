@@ -98,6 +98,7 @@ from nexus_ai_agent.creative.studio.models import (
     TypedCommand,
     compute_state_hash,
 )
+from nexus_ai_agent.creative.studio.plan_identifiers import validate_plan_identity
 from nexus_ai_agent.creative.studio.references import ReferenceResolver
 
 
@@ -492,8 +493,7 @@ class PlanTransaction:
     _step_results: dict[int, Any] = field(default_factory=dict, repr=False)
 
     def __post_init__(self) -> None:
-        if not isinstance(self.plan_id, str) or not self.plan_id.strip():
-            raise ValueError("plan_id must be a non-empty string")
+        validate_plan_identity(self.plan_id, name="plan_id")
         if self.require_compensation and any(
             step.execute is not None and step.compensate is None for step in self.steps
         ):
