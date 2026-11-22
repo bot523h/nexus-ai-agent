@@ -7,6 +7,15 @@ NAGAR unified cinema science pipeline.  Each module is pure and framework-free
 
 from __future__ import annotations
 
+from nexus_ai_agent.creative.science.optimal_transport_spd import (
+    bures_wasserstein_2,
+    matrix_inverse,
+    matrix_square_root,
+    mccann_geodesic,
+    monge_map_tensor,
+    monge_transport_map,
+    optimal_transport_distance,
+)
 from nexus_ai_agent.creative.science.photochemical_emulsion import (
     CANONICAL_LAYERS,
     PAIR_HIGH,
@@ -51,6 +60,13 @@ from nexus_ai_agent.creative.science.physical_optics_radiometry import (
 )
 
 __all__ = [
+    "bures_wasserstein_2",
+    "matrix_inverse",
+    "matrix_square_root",
+    "mccann_geodesic",
+    "monge_map_tensor",
+    "monge_transport_map",
+    "optimal_transport_distance",
     "BG_REFERENCE",
     "C_LIGHT",
     "H_PLANCK",
