@@ -7,6 +7,7 @@ import os
 import types
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -97,6 +98,168 @@ def _owned_local_lease(tmp_path: Path) -> tuple[LocalDeviceVaultDriver, str, Pat
     return driver, lease_id, driver._lease_path(lease_id)
 
 
+@pytest.mark.parametrize("backend", ["local", "bundle"])
+def test_restarted_lease_owner_recovers_only_with_token_then_releases(
+    backend: str, tmp_path: Path
+) -> None:
+    restarted: LocalDeviceVaultDriver | PortableBundleVaultDriver
+    if backend == "local":
+        path = tmp_path / "restart-vault"
+        local_owner = LocalDeviceVaultDriver(path)
+        lease_id = local_owner.acquire_push_lease([], lease_id="restart-owner")
+        raw = local_owner._lease_path(lease_id).read_bytes()
+        restarted = LocalDeviceVaultDriver(path)
+    else:
+        path = tmp_path / "restart.nagarvault"
+        bundle_owner = PortableBundleVaultDriver(path)
+        lease_id = bundle_owner.acquire_push_lease([], lease_id="restart-owner")
+        bundle_owner._read_locked()
+        raw = bundle_owner._leases[lease_id]
+        restarted = PortableBundleVaultDriver(path)
+
+    token = byos_drivers._parse_lease_token(raw)
+    assert token
+    with pytest.raises(VaultRevisionConflictError):
+        restarted.release_push_lease(lease_id)
+    with pytest.raises(VaultRevisionConflictError):
+        restarted.recover_owned_lease(lease_id, "stranger-token")
+    assert restarted.recover_owned_lease(lease_id, token)
+    restarted.release_push_lease(lease_id)
+    with pytest.raises(VaultTransportError):
+        restarted.recover_owned_lease(lease_id, token)
+
+
+def _s3_ambiguous_fixture(
+    failure_mode: str,
+) -> tuple[byos_drivers.S3CompatibleSigV4Driver, dict[str, Any], str, str]:
+    lease_id = "ambiguous-put"
+    prior_token = "original-owner-token"
+    prior_body = byos_drivers._build_lease_json_bytes(
+        lease_id=lease_id,
+        project_id="project-1",
+        now_epoch=1_800_000_000.0,
+        ttl_seconds=3600,
+        chunk_ids=[],
+        lease_token=prior_token,
+    )
+    state: dict[str, Any] = {
+        "body": prior_body,
+        "etag": hashlib.sha256(prior_body).hexdigest(),
+        "puts": 0,
+        "failure_mode": failure_mode,
+    }
+    config = byos_drivers.S3SigV4Config(
+        endpoint_url="https://account.example.com",
+        bucket="leases",
+        region="us-east-1",
+        access_key_id="access",
+        secret_access_key="secret",
+    )
+
+    def transport(request: byos_drivers.S3HttpRequest) -> byos_drivers.S3HttpResponse:
+        method = request.method.upper()
+        if method == "HEAD":
+            return byos_drivers.S3HttpResponse(
+                status_code=200,
+                headers={"etag": str(state["etag"])},
+            )
+        if method == "GET":
+            if failure_mode == "get-fails" and int(state["puts"]) > 0:
+                return byos_drivers.S3HttpResponse(status_code=503)
+            return byos_drivers.S3HttpResponse(
+                status_code=200,
+                body=bytes(state["body"]),
+                headers={"etag": str(state["etag"])},
+            )
+        if method == "PUT":
+            state["puts"] = int(state["puts"]) + 1
+            if failure_mode == "not-committed":
+                raise VaultTransportError("injected lost PUT before commit")
+            if failure_mode == "competitor":
+                rival = byos_drivers._build_lease_json_bytes(
+                    lease_id=lease_id,
+                    project_id="project-1",
+                    now_epoch=1_800_000_000.0,
+                    ttl_seconds=3600,
+                    chunk_ids=[],
+                    lease_token="rival-owner-token",
+                )
+                state["body"] = rival
+                state["etag"] = hashlib.sha256(rival).hexdigest()
+                raise VaultTransportError("injected lost PUT after rival replacement")
+            if request.headers.get("if-match") != state["etag"]:
+                return byos_drivers.S3HttpResponse(status_code=412)
+            state["body"] = request.body
+            state["etag"] = hashlib.sha256(request.body).hexdigest()
+            if failure_mode in ("committed", "get-fails"):
+                raise VaultTransportError("injected lost successful PUT response")
+            return byos_drivers.S3HttpResponse(
+                status_code=200, headers={"etag": str(state["etag"])}
+            )
+        if method == "DELETE":
+            if request.headers.get("if-match") == state["etag"]:
+                state["body"] = b""
+                state["etag"] = ""
+                return byos_drivers.S3HttpResponse(status_code=204)
+            return byos_drivers.S3HttpResponse(status_code=412)
+        return byos_drivers.S3HttpResponse(status_code=404)
+
+    driver = byos_drivers.S3CompatibleSigV4Driver(config, http_transport=transport)
+    obj_key = driver._object_key("leases", f"{lease_id}.json")
+    driver._owned_lease_etags[lease_id] = (str(state["etag"]), prior_token)
+    state["object_key"] = obj_key
+    return driver, state, lease_id, prior_token
+
+
+def test_restarted_s3_owner_recovers_only_with_token_then_releases() -> None:
+    driver, state, lease_id, token = _s3_ambiguous_fixture("safe")
+    restarted = byos_drivers.S3CompatibleSigV4Driver(
+        driver.config, http_transport=driver._transport
+    )
+    with pytest.raises(VaultRevisionConflictError):
+        restarted.release_push_lease(lease_id)
+    with pytest.raises(VaultRevisionConflictError):
+        restarted.recover_owned_lease(lease_id, "stranger-token")
+    assert restarted.recover_owned_lease(lease_id, token) == state["etag"]
+    restarted.release_push_lease(lease_id)
+    assert state["body"] == b""
+
+
+def test_s3_ambiguous_put_committed_response_lost_reconciles_and_releases() -> None:
+    driver, state, lease_id, _prior_token = _s3_ambiguous_fixture("committed")
+    driver.update_push_lease(lease_id, [], project_id="project-1")
+    written_token = byos_drivers._parse_lease_token(bytes(state["body"]))
+    assert written_token
+    assert driver._owned_lease_etags[lease_id] == (str(state["etag"]), written_token)
+    driver.release_push_lease(lease_id)
+    assert state["body"] == b""
+
+
+def test_s3_ambiguous_put_not_committed_fails_without_claiming_prior() -> None:
+    driver, state, lease_id, prior_token = _s3_ambiguous_fixture("not-committed")
+    prior_etag = str(state["etag"])
+    with pytest.raises(VaultTransportError, match="prior version remains"):
+        driver.update_push_lease(lease_id, [], project_id="project-1")
+    assert driver._owned_lease_etags[lease_id] == (prior_etag, prior_token)
+
+
+def test_s3_ambiguous_put_never_claims_competing_writer() -> None:
+    driver, state, lease_id, _prior_token = _s3_ambiguous_fixture("competitor")
+    with pytest.raises(VaultRevisionConflictError, match="another writer"):
+        driver.update_push_lease(lease_id, [], project_id="project-1")
+    assert byos_drivers._parse_lease_token(bytes(state["body"])) == "rival-owner-token"
+    assert driver._owned_lease_etags[lease_id][0] != state["etag"]
+
+
+def test_s3_ambiguous_put_reconciliation_get_failure_fails_closed() -> None:
+    driver, state, lease_id, prior_token = _s3_ambiguous_fixture("get-fails")
+    prior_etag = str(driver._owned_lease_etags[lease_id][0])
+    with pytest.raises(VaultTransportError, match="reconciliation read failed"):
+        driver.update_push_lease(lease_id, [], project_id="project-1")
+    assert driver._owned_lease_etags[lease_id] == (prior_etag, prior_token)
+    assert state["body"] != b""
+
+
 def test_local_refresh_and_release_refuse_a_blank_etag(tmp_path: Path) -> None:
     driver, lease_id, path = _owned_local_lease(tmp_path)
     with pytest.raises(VaultTransportError):
@@ -120,6 +283,59 @@ def test_local_lease_read_refuses_a_symlink_or_a_directory(tmp_path: Path) -> No
         byos_drivers._read_lease_file_once(path)
     path.rmdir()
     assert byos_drivers._read_lease_file_once(path) is None
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="named pipes require os.mkfifo")
+@pytest.mark.parametrize("operation", ["read", "scan", "refresh", "release"])
+def test_fifo_lease_is_nonblocking_rejected_and_never_unlinked(
+    operation: str, tmp_path: Path
+) -> None:
+    import stat
+    import time
+
+    driver = LocalDeviceVaultDriver(tmp_path / "fifo-vault")
+    lease_path = driver._lease_path("fifo-no-writer")
+    lease_path.parent.mkdir(parents=True, exist_ok=True)
+    os.mkfifo(lease_path)
+
+    started = time.monotonic()
+    with pytest.raises(VaultTransportError):
+        if operation == "read":
+            byos_drivers._read_lease_file_once(lease_path)
+        elif operation == "scan":
+            driver.read_active_leased_chunks()
+        elif operation == "refresh":
+            driver.update_push_lease("fifo-no-writer", [])
+        else:
+            driver.release_push_lease("fifo-no-writer")
+    assert time.monotonic() - started < 0.5
+    assert stat.S_ISFIFO(lease_path.lstat().st_mode)
+    assert lease_path.exists(), "a FIFO is untrusted input, never a lease to clean up"
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="named pipes require os.mkfifo")
+@pytest.mark.parametrize("operation", ["read", "refresh", "release"])
+def test_fifo_portable_bundle_is_nonblocking_rejected_and_never_unlinked(
+    operation: str, tmp_path: Path
+) -> None:
+    import stat
+    import time
+
+    bundle_path = tmp_path / "fifo-bundle.nagarvault"
+    driver = PortableBundleVaultDriver(bundle_path)
+    os.mkfifo(bundle_path)
+
+    started = time.monotonic()
+    with pytest.raises(VaultTransportError):
+        if operation == "read":
+            driver.read_active_leased_chunks()
+        elif operation == "refresh":
+            driver.update_push_lease("fifo-bundle", [])
+        else:
+            driver.release_push_lease("fifo-bundle")
+    assert time.monotonic() - started < 0.5
+    assert stat.S_ISFIFO(bundle_path.lstat().st_mode)
+    assert bundle_path.exists()
 
 
 def test_lease_read_fails_closed_when_the_inode_changes_during_the_read(

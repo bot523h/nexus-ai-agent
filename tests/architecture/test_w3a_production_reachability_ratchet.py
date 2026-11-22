@@ -1,14 +1,16 @@
-"""AST-only production reachability ratchet for the W3 foundation wave.
+"""Static Import Reachability with dead-branch and TYPE_CHECKING pruning.
 
-This gate deliberately uses only the standard library. It follows static Python
-imports from the six executable production roots, not imports in tests, and
-allows the known orphan inventory only to shrink as future waves wire modules.
+The standard-library-only gate follows runtime-relevant static imports from six
+production roots, excludes imports hidden behind dead/type-only branches, and
+checks actual worker registration at runtime. Reviewed orphan ceilings are
+monotonic: new orphans fail closed while later wiring may only shrink them.
 """
 
 from __future__ import annotations
 
 import ast
 import importlib.util
+import numbers
 from pathlib import Path
 
 SRC_ROOT = Path(__file__).resolve().parents[2] / "src" / "nexus_ai_agent"
@@ -61,8 +63,67 @@ def _module_name(path: Path) -> str:
     return name.removesuffix(".__init__")
 
 
+class _RuntimeImportVisitor(ast.NodeVisitor):
+    """Visit imports that can execute, pruning constant-dead and type-only arms."""
+
+    def __init__(self) -> None:
+        self.imports: list[ast.Import | ast.ImportFrom] = []
+
+    @staticmethod
+    def _type_checking_test(test: ast.expr) -> bool | None:
+        if isinstance(test, ast.Name) and test.id == "TYPE_CHECKING":
+            return True
+        if (
+            isinstance(test, ast.Attribute)
+            and test.attr == "TYPE_CHECKING"
+            and isinstance(test.value, ast.Name)
+            and test.value.id == "typing"
+        ):
+            return True
+        if isinstance(test, ast.UnaryOp) and isinstance(test.op, ast.Not):
+            inner = _RuntimeImportVisitor._type_checking_test(test.operand)
+            return None if inner is None else not inner
+        return None
+
+    @staticmethod
+    def _constant_truth(test: ast.expr) -> bool | None:
+        try:
+            value = ast.literal_eval(test)
+        except (ValueError, TypeError):
+            return None
+        if isinstance(value, (bool, numbers.Number)):
+            return bool(value)
+        return None
+
+    def visit_If(self, node: ast.If) -> None:
+        type_checking = self._type_checking_test(node.test)
+        if type_checking is not None:
+            if type_checking:
+                return
+            for statement in node.body:
+                self.visit(statement)
+            return
+        constant = self._constant_truth(node.test)
+        if constant is True:
+            for statement in node.body:
+                self.visit(statement)
+            return
+        if constant is False:
+            for statement in node.orelse:
+                self.visit(statement)
+            return
+        for statement in (*node.body, *node.orelse):
+            self.visit(statement)
+
+    def visit_Import(self, node: ast.Import) -> None:
+        self.imports.append(node)
+
+    def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
+        self.imports.append(node)
+
+
 def _import_graph() -> tuple[dict[str, ast.Module], dict[str, set[str]]]:
-    """Parse every package module and resolve imports to in-package modules."""
+    """Parse every package module and resolve runtime-relevant in-package imports."""
     modules_by_path: dict[str, ast.Module] = {}
     paths_by_name: dict[str, Path] = {}
     for path in sorted(SRC_ROOT.rglob("*.py")):
@@ -74,7 +135,9 @@ def _import_graph() -> tuple[dict[str, ast.Module], dict[str, set[str]]]:
 
     for name, tree in modules_by_path.items():
         path = paths_by_name[name]
-        for node in ast.walk(tree):
+        visitor = _RuntimeImportVisitor()
+        visitor.visit(tree)
+        for node in visitor.imports:
             candidates: list[str] = []
             if isinstance(node, ast.Import):
                 candidates.extend(alias.name for alias in node.names)
@@ -187,11 +250,62 @@ def test_worker_ast_registers_storyboard_render_job() -> None:
     )
 
 
+def test_runtime_import_visitor_prunes_adversarial_dead_and_type_only_branches() -> None:
+    tree = ast.parse(
+        """\
+import live_root
+if False:
+    import dead_false
+if 0:
+    import dead_zero
+if 0.0:
+    import dead_float_zero
+if TYPE_CHECKING:
+    import type_only_name
+if typing.TYPE_CHECKING:
+    import type_only_attribute
+if True:
+    import live_true
+else:
+    import dead_else
+if 2:
+    import live_nonzero
+if 0.5:
+    import live_nonzero_float
+if not TYPE_CHECKING:
+    import live_not_type_checking
+if unknown_condition:
+    import maybe_body
+else:
+    import maybe_else
+"""
+    )
+    visitor = _RuntimeImportVisitor()
+    visitor.visit(tree)
+    imported = {alias.name for node in visitor.imports for alias in node.names}
+    assert imported == {
+        "live_root",
+        "live_true",
+        "live_nonzero",
+        "live_nonzero_float",
+        "live_not_type_checking",
+        "maybe_body",
+        "maybe_else",
+    }
+
+
+def test_worker_runtime_registry_contains_storyboard_render_handler() -> None:
+    from nexus_ai_agent.creative.storyboard_jobs import storyboard_render_job
+    from nexus_ai_agent.worker import default_job_handlers
+
+    assert default_job_handlers().get("storyboard_render") is storyboard_render_job
+
+
 def test_reachability_inventory_is_measurable_and_roots_are_not_stubs() -> None:
     modules, graph = _import_graph()
     reachable = _production_reachable(graph)
-    # Post-#353 census on base main 1c1cb293: pin the measured tree so future
-    # module additions trigger an explicit inventory review, not silent drift.
+    # Post-pruning census on the W3-A.2 base: dead/type-only imports no longer
+    # inflate runtime reachability; pin both counts to force explicit inventory review.
     assert len(modules) == 601
-    assert len(reachable) == 409
+    assert len(reachable) == 407
     assert all(graph[root] for root in PRODUCTION_ROOTS)

@@ -2873,3 +2873,34 @@ row with `attempt = 0`), alongside the standing cancel matrix
 `test_cancel_running_job_is_fenced_and_recoverable`,
 `test_cancel_without_a_fencing_token_is_refused`). Architecture page
 `docs/architecture/EXECUTION_CORE.md` §2 states the choice and names the test.
+
+## D-0040 — BYOS lease authority is the proven `(lease_token, ETag)` pair
+
+**Context.** A local or bundled lease has mutable bytes and can be replaced
+between observation and refresh/release; an S3-compatible object adds conditional
+writes whose response may be lost after the server has committed. An ETag is a
+version fence, not proof that the caller owns that version. Local lease paths can
+also be adversarial FIFOs, symlinks, or inode replacements (including ABA races).
+
+**Decision.** Lease ownership is recorded as the pair `(lease_token, ETag)` and
+refreshed or released only against a version the driver has proved it owns. The
+public `release_push_lease(expected_etag=None)` contract is preserved: `None`
+uses a same-instance ownership record only, never an observed ETag as authority.
+After restart, `recover_owned_lease(lease_id, expected_lease_token,
+expected_etag=None)` proves the token with constant-time `hmac.compare_digest`,
+optionally checks the expected ETag, and records ownership only after proof.
+
+Local lease file opens use `O_NONBLOCK` plus no-follow flags, then `fstat` the
+opened descriptor and read only regular files. FIFOs and other non-regular files
+are rejected without reading or unlinking them. Stable-descriptor/inode checks
+fence symlink and inode ABA swaps; any mismatch fails closed. For an ambiguous
+S3 conditional PUT (transient failure other than 409/412), the driver performs a
+lease GET and accepts the result only if its lease token and owner fields match
+the request's own write. It records the new ETag and completes post-write
+verification only for that exact write; a prior version, another writer, or an
+unverifiable GET fails closed and is never claimed.
+
+**Rejected alternatives.** ETag-only ownership, unconditional release, reading a
+FIFO before inspecting its type, deleting unexpected local entries, and treating
+any post-error S3 object as the caller's write are all rejected because each can
+turn observation or ambiguity into authority over another writer's lease.

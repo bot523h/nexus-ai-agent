@@ -182,16 +182,43 @@ def test_real_verified_descriptor_streams_and_background_closes_fd(
     registry = FakeRegistry({JOB_ID: _row(result)})
     monkeypatch.setattr("nexus_ai_agent.api.app.get_creative_registry", lambda: registry)
 
-    fd_dir = Path("/proc/self/fd")
-    before = set(fd_dir.iterdir())
+    from nexus_ai_agent.creative.artifact_download import (
+        AuthorizedDownload,
+        _FdLease,
+        authorize_artifact_download,
+    )
+
+    real_authorize = authorize_artifact_download
+    captured: list[AuthorizedDownload] = []
+
+    def capture_authorized(
+        workspace_root: Path,
+        rel_path: str,
+        signing_key: str | bytes,
+    ) -> AuthorizedDownload:
+        opened = real_authorize(workspace_root, rel_path, signing_key)
+        captured.append(opened)
+        return opened
+
+    monkeypatch.setattr(studio_api, "authorize_artifact_download", capture_authorized)
     response = asyncio.run(studio_api.download_studio_artifact(PROJECT_ID, JOB_ID))
-    opened_for_artifact = [
-        candidate
-        for candidate in set(fd_dir.iterdir()) - before
-        if candidate.is_symlink() and candidate.resolve() == mp4.resolve()
-    ]
-    assert len(opened_for_artifact) == 1
-    fd = int(opened_for_artifact[0].name)
+    assert len(captured) == 1
+    response_authorized = captured[0]
+    assert isinstance(response_authorized, AuthorizedDownload)
+    response_lease = response_authorized._lease
+    assert isinstance(response_lease, _FdLease)
+    fd = response_authorized.fd
+    assert fd is not None
+    original_fstat = os.fstat(fd)
+
+    # /proc is an optional supplemental diagnostic only; the portable proof
+    # below uses the descriptor exposed by the actual _FdLease and fstat/EBADF.
+    proc_fd = Path("/proc/self/fd")
+    if proc_fd.is_dir():
+        proc_entry = proc_fd / str(fd)
+        if proc_entry.is_symlink():
+            assert proc_entry.resolve() == mp4.resolve()
+
     assert response.headers["x-artifact-sha256"] == hashlib.sha256(mp4.read_bytes()).hexdigest()
 
     # Consume exactly Content-Length bytes without requesting the EOF sentinel:
@@ -211,12 +238,17 @@ def test_real_verified_descriptor_streams_and_background_closes_fd(
     body = asyncio.run(read_exact_response_body())
     assert body == mp4.read_bytes()
     assert hashlib.sha256(body).hexdigest() == response.headers["x-artifact-sha256"]
-    os.fstat(fd)
+    assert os.fstat(fd).st_ino == original_fstat.st_ino
 
     assert response.background is not None
     asyncio.run(response.background())
-    with pytest.raises(OSError):
+    with pytest.raises(OSError) as closed:
         os.fstat(fd)
+    import errno
+
+    assert closed.value.errno == errno.EBADF
+    assert response_authorized.fd is None
+    assert response_lease.fd is None
 
 
 def test_real_symlinked_mp4_is_refused_by_the_download_route(

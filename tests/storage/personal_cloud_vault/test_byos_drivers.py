@@ -12,7 +12,7 @@ import zlib
 from collections.abc import Iterable
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -599,16 +599,16 @@ def test_portable_bundle_binary_format_tamper_edges(
 
     io_drv = PortableBundleVaultDriver(tmp_path / "io_err.nagarvault")
     io_drv.put_chunk("a" * 64, b"ok")
-    real_open = Path.open
+    import os
 
-    # ``Path.open`` is heavily overloaded; a thin wrapper that only ever receives the
-    # single ``"rb"`` call the verifier makes keeps the types honest without ignoring any.
-    def _failing_open(self: Path, mode: str = "r", *args: object, **kwargs: object) -> object:
-        if self.suffix == ".nagarvault":
+    real_open = os.open
+
+    def _failing_open(path: str | os.PathLike[str], flags: int, *args: int) -> int:
+        if Path(path).suffix == ".nagarvault":
             raise OSError("bundle read failed")
-        return real_open(self, mode)
+        return real_open(path, flags, *args)
 
-    monkeypatch.setattr(Path, "open", _failing_open)
+    monkeypatch.setattr(os, "open", _failing_open)
     with pytest.raises(VaultTransportError, match="Cannot read bundle"):
         io_drv.verify_bundle()
     monkeypatch.undo()
@@ -1048,17 +1048,19 @@ def test_edge_branches_local_s3_and_bundle_fail_closed_paths(
 
     # OSError while reading a well-named lease file fails closed
     vault.acquire_push_lease(["a" * 64], lease_id="edge-lease")
-    orig_read_bytes = Path.read_bytes
+    from nexus_ai_agent.storage.personal_cloud_vault import byos_drivers
 
-    def _fail_lease_read(self_path: Path) -> bytes:
-        if self_path.name.startswith("lease-"):
+    original_reader = byos_drivers._read_lease_file_once
+
+    def _fail_lease_read(path: Path) -> bytes | None:
+        if path.name.startswith("lease-"):
             raise OSError("lease unreadable")
-        return orig_read_bytes(self_path)
+        return original_reader(path)
 
-    monkeypatch.setattr(Path, "read_bytes", _fail_lease_read)
+    monkeypatch.setattr(byos_drivers, "_read_lease_file_once", _fail_lease_read)
     with pytest.raises(VaultTransportError, match="Failed reading push lease file"):
         vault.read_active_leased_chunks()
-    monkeypatch.setattr(Path, "read_bytes", orig_read_bytes)
+    monkeypatch.setattr(byos_drivers, "_read_lease_file_once", original_reader)
     vault.release_push_lease("edge-lease")
 
     # --- S3: HTTP error branches, XML oddities, list filtering ----------------------
@@ -2095,7 +2097,7 @@ def test_edge_branches_owner_release_races_lock_errors_and_bundle_sweeps(
 
     def _shifting_token() -> tuple[tuple[str, str], ...]:
         calls["n"] += 1
-        token = real_token()
+        token = cast(tuple[tuple[str, str], ...], real_token())
         if calls["n"] > 1:
             return token + (("ghost", "changed"),)
         return token
@@ -2195,7 +2197,7 @@ def test_last_mile_lease_state_shift_before_delete_aborts_s3_deletion(
 
     def _shift_on_third_check() -> tuple[tuple[str, str], ...]:
         calls["n"] += 1
-        token = real_token()
+        token = cast(tuple[tuple[str, str], ...], real_token())
         # call 1 = baseline, call 2 = post-scan re-check, call 3 = final pre-DELETE check
         if calls["n"] >= 3:
             return token + (("late", "appeared"),)
@@ -2456,25 +2458,19 @@ def test_wave4_bundle_load_wraps_midstream_read_errors(
             self._inner.close()
             super().close()
 
-    real_open = Path.open
+    import os
+
+    real_fdopen = os.fdopen
     holder: dict[str, object] = {}
 
-    def _open_rb(target: Path) -> io.BufferedReader:
-        """Open ``target`` as ``rb`` (the only mode the bundle verifier ever uses)."""
-        opened = real_open(target, "rb")
+    def _patched_fdopen(fd: int, mode: str = "r", *args: object) -> object:
+        opened = real_fdopen(fd, mode)
         assert isinstance(opened, io.BufferedReader)
-        return opened
+        wrapped = _FailingRead(opened)
+        holder["handle"] = wrapped
+        return wrapped
 
-    def _patched_open(self: Path, mode: str = "r", *args: object, **kwargs: object) -> object:
-        # The verifier only ever opens ``"rb"``; that keeps the overload analysis exact.
-        handle = _open_rb(self)
-        if self.suffix == ".nagarvault":
-            wrapped = _FailingRead(handle)
-            holder["handle"] = wrapped
-            return wrapped
-        return handle
-
-    monkeypatch.setattr(Path, "open", _patched_open)
+    monkeypatch.setattr(os, "fdopen", _patched_fdopen)
     with pytest.raises(VaultTransportError, match="Cannot read bundle"):
         PortableBundleVaultDriver(bundle_path)
     assert "handle" in holder
