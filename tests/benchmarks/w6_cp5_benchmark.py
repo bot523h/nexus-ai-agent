@@ -19,6 +19,7 @@ from time import perf_counter
 from typing import Any
 
 import numpy as np
+import scipy
 
 from nexus_ai_agent.creative.character import (
     CharacterCapsule,
@@ -125,18 +126,26 @@ def main() -> None:
         )
         for _ in range(5)
     ]
+    from statistics import mean, pstdev
+
     print(
         json.dumps(
             {
                 "python": platform.python_version(),
                 "numpy": np.__version__,
+                "scipy": scipy.__version__,
+                "platform": platform.platform(),
                 "batches": BATCHES,
                 "unit": "ms/batch",
                 "warmup_per_path": 1,
                 "results": {
                     name: {
                         "runs": [run[name] for run in runs],
+                        "mean": mean(run[name] for run in runs),
                         "median": statistics.median(run[name] for run in runs),
+                        "std": pstdev(run[name] for run in runs),
+                        "min": min(run[name] for run in runs),
+                        "max": max(run[name] for run in runs),
                     }
                     for name in BATCHES
                 },

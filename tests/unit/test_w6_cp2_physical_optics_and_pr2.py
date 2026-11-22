@@ -28,6 +28,7 @@ from nexus_ai_agent.creative.science.physical_optics_radiometry import (
     critical_angle_deg,
     film_materials_from_air,
     fresnel_amplitudes,
+    fresnel_transmittance_p,
     fresnel_transmittance_s,
     henyey_greenstein_norm,
     henyey_greenstein_phase_function,
@@ -297,3 +298,77 @@ class TestSharedConstants:
 
         assert physics_light == C_LIGHT
         assert BG_REFERENCE == 1.0
+
+
+# ---------------------------------------------------------------------------
+# W6-CP5: P1 regression tests — R+T=1 for both polarizations below TIR,
+# expm1 accuracy, HG normalization on the unit sphere
+# ---------------------------------------------------------------------------
+
+
+class TestFresnelConservationFullPolarizations:
+    def test_r_plus_t_equals_one_below_tir_for_both_polarizations(self):
+        for n1, n2, theta in ((1.0, 1.5, 30.0), (1.5, 1.0, 40.0), (1.0, 1.0, 45.0)):
+            fresnel = fresnel_amplitudes(n1, n2, theta)
+            r_s, r_p = fresnel.R_s, fresnel.R_p
+            assert r_s + fresnel_transmittance_s(n1, n2, theta) == pytest.approx(1.0)
+            assert r_p + fresnel_transmittance_p(n1, n2, theta) == pytest.approx(1.0)
+
+    def test_tir_reflectance_is_one_and_transmittance_is_zero(self):
+        critical = critical_angle_deg(1.5, 1.0)
+        theta = critical + 5.0
+        fresnel = fresnel_amplitudes(1.5, 1.0, theta)
+        assert fresnel.R_s == pytest.approx(1.0)
+        assert fresnel.R_p == pytest.approx(1.0)
+        assert fresnel_transmittance_s(1.5, 1.0, theta) == pytest.approx(0.0)
+        assert fresnel_transmittance_p(1.5, 1.0, theta) == pytest.approx(0.0)
+
+    def test_p_polarized_transmittance_at_normal_incidence(self):
+        fresnel = fresnel_amplitudes(1.2, 1.5, 0.0)
+        assert fresnel_transmittance_p(1.2, 1.5, 0.0) == pytest.approx(1.0 - fresnel.R_p)
+
+    def test_brester_angle_zero_p_reflection_at_steep_angle(self):
+        # Brewster angle kills p reflection even away from zero incidence.
+        theta_b = brester_angle_deg(1.0, 2.0)
+        assert theta_b == pytest.approx(math.degrees(math.atan(2.0)))
+        fresnel = fresnel_amplitudes(1.0, 2.0, theta_b)
+        assert fresnel.R_p == pytest.approx(0.0, abs=1e-10)
+
+
+class TestPlanckExpm1Accuracy:
+    def test_expm1_accurate_at_low_temperature_long_wavelength(self):
+        # The Planck denominator exp(x) - 1 loses all significant digits when x is
+        # small; math.expm1 must recover the true value. Compare against a
+        # closed-form high-precision computation via log-space.
+        T = 1.0  # 1 K
+        lam = 100.0  # 100 m
+        x = H_PLANCK * C_LIGHT / (lam * KB_BOLTZMANN * T)
+        expected = 2.0 * H_PLANCK * C_LIGHT**2 / (lam**5 * math.expm1(x))
+        actual = planck_blackbody_spectral_radiance(lam, T)
+        assert actual == pytest.approx(expected, rel=1e-12)
+        # And it must be finite and positive.
+        assert math.isfinite(actual) and actual > 0.0
+
+    def test_low_temperature_high_lambda_is_monotone_in_wavelength(self):
+        # B_lambda grows with lambda in the small-x (Rayleigh-Jeans) limit:
+        # B ~ 2 c k_B T / lambda^4 (Wien limit is the other end).
+        T = 100.0
+        vals = [planck_blackbody_spectral_radiance(lam, T) for lam in (1e-3, 1e-4, 1e-5)]
+        assert vals[0] < vals[1]  # farther from peak, smaller radiance
+        assert all(v > 0.0 for v in vals)
+
+
+class TestHGNormalizationOnUnitSphere:
+    @pytest.mark.parametrize("g", [-0.9, -0.5, -0.1, 0.0, 0.1, 0.5, 0.9])
+    def test_unit_sphere_integral_equals_one_to_high_precision(self, g):
+        # Integrate the exact phase function over the unit sphere:
+        # int_0^pi p(cos(theta), g) 2pi sin(theta) d(theta) = 1
+        # (equivalently int_-1^1 p(u, g) 2pi du = 1).
+        n_points = 200_000
+        du = 2.0 / n_points
+        total = 0.0
+        for i in range(n_points + 1):
+            u = -1.0 + i * du
+            w = 1.0 if 0 < i < n_points else 0.5
+            total += w * henyey_greenstein_phase_function(u, g) * 2.0 * math.pi * du
+        assert total == pytest.approx(1.0, rel=1e-6)

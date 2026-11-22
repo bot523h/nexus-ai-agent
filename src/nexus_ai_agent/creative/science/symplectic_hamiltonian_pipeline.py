@@ -20,10 +20,15 @@ Störmer–Verlet (leapfrog) step::
 with ``gradV(q) = K q + alpha ||q||^2 q``.
 
 Rayleigh dissipation: with ``c > 0``, the force gains the velocity-proportional
-Rayleigh term ``-c p/m``; energy decreases at a rate bounded by
-``-c ||p||^2 / m`` per step, and the orbit converges to the global minimum
-``(0, 0)`` of the Hamiltonian (a Lyapunov function: ``H`` strictly decreases
-along the flow in the absence of external drive).
+Rayleigh term ``-(c/m) p``; along the continuous flow, ``dH/dt = -c ||p||^2 / m^2``
+(a Lyapunov rate — the orbit converges to the global minimum ``(0, 0)`` of the
+Hamiltonian in the absence of external drive).  The discrete step uses a
+symmetric Strang splitting — exact half-step damping
+``p <- p * exp(-c dt / (2 m))`` on both sides of a conservative Störmer–Verlet
+step — so the damping factor is always in ``(0, 1)`` and is unconditionally
+stable.  The conservative part still obeys the leapfrog/Verlet stability limit
+``omega_max * dt < 2`` with ``omega_max = sqrt(lambda_max(K) / m)``; that limit is
+enforced (fail-closed) at every step.
 
 The :class:`UnifiedCinemaSciencePipeline` then combines the four science
 modules (photochemical emulsion, physical optics radiometry, optimal
@@ -68,16 +73,39 @@ class HamiltonianSpec:
         k = np.asarray(self.stiffness, dtype=float)
         if k.ndim != 2 or k.shape[0] != k.shape[1] or k.shape[0] == 0:
             raise ValueError("stiffness must be a non-empty d-by-d square matrix")
-        eigs = np.linalg.eigvalsh(k)
+        if not np.all(np.isfinite(k)):
+            raise ValueError("stiffness must contain only finite entries")
+        # Scale-aware symmetry check BEFORE any symmetrization: asymmetric
+        # matrices may pass naive eigvalsh checks on the lower triangle, so
+        # never silently average a large asymmetry away.
+        asymmetry = float(np.max(np.abs(k - k.T)))
+        scale = float(np.max(np.abs(k)))
+        if asymmetry > 1e-10 + 1e-8 * scale:
+            raise ValueError("stiffness matrix must be symmetric")
+        k_s = 0.5 * (k + k.T)
+        eigs = np.linalg.eigvalsh(k_s)
         if float(np.min(eigs)) <= 0.0:
             raise ValueError("stiffness must be positive definite")
         if not math.isfinite(self.quartic_coupling) or self.quartic_coupling < 0.0:
             raise ValueError("quartic_coupling must be non-negative and finite")
-        object.__setattr__(self, "stiffness", 0.5 * (k + k.T))
+        # Defensive, read-only copy: the caller cannot mutate the stored tensor.
+        k_copy = np.array(k_s, dtype=np.float64, copy=True)
+        k_copy.setflags(write=False)
+        object.__setattr__(self, "stiffness", k_copy)
 
     @property
     def dimension(self) -> int:
         return int(np.asarray(self.stiffness).shape[0])
+
+    @property
+    def lambda_max(self) -> float:
+        """Largest eigenvalue of the stiffness matrix."""
+        return float(np.max(np.linalg.eigvalsh(np.asarray(self.stiffness))))
+
+    @property
+    def omega_max(self) -> float:
+        """Highest angular frequency of the conservative flow, sqrt(lambda_max / m)."""
+        return math.sqrt(self.lambda_max / self.mass)
 
 
 def hamiltonian(
@@ -118,25 +146,40 @@ def stormer_verlet_step(
 ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
     """One Störmer–Verlet step with optional Rayleigh damping.
 
-    The damping term ``-c p/m`` is applied to both half-steps (explicit
-    Rayleigh term); ``c = 0`` recovers the exact symplectic flow.
-    Returns ``(q_next, p_next)``.
+    The damping is a symmetric Strang splitting: exact half-step damping
+    ``p <- p * exp(-c dt / (2m))`` on both sides of a conservative
+    Störmer–Verlet step.  The damping factor is always in ``(0, 1]`` — it is
+    unconditionally stable — and the conservative part is gated by the
+    leapfrog/Verlet stability limit ``omega_max * dt < 2`` (fail-closed).
+
+    For ``c = 0`` the step is the exact symplectic Störmer–Verlet flow
+    (time-reversible and volume-preserving).  Returns ``(q_next, p_next)``.
     """
-    if not math.isfinite(dt) or dt <= 0.0:
-        raise ValueError("dt must be positive and finite")
+    if not math.isfinite(dt) or dt == 0.0:
+        raise ValueError("dt must be finite and non-zero")
     if not math.isfinite(rayleigh_damping) or rayleigh_damping < 0.0:
         raise ValueError("rayleigh_damping must be non-negative and finite")
     arr_q = np.asarray(q, dtype=float).ravel()
     arr_p = np.asarray(p, dtype=float).ravel()
     if arr_q.shape != arr_p.shape:
         raise ValueError("q and p must have equal length")
+    omega_max = spec.omega_max
+    if omega_max * abs(dt) >= 2.0:
+        raise ValueError(
+            f"dt violates the symplectic stability limit: omega_max * dt = "
+            f"{omega_max * dt:.6f} >= 2.0 (omega_max = {omega_max:.6f})"
+        )
+    damp_half = math.exp(-rayleigh_damping * dt / (2.0 * spec.mass))
+    # Half-step damping (exact).
+    p_half = arr_p * damp_half
+    # Conservative Störmer–Verlet step.
     grad_q = gradient_potential(arr_q, spec)
-    drag = rayleigh_damping * arr_p / spec.mass
-    p_half = arr_p - 0.5 * dt * (grad_q + drag)
-    q_next = arr_q + dt * p_half / spec.mass
+    p_half2 = p_half - 0.5 * dt * grad_q
+    q_next = arr_q + dt * p_half2 / spec.mass
     grad_q_next = gradient_potential(q_next, spec)
-    drag_next = rayleigh_damping * p_half / spec.mass
-    p_next = p_half - 0.5 * dt * (grad_q_next + drag_next)
+    p_next = p_half2 - 0.5 * dt * grad_q_next
+    # Half-step damping (exact).
+    p_next = p_next * damp_half
     return q_next, p_next
 
 
@@ -420,6 +463,68 @@ class UnifiedCinemaSciencePipeline:
         )
 
 
+def analytic_jacobian_of_step(
+    q: np.ndarray | list[float],
+    p: np.ndarray | list[float],
+    dt: float,
+    spec: HamiltonianSpec,
+    rayleigh_damping: float = 0.0,
+) -> NDArray[np.float64]:
+    """Exact (analytic) Jacobian of one Störmer-Verlet step.
+
+    Uses the chain rule through the half-kick / drift / half-kick decomposition,
+    so for the conservative flow (``rayleigh_damping == 0``) the result
+    satisfies ``M^T Ω M = Ω`` to machine precision — no finite-difference ``eps``.
+
+    For ``c > 0`` (Rayleigh damping) the accumulated exact linearization is the
+    conservative blocks congruenced by the scalar half-step damping factor
+    ``d = exp(-c dt / (2 m))``: ``M = [[A, d B], [d C, d^2 D]]``.
+    """
+    if not math.isfinite(dt) or dt == 0.0:
+        raise ValueError("dt must be finite and non-zero")
+    if not math.isfinite(rayleigh_damping) or rayleigh_damping < 0.0:
+        raise ValueError("rayleigh_damping must be non-negative and finite")
+    arr_q = np.asarray(q, dtype=float).ravel()
+    arr_p = np.asarray(p, dtype=float).ravel()
+    if arr_q.shape != arr_p.shape:
+        raise ValueError("q and p must have equal length")
+    mass = spec.mass
+    stiff = np.asarray(spec.stiffness, dtype=float)
+    alpha = spec.quartic_coupling
+    d = arr_q.size
+    eye = np.eye(d)
+
+    def hessian(x: NDArray[np.float64]) -> NDArray[np.float64]:
+        return stiff + alpha * (4.0 * float(x @ x) * eye + 2.0 * np.outer(x, x))
+
+    damp_half = math.exp(-rayleigh_damping * dt / (2.0 * mass))
+
+    # Conservative forward step (c = 0) on the same state, used for the exact
+    # second half-step position.
+    grad_q = stiff @ arr_q + alpha * float(arr_q @ arr_q) * arr_q
+    p_half = arr_p * damp_half
+    p_half2 = p_half - 0.5 * dt * grad_q
+    q_next = arr_q + dt * p_half2 / mass
+
+    hess_q = hessian(arr_q)
+    hess_next = hessian(q_next)
+
+    # Exact conservative blocks.
+    a_q = eye - (dt * dt / (2.0 * mass)) * hess_q
+    b_q = (dt / mass) * eye
+    c_q = -0.5 * dt * hess_q - 0.5 * dt * (hess_next @ a_q)
+    d_q = eye - (dt * dt / (2.0 * mass)) * hess_next
+
+    # Congruence with the scalar half-step damping factor ``damp_half``.
+    matrix = np.block(
+        [
+            [a_q, damp_half * b_q],
+            [damp_half * c_q, damp_half * damp_half * d_q],
+        ]
+    )
+    return np.ascontiguousarray(matrix)
+
+
 def default_reference_inputs() -> UnifiedCinemaScienceInputs:
     """The canonical reference scenario for the unified pipeline."""
     return UnifiedCinemaScienceInputs()
@@ -431,6 +536,7 @@ __all__ = [
     "gradient_potential",
     "stormer_verlet_step",
     "jacobian_of_step",
+    "analytic_jacobian_of_step",
     "symplectic_volume_preservation_error",
     "integrate_verlet",
     "ScientificPipelineReceipt",

@@ -256,52 +256,82 @@ def schwarzschild_reciprocity(
     return float(intensity * (time**p))
 
 
+def _interior_laplacian(arr: NDArray[np.float64], grid_spacing: float = 1.0) -> NDArray[np.float64]:
+    """Interior discrete Laplacian with zero-Neumann edges (1D or 2D).
+
+    Returns ``(sum(neighbors) - d * D_i) / dx^2`` inside the grid; edge cells
+    keep ``laplacian == 0`` (zero-flux / Neumann boundary).
+    """
+    inv_dx_sq = 1.0 / (grid_spacing * grid_spacing)
+    if arr.ndim == 1:
+        n = arr.shape[0]
+        laplacian = np.zeros_like(arr)
+        if n > 2:
+            laplacian[1:-1] = (arr[:-2] - 2.0 * arr[1:-1] + arr[2:]) * inv_dx_sq
+        return laplacian
+    rows, cols = arr.shape
+    laplacian = np.zeros_like(arr)
+    if rows > 2 and cols > 2:
+        laplacian[1:-1, 1:-1] = (
+            arr[:-2, 1:-1] + arr[2:, 1:-1] + arr[1:-1, :-2] + arr[1:-1, 2:] - 4.0 * arr[1:-1, 1:-1]
+        ) * inv_dx_sq
+    return laplacian
+
+
 def dir_reaction_diffusion(
     density: np.ndarray,
     kappa: float,
     clip_lo: float,
     clip_hi: float,
+    *,
+    grid_spacing: float = 1.0,
+    time_step: float = 1.0,
 ) -> NDArray[np.float64]:
     """DIR-coupler reaction–diffusion pass (Eberhard effect).
 
-    ``D_final = clip(D - kappa * nabla^2 D, clip_lo, clip_hi)``.
+    ``D_final = clip(D + kappa * dt * nabla^2 D / dx^2, clip_lo, clip_hi)``
 
-    Uses a 4-neighbour finite-difference Laplacian along every axis (1D or 2D),
-    with zero-gradient boundaries (Neumann).  Result is clipped into
-    ``[clip_lo, clip_hi]``.
+    Physical explicit-Euler diffusion (forward in time where gradients are
+    smoothed out): interior Laplacian uses the standard discrete stencil
+    ``sum(neighbors) - d * D_i`` (4-neighbourhood in 2D, 2-neighbourhood in 1D),
+    ``nabla^2 D = (neighbours - d*D_i) / dx^2`` with zero-gradient Neumann
+    boundaries (edge Laplacian = 0).
+
+    Stability is fail-closed: the explicit Euler step requires the CFL
+    condition ``kappa * dt / dx^2 <= 0.5`` (1D) or ``<= 0.25`` (2D); a grid
+    that violates it is refused.  ``clip[_lo, _hi]`` and Laplacian are
+    unchanged from the validated developer workflow.
     """
     if not math.isfinite(kappa):
         raise ValueError("kappa must be finite")
+    if kappa < 0.0:
+        raise ValueError("kappa must be non-negative (diffusion, not anti-diffusion)")
     if not math.isfinite(clip_lo) or not math.isfinite(clip_hi):
         raise ValueError("clip bounds must be finite")
     if clip_lo >= clip_hi:
         raise ValueError("require clip_lo < clip_hi")
+    if not math.isfinite(grid_spacing) or grid_spacing <= 0.0:
+        raise ValueError("grid_spacing must be positive and finite")
+    if not math.isfinite(time_step) or time_step <= 0.0:
+        raise ValueError("time_step must be positive and finite")
     arr = np.asarray(density, dtype=float)
     if arr.ndim < 1 or arr.ndim > 2:
         raise ValueError("density must be a 1D or 2D grid")
     if arr.size == 0:
         raise ValueError("density must not be empty")
 
-    if arr.ndim == 1:
-        n = arr.shape[0]
-        laplacian = np.zeros_like(arr)
-        if n > 2:
-            laplacian[1:-1] = arr[:-2] - 2.0 * arr[1:-1] + arr[2:]
-        # Edges keep zero-Neumann (no-flux) semantics: laplacian = 0.
-    else:
-        rows, cols = arr.shape
-        laplacian = np.zeros_like(arr)
-        if rows > 2 and cols > 2:
-            laplacian[1:-1, 1:-1] = (
-                arr[:-2, 1:-1]
-                + arr[2:, 1:-1]
-                + arr[1:-1, :-2]
-                + arr[1:-1, 2:]
-                - 4.0 * arr[1:-1, 1:-1]
-            )
-        # Edges keep zero-Neumann (no-flux) semantics: laplacian = 0.
+    r = kappa * time_step / (grid_spacing * grid_spacing)
+    # Explicit-Euler stability (2D requires the stricter 0.25 limit).
+    cfl_limit = 0.5 if arr.ndim == 1 else 0.25
+    if r > cfl_limit:
+        raise ValueError(
+            f"CFL violation: kappa * dt / dx^2 = {r:.6f} > {cfl_limit} "
+            f"({arr.ndim}D explicit diffusion); refusing the unstable step"
+        )
 
-    changed = arr - kappa * laplacian
+    laplacian = _interior_laplacian(arr, grid_spacing=grid_spacing)
+
+    changed = arr + kappa * time_step * laplacian
     return np.asarray(np.clip(changed, clip_lo, clip_hi), dtype=np.float64)
 
 
@@ -315,24 +345,8 @@ def dir_film_state(
     arr = np.asarray(density, dtype=float)
     if arr.size == 0:
         raise ValueError("density must not be empty")
-    if arr.ndim == 1:
-        lap = np.zeros_like(arr)
-        if arr.size > 2:
-            lap[1:-1] = arr[:-2] - 2.0 * arr[1:-1] + arr[2:]
-        # Edges keep zero-Neumann (no-flux) semantics: laplacian = 0.
-    else:
-        rows, cols = arr.shape
-        lap = np.zeros_like(arr)
-        if rows > 2 and cols > 2:
-            lap[1:-1, 1:-1] = (
-                arr[:-2, 1:-1]
-                + arr[2:, 1:-1]
-                + arr[1:-1, :-2]
-                + arr[1:-1, 2:]
-                - 4.0 * arr[1:-1, 1:-1]
-            )
-        # Edges keep zero-Neumann (no-flux) semantics: laplacian = 0.
-    final = np.clip(arr - kappa * lap, clip_lo, clip_hi)
+    lap = _interior_laplacian(arr, grid_spacing=1.0)
+    final = np.clip(arr + kappa * lap, clip_lo, clip_hi)
     return DirFilmState(arr, lap, final, clip_lo, clip_hi)
 
 

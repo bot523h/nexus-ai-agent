@@ -58,7 +58,10 @@ BG_REFERENCE = 1.0
 def planck_blackbody_spectral_radiance(lambda_m: float, temperature_k: float) -> float:
     """Planck's law for black-body spectral radiance per unit wavelength.
 
-    Units: ``W sr^-1 m^-3`` (i.e. per metre of wavelength).
+    Units: ``W sr^-1 m^-3`` (i.e. per metre of wavelength).  Uses ``math.expm1``
+    for the Planck denominator so the value stays accurate at small ``x``
+    (low temperatures / long wavelengths), where ``exp(x) - 1`` loses all
+    significant digits to cancellation.
     """
     if not math.isfinite(lambda_m) or lambda_m <= 0.0:
         raise ValueError("lambda must be positive and finite")
@@ -68,7 +71,8 @@ def planck_blackbody_spectral_radiance(lambda_m: float, temperature_k: float) ->
     if x > 700.0:
         # exp(700) is finite; the radiance is effectively zero.
         return 0.0
-    return float(2.0 * H_PLANCK * C_LIGHT**2 / (lambda_m**5 * (math.exp(x) - 1.0)))
+    # math.expm1 avoids catastrophic cancellation when x is small (low T / long lambda).
+    return float(2.0 * H_PLANCK * C_LIGHT**2 / (lambda_m**5 * math.expm1(x)))
 
 
 def wien_max_wavelength(temperature_k: float) -> float:
@@ -110,8 +114,8 @@ def critical_angle_deg(n_dense: float, n_sparse: float) -> float | None:
     if not (n_sparse > 0.0 and n_dense > n_sparse):
         return None
     ratio = n_sparse / n_dense
-    if ratio >= 1.0:
-        return None
+    # First guard (n_dense > n_sparse, both positive) already guarantees
+    # ratio < 1, so the asin argument is always in the domain.
     return float(math.degrees(math.asin(ratio)))
 
 
@@ -166,8 +170,23 @@ def brester_reflectance(n1: float, n2: float) -> tuple[float, float]:
 
 
 def fresnel_transmittance_s(n1: float, n2: float, theta_i_deg: float) -> float:
-    """Power-conserving transmittance ``T_s = 1 - R_s`` (no absorption)."""
-    return max(0.0, 1.0 - fresnel_amplitudes(n1, n2, theta_i_deg).R_s)
+    """Power-conserving transmittance ``T_s = 1 - R_s`` (no absorption).
+
+    Valid below TIR (``R_s + T_s = 1``); under total internal reflection
+    ``R_s = 1`` and the transmittance is exactly ``0``.
+    """
+    fresnel = fresnel_amplitudes(n1, n2, theta_i_deg)
+    return max(0.0, 1.0 - fresnel.R_s)
+
+
+def fresnel_transmittance_p(n1: float, n2: float, theta_i_deg: float) -> float:
+    """Power-conserving p-polarized transmittance ``T_p = 1 - R_p``.
+
+    Same physical statement as :func:`fresnel_transmittance_s`: valid below
+    TIR (``R_p + T_p = 1``); under TIR ``R_p = 1`` and the transmittance is 0.
+    """
+    fresnel = fresnel_amplitudes(n1, n2, theta_i_deg)
+    return max(0.0, 1.0 - fresnel.R_p)
 
 
 def thin_film_phase(
@@ -302,6 +321,7 @@ __all__ = [
     "brester_angle_deg",
     "brester_reflectance",
     "fresnel_transmittance_s",
+    "fresnel_transmittance_p",
     "thin_film_phase",
     "thin_film_reflectance",
     "film_materials_from_air",

@@ -11,8 +11,10 @@ import numpy as np
 import pytest
 
 from nexus_ai_agent.creative.science.optimal_transport_spd import (
+    _as_covariance,
     bures_wasserstein_2,
     matrix_inverse,
+    matrix_inverse_square_root,
     matrix_square_root,
     mccann_geodesic,
     monge_map_tensor,
@@ -256,3 +258,175 @@ class TestJcsSupersession:
 
 class Object:
     pass
+
+
+# ---------------------------------------------------------------------------
+# W6-CP5: P1 regression tests — complex detection, symmetry-before-symmetrize,
+# eigen-decomposition roots, monotonic structural checks
+# ---------------------------------------------------------------------------
+
+
+class TestComplexDetection:
+    def test_complex_input_rejected_before_casting(self):
+        cov = np.array([[1.0 + 1j, 0.0], [0.0, 1.0]])
+        with pytest.raises(ValueError, match="real"):
+            _as_covariance(cov)
+
+    def test_complex_input_rejected_early_in_bures(self):
+        cov = np.array([[1.0, 0.5], [0.5, 1.0]], dtype=complex)
+        cov[0, 1] = 0.5 + 1e-3j
+        with pytest.raises(ValueError, match="real"):
+            bures_wasserstein_2([0.0, 0.0], cov, [0.0, 0.0], np.eye(2))
+
+
+class TestSymmetryBeforeSymmetrization:
+    def test_asymmetric_rejected_before_averaging(self):
+        # Naive eigvalsh on the lower triangle would pass this matrix.
+        cov = np.array([[1.0, 100.0], [0.0, 1.0]])
+        with pytest.raises(ValueError, match="symmetric"):
+            _as_covariance(cov)
+
+    def test_repeated_eigenvalues_still_valid(self):
+        # Scalar covariances have degenerate eigenspaces: valid input.
+        cov = np.eye(2) * 1.5
+        root = matrix_square_root(cov)
+        assert np.allclose(root @ root, cov, atol=1e-12)
+
+
+class TestPositiveDefinitenessGate:
+    def test_indefinite_covariance_rejected(self):
+        with pytest.raises(ValueError, match="positive definite"):
+            _as_covariance(np.diag([1.0, -1.0]))
+
+    def test_near_singular_covariance_rejected(self):
+        with pytest.raises(ValueError, match="ill-conditioned"):
+            _as_covariance(np.diag([1.0, 1e-16]))
+
+    def test_ill_conditioned_covariance_rejected(self):
+        with pytest.raises(ValueError, match="ill-conditioned"):
+            _as_covariance(np.diag([1.0, 1e-12]))
+
+    def test_finite_check(self):
+        with pytest.raises(ValueError, match="finite"):
+            _as_covariance(np.array([[np.nan, 0.0], [0.0, 1.0]]))
+
+    def test_empty_and_nonsquare_rejected(self):
+        with pytest.raises(ValueError, match="square"):
+            _as_covariance(np.ones((2, 3)))
+        with pytest.raises(ValueError, match="non-empty"):
+            _as_covariance(np.zeros((0, 0)))
+
+
+class TestEigendecompositionRoots:
+    def test_root_square_identity(self):
+        # R R^T == Σ via eigh construction
+        cov = np.diag([2.0, 8.0])
+        root = matrix_square_root(cov)
+        assert np.allclose(root @ root, cov, atol=1e-12)
+        assert np.allclose(root, root.T, atol=1e-12)
+
+    def test_inverse_square_root_inverts_root(self):
+        cov = np.diag([2.0, 8.0])
+        root = matrix_square_root(cov)
+        inv_root = matrix_inverse_square_root(cov)
+        assert np.allclose(inv_root @ root, np.eye(2), atol=1e-12)
+
+    def test_matrix_inverse_is_eigen_decomposition_based(self):
+        cov = np.diag([2.0, 8.0])
+        inv = matrix_inverse(cov)
+        assert np.allclose(inv @ cov, np.eye(2), atol=1e-12)
+
+    def test_eigenvector_degeneracy_still_symmetric_root(self):
+        cov = np.eye(3) * 4.0
+        root = matrix_square_root(cov)
+        assert np.allclose(root, 2.0 * np.eye(3), atol=1e-12)
+
+
+class TestMongeMapStructuralChecks:
+    def test_non_commuting_covariances_satisfy_map_equation(self):
+        # Σ₁ and Σ₂ do not commute: the map must still satisfy A Σ₁ Aᵀ = Σ₂.
+        s1 = np.array([[2.0, 1.0], [1.0, 2.0]])
+        s2 = np.array([[4.0, -0.5], [-0.5, 1.5]])
+        # The module's own map must satisfy the structural identity.
+        a_module = monge_transport_map([0.0, 0.0], s1, [1.0, 2.0], s2)
+        assert np.allclose(a_module @ s1 @ a_module.T, s2, atol=1e-8)
+        assert np.allclose(a_module, a_module.T, atol=1e-10)
+        # Monge map must be SPD.
+        eigs = np.linalg.eigvalsh(a_module)
+        assert eigs.min() > 0.0
+
+    def test_transport_matrix_is_positive_definite_and_symmetric(self):
+        s1 = np.diag([1.0, 4.0])
+        s2 = np.diag([2.0, 8.0])
+        a = monge_transport_map([0.0, 0.0], s1, [1.0, 1.0], s2)
+        eigs = np.linalg.eigvalsh(a)
+        assert eigs.min() > 0.0
+
+
+class TestMcCannGeodesicSpotChecks:
+    def test_geodesic_at_t_half_matches_endpoints(self):
+        m1 = np.array([0.0, 0.0])
+        m2 = np.array([1.0, 1.0])
+        c1 = np.diag([1.0, 4.0])
+        c2 = np.diag([4.0, 1.0])
+        for t in (0.0, 0.5, 1.0):
+            mean_t, cov_t = mccann_geodesic(t, m1, c1, m2, c2)
+            expected_mean = (1.0 - t) * m1 + t * m2
+            assert np.allclose(mean_t, expected_mean, atol=1e-12)
+        mean_half, cov_half = mccann_geodesic(0.5, m1, c1, m2, c2)
+        assert np.allclose(mean_half, 0.5 * (m1 + m2), atol=1e-12)
+        eigs = np.linalg.eigvalsh(cov_half)
+        assert eigs.min() > 0.0
+
+    def test_geodesic_endpoints_pass_through_source_and_target(self):
+        m1 = np.array([0.0, 0.0])
+        m2 = np.array([1.0, 1.0])
+        c1 = np.diag([1.0, 4.0])
+        c2 = np.diag([4.0, 1.0])
+        m0, c0 = mccann_geodesic(0.0, m1, c1, m2, c2)
+        m1_, c1_ = mccann_geodesic(1.0, m1, c1, m2, c2)
+        assert np.allclose(m0, m1, atol=1e-12)
+        assert np.allclose(c0, c1, atol=1e-10)
+        assert np.allclose(m1_, m2, atol=1e-12)
+        assert np.allclose(c1_, c2, atol=1e-10)
+
+
+class TestBuresNegativeClamp:
+    def test_identical_gaussians_give_machine_noise_zero_clamped_to_zero(self):
+        # Identical covariances: W_2^2 is exactly 0; the clamp must absorb noise.
+        c = np.diag([1.0, 4.0])
+        w2 = bures_wasserstein_2([0.0, 0.0], c, [0.0, 0.0], c)
+        assert w2 == 0.0
+
+    def test_identical_with_mean_shift_positive(self):
+        c = np.diag([1.0, 4.0])
+        w2 = bures_wasserstein_2([0.0, 0.0], c, [1.0, 2.0], c)
+        assert w2 == pytest.approx(5.0, rel=1e-12)
+
+    def test_mean_dimension_mismatch_refused(self):
+        with pytest.raises(ValueError, match="dimension"):
+            bures_wasserstein_2([0.0, 0.0, 0.0], np.eye(2), [0.0, 0.0], np.eye(2))
+
+    def test_mean_dimension_mismatch_inside_monge_map(self):
+        with pytest.raises(ValueError, match="dimension"):
+            monge_transport_map([0.0], np.eye(2), [0.0, 0.0], np.eye(2))
+
+
+class TestComplexMeanAndNonNumericCovariance:
+    def test_complex_mean_rejected(self):
+        with pytest.raises(ValueError, match="real"):
+            bures_wasserstein_2(
+                np.array([0.0 + 1j, 0.0]),
+                np.eye(2),
+                [0.0, 0.0],
+                np.eye(2),
+            )
+
+    def test_non_numeric_covariance_rejected(self):
+        with pytest.raises(ValueError, match="numeric"):
+            _as_covariance(["not", "a", "number"])  # type: ignore[arg-type]
+
+    def test_complex_covariance_rejected_early_in_matrix_sqrt(self):
+        cov = np.eye(2) + np.eye(2) * 1j
+        with pytest.raises(ValueError, match="real"):
+            matrix_square_root(cov)

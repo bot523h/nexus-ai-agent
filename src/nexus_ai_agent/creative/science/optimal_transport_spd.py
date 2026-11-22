@@ -32,11 +32,13 @@ import math
 from collections.abc import Callable
 
 import numpy as np
-import scipy.linalg
 from numpy.typing import NDArray
 
 
 def _as_mean(mean: np.ndarray | list[float] | tuple[float, ...]) -> NDArray[np.float64]:
+    arr = np.asarray(mean).ravel()
+    if np.iscomplexobj(arr):
+        raise ValueError("mean must be real (complex input rejected)")
     arr = np.asarray(mean, dtype=float).ravel()
     if arr.size == 0:
         raise ValueError("mean must be non-empty")
@@ -46,41 +48,81 @@ def _as_mean(mean: np.ndarray | list[float] | tuple[float, ...]) -> NDArray[np.f
 
 
 def _as_covariance(cov: np.ndarray | list[list[float]]) -> NDArray[np.float64]:
-    arr = np.asarray(cov, dtype=np.float64)
+    """Validate a covariance matrix and return its symmetrised (real, SPD-checked) form.
+
+    Fail-closed checks in fixed order: complex input -> rejected; non-square /
+    empty shape -> rejected; non-finite entries -> rejected; asymmetry ->
+    rejected *before* any symmetrization (the naive upper/lower-triangle
+    eigvalsh check cannot catch an asymmetric matrix); then eigenvalues
+    computed on the symmetrised matrix with ``lambda_min > 0`` required and an
+    ill-conditioning floor (``lambda_max / lambda_min <= 1e10``).
+    """
+    if np.iscomplexobj(cov):
+        raise ValueError("covariance must be real (complex input rejected)")
+    arr = np.asarray(cov)
+    if not np.issubdtype(arr.dtype, np.number) or np.iscomplexobj(arr):
+        raise ValueError("covariance must be a real numeric matrix")
+    arr = np.asarray(arr, dtype=float)
     if arr.ndim != 2 or arr.shape[0] != arr.shape[1]:
         raise ValueError("covariance must be square")
     if arr.size == 0:
         raise ValueError("covariance must be non-empty")
     if not np.isfinite(arr).all():
         raise ValueError("covariance must be finite")
+    # Symmetry gate BEFORE any symmetrization.
+    asymmetry = float(np.max(np.abs(arr - arr.T))) if arr.size else 0.0
+    scale = float(np.max(np.abs(arr))) if arr.size else 0.0
+    if asymmetry > 1e-12 + 1e-10 * scale:
+        raise ValueError(f"covariance must be symmetric (max |K - K^T| = {asymmetry:.3e})")
     sym = np.asarray(0.5 * (arr + arr.T), dtype=np.float64)
-    # Symmetrise and verify positive-definiteness: smallest eigenvalue > 0.
-    eigs = scipy.linalg.eigvalsh(sym)
-    if eigs.size == 0 or float(eigs.min()) <= 1e-12:
-        raise ValueError("covariance must be positive definite")
-    if not np.allclose(sym, arr, atol=1e-8):
-        # Allow the upper/lower split sweep; report symmetry explicitly.
-        raise ValueError("covariance must be symmetric")
+    eigs, _ = np.linalg.eigh(sym)
+    lam_min = float(eigs.min())
+    lam_max = float(eigs.max())
+    if lam_min <= 0.0:
+        raise ValueError("covariance must be positive definite (lambda_min <= 0)")
+    if lam_max / lam_min > 1e10:
+        raise ValueError(
+            f"covariance is ill-conditioned (lambda_max / lambda_min = "
+            f"{lam_max / lam_min:.3e} > 1e10)"
+        )
     return sym
 
 
 def matrix_square_root(cov: np.ndarray) -> NDArray[np.float64]:
-    """Positive-definite matrix square root (unique SPD root)."""
+    """Positive-definite matrix square root (unique SPD root).
+
+    Computed via eigen-decomposition ``Sigma = Q Lambda Q^T`` and ``R = Q sqrt(Lambda) Q^T``;
+    no complex roots are ever produced (the input is validated as SPD beforehand).
+    """
     arr = _as_covariance(cov)
-    root = scipy.linalg.sqrtm(arr)
-    root = np.asarray(root, dtype=float)
-    if np.iscomplexobj(root):
-        if not np.allclose(root.imag, 0.0, atol=1e-10):
-            raise ValueError("matrix square root is complex for a symmetric matrix")
-        root = root.real
-    # Numerical polish: symmetrize the tiny asymmetry the real arithmetic leaves.
-    return np.asarray(0.5 * (root + root.T), dtype=np.float64)
+    eigvals, eigvecs = np.linalg.eigh(arr)
+    root = eigvecs @ np.diag(np.sqrt(eigvals)) @ eigvecs.T
+    root = np.asarray(0.5 * (root + root.T), dtype=np.float64)
+    # Defensive invariant: validated SPD input in real arithmetic cannot
+    # produce a complex/non-finite root — this guards against numerical drift
+    # in the LAPACK path, not expected states.
+    if np.iscomplexobj(root) or not np.isfinite(root).all():  # pragma: no cover
+        raise ValueError("matrix square root is complex or non-finite for a validated SPD matrix")
+    return root
+
+
+def matrix_inverse_square_root(cov: np.ndarray) -> NDArray[np.float64]:
+    """SPD inverse square root ``Sigma^{-1/2}`` via eigen-decomposition."""
+    arr = _as_covariance(cov)
+    eigvals, eigvecs = np.linalg.eigh(arr)
+    root = eigvecs @ np.diag(1.0 / np.sqrt(eigvals)) @ eigvecs.T
+    root = np.asarray(0.5 * (root + root.T), dtype=np.float64)
+    # Defensive invariant (see matrix_square_root).
+    if np.iscomplexobj(root) or not np.isfinite(root).all():  # pragma: no cover
+        raise ValueError("matrix inverse square root is complex or non-finite")
+    return root
 
 
 def matrix_inverse(cov: np.ndarray) -> NDArray[np.float64]:
-    """Matrix inverse for a positive-definite covariance."""
+    """Matrix inverse for a positive-definite covariance (eigen-decomposition-based)."""
     arr = _as_covariance(cov)
-    return np.asarray(np.linalg.inv(arr), dtype=np.float64)
+    eigvals, eigvecs = np.linalg.eigh(arr)
+    return np.asarray(eigvecs @ np.diag(1.0 / eigvals) @ eigvecs.T, dtype=np.float64)
 
 
 def bures_wasserstein_2(
@@ -91,7 +133,9 @@ def bures_wasserstein_2(
 ) -> float:
     """Closed-form Bures–Wasserstein-2 distance (squared).
 
-    Returns ``W_2^2(mu_1, mu_2)`` (NOT the distance).
+    Returns ``W_2^2(mu_1, mu_2)`` (NOT the distance).  Slightly negative values
+    are machine noise and are clamped to ``0.0``; larger negatives are reported
+    or raised (fail-closed).
     """
     m1 = _as_mean(mean1)
     m2 = _as_mean(mean2)
@@ -106,7 +150,19 @@ def bures_wasserstein_2(
     product = root1 @ c2 @ root1
     root_product = matrix_square_root(product)
     cov_term = float(np.trace(c1) + np.trace(c2) - 2.0 * np.trace(root_product))
-    return float(m + cov_term)
+    w2_sq = float(m + cov_term)
+    # Clamp machine-noise negativity to 0; report (raise on) anything bigger.
+    scale = float(np.trace(c1) + np.trace(c2) + m)
+    neg_tol = 1e-12 * max(scale, 1.0)
+    if w2_sq < 0.0:
+        if w2_sq >= -neg_tol:
+            return 0.0
+        # Defensive: the closed form is non-negative for valid SPD input.
+        raise ValueError(  # pragma: no cover
+            f"W_2^2 came out negative by {-w2_sq:.3e} (tolerance {neg_tol:.3e}); "
+            "this indicates a numerical failure, refusing to report a bogus distance"
+        )
+    return w2_sq
 
 
 def monge_transport_map(
@@ -130,11 +186,22 @@ def monge_transport_map(
     if c1.shape != c2.shape:
         raise ValueError("covariances must have the same shape")
     root1 = matrix_square_root(c1)
-    c1_inv_half = np.linalg.inv(root1)
+    c1_inv_half = matrix_inverse_square_root(c1)
     product = root1 @ c2 @ root1
     root_product = matrix_square_root(product)
     a = c1_inv_half @ root_product @ c1_inv_half
-    return 0.5 * (a + a.T)
+    a = np.asarray(0.5 * (a + a.T), dtype=np.float64)
+    # Structural checks before returning: symmetry not just on the off-diagonals.
+    if float(np.max(np.abs(a - a.T))) > 1e-10:  # pragma: no cover
+        raise ValueError("Monge map is not symmetric (numerical failure)")
+    a_eigs = np.linalg.eigvalsh(a)
+    if float(a_eigs.min()) <= 0.0:  # pragma: no cover
+        raise ValueError("Monge map is not positive definite (numerical failure)")
+    residual = float(np.linalg.norm(a @ c1 @ a.T - c2, ord="fro"))
+    target = float(np.linalg.norm(c2, ord="fro"))
+    if residual > 1e-8 * max(target, 1.0):  # pragma: no cover
+        raise ValueError(f"Monge map violates A C_1 A^T = C_2 (residual = {residual:.3e})")
+    return a
 
 
 def monge_map_tensor(

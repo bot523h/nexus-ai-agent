@@ -1,13 +1,19 @@
 #!/usr/bin/env python3
-"""Adversarial mutation harness for the Wave 6 science modules.
+"""Adversarial mutation harness for the Wave 6 science and character modules.
 
-Evidence rule: an invariant that has never been attacked is not evidence.  Each
-mutation rewrites one shipped guard/formula, re-runs the targeted suite, and
-requires it to turn RED.  Every source file is restored afterwards — including
-on failure — and the final run must be GREEN again.
+Evidence rule: an invariant that has never been attacked is not evidence.
+Each mutation rewrites one shipped guard/formula, re-runs the targeted suite,
+and is credited VALID_KILL **only** if
 
-All mutations are verified to parse as valid Python and to occur exactly once in
-the target file before they are applied (AST-verified string rewrites).
+* the mutated file parses as valid Python (``ast.parse``), and
+* the anchor occurs **exactly once** in the target file before the rewrite, and
+* pytest exits with code 1 (tests ran and failed), and
+* the pytest output shows a real ``AssertionError`` for at least one target test
+  (a collection error, import error or timeout is NOT a valid kill).
+
+Every mutated file is restored in a ``finally`` block and verified by SHA-256
+equality against its pre-mutation digest (fail-closed).  The whole campaign
+must start green and finish green again.
 
 Usage::
 
@@ -21,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import hashlib
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -74,17 +81,17 @@ MUTATIONS: tuple[Mutation, ...] = (
     Mutation(
         "W6_M04_dir_reaction_sign_flip",
         SCIENCE / "photochemical_emulsion.py",
-        "changed = arr - kappa * laplacian",
-        "changed = arr + kappa * laplacian",
-        "inverting the reaction term excites rather than quenches structure",
+        "changed = arr + kappa * time_step * laplacian",
+        "changed = arr - kappa * time_step * laplacian",
+        "flipping the diffusion sign re-opens the anti-diffusion defect",
         CP1,
     ),
     Mutation(
         "W6_M05_planck_exponent_sign_flip",
         SCIENCE / "physical_optics_radiometry.py",
-        "(math.exp(x) - 1.0)",
-        "(math.exp(x) + 1.0)",
-        "inverting the Planck denominator changes the radiance fundamentally",
+        "math.expm1(x)",
+        "math.exp(x) + 1.0",
+        "using exp(x) + 1.0 as the Planck denominator changes the radiance fundamentally",
         CP2,
     ),
     Mutation(
@@ -130,8 +137,14 @@ MUTATIONS: tuple[Mutation, ...] = (
     Mutation(
         "W6_M11_matrix_square_root_anti_symmetrize",
         SCIENCE / "optimal_transport_spd.py",
-        "return np.asarray(0.5 * (root + root.T), dtype=np.float64)",
-        "return np.asarray(0.5 * (root - root.T), dtype=np.float64)",
+        (
+            "root = eigvecs @ np.diag(np.sqrt(eigvals)) @ eigvecs.T\n"
+            "    root = np.asarray(0.5 * (root + root.T), dtype=np.float64)"
+        ),
+        (
+            "root = eigvecs @ np.diag(np.sqrt(eigvals)) @ eigvecs.T\n"
+            "    root = np.asarray(0.5 * (root - root.T), dtype=np.float64)"
+        ),
         "keeping an anti-symmetric root destroys SPD structure",
         CP3,
     ),
@@ -170,9 +183,9 @@ MUTATIONS: tuple[Mutation, ...] = (
     Mutation(
         "W6_M16_verlet_half_step_sign_flip",
         SCIENCE / "symplectic_hamiltonian_pipeline.py",
-        "p_half = arr_p - 0.5 * dt * (grad_q + drag)",
-        "p_half = arr_p + 0.5 * dt * (grad_q + drag)",
-        "flipping the half-step sign breaks symplecticity",
+        "p_next = p_half2 - 0.5 * dt * grad_q_next",
+        "p_next = p_half2 + 0.5 * dt * grad_q_next",
+        "flipping the second half-step sign breaks symplecticity",
         CP4,
     ),
     Mutation(
@@ -214,14 +227,58 @@ def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
-def _run_suite(tests: str) -> int:
-    result = subprocess.run(
+def _sha256_digest(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _is_valid_kill(result: subprocess.CompletedProcess[str]) -> tuple[bool, str]:
+    """Return ``(ok, reason)`` for one pytest run of the target suite.
+
+    A mutation is a VALID_KILL only when pytest reports a real failure of the
+    targeted test set: exit code 1 with at least one failed test (``FAILED``
+    lines) showing a real error traceback, and **no** infrastructure signal
+    (collection error, import error, timeout, ``no tests ran``).  A genuine
+    invocation failure — ``AssertionError`` or the module's own
+    ``ValueError``-family refusal of the broken invocation — counts as a real
+    kill.  Infrastructure noise never counts.
+    """
+    output = (result.stdout or "") + (result.stderr or "")
+    if result.returncode != 1:
+        return False, f"pytest exit code {result.returncode} (not 1)"
+    failed_lines = [line for line in output.splitlines() if "FAILED" in line and "::" in line]
+    if not failed_lines:
+        return False, "no FAILED test lines in output"
+    lowered = output.lower()
+    for marker in (
+        "collection error",
+        "no module named",
+        "module not found",
+        "internalerror",
+        "timed out",
+        "no tests ran",
+    ):
+        if marker in lowered:
+            return False, f"infrastructure failure in output ({marker})"
+    if "E " not in output:
+        return False, "no error traceback lines in output"
+    if (
+        "assertionerror" in lowered
+        or "failed:" in lowered
+        or "valueerror" in lowered
+        or "validationerror" in lowered
+    ):
+        return True, ""
+    return False, "no real test failure in output"
+
+
+def _run_suite(tests: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
         [".venv/bin/python", "-m", "pytest", tests, "-q"],
         capture_output=True,
         text=True,
         cwd=ROOT,
+        timeout=300,
     )
-    return result.returncode
 
 
 def main() -> int:
@@ -235,15 +292,20 @@ def main() -> int:
 
     # sanity: the tree must be green before we start
     for tests in (CP1, CP2, CP3, CP4):
-        code = _run_suite(tests)
+        code = _run_suite(tests).returncode
         if code != 0:
             print(f"FATAL: suite {tests} is not green before mutation testing", file=sys.stderr)
             return 2
 
     killed = 0
+    valid_kills: list[str] = []
     survivors: list[str] = []
+    restore_failed: str | None = None
     for mutation in MUTATIONS:
-        original = _read(mutation.path)
+        restore_failed = None
+        path = mutation.path
+        original = _read(path)
+        original_digest = hashlib.sha256(original.encode("utf-8")).hexdigest()
         if original.count(mutation.old) != 1:
             print(f"  SKIP {mutation.name}: anchor occurs {original.count(mutation.old)} times")
             survivors.append(f"{mutation.name} (anchor mismatch)")
@@ -256,25 +318,36 @@ def main() -> int:
             survivors.append(f"{mutation.name} (parse failure)")
             continue
         try:
-            mutation.path.write_text(mutated, encoding="utf-8")
-            code = _run_suite(mutation.tests)
-            if code != 0:
+            path.write_text(mutated, encoding="utf-8")
+            result = _run_suite(mutation.tests)
+            ok, reason = _is_valid_kill(result)
+            if ok:
                 killed += 1
-                print(f"  KILLED {mutation.name} ({mutation.tests})")
+                valid_kills.append(mutation.name)
+                print(f"  VALID_KILL {mutation.name} ({mutation.tests})")
             else:
-                survivors.append(mutation.name)
-                print(f"  SURVIVED {mutation.name} ({mutation.tests})")
+                survivors.append(f"{mutation.name} ({reason})")
+                print(f"  SURVIVED {mutation.name} ({mutation.tests}): {reason}")
         finally:
-            mutation.path.write_text(original, encoding="utf-8")
+            path.write_text(original, encoding="utf-8")
+            restored = _read(path)
+            restored_digest = hashlib.sha256(restored.encode("utf-8")).hexdigest()
+            if restored_digest != original_digest:
+                restore_failed = mutation.name
+            else:
+                restore_failed = None
+        if restore_failed is not None:
+            print(f"  FATAL: file not restored for {restore_failed}", file=sys.stderr)
+            return 4
 
     # final: everything must be green again
     for tests in (CP1, CP2, CP3, CP4):
-        if _run_suite(tests) != 0:
+        if _run_suite(tests).returncode != 0:
             print("FATAL: suite still red after restore", file=sys.stderr)
             return 3
 
     total = len(MUTATIONS)
-    print(f"\n{killed}/{total} mutants killed")
+    print(f"\n{killed}/{total} mutants killed (VALID_KILL)")
     if survivors:
         print(f"survivors: {', '.join(survivors)}")
         return 1

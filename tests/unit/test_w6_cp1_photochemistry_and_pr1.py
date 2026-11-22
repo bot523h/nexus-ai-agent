@@ -169,12 +169,45 @@ class TestDirReactionDiffusion:
         assert final.min() >= 0.0
 
     def test_reaction_term_moves_in_right_direction_and_clips(self):
+        # Physical diffusion: gradients smooth out; a local peak is decreased,
+        # a local trough is increased.
         grid = np.array([0.0, 1.0, 0.0, 1.0, 0.0])
-        # interior Laplacian at index 2 = 1 - 0 + 1 = 2; reaction decreases it (2 * 0.2 = 0.4)
+        # interior Laplacian at index 2 = 1 - 0 + 1 = 2; physical step: 0 + 0.2*2 = 0.4
+        # final[1]: 1.0 + 0.2*(0.0 - 2.0*1.0 + 0.0) = 0.6 (the hump recedes)
         final = dir_reaction_diffusion(grid, 0.2, 0.0, 3.0)
-        assert final[2] == pytest.approx(0.0)  # 0 - 0.2*2 clipped to [0, 3]
-        assert final[1] == pytest.approx(1.0 - 0.2 * (0.0 - 2.0 * 1.0 + 0.0))  # 1.4
-        assert final[2] < final[1]
+        assert final[2] == pytest.approx(0.4)
+        assert final[1] == pytest.approx(1.0 + 0.2 * (0.0 - 2.0 * 1.0 + 0.0))  # 0.6
+        assert final[1] < 1.0  # peak receded
+        assert final[2] > 0.0  # trough filled
+
+    def test_diffusion_is_physical_not_anti_diffusive(self):
+        # A single peak must spread (peak decreases, neighbours rise).
+        grid = np.ones(7)
+        grid[3] = 5.0
+        final = dir_reaction_diffusion(grid, 0.1, 0.0, 3.0)
+        assert final[3] < 5.0
+        assert final[2] > 1.0
+        assert final[4] > 1.0
+
+    def test_cfl_violation_is_refused_fail_closed(self):
+        # 2D limit is r <= 0.25: this grid's kappa * dt / dx^2 = 0.5 is rejected.
+        grid = np.ones((5, 5))
+        with pytest.raises(ValueError, match="CFL"):
+            dir_reaction_diffusion(grid, 0.5, 0.0, 3.0)
+
+    def test_cfl_limit_1d_boundary_is_accepted(self):
+        # 1D limit is r <= 0.5: exactly 0.5 is on the boundary and is allowed.
+        grid = np.array([0.0, 1.0, 0.0, 1.0, 0.0])
+        final = dir_reaction_diffusion(grid, 0.5, 0.0, 3.0)
+        assert final.shape == (5,)
+
+    def test_cfl_with_explicit_grid_spacing_and_time_step(self):
+        grid = np.ones(5)
+        with pytest.raises(ValueError, match="CFL"):
+            dir_reaction_diffusion(grid, 0.5, 0.0, 3.0, grid_spacing=0.5, time_step=0.5)
+        # passing case: r = 0.5 * 0.1 / 0.25 = 0.2 <= 0.5 -> accepted
+        final = dir_reaction_diffusion(grid, 0.5, 0.0, 3.0, grid_spacing=0.5, time_step=0.1)
+        assert final.shape == (5,)
 
     def test_1d_laplacian_interior(self):
         grid = np.array([0.0, 1.0, 0.0, 1.0, 0.0])
@@ -284,3 +317,104 @@ class TestHyperionVault:
         counts = _sqlite_inventory(None, conn)  # type: ignore[arg-type]
         assert counts == {hostile: 2, "safe": 1}
         assert conn.execute("SELECT COUNT(*) FROM safe").fetchone()[0] == 1
+
+
+# ---------------------------------------------------------------------------
+# W6-CP5: P1 regression tests — Hurter–Driffield derivative vs 4th-order FD,
+# Beer–Lambert bounds
+# ---------------------------------------------------------------------------
+
+
+class TestHurterDriffield4thOrderFD:
+    @pytest.mark.parametrize("layer", CANONICAL_LAYERS)
+    def test_log10_slope_matches_4th_order_central_difference(self, layer):
+        h = 1e-4
+        x = 2.0  # well away from the sigmoid tails and the clamp edges
+
+        def D(u):
+            return hurter_driffield_density(layer, u, 293.15)
+
+        fd = (-D(x + 2 * h) + 8.0 * D(x + h) - 8.0 * D(x - h) + D(x - 2 * h)) / (12.0 * h)
+        analytic = hurt_driffield_slope_log10(layer, x, 293.15)
+        assert analytic == pytest.approx(fd, rel=1e-4, abs=1e-8)
+
+    @pytest.mark.parametrize("layer", CANONICAL_LAYERS)
+    def test_ln_slope_matches_4th_order_central_difference(self, layer):
+        # Same curve reparametrised in natural-log stimulus: slope must match
+        # the 4th-order FD of D vs ln H exactly to high precision.
+        h = 2e-3
+        x_ln = math.log(10.0) * 2.0  # ln H at log10 H = 2.0
+
+        def D(u_ln):
+            return hurter_driffield_density(layer, u_ln / math.log(10.0), 293.15)
+
+        fd = (-D(x_ln + 2 * h) + 8.0 * D(x_ln + h) - 8.0 * D(x_ln - h) + D(x_ln - 2 * h)) / (
+            12.0 * h
+        )
+        analytic = hurt_driffield_slope_ln(layer, 2.0, 293.15)
+        assert analytic == pytest.approx(fd, rel=1e-3, abs=1e-8)
+
+    @pytest.mark.parametrize("layer", CANONICAL_LAYERS)
+    def test_slope_log10_equals_ln10_times_slope_ln(self, layer):
+        for x in (1.0, 2.0, 3.0):
+            s_log10 = hurt_driffield_slope_log10(layer, x, 293.15)
+            s_ln = hurt_driffield_slope_ln(layer, x, 293.15)
+            assert s_log10 == pytest.approx(math.log(10.0) * s_ln, rel=1e-12)
+
+
+class TestBeerLambertBounds:
+    def test_zero_optical_depth_gives_exactly_one(self):
+        M = np.eye(3)
+        T = beer_lambert_rgb(M, np.array([0.0, 0.0, 0.0]))
+        assert T == pytest.approx(np.ones(3))
+
+    def test_huge_optical_depth_stays_positive(self):
+        M = np.eye(3) * 1e6
+        T = beer_lambert_rgb(M, np.ones(3))
+        assert np.all(T > 0.0)
+        assert np.all(T <= 1.0)
+
+    def test_transmission_never_exceeds_one(self):
+        # Even with positive M entries and negative densities forced through
+        # the harness path (rejected upstream, but the safety clip must hold).
+        M = np.array([[0.5, 0.1, 0.0], [0.1, 0.7, 0.0], [0.0, 0.2, 0.4]])
+        T = beer_lambert_rgb(M, np.array([100.0, 100.0, 100.0]))
+        assert np.all(T > 0.0)
+        assert np.all(T <= 1.0)
+
+    def test_negative_density_refused(self):
+        with pytest.raises(ValueError):
+            beer_lambert_rgb(np.eye(3), np.array([0.1, 0.1, -0.1]))
+
+
+class TestEdgeCaseBranches:
+    def test_1d_grid_with_two_cells_does_not_raise(self):
+        grid = np.array([0.5, 1.5])
+        final = dir_reaction_diffusion(grid, 0.1, 0.0, 3.0)
+        assert final.shape == (2,)
+
+    def test_2d_grid_with_two_by_two_cells_does_not_raise(self):
+        grid = np.array([[0.5, 1.5], [1.0, 0.25]])
+        final = dir_reaction_diffusion(grid, 0.1, 0.0, 3.0)
+        assert final.shape == (2, 2)
+
+    def test_negative_kappa_refused(self):
+        grid = np.array([0.5, 1.5, 0.25])
+        with pytest.raises(ValueError, match="non-negative"):
+            dir_reaction_diffusion(grid, -0.5, 0.0, 3.0)
+
+    def test_invalid_grid_spacing_refused(self):
+        grid = np.array([0.5, 1.5, 0.25])
+        with pytest.raises(ValueError, match="grid_spacing"):
+            dir_reaction_diffusion(grid, 0.1, 0.0, 3.0, grid_spacing=0.0)
+
+    def test_invalid_time_step_refused(self):
+        grid = np.array([0.5, 1.5, 0.25])
+        with pytest.raises(ValueError, match="time_step"):
+            dir_reaction_diffusion(grid, 0.1, 0.0, 3.0, time_step=0.0)
+
+    def test_grid_spacing_1d_and_2d_both_accepted_at_cfl_boundary(self):
+        # 2D CFL boundary 0.25: kappa = 0.25 with dx = 1, dt = 1 is accepted.
+        grid2d = np.ones((3, 3))
+        final = dir_reaction_diffusion(grid2d, 0.25, 0.0, 3.0)
+        assert final.shape == (3, 3)
