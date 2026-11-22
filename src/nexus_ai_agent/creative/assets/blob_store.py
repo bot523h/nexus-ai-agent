@@ -12,8 +12,11 @@ fallback from a (future) remote store to local disk.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
+import os
 import secrets
+import stat
 from pathlib import Path
 from typing import BinaryIO
 
@@ -36,11 +39,28 @@ _BLOB_PREFIX = "blobs"
 class LocalContentAddressedBlobStore:
     """A filesystem blob store keyed by SHA-256, inside one workspace boundary."""
 
-    def __init__(self, root: str | Path) -> None:
-        Path(root).expanduser().mkdir(parents=True, exist_ok=True)
-        self._fs = WorkspaceFilesystem(root)
+    def __init__(self, root: str | Path, *, lock_timeout_seconds: float = 10.0) -> None:
+        path = Path(root).expanduser()
+        path.mkdir(mode=0o700, parents=True, exist_ok=True)
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK)
+        try:
+            if not stat.S_ISDIR(os.fstat(fd).st_mode):
+                raise BlobStoreError("blob root is not a directory")
+            os.fchmod(fd, 0o700)
+            if stat.S_IMODE(os.fstat(fd).st_mode) != 0o700:
+                raise BlobStoreError("blob root permissions are unsafe")
+        finally:
+            os.close(fd)
+        self._fs = WorkspaceFilesystem(root, lock_timeout_seconds=lock_timeout_seconds)
         self._fs.ensure_directory(_STAGING_PREFIX)
         self._fs.ensure_directory(_BLOB_PREFIX)
+        stage_fd = self._fs._open_dir((_STAGING_PREFIX,))
+        try:
+            os.fchmod(stage_fd, 0o700)
+            if stat.S_IMODE(os.fstat(stage_fd).st_mode) != 0o700:
+                raise BlobStoreError("staging permissions are unsafe")
+        finally:
+            os.close(stage_fd)
 
     @staticmethod
     def blob_key_for(sha256: str) -> str:
@@ -112,10 +132,22 @@ class LocalContentAddressedBlobStore:
             )
         except FilesystemIntegrityError as exc:
             raise ContentIntegrityError("publication failed integrity verification") from exc
+        except TimeoutError:
+            raise
         except (FilesystemBoundaryError, OSError) as exc:
             raise BlobStoreError("blob publication failed inside the boundary") from exc
         self._fs.unlink(staging_key)
         return sha256, size, not published
+
+    def publish_from_staging(self, staging_key: str, blob_key: str) -> tuple[str, int, bool]:
+        """Publish a staged blob using the canonical synchronous operation."""
+        return self.store(staging_key, blob_key)
+
+    async def publish_from_staging_async(
+        self, staging_key: str, blob_key: str
+    ) -> tuple[str, int, bool]:
+        """Run blocking publication in a worker thread."""
+        return await asyncio.to_thread(self.publish_from_staging, staging_key, blob_key)
 
     def verify(self, blob_key: str, *, sha256: str, size_bytes: int) -> bool:
         """True iff the stored blob exists and matches the recorded identity."""

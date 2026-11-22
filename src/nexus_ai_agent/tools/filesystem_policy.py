@@ -15,11 +15,13 @@ from __future__ import annotations
 
 import errno
 import hashlib
+import math
 import ntpath
 import os
 import secrets
 import stat
 import threading
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -95,7 +97,15 @@ def _validate_relative(raw: str, *, allow_root: bool = False) -> tuple[str, ...]
 class WorkspaceFilesystem:
     """A physically contained, symlink-resistant workspace boundary."""
 
-    def __init__(self, root: str | Path) -> None:
+    def __init__(self, root: str | Path, *, lock_timeout_seconds: float = 10.0) -> None:
+        if (
+            isinstance(lock_timeout_seconds, bool)
+            or not isinstance(lock_timeout_seconds, (int, float))
+            or not math.isfinite(lock_timeout_seconds)
+            or lock_timeout_seconds <= 0
+        ):
+            raise ValueError("invalid publication lock timeout")
+        self._lock_timeout_seconds = float(lock_timeout_seconds)
         configured = Path(root).expanduser()
         if not configured.is_absolute():
             configured = Path.cwd() / configured
@@ -553,7 +563,10 @@ class WorkspaceFilesystem:
         """Serialize cooperating publishers; non-cooperating writers are not fenced."""
         import fcntl
 
-        with _PUBLICATION_LOCK:
+        deadline = time.monotonic() + self._lock_timeout_seconds
+        if not _PUBLICATION_LOCK.acquire(timeout=self._lock_timeout_seconds):
+            raise TimeoutError("publication lock timed out")
+        try:
             root_fd = self._root_fd()
             try:
                 fd = os.open(
@@ -565,7 +578,15 @@ class WorkspaceFilesystem:
                 try:
                     if not stat.S_ISREG(os.fstat(fd).st_mode):
                         raise FilesystemBoundaryError("publication lock is not regular")
-                    fcntl.flock(fd, fcntl.LOCK_EX)
+                    while True:
+                        try:
+                            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                            break
+                        except BlockingIOError:
+                            remaining = deadline - time.monotonic()
+                            if remaining <= 0:
+                                raise TimeoutError("publication lock timed out") from None
+                            time.sleep(min(remaining, 0.01))
                     try:
                         yield
                     finally:
@@ -574,6 +595,8 @@ class WorkspaceFilesystem:
                     os.close(fd)
             finally:
                 os.close(root_fd)
+        finally:
+            _PUBLICATION_LOCK.release()
 
     @staticmethod
     @contextmanager
@@ -593,6 +616,14 @@ class WorkspaceFilesystem:
             digest.update(chunk)
             size += len(chunk)
         return digest.hexdigest(), size
+
+    @staticmethod
+    def _fsync_dir_fd(fd: int) -> None:
+        try:
+            os.fsync(fd)
+        except OSError as exc:
+            if exc.errno not in (errno.EINVAL, errno.EBADF):
+                raise
 
     def _promote_candidate(
         self,
@@ -629,6 +660,8 @@ class WorkspaceFilesystem:
             except FileExistsError:
                 published = False
             try:
+                if published:
+                    self._fsync_dir_fd(dest_dir_fd)
                 fd = os.open(
                     dest_name, os.O_RDONLY | _NOFOLLOW | _CLOEXEC | _NONBLOCK, dir_fd=dest_dir_fd
                 )
@@ -650,6 +683,7 @@ class WorkspaceFilesystem:
                     else:
                         if (current.st_dev, current.st_ino) == identity:
                             os.unlink(dest_name, dir_fd=dest_dir_fd)
+                            self._fsync_dir_fd(dest_dir_fd)
                 raise FilesystemIntegrityError(
                     "published or existing blob failed validation"
                 ) from exc
@@ -730,6 +764,8 @@ class WorkspaceFilesystem:
                             os.rmdir(candidate_dir, dir_fd=dst_fd)
                     finally:
                         os.close(source_fd)
+        except TimeoutError:
+            raise
         except OSError as exc:
             raise FilesystemBoundaryError("link failed inside the workspace") from exc
 

@@ -80,3 +80,94 @@ def test_passport_hmac_and_drill_manifest_vectors() -> None:
         )
         == b'{"nonce_hex":"00","row_counts":{"a":2},"schema_version":1,"source_sha256":"ab"}'
     )
+
+
+def _reference_tree(leaves: list[bytes]) -> bytes:
+    if len(leaves) == 1:
+        return hashlib.sha256(b"\x00" + leaves[0]).digest()
+    split = 1 << ((len(leaves) - 1).bit_length() - 1)
+    return hashlib.sha256(
+        b"\x01" + _reference_tree(leaves[:split]) + _reference_tree(leaves[split:])
+    ).digest()
+
+
+def _reference_verify(leaf: bytes, index: int, count: int, proof: tuple[str, ...]) -> bytes:
+    directions: list[bool] = []
+    while count > 1:
+        split = 1 << ((count - 1).bit_length() - 1)
+        left = index < split
+        directions.append(left)
+        if left:
+            count = split
+        else:
+            count -= split
+            index -= split
+    assert len(directions) == len(proof)
+    result = hashlib.sha256(b"\x00" + leaf).digest()
+    for left, sibling in zip(reversed(directions), proof, strict=True):
+        other = bytes.fromhex(sibling)
+        result = hashlib.sha256(b"\x01" + (result + other if left else other + result)).digest()
+    return result
+
+
+@pytest.mark.parametrize(
+    "count,root",
+    [
+        (4, "bdd1c5ff55b19cb6b0e7c761bf9a6ccaa27fbbfc07b74f1fabb6e911a0bd2ab3"),
+        (5, "00d21829a5503145348abcf712513eacf2a274211ad83e970202bb5b6d80b286"),
+    ],
+)
+def test_independent_merkle_reference_and_audit_path(count: int, root: str) -> None:
+    leaves = [f"leaf-{i}".encode() for i in range(count)]
+    assert _reference_tree(leaves).hex() == root
+    assert merkle_root(leaves)[0] == root
+    for index, leaf in enumerate(leaves):
+        proof = merkle_inclusion_proof(leaves, index)
+        assert _reference_verify(leaf, index, count, proof).hex() == root
+
+
+def test_aes_gcm_authenticates_all_inputs() -> None:
+    from cryptography.exceptions import InvalidTag
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+    aes = AESGCM(bytes(32))
+    nonce = bytes(12)
+    data = b"W5 authenticated data"
+    aad = b"manifest"
+    sealed = aes.encrypt(nonce, data, aad)
+    assert len(sealed) == len(data) + 16
+    assert aes.decrypt(nonce, sealed, aad) == data
+    for iv, payload, metadata in (
+        (nonce, bytes([sealed[0] ^ 1]) + sealed[1:], aad),
+        (nonce, sealed[:-1] + bytes([sealed[-1] ^ 1]), aad),
+        (b"\x01" + nonce[1:], sealed, aad),
+        (nonce, sealed, b"Manifest"),
+    ):
+        with pytest.raises(InvalidTag):
+            aes.decrypt(iv, payload, metadata)
+
+
+def test_bt709_luminance_and_fft_parseval() -> None:
+    import numpy as np
+
+    weights = np.array([0.2126, 0.7152, 0.0722])
+    assert sum(weights) == pytest.approx(1.0, abs=1e-12)
+    assert np.eye(3) @ weights == pytest.approx([0.2126, 0.7152, 0.0722], abs=1e-12)
+    assert np.ones(3) @ weights == pytest.approx(1.0, abs=1e-12)
+    n = np.arange(1024)
+    signal = np.sin(2 * np.pi * 17 * n / 1024) + 0.3 * np.cos(2 * np.pi * 71 * n / 1024)
+    time_energy = float(np.sum(np.abs(signal) ** 2))
+    frequency_energy = float(np.sum(np.abs(np.fft.fft(signal)) ** 2) / signal.size)
+    assert time_energy == pytest.approx(frequency_energy, rel=1e-10)
+
+
+def test_gaussian_kernel_preserves_constant_signal() -> None:
+    import numpy as np
+
+    positions = np.arange(-4, 5, dtype=float)
+    kernel = np.exp(-(positions**2) / 2.0)
+    kernel /= np.sum(kernel)
+    assert np.array_equal(kernel, kernel[::-1])
+    assert np.all(kernel >= 0)
+    assert np.sum(kernel) == pytest.approx(1.0, abs=1e-12)
+    assert np.convolve(np.ones(100), kernel, mode="valid") == pytest.approx(np.ones(92), abs=1e-12)

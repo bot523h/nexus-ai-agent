@@ -144,3 +144,58 @@ def test_concurrent_publication_has_one_winner(tmp_path: Path) -> None:
     assert sorted(result[2] for result in results) == [False, True]
     assert all(result[:2] == (digest, size) for result in results)
     assert (tmp_path / key).read_bytes() == b"payload"
+
+
+def test_root_and_staging_permissions_and_symlink_refusal(tmp_path: Path) -> None:
+    import stat
+
+    root = tmp_path / "root"
+    root.mkdir(mode=0o755)
+    (root / "staging").mkdir(mode=0o755)
+    LocalContentAddressedBlobStore(root)
+    assert stat.S_IMODE(root.stat().st_mode) == 0o700
+    assert stat.S_IMODE((root / "staging").stat().st_mode) == 0o700
+    link = tmp_path / "link"
+    link.symlink_to(root, target_is_directory=True)
+    with pytest.raises(OSError):
+        LocalContentAddressedBlobStore(link)
+
+
+def test_locked_publication_times_out(tmp_path: Path) -> None:
+    import fcntl
+
+    store = LocalContentAddressedBlobStore(tmp_path, lock_timeout_seconds=0.01)
+    staging, digest, _ = store.stage(io.BytesIO(b"payload"), max_bytes=100)
+    fd = os.open(tmp_path / ".blob_publish.lock", os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        with pytest.raises(TimeoutError, match="publication lock timed out"):
+            store.store(staging, store.blob_key_for(digest))
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+
+
+def test_async_publication_and_directory_sync(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import asyncio
+    import stat
+
+    store = LocalContentAddressedBlobStore(tmp_path)
+    stage, digest, size = store.stage(io.BytesIO(b"payload"), max_bytes=100)
+    real_fsync = os.fsync
+    directories: list[int] = []
+
+    def tracking_fsync(fd: int) -> None:
+        if stat.S_ISDIR(os.fstat(fd).st_mode):
+            directories.append(fd)
+        real_fsync(fd)
+
+    monkeypatch.setattr(os, "fsync", tracking_fsync)
+    assert asyncio.run(store.publish_from_staging_async(stage, store.blob_key_for(digest))) == (
+        digest,
+        size,
+        False,
+    )
+    assert directories

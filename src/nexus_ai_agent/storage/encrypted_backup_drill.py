@@ -8,17 +8,22 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import ipaddress
 import json
+import math
 import os
+import re
 import secrets
 import sqlite3
 import stat
 import tempfile
+import time
 from collections.abc import Mapping
 from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path
-from urllib.parse import urlsplit
+from types import MappingProxyType
+from urllib.parse import parse_qs, urlsplit
 
 from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -32,6 +37,19 @@ _B2 = (
 )
 _R2 = ("R2_ACCOUNT_ID", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "R2_BUCKET")
 _DATABASE = "NEXUS_DATABASE_URL"
+_ALIASES = {
+    _DATABASE: (_DATABASE, "DATABASE_URL"),
+    _B2[0]: (_B2[0], "B2_KEY_ID", "B2_APPLICATION_KEY_ID"),
+    _B2[1]: (_B2[1], "B2_APPLICATION_KEY"),
+    _B2[2]: (_B2[2], "NEXUS_B2_BUCKET_NAME", "B2_BUCKET", "B2_BUCKET_NAME"),
+    _B2[3]: (_B2[3], "NEXUS_B2_ENDPOINT_URL", "B2_ENDPOINT", "B2_ENDPOINT_URL"),
+    _B2[4]: (_B2[4], "B2_REGION"),
+    _R2[0]: ("NEXUS_R2_ACCOUNT_ID", _R2[0]),
+    _R2[1]: ("NEXUS_R2_ACCESS_KEY_ID", _R2[1]),
+    _R2[2]: ("NEXUS_R2_SECRET_ACCESS_KEY", _R2[2]),
+    _R2[3]: ("NEXUS_R2_BUCKET", "NEXUS_R2_BUCKET_NAME", _R2[3], "R2_BUCKET_NAME"),
+    "R2_ENDPOINT_URL": ("NEXUS_R2_ENDPOINT_URL", "R2_ENDPOINT_URL"),
+}
 
 
 class BackupPreflightError(ValueError):
@@ -47,6 +65,19 @@ def _valid_value(value: object) -> bool:
     )
 
 
+def _valid_host(host: str | None) -> bool:
+    if not host:
+        return False
+    try:
+        ipaddress.ip_address(host)
+        return True
+    except ValueError:
+        return len(host) <= 253 and all(
+            re.fullmatch(r"[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?", label)
+            for label in host.split(".")
+        )
+
+
 def _valid_url(value: str, schemes: frozenset[str], *, database: bool) -> bool:
     try:
         parsed = urlsplit(value)
@@ -54,15 +85,24 @@ def _valid_url(value: str, schemes: frozenset[str], *, database: bool) -> bool:
         port = parsed.port
         return (
             parsed.scheme in schemes
-            and bool(parsed.hostname)
+            and _valid_host(parsed.hostname)
             and (port is None or 0 < port <= 65535)
             and not parsed.fragment
             and not any(char.isspace() for char in value)
             and (not database or bool(parsed.path.strip("/")))
+            and (
+                not database
+                or parse_qs(parsed.query, keep_blank_values=True).get("sslmode")
+                in (["verify-full"], ["verify-ca"])
+            )
             and (database or (not parsed.username and not parsed.password))
         )
     except ValueError:
         return False
+
+
+def _valid_bucket(value: str) -> bool:
+    return bool(re.fullmatch(r"[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]", value)) and ".." not in value
 
 
 def verify_production_backup_preflight(
@@ -76,25 +116,42 @@ def verify_production_backup_preflight(
     """
     if not isinstance(require_remote_tier, bool):
         raise BackupPreflightError("FAILED_PREFLIGHT_REMOTE_MISSING")
-    names = (_DATABASE,) + _B2 + _R2
-    present = {name for name in names if env_mapping.get(name) not in (None, "")}
+    normalized: dict[str, str] = {}
+    for canonical, aliases in _ALIASES.items():
+        values = [env_mapping[name] for name in aliases if env_mapping.get(name) not in (None, "")]
+        if values:
+            if any(not _valid_value(value) for value in values) or any(
+                value != values[0] for value in values[1:]
+            ):
+                raise BackupPreflightError("FAILED_PREFLIGHT_REMOTE_MISSING")
+            normalized[canonical] = values[0]
+    present = set(normalized)
     if not present and not require_remote_tier:
         return "REMOTE_UNCONFIGURED"
-    if any(not _valid_value(env_mapping.get(name)) for name in present):
-        raise BackupPreflightError("FAILED_PREFLIGHT_REMOTE_MISSING")
-    db = env_mapping.get(_DATABASE, "")
+    db = normalized.get(_DATABASE, "")
     b2 = all(name in present for name in _B2)
     r2 = all(name in present for name in _R2)
     # A partially configured tier is suspicious even if the other is complete.
     if (
         not _valid_value(db)
         or not _valid_url(
-            db, frozenset({"postgres", "postgresql", "postgresql+asyncpg"}), database=True
+            db,
+            frozenset({"postgres", "postgresql", "postgresql+asyncpg", "postgresql+psycopg"}),
+            database=True,
         )
         or not (b2 or r2)
         or (bool(present.intersection(_B2)) and not b2)
         or (bool(present.intersection(_R2)) and not r2)
-        or (b2 and not _valid_url(env_mapping[_B2[3]], frozenset({"https"}), database=False))
+        or (b2 and not _valid_url(normalized[_B2[3]], frozenset({"https"}), database=False))
+        or (b2 and not _valid_bucket(normalized[_B2[2]]))
+        or (r2 and not _valid_bucket(normalized[_R2[3]]))
+        or (b2 and any(char.isspace() for char in normalized[_B2[4]]))
+        or (r2 and any(char.isspace() for char in normalized[_R2[0]]))
+        or ("R2_ENDPOINT_URL" in present and not r2)
+        or (
+            "R2_ENDPOINT_URL" in present
+            and not _valid_url(normalized["R2_ENDPOINT_URL"], frozenset({"https"}), database=False)
+        )
     ):
         raise BackupPreflightError("FAILED_PREFLIGHT_REMOTE_MISSING")
     return "REMOTE_CONFIGURATION_VALIDATED"
@@ -110,25 +167,43 @@ class BackupDrillEvidence:
     source_sha256: str
     ciphertext_sha256: str
     merkle_root: str
-    row_counts: dict[str, int]
+    row_counts: Mapping[str, int]
     archive_path: Path
     manifest_path: Path
     restored_path: Path
 
 
-def _key(key: bytes | bytearray) -> bytes:
-    if not isinstance(key, (bytes, bytearray)) or len(key) < 32 or len(set(key)) < 4:
+def _key(key: bytes | bytearray | memoryview) -> bytes:
+    """Reject simple patterns; callers must still supply a CSPRNG-generated key.
+
+    Structural tests cannot prove entropy, and hashing cannot create entropy.
+    """
+    if not isinstance(key, (bytes, bytearray, memoryview)):
         raise ValueError("invalid encryption key")
-    return hashlib.sha256(b"nexus-local-drill-aesgcm-v1\x00" + bytes(key)).digest()
+    raw = bytes(key)
+    if (
+        len(raw) != 32
+        or len(set(raw)) < 16
+        or any(raw[:period] * (32 // period) == raw for period in (4, 8, 16))
+        or len({(raw[i + 1] - raw[i]) % 256 for i in range(31)}) == 1
+    ):
+        raise ValueError("invalid encryption key")
+    return hashlib.sha256(b"nexus-local-drill-aesgcm-v1\x00" + raw).digest()
 
 
-def _read_regular(path: Path) -> bytes:
+def _read_regular(path: Path, limit: int = 64 * 1024 * 1024) -> bytes:
     fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK)
     try:
-        if not stat.S_ISREG(os.fstat(fd).st_mode):
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode):
             raise ValueError("not a regular file")
+        if info.st_size > limit:
+            raise ValueError("database size exceeds drill limit")
         with os.fdopen(fd, "rb", closefd=False) as stream:
-            return stream.read()
+            data = stream.read(limit + 1)
+        if len(data) > limit:
+            raise ValueError("database size exceeds drill limit")
+        return data
     finally:
         os.close(fd)
 
@@ -160,7 +235,7 @@ def _inventory(conn: sqlite3.Connection) -> dict[str, int]:
         raise ValueError("SQLite integrity check failed")
     names = conn.execute(
         "SELECT name FROM sqlite_master WHERE type='table' "
-        "AND name NOT LIKE 'sqlite_%' ORDER BY name"
+        "AND substr(name, 1, 7) != 'sqlite_' ORDER BY name"
     ).fetchall()
     result = {}
     for (name,) in names:
@@ -188,6 +263,7 @@ def _exclusive_write(path: Path, data: bytes) -> None:
         finally:
             os.close(fd)
             os.unlink(name, dir_fd=parent)
+        os.fsync(parent)
     finally:
         os.close(parent)
 
@@ -216,13 +292,19 @@ def _parse_manifest(raw: bytes) -> dict[str, object]:
 
 
 def verify_encrypted_sqlite_backup(
-    archive_path: Path, manifest_path: Path, key: bytes | bytearray
+    archive_path: Path,
+    manifest_path: Path,
+    key: bytes | bytearray | memoryview,
+    *,
+    max_database_bytes: int = 64 * 1024 * 1024,
 ) -> bytes:
     """Authenticate an artifact before returning any plaintext; never restore on failure."""
     aes_key = _key(key)
+    if type(max_database_bytes) is not int or max_database_bytes <= 0:
+        raise ValueError("database size exceeds drill limit")
     try:
-        manifest = _parse_manifest(_read_regular(manifest_path))
-        ciphertext = _read_regular(archive_path)
+        manifest = _parse_manifest(_read_regular(manifest_path, 1024 * 1024))
+        ciphertext = _read_regular(archive_path, max_database_bytes)
         aad = {
             k: manifest[k] for k in ("schema_version", "source_sha256", "row_counts", "nonce_hex")
         }
@@ -251,9 +333,13 @@ def verify_encrypted_sqlite_backup(
 def run_encrypted_sqlite_backup_restore_drill(
     source_db_path: Path,
     drill_workdir: Path,
-    encryption_key: bytes | bytearray,
+    encryption_key: bytes | bytearray | memoryview,
     *,
     inject_tamper_byte: bool = False,
+    max_database_bytes: int = 64 * 1024 * 1024,
+    backup_timeout_seconds: float = 10.0,
+    allow_empty_database: bool = False,
+    preflight_env: Mapping[str, str] | None = None,
 ) -> BackupDrillEvidence:
     """Execute a local SQLite backup and restore, never a production remote backup.
 
@@ -261,21 +347,50 @@ def run_encrypted_sqlite_backup_restore_drill(
     Python's SQLite API opens paths independently of our no-follow descriptor.
     """
     aes_key = _key(encryption_key)
-    if not isinstance(inject_tamper_byte, bool):
-        raise ValueError("tamper flag must be boolean")
+    if type(max_database_bytes) is not int or max_database_bytes <= 0:
+        raise ValueError("database size exceeds drill limit")
+    if (
+        isinstance(backup_timeout_seconds, bool)
+        or not isinstance(backup_timeout_seconds, (int, float))
+        or not math.isfinite(backup_timeout_seconds)
+        or backup_timeout_seconds <= 0
+    ):
+        raise ValueError("invalid backup timeout")
+    if not isinstance(inject_tamper_byte, bool) or not isinstance(allow_empty_database, bool):
+        raise ValueError("drill flags must be boolean")
+    if preflight_env is not None:
+        verify_production_backup_preflight(preflight_env)
+        status = "LOCAL_DRILL_VERIFIED_REMOTE_PREFLIGHT_OK"
+    else:
+        status = "LOCAL_DRILL_VERIFIED_REMOTE_NOT_CHECKED"
     source = Path(source_db_path).absolute()
     work = Path(drill_workdir).absolute()
     source_fd = os.open(source, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK)
     try:
-        if not stat.S_ISREG(os.fstat(source_fd).st_mode):
+        source_info = os.fstat(source_fd)
+        if not stat.S_ISREG(source_info.st_mode):
             raise ValueError("source is not a regular file")
+        if source_info.st_size > max_database_bytes:
+            raise ValueError("database size exceeds drill limit")
+        deadline = time.monotonic() + backup_timeout_seconds
+
+        def progress(_status: int, _remaining: int, _total: int) -> None:
+            if time.monotonic() > deadline:
+                raise TimeoutError("sqlite backup timed out")
+
         with tempfile.TemporaryDirectory(prefix=".nexus-drill-", dir=work) as temp:
             snapshot = Path(temp) / "snapshot.sqlite"
-            with closing(sqlite3.connect(source.as_uri() + "?mode=ro", uri=True)) as src:
-                with closing(sqlite3.connect(snapshot)) as dst:
-                    src.backup(dst)
+            with closing(
+                sqlite3.connect(
+                    source.as_uri() + "?mode=ro", uri=True, timeout=backup_timeout_seconds
+                )
+            ) as src:
+                with closing(sqlite3.connect(snapshot, timeout=backup_timeout_seconds)) as dst:
+                    src.backup(dst, pages=128, progress=progress, sleep=0.005)
                     counts = _inventory(dst)
-            plaintext = _read_regular(snapshot)
+                    if not counts and not allow_empty_database:
+                        raise ValueError("source database has no user tables")
+            plaintext = _read_regular(snapshot, max_database_bytes)
             source_hash = hashlib.sha256(plaintext).hexdigest()
             nonce = os.urandom(12)
             aad = {
@@ -292,15 +407,12 @@ def run_encrypted_sqlite_backup_restore_drill(
                 "merkle_root": _merkle(ciphertext),
                 "auth_tag_hex": tag.hex(),
             }
-            archive = work / "backup.enc"
-            manifest_path = work / "manifest.json"
-            restored = work / "restored.sqlite"
+            stage = Path(temp)
+            archive = stage / "backup.enc"
+            manifest_path = stage / "manifest.json"
+            restored = stage / "restored.sqlite"
             _exclusive_write(archive, ciphertext)
-            try:
-                _exclusive_write(manifest_path, _canonical(manifest))
-            except Exception:
-                archive.unlink()
-                raise
+            _exclusive_write(manifest_path, _canonical(manifest))
             if inject_tamper_byte:
                 fd = os.open(archive, os.O_RDWR | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK)
                 try:
@@ -311,20 +423,37 @@ def run_encrypted_sqlite_backup_restore_drill(
                     os.write(fd, bytes([first[0] ^ 1]))
                 finally:
                     os.close(fd)
-            verified = verify_encrypted_sqlite_backup(archive, manifest_path, encryption_key)
+            verified = verify_encrypted_sqlite_backup(
+                archive, manifest_path, encryption_key, max_database_bytes=max_database_bytes
+            )
             _exclusive_write(restored, verified)
             with closing(sqlite3.connect(restored.as_uri() + "?mode=ro", uri=True)) as connection:
                 if _inventory(connection) != counts:
                     raise BackupIntegrityTamperError("restored database inventory mismatch")
+            snapshot.unlink()
+            stage_fd = os.open(stage, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+            try:
+                os.fsync(stage_fd)
+            finally:
+                os.close(stage_fd)
+            final = work / ("drill-" + secrets.token_hex(16))
+            # A unique generation is made visible by one directory rename, not
+            # three independent file replacements. The work directory is trusted.
+            os.rename(stage, final)
+            work_fd = os.open(work, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+            try:
+                os.fsync(work_fd)
+            finally:
+                os.close(work_fd)
             return BackupDrillEvidence(
-                "LOCAL_DRILL_VERIFIED_REMOTE_UNCONFIGURED",
+                status,
                 source_hash,
                 str(manifest["ciphertext_sha256"]),
                 str(manifest["merkle_root"]),
-                counts,
-                archive,
-                manifest_path,
-                restored,
+                MappingProxyType(dict(counts)),
+                final / archive.name,
+                final / manifest_path.name,
+                final / restored.name,
             )
     finally:
         os.close(source_fd)
