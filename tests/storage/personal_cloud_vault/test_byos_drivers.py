@@ -1004,7 +1004,10 @@ def test_p1_3_multi_backend_s3_and_bundle_leases_and_chunk_mtime(tmp_path: Path)
     assert b_b.delete_chunk_if_unleased(c1) is True
     assert b_b.delete_chunk_if_unleased(c1) is False
     b_a.acquire_push_lease([c2], lease_id="b-l2")
-    b_b.release_push_lease("b-l2")
+    with pytest.raises(VaultRevisionConflictError):
+        b_b.release_push_lease("b-l2")
+    assert b_b.read_active_leased_chunks() == {c2}
+    b_a.release_push_lease("b-l2")
     assert b_b.read_active_leased_chunks() == set()
 
 
@@ -1603,8 +1606,10 @@ def test_f3_bundle_multi_instance_lease_serialization_and_staging_journal(
     assert peer.has_chunk(c2)
     with pytest.raises(VaultRevisionConflictError):
         peer.acquire_push_lease([c2], lease_id="f3-bundle-lease")
-    peer.update_push_lease(lease_id, [c2, c3])
-    assert writer.read_active_leased_chunks() == {c2, c3}
+    with pytest.raises(VaultRevisionConflictError):
+        peer.update_push_lease(lease_id, [c2, c3])
+    writer.update_push_lease(lease_id, [c2, c3])
+    assert peer.read_active_leased_chunks() == {c2, c3}
     with pytest.raises(VaultTransportError):
         peer.update_push_lease("no-such-bundle-lease", [c2])
 
@@ -2479,7 +2484,7 @@ def _fence_transport(
     *,
     bucket: str,
     inject_on_key: str | None = None,
-    inject_lease: tuple[str, bytes],
+    inject_lease: tuple[str, str],
     inject_on_delete_key: str | None = None,
 ) -> Any:
     import json

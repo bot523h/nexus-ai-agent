@@ -33,7 +33,7 @@ from nexus_ai_agent.storage.personal_cloud_vault import (
     VaultRevisionConflictError,
     VaultTransportError,
 )
-from nexus_ai_agent.storage.personal_cloud_vault.byos_drivers import VaultTamperDetectedError
+from nexus_ai_agent.storage.personal_cloud_vault.errors import VaultTamperDetectedError
 
 CHUNK = "c" * 64
 PREFIX = "user-7"
@@ -476,7 +476,7 @@ def test_collector_restores_the_chunk_when_a_clock_skewed_writer_wins_the_last_w
     gc_driver.put_chunk(CHUNK, b"precious-bytes")
 
     skew = datetime.now(timezone.utc) + timedelta(hours=2)
-    writer_driver._clock = lambda: skew  # type: ignore[method-assign]
+    writer_driver._clock = lambda: skew
 
     leased: list[str] = []
 
@@ -517,7 +517,7 @@ def test_lease_registered_while_the_fence_is_being_retired_is_still_seen() -> No
     gc_driver.put_chunk(CHUNK, b"precious-bytes")
 
     skew = datetime.now(timezone.utc) + timedelta(hours=2)
-    writer_driver._clock = lambda: skew  # type: ignore[method-assign]
+    writer_driver._clock = lambda: skew
 
     leased: list[str] = []
     original_retire = gc_driver._retire_gc_fence
@@ -551,7 +551,7 @@ def test_conditional_restore_never_overwrites_a_newer_chunk_object() -> None:
     gc_driver.put_chunk(CHUNK, b"staged-bytes")
 
     skew = datetime.now(timezone.utc) + timedelta(hours=2)
-    writer_driver._clock = lambda: skew  # type: ignore[method-assign]
+    writer_driver._clock = lambda: skew
     leased: list[str] = []
 
     def _writer_publishes_a_newer_object() -> None:
@@ -704,7 +704,7 @@ def test_a_lagging_writer_clock_never_makes_its_fresh_lease_look_expired() -> No
     gc_driver.put_chunk(CHUNK, b"precious-bytes")
 
     lagging = datetime.now(timezone.utc) - timedelta(hours=2)
-    writer_driver._clock = lambda: lagging  # type: ignore[method-assign]
+    writer_driver._clock = lambda: lagging
     lease_id = writer_driver.acquire_push_lease([CHUNK], project_id="project-1", ttl_seconds=600.0)
 
     written = json.loads(transport.objects[f"{PREFIX}/leases/{lease_id}.json"])
@@ -725,7 +725,7 @@ def test_a_leading_writer_clock_never_shortens_the_lease_it_wrote() -> None:
     gc_driver.put_chunk(CHUNK, b"precious-bytes")
 
     leading = datetime.now(timezone.utc) + timedelta(hours=1)
-    writer_driver._clock = lambda: leading  # type: ignore[method-assign]
+    writer_driver._clock = lambda: leading
     writer_driver.acquire_push_lease([CHUNK], project_id="project-1", ttl_seconds=600.0)
 
     assert gc_driver.read_active_leased_chunks() == {CHUNK}
@@ -947,7 +947,13 @@ def test_failed_rollback_never_deletes_a_third_writers_newer_lease() -> None:
     racer._pre_lease_put_race_probe = _collector_claims_the_chunk
 
     with pytest.raises(VaultRevisionConflictError):
-        racer.update_push_lease(lease_id, [CHUNK], project_id="project-1", ttl_seconds=600.0)
+        racer.update_push_lease(
+            lease_id,
+            [CHUNK],
+            project_id="project-1",
+            ttl_seconds=600.0,
+            expected_etag=writer._owned_lease_etags[lease_id][0],
+        )
 
     assert state["replaced"] is True
     assert lease_key in transport.objects
@@ -1191,7 +1197,13 @@ def test_release_push_lease_without_explicit_etag_is_still_bound_to_owner_etag()
     lease_key = f"{PREFIX}/leases/{lease_id}.json"
     acquired = transport.objects[lease_key]
 
-    driver_b.update_push_lease(lease_id, [CHUNK], project_id="project-1", ttl_seconds=900.0)
+    driver_b.update_push_lease(
+        lease_id,
+        [CHUNK],
+        project_id="project-1",
+        ttl_seconds=900.0,
+        expected_etag=driver_a._owned_lease_etags[lease_id][0],
+    )
     refreshed = transport.objects[lease_key]
     assert refreshed != acquired
     deletes_before = [entry for entry in transport.requests if entry[0] == "DELETE"]
