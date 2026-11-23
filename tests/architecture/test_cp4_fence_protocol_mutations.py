@@ -265,20 +265,13 @@ MUTANTS: tuple[tuple[str, str, str, str, str, str], ...] = (
     (
         "M17 expired-lease reap trusts a stale read",
         DRIVERS,
-        """        if not state.is_ours(etag=expected_etag, lease_token=expected_lease_token):
-            return False
-        if state.deadline_epoch + self._clock_skew_margin > effective_now:
-            return False
-        try:
-            resp = self._send(
-                "DELETE",
-                object_key=obj_key,
-                extra_headers={"if-match": expected_etag},
-            )
-        except VaultTransportError:
-            return False
-        if resp.status_code in (200, 202, 204):
-            return True""",
+        (
+            "        if not state.is_ours(etag=expected_etag, "
+            "lease_token_verifier=expected_lease_verifier):\n"
+            "            return False\n"
+            "        if state.deadline_epoch + self._clock_skew_margin > effective_now:\n"
+            "            return False"
+        ),
         """        return (
             self._send("DELETE", object_key=obj_key).status_code in (200, 202, 204, 404)
         )""",
@@ -288,7 +281,13 @@ MUTANTS: tuple[tuple[str, str, str, str, str, str], ...] = (
     (
         "M18 rollback loses its ownership precondition",
         DRIVERS,
-        """        if not state.is_ours(etag=our_write_etag, lease_token=our_lease_token):
+        """        if not _lease_state_matches_token(
+            state,
+            etag=our_write_etag,
+            project_id=state_project_id,
+            lease_id=state_lease_id,
+            lease_token=our_lease_token,
+        ):
             return
         if prior_body is not None and prior_etag and state.etag == prior_etag:
             return
@@ -337,15 +336,12 @@ MUTANTS: tuple[tuple[str, str, str, str, str, str], ...] = (
     (
         "M20 release accepts an empty ETag",
         DRIVERS,
-        """            raw_etag: object = expected_etag
-            if not isinstance(raw_etag, str) or not raw_etag.strip():
-                raise VaultTransportError(
-                    f"Refusing to release S3 push lease {valid_id!r} without a known ETag: "
-                    "an unconditional DELETE could remove a lease another writer just took over"
-                )""",
-        """            raw_etag: object = expected_etag
-            if False:
-                raise VaultTransportError("unreachable")""",
+        """    if expected_etag is not None and (
+        not isinstance(expected_etag, str) or not expected_etag.strip()
+    ):
+        raise VaultTransportError("Lease update/release requires a non-empty expected ETag")""",
+        """    if False:
+        raise VaultTransportError("unreachable")""",
         FENCE_TESTS,
         "test_absent_lease_etag_never_causes_unconditional_lease_deletion",
     ),
@@ -397,8 +393,7 @@ MUTANTS: tuple[tuple[str, str, str, str, str, str], ...] = (
         """        if prior.status_code != 200 or not prior.body:
             raise VaultTransportError(
                 f"S3 update_push_lease could not read the prior lease {valid_id!r} "
-                f"(HTTP {prior.status_code}); refusing to refresh without a prior body "
-                "to restore"
+                f"(HTTP {prior.status_code})"
             )""",
         """        if False:
             raise VaultTransportError("never reached")""",
@@ -408,17 +403,22 @@ MUTANTS: tuple[tuple[str, str, str, str, str, str], ...] = (
     (
         "M27 release trusts a fresh read instead of its own write",
         DRIVERS,
-        """        elif valid_id in self._owned_lease_etags:
-            # Our own write: condition on the ETag it produced, so a refresh by another
-            # writer turns this release into a 412 instead of a silent takeover.
-            etag_to_match = self._owned_lease_etags[valid_id][0]""",
-        """        elif valid_id in self._owned_lease_etags:
-            observed = self._read_lease_state(obj_key)
-            etag_to_match = ""
-            if observed is not None:
-                etag_to_match = observed.etag""",
+        """        actual_id, project_id, _verifier = _lease_owner_fields(state.raw)
+        if (
+            state.etag != owned_etag
+            or actual_id != valid_id
+            or not _lease_record_matches_owner(
+                state.raw, project_id=project_id, lease_id=valid_id, lease_token=token
+            )
+        ):
+            self._forget_owned_lease(obj_key)
+            raise VaultRevisionConflictError(
+                f"Lease {valid_id!r} changed owner or ETag before release"
+            )""",
+        """        # MUTANT: trusts the latest observed ETag instead of this owner's recorded write.
+        owned_etag = state.etag""",
         FENCE_TESTS,
-        "test_release_push_lease_without_explicit_etag_is_still_bound_to_owner_etag",
+        "test_release_refuses_peer_lease_even_when_peer_has_a_real_etag",
     ),
     (
         "M28 chunk generation ignored on an unversioned bucket",

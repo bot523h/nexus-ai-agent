@@ -2873,3 +2873,46 @@ row with `attempt = 0`), alongside the standing cancel matrix
 `test_cancel_running_job_is_fenced_and_recoverable`,
 `test_cancel_without_a_fencing_token_is_refused`). Architecture page
 `docs/architecture/EXECUTION_CORE.md` §2 states the choice and names the test.
+
+## D-0040 — BYOS lease authority is the proven `(lease_token, ETag)` pair
+
+**Context.** A local or bundled lease has mutable bytes and can be replaced
+between observation and refresh/release; an S3-compatible object adds conditional
+writes whose response may be lost after the server has committed. An ETag is a
+version fence, not proof that the caller owns that version. Local lease paths can
+also be adversarial FIFOs, symlinks, or inode replacements (including ABA races).
+
+**Decision.** The raw lease credential is never written to shared storage. Each
+lease document stores only a domain-separated, one-way verifier binding the
+project ID, lease ID, and random owner token. The driver's in-memory ownership
+record and the caller's private recovery credential carry the raw token and the
+exact ETag as a pair; refresh and release are permitted only when both still
+prove the same current lease. `export_lease_credential(lease_id)` exports that
+pair only after revalidating the shared document, so callers can persist it in
+private storage if they need recovery across process restarts.
+
+After restart, the public
+`recover_owned_lease(project_id, lease_id, lease_token, expected_etag)` requires
+both the secret token and a non-empty expected ETag. It accepts only an active
+lease, compares the token-derived verifier and ETag with
+`hmac.compare_digest`, and records ownership only after both proofs succeed.
+An omitted ETag is not inferred from a remote read: that would let an
+unauthenticated peer turn observation into deletion authority. The
+`release_push_lease(expected_etag=None)` form remains convenient for the same
+driver instance because it uses that instance's recorded token/ETag pair; a
+peer with no such record is refused even if it can observe the lease.
+
+Local lease file opens use `O_NONBLOCK` plus no-follow flags, then `fstat` the
+opened descriptor and read only regular files. POSIX operation fails closed if
+`O_NONBLOCK` is unavailable. FIFOs and other non-regular files are rejected
+without reading or unlinking them. Stable-descriptor/inode checks fence symlink
+and inode ABA swaps; any mismatch fails closed. For an ambiguous S3 conditional
+PUT, the driver performs a lease GET and adopts the new ETag only if the stored
+verifier proves the token generated for that exact refresh and the owner IDs
+match. A prior version, another writer, or an unverifiable GET fails closed and
+is never claimed.
+
+**Rejected alternatives.** ETag-only ownership, unconditional release, reading a
+FIFO before inspecting its type, deleting unexpected local entries, and treating
+any post-error S3 object as the caller's write are all rejected because each can
+turn observation or ambiguity into authority over another writer's lease.

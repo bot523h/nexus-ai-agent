@@ -1,22 +1,13 @@
-"""Zero-dependency BYOS (Bring Your Own Storage) vault drivers.
+"""Zero-dependency BYOS drivers and their shared storage protocol.
 
-Provides the :class:`BYOSStorageDriver` protocol and three stdlib-only drivers:
-
-1. :class:`LocalDeviceVaultDriver` — atomic (``.tmp`` + ``fsync`` + ``os.replace``)
-   storage on a local folder or external drive with strict ``max_quota_bytes``
-   enforcement.
-2. :class:`S3CompatibleSigV4Driver` — pure-stdlib AWS Signature Version 4
-   (``AWS4-HMAC-SHA256``) client compatible with Cloudflare R2, AWS S3, and MinIO,
-   supporting injectable ``http_transport`` for deterministic offline testing.
-3. :class:`PortableBundleVaultDriver` — single-file ``.nagarvault`` binary archive
-   with binary index table, per-entry CRC32 + SHA-256, and full-archive SHA-256
-   verification for air-gapped / offline cross-device transfer.
+Backends are atomic local storage, SigV4-compatible S3 (R2/MinIO included), and a
+verified single-file ``.nagarvault`` bundle for offline transfer. Each supports
+quota controls and fail-closed lease ownership; S3 transport is injectable for tests.
 """
 
 from __future__ import annotations
 
 import contextlib
-import email.utils
 import hashlib
 import hmac
 import json
@@ -24,15 +15,13 @@ import math
 import os
 import re
 import secrets
+import stat
 import struct
 import threading
 import time
-import urllib.error
 import urllib.parse
-import urllib.request
 import uuid
 import xml.etree.ElementTree as ET
-import zlib
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -46,12 +35,17 @@ from nexus_ai_agent.storage.personal_cloud_vault.crypto_chunk_envelope import (
 from nexus_ai_agent.storage.personal_cloud_vault.errors import (
     PersonalVaultError,
     VaultAuthenticationError,
-    VaultKeyNotFoundError,
     VaultQuotaExceededError,
     VaultRevisionConflictError,
     VaultTamperDetectedError,
     VaultTransportError,
 )
+
+
+class VaultDriverError(VaultTransportError):
+    """Typed fail-closed driver error for missing or unverifiable lease authority."""
+
+    __slots__ = ()
 
 
 def _load_fcntl() -> Any:
@@ -85,6 +79,49 @@ def _validate_snapshot_id(snapshot_id: str) -> str:
     return snapshot_id
 
 
+def _read_lease_file_once(path: Path) -> bytes | None:
+    """Read a lease through one no-follow descriptor and prove its inode stayed stable."""
+    required_flags = ("O_RDONLY", "O_NOFOLLOW", "O_CLOEXEC")
+    if any(not hasattr(os, flag) for flag in required_flags):
+        raise VaultTransportError("Platform cannot safely open local lease files")
+    if _FCNTL is not None and not hasattr(os, "O_NONBLOCK"):
+        raise VaultTransportError(
+            "POSIX platform cannot safely open local lease files without O_NONBLOCK"
+        )
+    flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC
+    if hasattr(os, "O_NONBLOCK"):
+        flags |= os.O_NONBLOCK
+    try:
+        fd = os.open(path, flags)
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        raise VaultTransportError(f"Cannot open push lease {path}: {exc}") from exc
+    try:
+        opened = os.fstat(fd)
+        if not stat.S_ISREG(opened.st_mode):
+            raise VaultTransportError(f"Push lease is not a regular file: {path}")
+        chunks: list[bytes] = []
+        while True:
+            block = os.read(fd, 65536)
+            if not block:
+                break
+            chunks.append(block)
+        try:
+            current = os.stat(path, follow_symlinks=False)
+        except OSError as exc:
+            raise VaultRevisionConflictError(
+                f"Push lease {path} changed while it was being read"
+            ) from exc
+        if (opened.st_dev, opened.st_ino) != (current.st_dev, current.st_ino):
+            raise VaultRevisionConflictError(f"Push lease {path} changed while it was being read")
+        return b"".join(chunks)
+    except OSError as exc:
+        raise VaultTransportError(f"Cannot read push lease {path}: {exc}") from exc
+    finally:
+        os.close(fd)
+
+
 def _validate_positive_finite_seconds(value: float, *, name: str) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise PersonalVaultError(f"{name} must be a finite positive number, got {value!r}")
@@ -105,6 +142,71 @@ def _validate_finite_epoch(value: float | None, *, default_now: float) -> float:
     return as_float
 
 
+def _compute_lease_token_verifier(project_id: str, lease_id: str, lease_token: str) -> str:
+    """Domain-separated, one-way verifier stored in shared lease documents."""
+    fields = (project_id.encode("utf-8"), lease_id.encode("utf-8"), lease_token.encode("utf-8"))
+    material = bytearray(b"nexus-lease-token-verifier-v1\x00")
+    for field_bytes in fields:
+        material.extend(len(field_bytes).to_bytes(8, "big"))
+        material.extend(field_bytes)
+    return hashlib.sha256(material).hexdigest()
+
+
+def _lease_owner_fields(raw: bytes) -> tuple[str, str, str]:
+    """Return ``(lease_id, project_id, token_verifier)``; malformed docs fail closed."""
+    try:
+        payload = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        return "", "", ""
+    if not isinstance(payload, dict):
+        return "", "", ""
+    lease_id = payload.get("lease_id")
+    project_id = payload.get("project_id")
+    verifier = payload.get("lease_token_verifier")
+    return (
+        lease_id if isinstance(lease_id, str) else "",
+        project_id if isinstance(project_id, str) else "",
+        verifier if isinstance(verifier, str) else "",
+    )
+
+
+def _lease_record_matches_owner(
+    raw: bytes,
+    *,
+    project_id: str,
+    lease_id: str,
+    lease_token: str,
+) -> bool:
+    actual_id, actual_project, actual_verifier = _lease_owner_fields(raw)
+    expected_verifier = _compute_lease_token_verifier(project_id, lease_id, lease_token)
+    return (
+        actual_id == lease_id
+        and actual_project == project_id
+        and bool(actual_verifier)
+        and hmac.compare_digest(expected_verifier, actual_verifier)
+    )
+
+
+def _owned_lease_pair(
+    owned_tokens: dict[str, str],
+    owned_etags: dict[str, str],
+    lease_id: str,
+    expected_etag: str | None,
+) -> tuple[str, str] | None:
+    """Return the instance's exact credential pair, or ``None`` for a peer/stale call."""
+    if expected_etag is not None and (
+        not isinstance(expected_etag, str) or not expected_etag.strip()
+    ):
+        raise VaultTransportError("Lease update/release requires a non-empty expected ETag")
+    token = owned_tokens.get(lease_id)
+    etag = owned_etags.get(lease_id)
+    if not token or not etag:
+        return None
+    if expected_etag is not None and expected_etag != etag:
+        return None
+    return token, etag
+
+
 def _build_lease_json_bytes(
     *,
     lease_id: str,
@@ -123,9 +225,11 @@ def _build_lease_json_bytes(
             "lease_id": lease_id,
             "pid": os.getpid(),
             "project_id": project_id,
-            # Identity of *this write*: a refresher mints a new token, so a rollback
-            # or a reap can prove it is undoing its own write and not a newer one.
-            "lease_token": lease_token,
+            # Store only a domain-separated verifier: the raw owner secret never
+            # enters the shared filesystem, bundle, or object store.
+            "lease_token_verifier": _compute_lease_token_verifier(
+                project_id, lease_id, lease_token
+            ),
             "created_at_epoch": now_epoch,
             "expires_at_epoch": expires_at,
             "ttl_seconds": ttl_seconds,
@@ -207,7 +311,7 @@ def _build_gc_fence_body(
     ).encode("utf-8")
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class _GcFence:
     """A GC fence object as observed on the bucket."""
 
@@ -335,6 +439,25 @@ def _parse_and_validate_lease_payload(
     return expires_at, chunk_set
 
 
+def _lease_verifier_for_recovery(
+    raw: bytes,
+    *,
+    project_id: str,
+    lease_id: str,
+    source_label: str,
+) -> str:
+    """Validate a stored lease and return its non-secret token verifier."""
+    _parse_and_validate_lease_payload(raw, source_label=source_label)
+    actual_id, actual_project, verifier = _lease_owner_fields(raw)
+    if actual_id != lease_id or actual_project != project_id:
+        raise VaultDriverError(
+            f"Lease {lease_id!r} does not match the requested owner at {source_label}"
+        )
+    if not verifier:
+        raise VaultDriverError(f"Lease {lease_id!r} has no recoverable owner verifier")
+    return verifier
+
+
 def _parse_http_or_iso_timestamp(raw_ts: str) -> float | None:
     """Parse RFC 7231 HTTP ``Last-Modified`` or ISO-8601 S3 ``<LastModified>`` string."""
     cleaned = raw_ts.strip()
@@ -347,6 +470,8 @@ def _parse_http_or_iso_timestamp(raw_ts: str) -> float | None:
             dt_iso = dt_iso.replace(tzinfo=timezone.utc)
         return dt_iso.timestamp()
     with contextlib.suppress(TypeError, ValueError):
+        import email.utils
+
         dt_http = email.utils.parsedate_to_datetime(cleaned)
         if dt_http.tzinfo is None:
             dt_http = dt_http.replace(tzinfo=timezone.utc)
@@ -439,45 +564,48 @@ def _new_chunk_generation() -> str:
     return uuid.uuid4().hex
 
 
-def _parse_lease_token(raw: bytes) -> str:
-    """Owner token of a lease document, or ``""`` when absent/unparsable.
-
-    Lenient by design: this runs on objects written by *other* writers (including
-    older ones that predate the token), and a lease that cannot prove it is ours is
-    simply not ours to roll back or delete.
-    """
-    try:
-        parsed = json.loads(raw.decode("utf-8"))
-    except (UnicodeDecodeError, ValueError):
-        return ""
-    if not isinstance(parsed, dict):
-        return ""
-    token = parsed.get("lease_token")
-    return token if isinstance(token, str) else ""
+def _parse_lease_token_verifier(raw: bytes) -> str:
+    """Return the stored one-way owner verifier, or ``""`` if absent/unparsable."""
+    _lease_id, _project_id, verifier = _lease_owner_fields(raw)
+    return verifier
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class _LeaseObjectState:
     """One observation of a lease object: its identity and its absolute deadline.
 
-    ``etag`` is the object version the backend reports; ``lease_token`` is the writer
-    token carried inside the body. Both are needed: the ETag says "this is the object
-    I wrote", the token says "this is the write I made", and a rollback or a reap is
-    only legitimate when *both* still match.
+    ``etag`` is the object version the backend reports; ``lease_token_verifier`` is
+    the non-secret verifier carried in the body. Both must match for a rollback/reap.
     """
 
     raw: bytes
     etag: str
-    lease_token: str
+    lease_token_verifier: str
     deadline_epoch: float | None
 
-    def is_ours(self, *, etag: str, lease_token: str) -> bool:
-        """True only when this observation is byte-for-byte the write we are undoing."""
+    def is_ours(self, *, etag: str, lease_token_verifier: str) -> bool:
+        """True only when this observation is the version and verifier we expect."""
         if not etag or not self.etag or self.etag != etag:
             return False
-        if not lease_token or not self.lease_token:
+        if not lease_token_verifier or not self.lease_token_verifier:
             return False
-        return hmac.compare_digest(self.lease_token, lease_token)
+        return hmac.compare_digest(self.lease_token_verifier, lease_token_verifier)
+
+
+def _lease_state_matches_token(
+    state: _LeaseObjectState,
+    *,
+    etag: str,
+    project_id: str,
+    lease_id: str,
+    lease_token: str,
+) -> bool:
+    """Match an in-memory secret token to the shared verifier and exact object version."""
+    actual_id, actual_project, _verifier = _lease_owner_fields(state.raw)
+    if actual_id != lease_id or actual_project != project_id:
+        return False
+    expected_verifier = _compute_lease_token_verifier(project_id, lease_id, lease_token)
+    return state.is_ours(etag=etag, lease_token_verifier=expected_verifier)
 
 
 def _pid_is_alive(pid: int) -> bool:
@@ -679,7 +807,7 @@ def _staging_journal_digest(project_id: str, parent_snapshot_id: str | None) -> 
     return hashlib.sha256(key_bytes).hexdigest()[:32]
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class _ArchiveLayout:
     """Streamable pieces of a ``.nagarvault`` archive (no concatenation needed)."""
 
@@ -739,6 +867,8 @@ _BUNDLE_VERIFY_BLOCK_BYTES = 64 * 1024
 
 class _StreamingBinaryReader(Protocol):
     """Seekable binary reader with ``readinto`` (what the streaming verifier needs)."""
+
+    __slots__ = ()
 
     def read(self, size: int = -1, /) -> bytes: ...
 
@@ -814,6 +944,8 @@ def _atomic_write_stream(
 class BYOSStorageDriver(Protocol):
     """Protocol implemented by all user-owned Personal Cloud & Local Vault backends."""
 
+    __slots__ = ()
+
     def put_chunk(self, chunk_id: str, data: bytes | bytearray | memoryview) -> None:
         """Persist an encrypted chunk envelope under ``chunk_id``."""
 
@@ -836,7 +968,7 @@ class BYOSStorageDriver(Protocol):
         """Delete an unreferenced encrypted chunk identified by ``chunk_id``."""
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class VaultStagingJournal:
     """Crash-recovery staging journal tracking non-secret KDF params and uploaded chunks."""
 
@@ -900,6 +1032,17 @@ class VaultStagingJournal:
 class LocalDeviceVaultDriver:
     """Atomic local-folder / external-drive BYOS vault driver with quota enforcement."""
 
+    __slots__ = (
+        "_root_dir",
+        "_chunks_dir",
+        "_manifests_dir",
+        "_leases_dir",
+        "_staging_dir",
+        "_max_quota_bytes",
+        "_owned_lease_etags",
+        "_owned_lease_tokens",
+    )
+
     def __init__(
         self,
         root_dir: Path | str,
@@ -922,7 +1065,8 @@ class LocalDeviceVaultDriver:
         # Leases this instance wrote, as ``stem -> (sha256 of the body, lease token)``.
         # Same rule as the S3 driver: a release without an explicit ETag conditions on
         # our own write, so a refresh by another writer is a conflict, not an unlink.
-        self._owned_lease_etags: dict[str, tuple[str, str]] = {}
+        self._owned_lease_etags: dict[str, str] = {}
+        self._owned_lease_tokens: dict[str, str] = {}
 
         try:
             self._chunks_dir.mkdir(parents=True, exist_ok=True)
@@ -1110,10 +1254,8 @@ class LocalDeviceVaultDriver:
                 os.fsync(fd)
             finally:
                 os.close(fd)
-        self._owned_lease_etags[effective_id] = (
-            hashlib.sha256(payload).hexdigest(),
-            local_lease_token,
-        )
+        self._owned_lease_etags[effective_id] = hashlib.sha256(payload).hexdigest()
+        self._owned_lease_tokens[effective_id] = local_lease_token
         return effective_id
 
     def update_push_lease(
@@ -1123,69 +1265,185 @@ class LocalDeviceVaultDriver:
         *,
         project_id: str = "",
         ttl_seconds: float = 3600.0,
-    ) -> None:
-        """Atomically refresh TTL and in-flight ``chunk_ids`` on an active push lease."""
-        finite_ttl = _validate_positive_finite_seconds(ttl_seconds, name="ttl_seconds")
+        expected_etag: str | None = None,
+    ) -> bool:
+        """Refresh only a current lease owned by this instance's token and ETag pair."""
         valid_id = _validate_snapshot_id(lease_id)
+        owned = _owned_lease_pair(
+            self._owned_lease_tokens, self._owned_lease_etags, valid_id, expected_etag
+        )
+        if owned is None:
+            with self._coordination_lock():
+                current = _read_lease_file_once(self._lease_path(valid_id))
+            if current is None:
+                raise VaultTransportError(f"Push lease {valid_id!r} is absent")
+            raise VaultRevisionConflictError(
+                f"This driver cannot prove ownership of lease {valid_id!r}"
+            )
+        owned_token, owned_etag = owned
+        finite_ttl = _validate_positive_finite_seconds(ttl_seconds, name="ttl_seconds")
         lease_path = self._lease_path(valid_id)
         now = time.time()
         refreshed_token = uuid.uuid4().hex
-        payload = _build_lease_json_bytes(
-            lease_id=valid_id,
-            project_id=project_id,
-            now_epoch=now,
-            ttl_seconds=finite_ttl,
-            chunk_ids=chunk_ids,
-            lease_token=refreshed_token,
-        )
         with self._coordination_lock():
-            if lease_path.is_symlink() or not lease_path.is_file():
-                raise VaultTransportError(f"Active push lease not found: {lease_id}")
+            current = _read_lease_file_once(lease_path)
+            if current is None:
+                self._owned_lease_tokens.pop(valid_id, None)
+                self._owned_lease_etags.pop(valid_id, None)
+                raise VaultRevisionConflictError(
+                    f"Lease {valid_id!r} changed owner or ETag before refresh"
+                )
+            current_etag = hashlib.sha256(current).hexdigest()
+            lease_doc_id, actual_project, _verifier = _lease_owner_fields(current)
+            if (
+                current_etag != owned_etag
+                or (project_id and actual_project != project_id)
+                or not _lease_record_matches_owner(
+                    current,
+                    project_id=actual_project,
+                    lease_id=valid_id,
+                    lease_token=owned_token,
+                )
+            ):
+                self._owned_lease_tokens.pop(valid_id, None)
+                self._owned_lease_etags.pop(valid_id, None)
+                raise VaultRevisionConflictError(
+                    f"Lease {valid_id!r} changed owner or ETag before refresh"
+                )
+            if lease_doc_id != valid_id:
+                return False
+            expires_at, _chunks = _parse_and_validate_lease_payload(
+                current, source_label=str(lease_path)
+            )
+            if expires_at <= now:
+                return False
+            payload = _build_lease_json_bytes(
+                lease_id=valid_id,
+                project_id=actual_project,
+                now_epoch=now,
+                ttl_seconds=finite_ttl,
+                chunk_ids=chunk_ids,
+                lease_token=refreshed_token,
+            )
             _atomic_write_file(lease_path, payload)
-        self._owned_lease_etags[valid_id] = (
-            hashlib.sha256(payload).hexdigest(),
-            refreshed_token,
+        self._owned_lease_etags[valid_id] = hashlib.sha256(payload).hexdigest()
+        self._owned_lease_tokens[valid_id] = refreshed_token
+        return True
+
+    def get_owned_lease_token(self, lease_id: str) -> str:
+        """Return a private credential only after re-proving its current owner pair."""
+        return self.export_lease_credential(lease_id)["lease_token"]
+
+    def export_lease_credential(self, lease_id: str) -> dict[str, str]:
+        """Export the current credential for private owner storage, never from shared data."""
+        valid_id = _validate_snapshot_id(lease_id)
+        owned = _owned_lease_pair(self._owned_lease_tokens, self._owned_lease_etags, valid_id, None)
+        if owned is None:
+            raise VaultDriverError(f"This driver does not own push lease {valid_id!r}")
+        token, owned_etag = owned
+        with self._coordination_lock():
+            raw = _read_lease_file_once(self._lease_path(valid_id))
+            if raw is None:
+                raise VaultDriverError(f"Push lease {valid_id!r} is absent")
+            current_etag = hashlib.sha256(raw).hexdigest()
+            actual_id, project_id, _verifier = _lease_owner_fields(raw)
+            if (
+                current_etag != owned_etag
+                or actual_id != valid_id
+                or not _lease_record_matches_owner(
+                    raw, project_id=project_id, lease_id=valid_id, lease_token=token
+                )
+            ):
+                raise VaultDriverError(f"Push lease {valid_id!r} is no longer owned here")
+        return {
+            "lease_id": valid_id,
+            "project_id": project_id,
+            "lease_token": token,
+            "etag": current_etag,
+        }
+
+    def recover_owned_lease(
+        self,
+        project_id: str,
+        lease_id: str,
+        lease_token: str,
+        expected_etag: str | None = None,
+    ) -> str:
+        """Prove the secret token against an active lease verifier before restoring ownership."""
+        valid_id = _validate_snapshot_id(lease_id)
+        if not isinstance(lease_token, str) or not lease_token:
+            raise VaultDriverError("Lease recovery requires a non-empty owner token")
+        with self._coordination_lock():
+            path = self._lease_path(valid_id)
+            raw = _read_lease_file_once(path)
+            if raw is None:
+                raise VaultDriverError(f"Push lease {valid_id!r} is absent")
+            expires_at, _chunks = _parse_and_validate_lease_payload(raw, source_label=str(path))
+            if expires_at <= time.time():
+                raise VaultDriverError(f"Push lease {valid_id!r} has expired")
+            verifier = _lease_verifier_for_recovery(
+                raw, project_id=project_id, lease_id=valid_id, source_label=str(path)
+            )
+            expected_verifier = _compute_lease_token_verifier(project_id, valid_id, lease_token)
+            if not hmac.compare_digest(expected_verifier, verifier):
+                raise VaultDriverError(f"Push lease {valid_id!r} owner token did not verify")
+            current_etag = hashlib.sha256(raw).hexdigest()
+            if (
+                not isinstance(expected_etag, str)
+                or not expected_etag
+                or not hmac.compare_digest(current_etag, expected_etag)
+            ):
+                raise VaultDriverError(f"Push lease {valid_id!r} ETag did not verify")
+            self._owned_lease_tokens[valid_id] = lease_token
+            self._owned_lease_etags[valid_id] = current_etag
+            return current_etag
+
+    def release_push_lease(self, lease_id: str, *, expected_etag: str | None = None) -> bool:
+        """Release only a lease proven by this instance's private token and exact ETag."""
+        valid_id = _validate_snapshot_id(lease_id)
+        owned = _owned_lease_pair(
+            self._owned_lease_tokens, self._owned_lease_etags, valid_id, expected_etag
         )
-
-    def release_push_lease(self, lease_id: str, *, expected_etag: str | None = None) -> None:
-        """Release and unlink a cross-process push lease file.
-
-        ``expected_etag`` makes the delete conditional: when supplied it must match the
-        sha256 of the lease file that is about to be removed, and an empty value is
-        refused outright rather than silently degrading to an unconditional unlink.
-        """
-        lease_path = self._lease_path(lease_id)
-        with self._coordination_lock(), contextlib.suppress(OSError):
-            if expected_etag is not None:
-                if not expected_etag.strip():
-                    raise VaultTransportError(
-                        "Refusing to release a push lease without a known ETag: an "
-                        "unconditional unlink could remove a lease another writer just "
-                        "took over"
-                    )
-                current = lease_path.read_bytes() if lease_path.is_file() else b""
-                current_etag = hashlib.sha256(current).hexdigest() if current else ""
-                if current_etag != expected_etag.strip():
-                    raise VaultRevisionConflictError(
-                        f"Push lease {lease_id!r} changed since it was observed; refusing "
-                        "to release a lease this caller no longer owns"
-                    )
-            elif lease_id in self._owned_lease_etags:
-                if not lease_path.is_file():
-                    # Provably gone (a reaper, or an earlier release): releasing twice is
-                    # a no-op, not a conflict — there is nothing to protect.
-                    self._owned_lease_etags.pop(lease_id, None)
-                    return
-                current = lease_path.read_bytes()
-                current_etag = hashlib.sha256(current).hexdigest()
-                owned_etag, _owned_token = self._owned_lease_etags[lease_id]
-                if current_etag != owned_etag:
-                    raise VaultRevisionConflictError(
-                        f"Push lease {lease_id!r} changed since this driver wrote it; "
-                        "refusing to release a lease this caller no longer owns"
-                    )
-            lease_path.unlink(missing_ok=True)
-            self._owned_lease_etags.pop(lease_id, None)
+        if owned is None:
+            with self._coordination_lock():
+                current = _read_lease_file_once(self._lease_path(valid_id))
+            if current is None:
+                return False
+            raise VaultRevisionConflictError(
+                f"This driver cannot prove ownership of lease {valid_id!r}"
+            )
+        owned_token, owned_etag = owned
+        lease_path = self._lease_path(valid_id)
+        with self._coordination_lock():
+            current = _read_lease_file_once(lease_path)
+            if current is None:
+                self._owned_lease_tokens.pop(valid_id, None)
+                self._owned_lease_etags.pop(valid_id, None)
+                return False
+            current_etag = hashlib.sha256(current).hexdigest()
+            actual_id, actual_project, _verifier = _lease_owner_fields(current)
+            if (
+                current_etag != owned_etag
+                or actual_id != valid_id
+                or not _lease_record_matches_owner(
+                    current,
+                    project_id=actual_project,
+                    lease_id=valid_id,
+                    lease_token=owned_token,
+                )
+            ):
+                self._owned_lease_tokens.pop(valid_id, None)
+                self._owned_lease_etags.pop(valid_id, None)
+                return False
+            try:
+                lease_path.unlink()
+            except OSError as exc:
+                raise VaultTransportError(
+                    f"Failed releasing push lease {valid_id!r}: {exc}"
+                ) from exc
+            self._owned_lease_tokens.pop(valid_id, None)
+            self._owned_lease_etags.pop(valid_id, None)
+        return True
 
     def _read_active_leased_chunks_unlocked(self, *, effective_now: float) -> set[str]:
         """Parse every lease file, failing closed on ANY unexpected entry.
@@ -1209,9 +1467,13 @@ class LocalDeviceVaultDriver:
                     f"Unexpected, hidden or symlinked entry in vault lease directory: {entry}"
                 )
             try:
-                raw_bytes = entry.read_bytes()
+                raw_bytes = _read_lease_file_once(entry)
             except OSError as exc:
                 raise VaultTransportError(f"Failed reading push lease file {entry}: {exc}") from exc
+            if raw_bytes is None:
+                raise VaultRevisionConflictError(
+                    f"Push lease {entry} disappeared while the lease directory was scanned"
+                )
             expires_at, chunk_set = _parse_and_validate_lease_payload(
                 raw_bytes,
                 source_label=str(entry),
@@ -1296,7 +1558,7 @@ def _hmac_sha256_bytes(key: bytes, message: str) -> bytes:
     return hmac.new(key, message.encode("utf-8"), hashlib.sha256).digest()
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class SigV4Artifacts:
     """Structured AWS Signature Version 4 signing outputs for auditing and tests."""
 
@@ -1307,7 +1569,7 @@ class SigV4Artifacts:
     signed_headers: dict[str, str]
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class S3SigV4Config:
     """Connection and credential settings for an S3-compatible user bucket."""
 
@@ -1336,7 +1598,7 @@ class S3SigV4Config:
             raise VaultAuthenticationError("S3 access_key_id and secret_access_key are required")
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class S3HttpRequest:
     """Immutable HTTP request passed to ``http_transport``."""
 
@@ -1346,7 +1608,7 @@ class S3HttpRequest:
     body: bytes = b""
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class S3HttpResponse:
     """Immutable HTTP response returned by ``http_transport``."""
 
@@ -1463,6 +1725,9 @@ def compute_sigv4_signature(
 
 def _default_urllib_transport(request: S3HttpRequest, *, timeout: float) -> S3HttpResponse:
     """Execute ``request`` using Python's stdlib :mod:`urllib.request`."""
+    import urllib.error
+    import urllib.request
+
     parsed = urllib.parse.urlsplit(request.url)
     if parsed.scheme not in ("http", "https"):
         raise VaultTransportError(f"Disallowed URL scheme: {parsed.scheme!r}")
@@ -1561,6 +1826,22 @@ def _parse_s3_list_xml(xml_bytes: bytes) -> tuple[list[str], str | None]:
 class S3CompatibleSigV4Driver:
     """Direct user-bucket BYOS driver (Cloudflare R2 / AWS S3 / MinIO) via SigV4."""
 
+    __slots__ = (
+        "_config",
+        "_transport",
+        "_clock",
+        "_clean_prefix",
+        "_chunk_mtimes",
+        "_owned_lease_etags",
+        "_owned_lease_tokens",
+        "_coord_lock",
+        "_fence_race_probe",
+        "_post_final_check_race_probe",
+        "_pre_lease_put_race_probe",
+        "_clock_skew_margin",
+        "__dict__",  # preserve the instance-level test seams and subclass compatibility
+    )
+
     def __init__(
         self,
         config: S3SigV4Config,
@@ -1579,12 +1860,10 @@ class S3CompatibleSigV4Driver:
         )
         self._clean_prefix = config.prefix.strip("/")
         self._chunk_mtimes: dict[str, float] = {}
-        # Leases *this instance* has written, as ``stem -> (our ETag, our token)``.
-        # It exists so that ``release_push_lease`` can condition the delete on the
-        # ETag of our own write even when the caller passes no ``expected_etag``: a
-        # lease we wrote and that a later writer refreshed is no longer ours to
-        # remove, and an unconditional DELETE would destroy the successor's claim.
-        self._owned_lease_etags: dict[str, tuple[str, str]] = {}
+        # Private instance ownership credentials. Shared lease bytes contain only a
+        # verifier; release still requires this exact token/ETag pair.
+        self._owned_lease_etags: dict[str, str] = {}
+        self._owned_lease_tokens: dict[str, str] = {}
         # Serialises lease acquisition against GC within this process; cross-process
         # safety still comes from the conditional lease writes and the fence protocol.
         self._coord_lock = threading.RLock()
@@ -2038,7 +2317,8 @@ class S3CompatibleSigV4Driver:
         # From here on this instance is the owner of the object it wrote: a later
         # ``release_push_lease(lease_id)`` can condition its delete on *this* ETag,
         # so a refresh by another writer makes our release a 412 instead of a DELETE.
-        self._owned_lease_etags[effective_id] = (our_write_etag, our_lease_token)
+        self._owned_lease_etags[effective_id] = our_write_etag
+        self._owned_lease_tokens[effective_id] = our_lease_token
         return effective_id
 
     @staticmethod
@@ -2048,7 +2328,9 @@ class S3CompatibleSigV4Driver:
 
     def _forget_owned_lease(self, obj_key: str) -> None:
         """Drop this instance's ownership record for the lease object at ``obj_key``."""
-        self._owned_lease_etags.pop(self._lease_stem_from_key(obj_key), None)
+        lease_id = self._lease_stem_from_key(obj_key)
+        self._owned_lease_etags.pop(lease_id, None)
+        self._owned_lease_tokens.pop(lease_id, None)
 
     def _rollback_lease_refresh(
         self,
@@ -2092,7 +2374,14 @@ class S3CompatibleSigV4Driver:
             return
         if state is None:
             return
-        if not state.is_ours(etag=our_write_etag, lease_token=our_lease_token):
+        state_lease_id, state_project_id, _state_verifier = _lease_owner_fields(state.raw)
+        if not _lease_state_matches_token(
+            state,
+            etag=our_write_etag,
+            project_id=state_project_id,
+            lease_id=state_lease_id,
+            lease_token=our_lease_token,
+        ):
             return
         if prior_body is not None and prior_etag and state.etag == prior_etag:
             return
@@ -2116,6 +2405,60 @@ class S3CompatibleSigV4Driver:
             f"S3 lease rollback failed for {obj_key} with HTTP {resp.status_code}"
         )
 
+    def _reconcile_ambiguous_lease_refresh(
+        self,
+        obj_key: str,
+        *,
+        lease_id: str,
+        project_id: str,
+        our_lease_token: str,
+        prior_etag: str,
+        prior_lease_verifier: str,
+    ) -> str:
+        """Prove an ambiguously acknowledged PUT using only its verifier and owner IDs."""
+        try:
+            state = self._read_lease_state(obj_key)
+        except (VaultTransportError, OSError, TimeoutError) as exc:
+            raise VaultTransportError(
+                f"Ambiguous S3 lease refresh for {lease_id!r}; reconciliation read failed"
+            ) from exc
+        if state is None or not state.etag:
+            raise VaultTransportError(
+                f"Ambiguous S3 lease refresh for {lease_id!r}; no verifiable remote version"
+            )
+        try:
+            _parse_and_validate_lease_payload(state.raw, source_label=obj_key)
+        except VaultTransportError as exc:
+            raise VaultTransportError(
+                f"Ambiguous S3 lease refresh for {lease_id!r}; remote lease is invalid"
+            ) from exc
+        remote_id, remote_project, remote_verifier = _lease_owner_fields(state.raw)
+        if remote_id != lease_id or remote_project != project_id:
+            raise VaultRevisionConflictError(
+                f"S3 lease {lease_id!r} changed owner during ambiguous refresh"
+            )
+        expected_verifier = _compute_lease_token_verifier(project_id, lease_id, our_lease_token)
+        try:
+            ours = bool(remote_verifier) and hmac.compare_digest(expected_verifier, remote_verifier)
+            prior_is_still_present = (
+                bool(prior_lease_verifier)
+                and state.etag == prior_etag
+                and hmac.compare_digest(remote_verifier, prior_lease_verifier)
+            )
+        except TypeError:
+            ours = False
+            prior_is_still_present = False
+        if ours:
+            return state.etag
+        if prior_is_still_present:
+            raise VaultTransportError(
+                f"S3 update_push_lease for {lease_id!r} was not committed; "
+                "the prior version remains"
+            )
+        raise VaultRevisionConflictError(
+            f"S3 lease {lease_id!r} was replaced by another writer during ambiguous refresh"
+        )
+
     def update_push_lease(
         self,
         lease_id: str,
@@ -2123,19 +2466,22 @@ class S3CompatibleSigV4Driver:
         *,
         project_id: str = "",
         ttl_seconds: float = 3600.0,
-    ) -> None:
-        """Refresh ``leases/<lease_id>.json`` on the S3 bucket.
-
-        The same fence handshake and the same generation proof as
-        :meth:`acquire_push_lease`, because this is the call that actually adds chunks
-        to a live lease in the real push path (``_acquire_driver_lease()`` takes an
-        empty lease, then every chunk is added here before it is uploaded). A chunk
-        whose fence is live is *not* added, and a chunk that existed at the preflight
-        but vanished before the refresh landed is not added either: the refresh is
-        rolled back so the lease never silently covers a chunk a collector deleted.
-        """
-        finite_ttl = _validate_positive_finite_seconds(ttl_seconds, name="ttl_seconds")
+        expected_etag: str | None = None,
+    ) -> bool:
+        """Refresh only a live remote version owned by this instance's token and ETag."""
         valid_id = _validate_snapshot_id(lease_id)
+        owned = _owned_lease_pair(
+            self._owned_lease_tokens, self._owned_lease_etags, valid_id, expected_etag
+        )
+        if owned is None:
+            state = self._read_lease_state(self._object_key("leases", f"{valid_id}.json"))
+            if state is None:
+                raise VaultTransportError(f"S3 lease {valid_id!r} is absent")
+            raise VaultRevisionConflictError(
+                f"This driver cannot prove ownership of lease {valid_id!r}"
+            )
+        owned_token, owned_etag = owned
+        finite_ttl = _validate_positive_finite_seconds(ttl_seconds, name="ttl_seconds")
         materialised_chunks = [_validate_chunk_id(cid) for cid in chunk_ids]
         obj_key = self._object_key("leases", f"{valid_id}.json")
         now = self._clock().timestamp()
@@ -2144,87 +2490,119 @@ class S3CompatibleSigV4Driver:
             materialised_chunks, now_epoch=now, when="before the lease refresh"
         )
         preflight = self._chunk_generations(materialised_chunks)
-
-        if self._pre_lease_put_race_probe is not None:  # test seam, see __init__
+        if self._pre_lease_put_race_probe is not None:
             self._pre_lease_put_race_probe()
 
         head_resp = self._send("HEAD", object_key=obj_key)
         if head_resp.status_code == 404:
-            raise VaultKeyNotFoundError(f"Active S3 push lease not found: {valid_id}")
+            self._forget_owned_lease(obj_key)
+            return False
         if head_resp.status_code != 200:
             raise VaultTransportError(
                 f"S3 lease probe failed for {valid_id} with HTTP {head_resp.status_code}"
             )
         lowered_head = {k.lower(): v for k, v in head_resp.headers.items()}
         head_etag = lowered_head.get("etag", "").strip()
-
-        # The prior body is the *only* thing a rollback can restore, so it is proven
-        # before the refresh writes anything — every branch below refuses with no PUT
-        # sent. An unconditional (or unrestorable) overwrite of a lease is worse than a
-        # refused refresh: the lease is exactly what tells GC which chunks not to
-        # delete, and ``prior_body = None`` used to turn the rollback into a DELETE.
         prior = self._send("GET", object_key=obj_key)
         if prior.status_code == 404:
-            raise VaultKeyNotFoundError(
-                f"Active S3 push lease {valid_id!r} disappeared between HEAD and GET"
-            )
+            self._forget_owned_lease(obj_key)
+            return False
         if prior.status_code != 200 or not prior.body:
             raise VaultTransportError(
                 f"S3 update_push_lease could not read the prior lease {valid_id!r} "
-                f"(HTTP {prior.status_code}); refusing to refresh without a prior body "
-                "to restore"
+                f"(HTTP {prior.status_code})"
             )
         get_etag = {k.lower(): v for k, v in (prior.headers or {}).items()}.get("etag", "").strip()
         if not head_etag or not get_etag:
             raise VaultTransportError("S3 lease update requires a non-empty ETag precondition")
         if head_etag != get_etag:
-            # The object changed between the two reads: whatever we would write now
-            # would be based on a state that no longer exists, and a rollback would
-            # restore a body that was already superseded.
             raise VaultRevisionConflictError(
-                f"S3 push lease {valid_id!r} changed between HEAD and GET; refusing to "
-                "overwrite a lease state this caller did not read"
+                f"S3 push lease {valid_id!r} changed between HEAD and GET"
             )
-        # A prior body that is not a lease document could not be restored either.
-        _parse_and_validate_lease_payload(prior.body, source_label=obj_key)
+        actual_id, actual_project, _verifier = _lease_owner_fields(prior.body)
+        if (
+            get_etag != owned_etag
+            or actual_id != valid_id
+            or (project_id and actual_project != project_id)
+            or not _lease_record_matches_owner(
+                prior.body,
+                project_id=actual_project,
+                lease_id=valid_id,
+                lease_token=owned_token,
+            )
+        ):
+            self._forget_owned_lease(obj_key)
+            return False
+        try:
+            expires_at, _prior_chunks = _parse_and_validate_lease_payload(
+                prior.body, source_label=obj_key
+            )
+        except VaultTransportError:
+            self._forget_owned_lease(obj_key)
+            return False
+        if _lease_deadline_epoch(prior.body, prior.headers, expires_at) <= now:
+            return False
+
         prior_etag = get_etag
         prior_body = prior.body
-
+        prior_verifier = _parse_lease_token_verifier(prior_body)
         our_lease_token = uuid.uuid4().hex
         payload = _build_lease_json_bytes(
             lease_id=valid_id,
-            project_id=project_id,
+            project_id=actual_project,
             now_epoch=now,
             ttl_seconds=finite_ttl,
             chunk_ids=materialised_chunks,
             lease_token=our_lease_token,
         )
-        # ``prior_etag`` is non-empty by construction above, so the precondition is
-        # unconditional in the sense that matters: there is no path through this method
-        # that PUTs without ``If-Match``. (A ``PUT`` without it silently overwrites
-        # whatever a concurrent refresher just wrote, then fails afterwards.)
         conditional: dict[str, str] = {"if-match": prior_etag}
-        put_resp = self._send(
-            "PUT",
-            object_key=obj_key,
-            body=payload,
-            content_type="application/json",
-            extra_headers=conditional,
-        )
-        if put_resp.status_code in (409, 412):
-            raise VaultRevisionConflictError(
-                f"Concurrent modification of S3 push lease {valid_id!r} (HTTP "
-                f"{put_resp.status_code}); refusing to overwrite a newer lease state"
+        reconciled_etag: str | None = None
+        try:
+            put_resp: S3HttpResponse | None = self._send(
+                "PUT",
+                object_key=obj_key,
+                body=payload,
+                content_type="application/json",
+                extra_headers=conditional,
             )
-        if put_resp.status_code not in (200, 201, 204):
-            raise VaultTransportError(
-                f"S3 update_push_lease failed with HTTP {put_resp.status_code}"
+        except (VaultAuthenticationError, VaultQuotaExceededError):
+            raise
+        except (VaultTransportError, OSError, TimeoutError):
+            reconciled_etag = self._reconcile_ambiguous_lease_refresh(
+                obj_key,
+                lease_id=valid_id,
+                project_id=actual_project,
+                our_lease_token=our_lease_token,
+                prior_etag=prior_etag,
+                prior_lease_verifier=prior_verifier,
             )
-        our_write_etag = self._lease_write_etag(obj_key, put_resp, our_lease_token)
+            put_resp = None
+
+        if put_resp is not None:
+            if put_resp.status_code in (409, 412):
+                raise VaultRevisionConflictError(
+                    f"Concurrent modification of S3 lease {valid_id!r} during refresh"
+                )
+            if put_resp.status_code in (200, 201, 204):
+                reconciled_etag = self._lease_write_etag(obj_key, put_resp, our_lease_token)
+            elif put_resp.status_code in (408, 425, 429) or 500 <= put_resp.status_code < 600:
+                reconciled_etag = self._reconcile_ambiguous_lease_refresh(
+                    obj_key,
+                    lease_id=valid_id,
+                    project_id=actual_project,
+                    our_lease_token=our_lease_token,
+                    prior_etag=prior_etag,
+                    prior_lease_verifier=prior_verifier,
+                )
+            else:
+                raise VaultTransportError(
+                    f"S3 update_push_lease failed with HTTP {put_resp.status_code}"
+                )
+
+        our_write_etag = reconciled_etag or ""
         if not our_write_etag:
             raise VaultTransportError(
-                f"S3 update_push_lease could not establish an ETag for lease {valid_id!r}; "
-                "refusing to continue without a way to undo this refresh conditionally"
+                f"S3 update_push_lease could not establish an ETag for {valid_id!r}"
             )
         try:
             self._assert_no_live_gc_fence(
@@ -2262,69 +2640,127 @@ class S3CompatibleSigV4Driver:
                 our_lease_token=our_lease_token,
             )
             raise
-        self._owned_lease_etags[valid_id] = (our_write_etag, our_lease_token)
+        self._owned_lease_etags[valid_id] = our_write_etag
+        self._owned_lease_tokens[valid_id] = our_lease_token
+        return True
 
-    def release_push_lease(self, lease_id: str, *, expected_etag: str | None = None) -> None:
-        """Delete ``leases/<lease_id>.json`` — always under an ``If-Match`` precondition.
+    def get_owned_lease_token(self, lease_id: str) -> str:
+        """Return a private credential only after re-proving its current owner pair."""
+        return self.export_lease_credential(lease_id)["lease_token"]
 
-        There is no unconditional path, and that includes the call that omits
-        ``expected_etag`` (which is what ``sync_journal_manager`` does): the ETag then
-        comes from this instance's own last write, or — if this instance never wrote
-        the lease — from one read of the object. An empty or absent ETag is a refusal,
-        never a licence, because the DELETE it would authorise can remove a lease a
-        *different* writer refreshed one round trip earlier, and the chunks that lease
-        was protecting with it.
-        """
+    def export_lease_credential(self, lease_id: str) -> dict[str, str]:
+        """Export the current credential only after proving the remote token/ETag pair."""
         valid_id = _validate_snapshot_id(lease_id)
+        owned = _owned_lease_pair(self._owned_lease_tokens, self._owned_lease_etags, valid_id, None)
+        if owned is None:
+            raise VaultDriverError(f"This driver does not own S3 lease {valid_id!r}")
+        token, owned_etag = owned
         obj_key = self._object_key("leases", f"{valid_id}.json")
+        state = self._read_lease_state(obj_key)
+        if state is None:
+            raise VaultDriverError(f"S3 lease {valid_id!r} is absent")
+        actual_id, project_id, _verifier = _lease_owner_fields(state.raw)
+        if (
+            state.etag != owned_etag
+            or actual_id != valid_id
+            or not _lease_record_matches_owner(
+                state.raw, project_id=project_id, lease_id=valid_id, lease_token=token
+            )
+        ):
+            raise VaultDriverError(f"S3 lease {valid_id!r} is no longer owned here")
+        return {
+            "lease_id": valid_id,
+            "project_id": project_id,
+            "lease_token": token,
+            "etag": state.etag,
+        }
 
-        if expected_etag is not None:
-            # Runtime boundary: the annotation is ``str | None``, but a caller reaching
-            # through ``getattr`` (the sync-journal path) can pass anything.
-            raw_etag: object = expected_etag
-            if not isinstance(raw_etag, str) or not raw_etag.strip():
-                raise VaultTransportError(
-                    f"Refusing to release S3 push lease {valid_id!r} without a known ETag: "
-                    "an unconditional DELETE could remove a lease another writer just took over"
-                )
-            etag_to_match = raw_etag.strip()
-        elif valid_id in self._owned_lease_etags:
-            # Our own write: condition on the ETag it produced, so a refresh by another
-            # writer turns this release into a 412 instead of a silent takeover.
-            etag_to_match = self._owned_lease_etags[valid_id][0]
-            if not etag_to_match.strip():
-                raise VaultTransportError(
-                    f"Refusing to release S3 push lease {valid_id!r}: the recorded ETag for "
-                    "our own write is empty"
-                )
-        else:
-            state = self._read_lease_state(obj_key)
+    def recover_owned_lease(
+        self,
+        project_id: str,
+        lease_id: str,
+        lease_token: str,
+        expected_etag: str | None = None,
+    ) -> str:
+        """Recover only an active remote lease whose one-way owner verifier matches."""
+        valid_id = _validate_snapshot_id(lease_id)
+        if not isinstance(lease_token, str) or not lease_token:
+            raise VaultDriverError("Lease recovery requires a non-empty owner token")
+        obj_key = self._object_key("leases", f"{valid_id}.json")
+        state = self._read_lease_state(obj_key)
+        if state is None or not state.etag:
+            raise VaultDriverError(f"S3 lease {valid_id!r} is absent or has no ETag")
+        expires_at, _chunks = _parse_and_validate_lease_payload(state.raw, source_label=obj_key)
+        if (
+            state.deadline_epoch is not None and state.deadline_epoch <= self._clock().timestamp()
+        ) or expires_at <= self._clock().timestamp():
+            raise VaultDriverError(f"S3 lease {valid_id!r} has expired")
+        actual_verifier = _lease_verifier_for_recovery(
+            state.raw,
+            project_id=project_id,
+            lease_id=valid_id,
+            source_label=obj_key,
+        )
+        expected_verifier = _compute_lease_token_verifier(project_id, valid_id, lease_token)
+        if not hmac.compare_digest(expected_verifier, actual_verifier):
+            raise VaultDriverError(f"S3 lease {valid_id!r} owner token did not verify")
+        if (
+            not isinstance(expected_etag, str)
+            or not expected_etag
+            or not hmac.compare_digest(expected_etag, state.etag)
+        ):
+            raise VaultDriverError(f"S3 lease {valid_id!r} ETag did not verify")
+        self._owned_lease_tokens[valid_id] = lease_token
+        self._owned_lease_etags[valid_id] = state.etag
+        return state.etag
+
+    def release_push_lease(self, lease_id: str, *, expected_etag: str | None = None) -> bool:
+        """Release only a current remote lease proved by this instance's token and ETag."""
+        valid_id = _validate_snapshot_id(lease_id)
+        owned = _owned_lease_pair(
+            self._owned_lease_tokens, self._owned_lease_etags, valid_id, expected_etag
+        )
+        if owned is None:
+            state = self._read_lease_state(self._object_key("leases", f"{valid_id}.json"))
             if state is None:
-                # Provably gone (404): nothing to delete, and nothing to condition on.
-                self._owned_lease_etags.pop(valid_id, None)
-                return
-            if not state.etag:
-                raise VaultTransportError(
-                    f"Refusing to release S3 push lease {valid_id!r}: the backend reported no "
-                    "ETag, so a DELETE could not be made conditional"
-                )
-            etag_to_match = state.etag
-
+                return False
+            raise VaultRevisionConflictError(
+                f"This driver cannot prove ownership of lease {valid_id!r}"
+            )
+        token, owned_etag = owned
+        obj_key = self._object_key("leases", f"{valid_id}.json")
+        state = self._read_lease_state(obj_key)
+        if state is None:
+            self._forget_owned_lease(obj_key)
+            return False
+        actual_id, project_id, _verifier = _lease_owner_fields(state.raw)
+        if (
+            state.etag != owned_etag
+            or actual_id != valid_id
+            or not _lease_record_matches_owner(
+                state.raw, project_id=project_id, lease_id=valid_id, lease_token=token
+            )
+        ):
+            self._forget_owned_lease(obj_key)
+            raise VaultRevisionConflictError(
+                f"Lease {valid_id!r} changed owner or ETag before release"
+            )
         resp = self._send(
             "DELETE",
             object_key=obj_key,
-            extra_headers={"if-match": etag_to_match},
+            extra_headers={"if-match": owned_etag},
         )
-        if resp.status_code in (409, 412):
+        if resp.status_code in (409, 412, 404):
+            self._forget_owned_lease(obj_key)
             raise VaultRevisionConflictError(
-                f"S3 push lease {valid_id!r} changed since it was observed (HTTP "
-                f"{resp.status_code}); refusing to release a lease this caller no longer owns"
+                f"Lease {valid_id!r} changed owner or ETag before release"
             )
-        if resp.status_code not in (200, 202, 204, 404):
+        if resp.status_code not in (200, 202, 204):
             raise VaultTransportError(
                 f"S3 release_push_lease failed for {valid_id} with HTTP {resp.status_code}"
             )
-        self._owned_lease_etags.pop(valid_id, None)
+        self._forget_owned_lease(obj_key)
+        return True
 
     def read_active_leased_chunks(self, *, now_epoch: float | None = None) -> set[str]:
         """List and parse all active ``leases/*.json`` objects fail-closed."""
@@ -2358,7 +2794,7 @@ class S3CompatibleSigV4Driver:
                 reaped = self._reap_expired_lease_if_unchanged(
                     obj_key,
                     expected_etag=lowered.get("etag", "").strip(),
-                    expected_lease_token=_parse_lease_token(resp.body),
+                    expected_lease_verifier=_parse_lease_token_verifier(resp.body),
                     effective_now=effective_now,
                 )
                 if not reaped:
@@ -2369,7 +2805,7 @@ class S3CompatibleSigV4Driver:
         return active_chunks
 
     def _read_lease_state(self, obj_key: str) -> _LeaseObjectState | None:
-        """Read one lease object, carrying its ETag, owner token and absolute deadline.
+        """Read one lease object, carrying its ETag, owner verifier and absolute deadline.
 
         ``deadline_epoch`` is ``None`` when the document cannot be parsed; every caller
         treats that as "not provably expired" / "not provably ours" and leaves the
@@ -2390,7 +2826,7 @@ class S3CompatibleSigV4Driver:
         return _LeaseObjectState(
             raw=resp.body,
             etag=lowered.get("etag", "").strip(),
-            lease_token=_parse_lease_token(resp.body),
+            lease_token_verifier=_parse_lease_token_verifier(resp.body),
             deadline_epoch=deadline,
         )
 
@@ -2412,9 +2848,16 @@ class S3CompatibleSigV4Driver:
         if etag:
             return etag
         state = self._read_lease_state(obj_key)
-        if state is None or not state.etag or not state.lease_token:
+        if state is None or not state.etag:
             return ""
-        if not lease_token or not hmac.compare_digest(state.lease_token, lease_token):
+        lease_id, project_id, _verifier = _lease_owner_fields(state.raw)
+        if not _lease_state_matches_token(
+            state,
+            etag=state.etag,
+            project_id=project_id,
+            lease_id=lease_id,
+            lease_token=lease_token,
+        ):
             return ""
         return state.etag
 
@@ -2423,7 +2866,7 @@ class S3CompatibleSigV4Driver:
         obj_key: str,
         *,
         expected_etag: str,
-        expected_lease_token: str,
+        expected_lease_verifier: str,
         effective_now: float,
     ) -> bool:
         """Delete an expired lease only while it is provably still the one we read.
@@ -2445,7 +2888,7 @@ class S3CompatibleSigV4Driver:
             return True
         if state.deadline_epoch is None:
             return False
-        if not state.is_ours(etag=expected_etag, lease_token=expected_lease_token):
+        if not state.is_ours(etag=expected_etag, lease_token_verifier=expected_lease_verifier):
             return False
         if state.deadline_epoch + self._clock_skew_margin > effective_now:
             return False
@@ -2489,7 +2932,14 @@ class S3CompatibleSigV4Driver:
             return
         if state is None:
             return
-        if not state.is_ours(etag=our_write_etag, lease_token=our_lease_token):
+        state_lease_id, state_project_id, _state_verifier = _lease_owner_fields(state.raw)
+        if not _lease_state_matches_token(
+            state,
+            etag=our_write_etag,
+            project_id=state_project_id,
+            lease_id=state_lease_id,
+            lease_token=our_lease_token,
+        ):
             return
         resp = self._send(
             "DELETE",
@@ -2932,29 +3382,27 @@ _STAGING_ENTRY_KEY_RE = re.compile(r"^staging/stage-[0-9a-f]{32}\.json$")
 
 
 class PortableBundleVaultDriver:
-    """Single-file ``.nagarvault`` binary archive driver with integrity verification.
+    """Integrity-verified single-file ``.nagarvault`` backend.
 
-    Memory characteristics (this backend is *storage*, not a pass-through):
-
-    * **Write** — the archive is serialized region by region and handed to
-      ``_atomic_write_stream`` (:meth:`_ArchiveLayout.iter_segments`), so persisting a
-      bundle never holds the archive in RAM. Only the index (one record per entry) is
-      materialised.
-    * **Load/verify** — :meth:`_load_and_verify` opens the file, checks the header, and
-      streams the remainder through a fixed 64 KiB scratch buffer to recompute the
-      archive-level SHA-256. It then reads the index and ``seek``-es to each blob
-      individually, so it never holds the whole file (plus a slice copy of every chunk)
-      at once.
-    * **Retained** — because the archive is self-contained, the driver necessarily
-      keeps every stored chunk in ``self._chunks``::
-
-          M_backend(N) = O(sum(S_chunk))
-
-      i.e. the *backend* cost equals the vault size. That is inherent to a portable
-      single-file vault and is exactly why the push path's payload bound
-      (``O(S_chunk)``, see :mod:`sync_journal_manager`) is described separately from
-      this backend term.
+    Writes stream archive segments; loads hash through a fixed 64 KiB buffer, parse
+    the compact index, and read one blob at a time. Because the bundle is self-contained,
+    retained storage is necessarily ``O(sum(S_chunk))``; this backend cost is separate
+    from the manager's ``O(S_chunk)`` transient push-payload bound.
     """
+
+    __slots__ = (
+        "_bundle_path",
+        "_max_quota_bytes",
+        "_chunks",
+        "_manifests",
+        "_leases",
+        "_staging_journals",
+        "_chunk_mtimes",
+        "_owned_lease_etags",
+        "_owned_lease_tokens",
+        "_lock_path",
+        "_owner_path",
+    )
 
     def __init__(
         self,
@@ -2981,10 +3429,10 @@ class PortableBundleVaultDriver:
         self._leases: dict[str, bytes] = {}
         self._staging_journals: dict[str, bytes] = {}
         self._chunk_mtimes: dict[str, float] = {}
-        # Leases this instance wrote, as ``stem -> (sha256 of the body, lease token)``.
-        # Same rule as the other two drivers: a release without an explicit ETag is
-        # conditioned on our own write, never on the id alone.
-        self._owned_lease_etags: dict[str, tuple[str, str]] = {}
+        # Private in-memory ownership credentials, never stored in the shared bundle.
+        # Release binds both token and ETag so a peer cannot adopt observed state.
+        self._owned_lease_etags: dict[str, str] = {}
+        self._owned_lease_tokens: dict[str, str] = {}
         # Cross-process lock identities live next to (never inside) the archive.
         self._lock_path = self._bundle_path.with_name(f".{self._bundle_path.name}.lock")
         self._owner_path = self._bundle_path.with_name(f".{self._bundle_path.name}.owner")
@@ -3051,21 +3499,60 @@ class PortableBundleVaultDriver:
         one chunk plus the index, instead of ``raw`` (the whole archive) *plus* a second
         full copy of every chunk via ``raw[offset:offset + len]`` slicing.
         """
-        if self._bundle_path.is_symlink() or not self._bundle_path.is_file():
+        if self._bundle_path.is_symlink():
             raise VaultTransportError(f"Bundle file does not exist: {self._bundle_path}")
+        if _FCNTL is not None and not hasattr(os, "O_NONBLOCK"):
+            raise VaultTransportError(
+                "POSIX platform cannot safely open bundles without O_NONBLOCK"
+            )
+        flags = os.O_RDONLY
+        for flag_name in ("O_NONBLOCK", "O_NOFOLLOW", "O_CLOEXEC"):
+            if hasattr(os, flag_name):
+                flags |= getattr(os, flag_name)
         try:
-            handle = self._bundle_path.open("rb")
+            fd = os.open(self._bundle_path, flags)
         except OSError as exc:
             raise VaultTransportError(f"Cannot read bundle {self._bundle_path}: {exc}") from exc
+        handle: Any | None = None
         try:
+            opened = os.fstat(fd)
+            if not stat.S_ISREG(opened.st_mode):
+                raise VaultTransportError(f"Bundle is not a regular file: {self._bundle_path}")
+            try:
+                before_read = os.stat(self._bundle_path, follow_symlinks=False)
+            except OSError as exc:
+                raise VaultRevisionConflictError(
+                    f"Bundle {self._bundle_path} changed while it was being opened"
+                ) from exc
+            if (opened.st_dev, opened.st_ino) != (before_read.st_dev, before_read.st_ino):
+                raise VaultRevisionConflictError(
+                    f"Bundle {self._bundle_path} changed while it was being opened"
+                )
+            handle = os.fdopen(fd, "rb")
+            fd = -1
             self._verify_and_load_from_handle(handle)
+            try:
+                after_read = os.stat(self._bundle_path, follow_symlinks=False)
+            except OSError as exc:
+                raise VaultRevisionConflictError(
+                    f"Bundle {self._bundle_path} changed while it was being read"
+                ) from exc
+            if (opened.st_dev, opened.st_ino) != (after_read.st_dev, after_read.st_ino):
+                raise VaultRevisionConflictError(
+                    f"Bundle {self._bundle_path} changed while it was being read"
+                )
         except OSError as exc:
             raise VaultTransportError(f"Cannot read bundle {self._bundle_path}: {exc}") from exc
         finally:
-            handle.close()
+            if handle is not None:
+                handle.close()
+            if fd >= 0:
+                os.close(fd)
 
     def _verify_and_load_from_handle(self, handle: _StreamingBinaryReader) -> None:
         """Streaming body of :meth:`_load_and_verify` over an already-open ``rb`` handle."""
+        import zlib
+
         file_size = os.fstat(handle.fileno()).st_size
         header = _read_exact(handle, _BUNDLE_HEADER_TOTAL, what="bundle header")
         header_prefix = header[: _BUNDLE_HEADER_PREFIX.size]
@@ -3193,6 +3680,8 @@ class PortableBundleVaultDriver:
         staging: Mapping[str, bytes] | None = None,
     ) -> _ArchiveLayout:
         """Compute the binary index and header without concatenating the payload."""
+        import zlib
+
         ordered_entries: list[tuple[int, str, bytes]] = []
         for chunk_id in sorted(chunks):
             ordered_entries.append((_ENTRY_CHUNK, chunk_id, chunks[chunk_id]))
@@ -3460,10 +3949,8 @@ class PortableBundleVaultDriver:
             leases[effective_id] = payload
 
         self._mutate(_apply)
-        self._owned_lease_etags[effective_id] = (
-            hashlib.sha256(payload).hexdigest(),
-            bundle_lease_token,
-        )
+        self._owned_lease_etags[effective_id] = hashlib.sha256(payload).hexdigest()
+        self._owned_lease_tokens[effective_id] = bundle_lease_token
         return effective_id
 
     def update_push_lease(
@@ -3473,74 +3960,199 @@ class PortableBundleVaultDriver:
         *,
         project_id: str = "",
         ttl_seconds: float = 3600.0,
-    ) -> None:
-        """Refresh an active ``leases/<lease_id>.json`` entry inside this bundle."""
-        finite_ttl = _validate_positive_finite_seconds(ttl_seconds, name="ttl_seconds")
+        expected_etag: str | None = None,
+    ) -> bool:
+        """Refresh only a current bundle lease owned by this token and ETag pair."""
         valid_id = _validate_snapshot_id(lease_id)
+        owned = _owned_lease_pair(
+            self._owned_lease_tokens, self._owned_lease_etags, valid_id, expected_etag
+        )
+        if owned is None:
+            with self._coordination_lock():
+                self._reload_locked()
+                current = self._leases.get(valid_id)
+            if current is None:
+                raise VaultTransportError(f"Bundle lease {valid_id!r} is absent")
+            raise VaultRevisionConflictError(
+                f"This driver cannot prove ownership of lease {valid_id!r}"
+            )
+        owned_token, owned_etag = owned
+        finite_ttl = _validate_positive_finite_seconds(ttl_seconds, name="ttl_seconds")
         leased_ids = sorted({_validate_chunk_id(cid) for cid in chunk_ids})
         bundle_refresh_token = uuid.uuid4().hex
-        payload = _build_lease_json_bytes(
-            lease_id=valid_id,
-            project_id=project_id,
-            now_epoch=time.time(),
-            ttl_seconds=finite_ttl,
-            chunk_ids=leased_ids,
-            lease_token=bundle_refresh_token,
-        )
+        now = time.time()
+        with self._coordination_lock():
+            self._reload_locked()
+            current = self._leases.get(valid_id)
+            if current is None:
+                self._owned_lease_tokens.pop(valid_id, None)
+                self._owned_lease_etags.pop(valid_id, None)
+                raise VaultRevisionConflictError(
+                    f"Lease {valid_id!r} changed owner or ETag before refresh"
+                )
+            current_etag = hashlib.sha256(current).hexdigest()
+            actual_id, actual_project, _verifier = _lease_owner_fields(current)
+            if (
+                current_etag != owned_etag
+                or actual_id != valid_id
+                or (project_id and actual_project != project_id)
+                or not _lease_record_matches_owner(
+                    current,
+                    project_id=actual_project,
+                    lease_id=valid_id,
+                    lease_token=owned_token,
+                )
+            ):
+                self._owned_lease_tokens.pop(valid_id, None)
+                self._owned_lease_etags.pop(valid_id, None)
+                raise VaultRevisionConflictError(
+                    f"Lease {valid_id!r} changed owner or ETag before refresh"
+                )
+            expires_at, _current_chunks = _parse_and_validate_lease_payload(
+                current, source_label=f"bundle://leases/{valid_id}.json"
+            )
+            if expires_at <= now:
+                return False
+            payload = _build_lease_json_bytes(
+                lease_id=valid_id,
+                project_id=actual_project,
+                now_epoch=now,
+                ttl_seconds=finite_ttl,
+                chunk_ids=leased_ids,
+                lease_token=bundle_refresh_token,
+            )
+            next_leases = dict(self._leases)
+            next_leases[valid_id] = payload
+            self._flush(
+                dict(self._chunks),
+                dict(self._manifests),
+                next_leases,
+                dict(self._staging_journals),
+            )
+        self._owned_lease_etags[valid_id] = hashlib.sha256(payload).hexdigest()
+        self._owned_lease_tokens[valid_id] = bundle_refresh_token
+        return True
 
-        def _apply(
-            chunks: dict[str, bytes],
-            manifests: dict[str, bytes],
-            leases: dict[str, bytes],
-        ) -> None:
-            del chunks, manifests
-            if valid_id not in self._leases:
-                raise VaultTransportError(f"Active bundle push lease not found: {valid_id}")
-            leases[valid_id] = payload
+    def get_owned_lease_token(self, lease_id: str) -> str:
+        """Return a private credential only after re-proving its current owner pair."""
+        return self.export_lease_credential(lease_id)["lease_token"]
 
-        self._mutate(_apply)
-        self._owned_lease_etags[valid_id] = (
-            hashlib.sha256(payload).hexdigest(),
-            bundle_refresh_token,
-        )
-
-    def release_push_lease(self, lease_id: str, *, expected_etag: str | None = None) -> None:
-        """Remove a ``leases/<lease_id>.json`` entry from this bundle.
-
-        ``expected_etag`` is the sha256 of the lease body that was observed; supplying
-        it makes the removal conditional, so a bundle whose lease was refreshed in the
-        meantime is left alone.
-        """
+    def export_lease_credential(self, lease_id: str) -> dict[str, str]:
+        """Export the current private credential after checking the shared lease verifier."""
         valid_id = _validate_snapshot_id(lease_id)
-        if expected_etag is not None and not expected_etag.strip():
-            raise VaultTransportError("Refusing to release a bundle lease without a known ETag")
+        owned = _owned_lease_pair(self._owned_lease_tokens, self._owned_lease_etags, valid_id, None)
+        if owned is None:
+            raise VaultDriverError(f"This driver does not own bundle lease {valid_id!r}")
+        token, owned_etag = owned
+        with self._coordination_lock():
+            self._reload_locked()
+            raw = self._leases.get(valid_id)
+            if raw is None:
+                raise VaultDriverError(f"Bundle lease {valid_id!r} is absent")
+            current_etag = hashlib.sha256(raw).hexdigest()
+            actual_id, project_id, _verifier = _lease_owner_fields(raw)
+            if (
+                current_etag != owned_etag
+                or actual_id != valid_id
+                or not _lease_record_matches_owner(
+                    raw, project_id=project_id, lease_id=valid_id, lease_token=token
+                )
+            ):
+                raise VaultDriverError(f"Bundle lease {valid_id!r} is no longer owned here")
+        return {
+            "lease_id": valid_id,
+            "project_id": project_id,
+            "lease_token": token,
+            "etag": current_etag,
+        }
 
-        def _apply(
-            chunks: dict[str, bytes],
-            manifests: dict[str, bytes],
-            leases: dict[str, bytes],
-        ) -> None:
-            del chunks, manifests
-            if expected_etag is not None:
-                current = self._leases.get(valid_id)
-                current_etag = hashlib.sha256(current).hexdigest() if current else ""
-                if current_etag != expected_etag.strip():
-                    raise VaultRevisionConflictError(
-                        f"Bundle lease {valid_id!r} changed since it was observed"
-                    )
-            elif valid_id in self._owned_lease_etags:
-                current = self._leases.get(valid_id)
-                if current is not None:
-                    current_etag = hashlib.sha256(current).hexdigest()
-                    owned_etag, _owned_token = self._owned_lease_etags[valid_id]
-                    if current_etag != owned_etag:
-                        raise VaultRevisionConflictError(
-                            f"Bundle lease {valid_id!r} changed since this driver wrote it"
-                        )
-            leases.pop(valid_id, None)
+    def recover_owned_lease(
+        self,
+        project_id: str,
+        lease_id: str,
+        lease_token: str,
+        expected_etag: str | None = None,
+    ) -> str:
+        """Recover only an active bundle lease whose one-way verifier proves the token."""
+        valid_id = _validate_snapshot_id(lease_id)
+        if not isinstance(lease_token, str) or not lease_token:
+            raise VaultDriverError("Lease recovery requires a non-empty owner token")
+        with self._coordination_lock():
+            self._reload_locked()
+            raw = self._leases.get(valid_id)
+            if raw is None:
+                raise VaultDriverError(f"Bundle lease {valid_id!r} is absent")
+            expires_at, _chunks = _parse_and_validate_lease_payload(
+                raw, source_label=f"bundle://leases/{valid_id}.json"
+            )
+            if expires_at <= time.time():
+                raise VaultDriverError(f"Bundle lease {valid_id!r} has expired")
+            verifier = _lease_verifier_for_recovery(
+                raw,
+                project_id=project_id,
+                lease_id=valid_id,
+                source_label=f"bundle://leases/{valid_id}.json",
+            )
+            expected_verifier = _compute_lease_token_verifier(project_id, valid_id, lease_token)
+            if not hmac.compare_digest(expected_verifier, verifier):
+                raise VaultDriverError(f"Bundle lease {valid_id!r} owner token did not verify")
+            current_etag = hashlib.sha256(raw).hexdigest()
+            if (
+                not isinstance(expected_etag, str)
+                or not expected_etag
+                or not hmac.compare_digest(expected_etag, current_etag)
+            ):
+                raise VaultDriverError(f"Bundle lease {valid_id!r} ETag did not verify")
+            self._owned_lease_tokens[valid_id] = lease_token
+            self._owned_lease_etags[valid_id] = current_etag
+            return current_etag
 
-        self._mutate(_apply)
-        self._owned_lease_etags.pop(valid_id, None)
+    def release_push_lease(self, lease_id: str, *, expected_etag: str | None = None) -> bool:
+        """Release only a bundle lease proven by this instance's token and exact ETag."""
+        valid_id = _validate_snapshot_id(lease_id)
+        owned = _owned_lease_pair(
+            self._owned_lease_tokens, self._owned_lease_etags, valid_id, expected_etag
+        )
+        if owned is None:
+            with self._coordination_lock():
+                self._reload_locked()
+                present = valid_id in self._leases
+            if not present:
+                return False
+            raise VaultRevisionConflictError(
+                f"This driver cannot prove ownership of lease {valid_id!r}"
+            )
+        token, owned_etag = owned
+        with self._coordination_lock():
+            self._reload_locked()
+            current = self._leases.get(valid_id)
+            if current is None:
+                self._owned_lease_tokens.pop(valid_id, None)
+                self._owned_lease_etags.pop(valid_id, None)
+                return False
+            current_etag = hashlib.sha256(current).hexdigest()
+            actual_id, project_id, _verifier = _lease_owner_fields(current)
+            if (
+                current_etag != owned_etag
+                or actual_id != valid_id
+                or not _lease_record_matches_owner(
+                    current, project_id=project_id, lease_id=valid_id, lease_token=token
+                )
+            ):
+                self._owned_lease_tokens.pop(valid_id, None)
+                self._owned_lease_etags.pop(valid_id, None)
+                return False
+            next_leases = dict(self._leases)
+            next_leases.pop(valid_id, None)
+            self._flush(
+                dict(self._chunks),
+                dict(self._manifests),
+                next_leases,
+                dict(self._staging_journals),
+            )
+            self._owned_lease_tokens.pop(valid_id, None)
+            self._owned_lease_etags.pop(valid_id, None)
+        return True
 
     def _active_leases_unlocked(self, *, effective_now: float) -> tuple[set[str], list[str]]:
         active_chunks: set[str] = set()

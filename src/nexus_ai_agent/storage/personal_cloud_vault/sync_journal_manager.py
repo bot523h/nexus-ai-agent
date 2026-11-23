@@ -580,8 +580,9 @@ class PersonalCloudVaultManager:
         self._lease_ttl_seconds = float(lease_ttl_seconds)
         self._key_ring = key_ring
         self._lock = threading.RLock()
-        self._known_chunk_ids: set[str] = set()
-        self._in_flight_chunks: set[str] = set()
+        # These indexes share keys: timestamps are the authoritative known-chunk
+        # journal, and refcount keys are the in-flight set. Avoid duplicate hash tables
+        # per chunk; the journal is exercised on large snapshots and should stay compact.
         self._in_flight_refcounts: dict[str, int] = {}
         self._chunk_seen_at: dict[str, float] = {}
 
@@ -597,7 +598,7 @@ class PersonalCloudVaultManager:
     def in_flight_chunks(self) -> frozenset[str]:
         """Return a thread-safe snapshot of chunk IDs currently being pushed."""
         with self._lock:
-            return frozenset(self._in_flight_chunks)
+            return frozenset(self._in_flight_refcounts)
 
     def record_orphan_candidate_chunk(
         self,
@@ -617,7 +618,6 @@ class PersonalCloudVaultManager:
                 raise PersonalVaultError(f"recorded_at must be finite, got {recorded_at!r}")
             ts = float(recorded_at)
         with self._lock:
-            self._known_chunk_ids.add(chunk_id)
             self._chunk_seen_at[chunk_id] = ts
 
     def _acquire_in_flight_chunks(self, chunk_ids: Iterable[str]) -> tuple[str, ...]:
@@ -626,8 +626,6 @@ class PersonalCloudVaultManager:
         with self._lock:
             for cid in unique_ids:
                 self._in_flight_refcounts[cid] = self._in_flight_refcounts.get(cid, 0) + 1
-                self._in_flight_chunks.add(cid)
-                self._known_chunk_ids.add(cid)
                 self._chunk_seen_at[cid] = now
         return unique_ids
 
@@ -637,7 +635,6 @@ class PersonalCloudVaultManager:
                 remaining = self._in_flight_refcounts.get(cid, 0) - 1
                 if remaining <= 0:
                     self._in_flight_refcounts.pop(cid, None)
-                    self._in_flight_chunks.discard(cid)
                 else:
                     self._in_flight_refcounts[cid] = remaining
 
@@ -741,7 +738,6 @@ class PersonalCloudVaultManager:
         self._driver.put_chunk(chunk_id, wire_buffer)
         del wire_buffer
         with self._lock:
-            self._known_chunk_ids.add(chunk_id)
             self._chunk_seen_at[chunk_id] = time.time()
         return wire_len
 
@@ -913,7 +909,9 @@ class PersonalCloudVaultManager:
             raw = self._driver.get_manifest(sid)
             manifest = VaultSnapshotManifest.from_json_bytes(raw)
             with self._lock:
-                self._known_chunk_ids.update(manifest.referenced_chunk_ids())
+                now = time.time()
+                for chunk_id in manifest.referenced_chunk_ids():
+                    self._chunk_seen_at.setdefault(chunk_id, now)
             if manifest.project_id == project_id:
                 project_manifests[sid] = manifest
         return all_ids, project_manifests
@@ -1291,7 +1289,7 @@ class PersonalCloudVaultManager:
                     _atomic_write_file(staged_path, plaintext)
                     staged_chunks[ref.chunk_id] = staged_path
                     with self._lock:
-                        self._known_chunk_ids.add(ref.chunk_id)
+                        self._chunk_seen_at.setdefault(ref.chunk_id, time.time())
 
             staged_sources: dict[str, Path] = {}
             total_bytes = 0
@@ -1420,7 +1418,6 @@ class PersonalCloudVaultManager:
             # P1-3 Fail-Safe: unknown age is stamped with `first_seen = now_epoch` and retained.
             with self._lock:
                 first_seen = self._chunk_seen_at.setdefault(chunk_id, now_epoch)
-                self._known_chunk_ids.add(chunk_id)
             return (now_epoch - first_seen) < min_age_seconds
         return (now_epoch - recorded_ts) < min_age_seconds
 
@@ -1457,9 +1454,9 @@ class PersonalCloudVaultManager:
             )
 
         with self._lock:
-            initial_in_flight = set(self._in_flight_chunks)
-            known_snapshot = set(self._known_chunk_ids)
+            initial_in_flight = set(self._in_flight_refcounts)
             seen_snapshot = dict(self._chunk_seen_at)
+            known_snapshot = set(seen_snapshot)
 
         cross_process_leased = self._read_driver_leased_chunks()
         stored_manifest_ids = set(self._driver.list_manifests())
@@ -1522,15 +1519,13 @@ class PersonalCloudVaultManager:
             ):
                 continue
             with self._lock:
-                if chunk_id in self._in_flight_chunks:
+                if chunk_id in self._in_flight_refcounts:
                     continue
                 if callable(atomic_delete_fn):
                     if atomic_delete_fn(chunk_id, now_epoch=now_epoch):
                         deleted.append(chunk_id)
-                        self._known_chunk_ids.discard(chunk_id)
                         self._chunk_seen_at.pop(chunk_id, None)
                     elif not self._driver.has_chunk(chunk_id):
-                        self._known_chunk_ids.discard(chunk_id)
                         self._chunk_seen_at.pop(chunk_id, None)
                     continue
                 if chunk_id in self._read_driver_leased_chunks():
@@ -1538,7 +1533,6 @@ class PersonalCloudVaultManager:
                 if self._driver.has_chunk(chunk_id):
                     self._driver.delete_chunk(chunk_id)
                     deleted.append(chunk_id)
-                self._known_chunk_ids.discard(chunk_id)
                 self._chunk_seen_at.pop(chunk_id, None)
 
         return GarbageCollectionReport(
