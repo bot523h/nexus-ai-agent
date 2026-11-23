@@ -707,7 +707,7 @@ class DurablePlanDedupeStore:
                     plan_hash,
                     attempt,
                     owner_token,
-                    now,
+                    self._now(),
                 ),
             ).rowcount
             if changed != 1:

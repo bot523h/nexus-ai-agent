@@ -346,6 +346,31 @@ def test_unresolved_effect_intent_cannot_be_committed(tmp_path: Path) -> None:
     assert store.compensation_journal("p", HASH)[0].status == "PENDING"
 
 
+def test_finish_rechecks_lease_after_reading_the_intent_journal(tmp_path: Path) -> None:
+    """Expiry between the fence read and final write cannot publish a receipt."""
+    import sqlite3
+
+    path = tmp_path / "db"
+    store = DurablePlanDedupeStore(path, clock=lambda: 10.0)
+    lease = store.reserve_and_start(
+        "p", HASH, external_effects=True, nonce="n", lease_ttl_seconds=1
+    )
+    values = iter((10.0, 11.0))
+    store._clock = lambda: next(values)
+    with pytest.raises(PlanFencingTokenMismatchError):
+        store.finish("p", HASH, attempt=lease.attempt, owner_token=lease.owner_token, evidence={})
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("SELECT status, evidence_json FROM plans").fetchone() == (
+            "EXECUTING",
+            None,
+        )
+    store._clock = lambda: 11.0
+    with pytest.raises(PlanInDoubtQuarantineError):
+        store.reserve_and_start("p", HASH, external_effects=True, nonce="fresh")
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("SELECT status FROM plans").fetchone() == ("IN_DOUBT",)
+
+
 def test_finish_refuses_a_suppressed_fenced_transition(tmp_path: Path) -> None:
     """A database trigger suppressing an update cannot produce a false receipt."""
     import sqlite3
