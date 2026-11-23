@@ -152,7 +152,10 @@ def _valid_r2_endpoint(endpoint: str, account: str) -> bool:
 
 
 def verify_production_backup_preflight(
-    env_mapping: Mapping[str, str] | Settings, *, require_remote_tier: bool = True
+    env_mapping: Mapping[str, str] | Settings,
+    *,
+    require_remote_tier: bool = True,
+    allow_local_database: bool = False,
 ) -> str:
     """Validate configuration only; never claim a remote backup took place.
 
@@ -160,7 +163,7 @@ def verify_production_backup_preflight(
     out. Partial configuration is always an error. Secrets are never included
     in errors, including when URL parsing fails.
     """
-    if not isinstance(require_remote_tier, bool):
+    if not isinstance(require_remote_tier, bool) or not isinstance(allow_local_database, bool):
         raise BackupPreflightError("FAILED_PREFLIGHT_REMOTE_MISSING")
     if isinstance(env_mapping, Settings):
         fields = {
@@ -193,11 +196,19 @@ def verify_production_backup_preflight(
     r2 = all(name in present for name in _R2)
     # A partially configured tier is suspicious even if the other is complete.
     if (
-        not _valid_value(db)
-        or not _valid_url(
-            db,
-            frozenset({"postgres", "postgresql", "postgresql+asyncpg", "postgresql+psycopg"}),
-            database=True,
+        (not db and not allow_local_database)
+        or (
+            bool(db)
+            and (
+                not _valid_value(db)
+                or not _valid_url(
+                    db,
+                    frozenset(
+                        {"postgres", "postgresql", "postgresql+asyncpg", "postgresql+psycopg"}
+                    ),
+                    database=True,
+                )
+            )
         )
         or not (b2 or r2)
         or (bool(present.intersection(_B2)) and not b2)

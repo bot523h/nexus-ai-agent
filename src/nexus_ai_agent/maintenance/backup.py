@@ -41,6 +41,7 @@ from nexus_ai_agent.maintenance.failures import (
 )
 from nexus_ai_agent.observability.logging import get_logger
 from nexus_ai_agent.storage.db import enforce_postgres_policy
+from nexus_ai_agent.storage.encrypted_backup_drill import verify_production_backup_preflight
 from nexus_ai_agent.storage.providers.b2 import B2Provider
 from nexus_ai_agent.storage.providers.base import ProviderUnavailable, StorageError
 from nexus_ai_agent.storage.providers.r2 import R2Provider
@@ -336,6 +337,13 @@ def create_backup(*, settings: Settings, dry_run: bool = False) -> dict[str, Any
         summary["detail"] = "dry-run: nothing dumped or uploaded"
         return summary
 
+    # Validate both the supplied settings and the database URL actually selected
+    # by the canonical backend policy, before provider creation or dumping.
+    verify_production_backup_preflight(settings, allow_local_database=database_url is None)
+    if database_url is not None:
+        verify_production_backup_preflight(
+            settings.model_copy(update={"database_url": database_url})
+        )
     provider = _build_provider(settings)
     if not provider.is_configured():
         # Fail loudly: a silently skipped backup is worse than a red job.

@@ -74,6 +74,10 @@ def _settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, db_rows: int = 3)
 
 
 def _provider(settings: Any, fake: _FakeR2, monkeypatch: pytest.MonkeyPatch) -> None:
+    settings.r2_account_id = "0123456789abcdef0123456789abcdef"
+    settings.r2_access_key_id = "access-key"
+    settings.r2_secret_access_key = "secret-key"
+    settings.r2_bucket = "backup-bucket"
     monkeypatch.setattr("nexus_ai_agent.maintenance.backup._build_provider", lambda settings: fake)
 
 
@@ -156,7 +160,7 @@ def test_postgres_dump_verifies_via_sha256_round_trip(
     the check uses the download primitive the provider already exposes."""
     from nexus_ai_agent.config.settings import Settings
 
-    monkeypatch.setenv("NEXUS_DATABASE_URL", "postgresql://u:p@h/db")
+    monkeypatch.setenv("NEXUS_DATABASE_URL", "postgresql://u:p@h/db?sslmode=verify-full")
     from nexus_ai_agent.config import settings as settings_module
 
     settings_module.get_settings.cache_clear()
@@ -182,7 +186,7 @@ def test_postgres_dump_rejects_truncated_artifact(
 ) -> None:
     from nexus_ai_agent.config.settings import Settings
 
-    monkeypatch.setenv("NEXUS_DATABASE_URL", "postgresql://u:p@h/db")
+    monkeypatch.setenv("NEXUS_DATABASE_URL", "postgresql://u:p@h/db?sslmode=verify-full")
     from nexus_ai_agent.config import settings as settings_module
 
     settings_module.get_settings.cache_clear()
@@ -275,6 +279,6 @@ def test_pg_dump_is_self_contained_for_restore(
     monkeypatch.setattr(backup_module.subprocess, "run", _fake_run)
     monkeypatch.setattr(backup_module.shutil, "which", lambda name: f"/usr/bin/{name}")
 
-    backup_module._dump_postgres("postgresql://u:p@h/db", tmp_path / "out.sql")
+    backup_module._dump_postgres("postgresql://u:p@h/db?sslmode=verify-full", tmp_path / "out.sql")
     assert "--clean" in captured["argv"]
     assert "--if-exists" in captured["argv"]

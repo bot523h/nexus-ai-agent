@@ -46,7 +46,13 @@ one directory is renamed into the work directory and the directory is fsynced.
 Independent three-file replacements are not an atomic transaction. Reruns
 create distinct generations, rather than a byte-identical idempotent result;
 retention and recovery after process or power failure remain unverified.
-The drill is not wired into the production maintenance scheduler. Checks of
+The encrypted drill is not wired into the production maintenance scheduler.
+The separate structural preflight now gates non-dry-run remote backup and
+remote restore before provider construction and I/O. Local restore does not
+require cloud settings. SQLite source is accepted only when the canonical
+backend policy permits it; configured PostgreSQL URLs must pass TLS checks.
+A valid preflight is configuration evidence, not remote backup verification.
+Checks of
 source-directory permissions and pre/post inode identity detect some path
 replacements, but a swap-and-restore between checks remains possible. The
 64 MiB absolute read cap is not a bound on total process RSS: encryption and

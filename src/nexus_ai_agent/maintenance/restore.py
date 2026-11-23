@@ -72,6 +72,8 @@ from nexus_ai_agent.maintenance.failures import (
 from nexus_ai_agent.maintenance.housekeeping import _parse_backup_stamp
 from nexus_ai_agent.maintenance.redact import redact_text, split_dsn_password, target_identity
 from nexus_ai_agent.observability.logging import get_logger
+from nexus_ai_agent.storage.db import enforce_postgres_policy
+from nexus_ai_agent.storage.encrypted_backup_drill import verify_production_backup_preflight
 from nexus_ai_agent.storage.providers.base import ProviderUnavailable, StorageError
 
 #: A lowercase, 64-hex SHA-256. Used to reject a sidecar (or operator flag)
@@ -382,7 +384,7 @@ def _expected_app_tables() -> set[str]:
     """
     from nexus_ai_agent.storage import models as _models
 
-    return set(_models.SQLModel.metadata.tables)
+    return set(_models.SQLModel.metadata.tables)  # type: ignore[attr-defined]
 
 
 def _apply_sqlite_restore(
@@ -782,6 +784,14 @@ def restore_drill(
     """
     if (from_local is None) == (from_r2_key is None and not latest):
         raise RestorePlanError("choose exactly one source: --from-local, --from-r2, or --latest")
+
+    if from_local is None:
+        database_url = enforce_postgres_policy()
+        verify_production_backup_preflight(settings, allow_local_database=database_url is None)
+        if database_url is not None:
+            verify_production_backup_preflight(
+                settings.model_copy(update={"database_url": database_url})
+            )
 
     mode = "apply" if apply else "drill"
     report = DrillReport(mode=mode)
