@@ -72,7 +72,7 @@ placeholder text.
 
 | Document | What it is |
 |---|---|
-| [product/NAGAR_ONE_PRODUCT_CONTRACT.md](product/NAGAR_ONE_PRODUCT_CONTRACT.md) | The NAGAR-ONE product frame: what the product is (Studio, not Telegram), the two non-negotiable laws (Intent ≠ Authority; one authority per responsibility), the target architecture chain, the traceability requirement, and the Stage 0–3 scope. |
+| [product/NAGAR_ONE_PRODUCT_CONTRACT.md](product/NAGAR_ONE_PRODUCT_CONTRACT.md) | The NAGAR-ONE product frame: what the product is (Studio, not Telegram), the two non-negotiable laws (Intent ≠ Authority; one authority per responsibility), the target architecture chain, the traceability requirement, Stage 0–3 scope, and permitted artifact downloads. |
 
 ## Overnight (dated engineering record — one-night session)
 
@@ -186,6 +186,7 @@ placeholder text.
 
 | Document | What it is |
 |---|---|
+| [W3-A production reachability ratchet](../tests/architecture/test_w3a_production_reachability_ratchet.py) | AST-only gate tracking reachable production modules, production roots, and reviewed orphan ceilings. |
 | [engineering/NAGAR_LIVE_EDITING_LIVE_AUDIT.md](engineering/NAGAR_LIVE_EDITING_LIVE_AUDIT.md) | M0 live audit for mission NAGAR-IBPC-LIVE-EDITING-01: 21-component inventory with file evidence, real execution path, verifier calibration, forbidden paths, NOW/NEXT/LATER. |
 | [engineering/NAGAR_IBPC.md](engineering/NAGAR_IBPC.md) | The IBPC slice (intent-bound proof capsules for live editing): chain, red-line→test map, scope semantics, verifier calibration, fencing, privacy, package map — plus the security closure (threat model, audio-ingress policy, approval identity contract, 13/13 mutation evidence) and the honest in-process lifecycle table (Implemented…ProductionVerified labels). |
 | [engineering/NAGAR_ONE_TRUTH_MATRIX.md](engineering/NAGAR_ONE_TRUTH_MATRIX.md) | The NAGAR-ONE technical truth matrix: every core capability labelled VERIFIED/PARTIAL/MISSING/BLOCKED/DEFERRED with its implementation site, test/evidence, and remaining gap — and the Stage 0–3 gate status. |
