@@ -308,6 +308,116 @@ def test_lock_retries_after_contention(tmp_path: Path, monkeypatch: pytest.Monke
     assert sleeps == [0.01]
 
 
+def test_unresolved_effect_intent_cannot_be_committed(tmp_path: Path) -> None:
+    """A real SQLite intent remains uncertain, even when a caller supplies evidence."""
+    import sqlite3
+
+    now = [10.0]
+    path = tmp_path / "db"
+    store = DurablePlanDedupeStore(path, clock=lambda: now[0])
+    lease = store.reserve_and_start(
+        "p", HASH, external_effects=True, nonce="n", lease_ttl_seconds=1
+    )
+    store.record_compensation_intent(
+        "p",
+        HASH,
+        attempt=lease.attempt,
+        owner_token=lease.owner_token,
+        step_id="step",
+        effect_key=KEY1,
+    )
+    with pytest.raises(PlanFencingTokenMismatchError):
+        store.finish("p", HASH, attempt=lease.attempt, owner_token="d" * 64, evidence={})
+    with pytest.raises(PlanInDoubtQuarantineError, match="unresolved effect intent"):
+        store.finish(
+            "p", HASH, attempt=lease.attempt, owner_token=lease.owner_token, evidence={"ok": True}
+        )
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("SELECT status, evidence_json FROM plans").fetchone() == (
+            "IN_DOUBT",
+            None,
+        )
+    with pytest.raises(PlanInDoubtQuarantineError):
+        DurablePlanDedupeStore(path, clock=lambda: now[0]).reserve_and_start(
+            "p", HASH, external_effects=True, nonce="fresh"
+        )
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("SELECT status FROM plans").fetchone() == ("IN_DOUBT",)
+    assert store.compensation_journal("p", HASH)[0].status == "PENDING"
+
+
+def test_finish_refuses_a_suppressed_fenced_transition(tmp_path: Path) -> None:
+    """A database trigger suppressing an update cannot produce a false receipt."""
+    import sqlite3
+
+    path = tmp_path / "db"
+    store = DurablePlanDedupeStore(path, clock=lambda: 10.0)
+    lease = store.reserve_and_start("p", HASH, external_effects=True, nonce="n")
+    with sqlite3.connect(path) as conn:
+        conn.execute(
+            "CREATE TRIGGER block_finish BEFORE UPDATE OF status ON plans "
+            "WHEN NEW.status='COMMITTED' BEGIN SELECT RAISE(IGNORE); END"
+        )
+    with pytest.raises(PlanFencingTokenMismatchError):
+        store.finish("p", HASH, attempt=lease.attempt, owner_token=lease.owner_token, evidence={})
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("SELECT status, evidence_json FROM plans").fetchone() == (
+            "EXECUTING",
+            None,
+        )
+
+
+def test_finish_and_intent_race_never_commits_with_an_unresolved_effect(tmp_path: Path) -> None:
+    """The live fence and intent insertion serialize on a real SQLite file."""
+    import sqlite3
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    path = tmp_path / "race.db"
+    owner = DurablePlanDedupeStore(path, clock=lambda: 10.0)
+    lease = owner.reserve_and_start("p", HASH, external_effects=True, nonce="n")
+    barrier = threading.Barrier(2)
+
+    def finish() -> str:
+        rival = DurablePlanDedupeStore(path, clock=lambda: 10.0)
+        barrier.wait(timeout=10)
+        try:
+            rival.finish(
+                "p", HASH, attempt=lease.attempt, owner_token=lease.owner_token, evidence={}
+            )
+        except PlanInDoubtQuarantineError:
+            return "in_doubt"
+        return "committed"
+
+    def intent() -> str:
+        rival = DurablePlanDedupeStore(path, clock=lambda: 10.0)
+        barrier.wait(timeout=10)
+        try:
+            rival.record_compensation_intent(
+                "p",
+                HASH,
+                attempt=lease.attempt,
+                owner_token=lease.owner_token,
+                step_id="step",
+                effect_key=KEY1,
+            )
+        except PlanFencingTokenMismatchError:
+            return "fenced"
+        return "recorded"
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        a = pool.submit(finish)
+        b = pool.submit(intent)
+        outcomes = (a.result(timeout=20), b.result(timeout=20))
+    assert outcomes in (("committed", "fenced"), ("in_doubt", "recorded"))
+    with sqlite3.connect(path) as conn:
+        status = conn.execute("SELECT status FROM plans").fetchone()[0]
+        pending = conn.execute(
+            "SELECT count(*) FROM compensation_journal WHERE status='PENDING'"
+        ).fetchone()[0]
+    assert (status, pending) in (("COMMITTED", 0), ("IN_DOUBT", 1))
+
+
 def test_intent_can_be_recorded_before_external_effect(tmp_path: Path) -> None:
     now = [1.0]
     path = tmp_path / "db"

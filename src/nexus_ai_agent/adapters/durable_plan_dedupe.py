@@ -673,17 +673,49 @@ class DurablePlanDedupeStore:
         self._validate_identity(plan_id, plan_hash, project_id)
         self._validate_fence(attempt, owner_token)
         body = _encode_evidence(evidence)
+        unresolved = False
         with self._transaction() as conn:
+            # A pending intent is an unknown external outcome, never a receipt.
+            # Check and transition under the same transaction and live fence.
+            now = self._now()
+            live = conn.execute(
+                "SELECT 1 FROM plans WHERE project_id=? AND plan_id=? AND plan_hash=? "
+                "AND status='EXECUTING' AND attempt=? AND owner_token=? AND lease_expires_at>?",
+                (project_id, plan_id, plan_hash, attempt, owner_token, now),
+            ).fetchone()
+            if live is None:
+                raise PlanFencingTokenMismatchError(
+                    "execution is stale or its owner does not match"
+                )
+            unresolved = (
+                conn.execute(
+                    "SELECT 1 FROM compensation_journal WHERE project_id=? AND plan_id=? "
+                    "AND plan_hash=? AND status='PENDING' LIMIT 1",
+                    (project_id, plan_id, plan_hash),
+                ).fetchone()
+                is not None
+            )
             changed = conn.execute(
-                "UPDATE plans SET status='COMMITTED', evidence_json=? "
+                "UPDATE plans SET status=?, evidence_json=? "
                 "WHERE project_id=? AND plan_id=? AND plan_hash=? AND status='EXECUTING' "
                 "AND attempt=? AND owner_token=? AND lease_expires_at>?",
-                (body, project_id, plan_id, plan_hash, attempt, owner_token, self._now()),
+                (
+                    "IN_DOUBT" if unresolved else "COMMITTED",
+                    None if unresolved else body,
+                    project_id,
+                    plan_id,
+                    plan_hash,
+                    attempt,
+                    owner_token,
+                    now,
+                ),
             ).rowcount
             if changed != 1:
                 raise PlanFencingTokenMismatchError(
                     "execution is stale or its owner does not match"
                 )
+        if unresolved:
+            raise PlanInDoubtQuarantineError("cannot finish with an unresolved effect intent")
 
     def quarantine(
         self,
