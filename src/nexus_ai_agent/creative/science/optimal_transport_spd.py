@@ -24,6 +24,16 @@ geometry is::
 with the metric property  ``W_2^2(mu_1, mu_t) = t^2 * W_2^2(mu_1, mu_2)``.
 
 This module is pure NumPy/SciPy + stdlib, total and deterministic.
+
+Policy note — the ``lambda_max / lambda_min <= 1e10`` ill-conditioning floor in
+``_as_covariance`` is a **finite-precision stability policy**, not an intrinsic
+mathematical necessity: the SPD manifold is perfectly regular for strictly
+positive-definite covariances of arbitrarily high condition number.  The floor
+exists so that the central differences taken from the eigendecomposition stay
+meaningful inside this module's precision envelope (LU/eigh with double
+precision cannot trust eigenvalues spanning more than ~10 orders of magnitude);
+it is deliberately fail-closed and must be documented as a numerical-stability
+cutoff, never as a geometric invariant.
 """
 
 from __future__ import annotations
@@ -56,6 +66,13 @@ def _as_covariance(cov: np.ndarray | list[list[float]]) -> NDArray[np.float64]:
     eigvalsh check cannot catch an asymmetric matrix); then eigenvalues
     computed on the symmetrised matrix with ``lambda_min > 0`` required and an
     ill-conditioning floor (``lambda_max / lambda_min <= 1e10``).
+
+    The ``1e10`` floor is a finite-precision stability policy, not an intrinsic
+    mathematical requirement of the Bures–Wasserstein geometry — strictly
+    positive-definite covariances of arbitrary condition number are valid
+    points on the SPD manifold.  It is enforced so that the eigendecomposition
+    stays inside double precision's envelope; it is intentionally fail-closed,
+    not a geometric invariant.
     """
     if np.iscomplexobj(cov):
         raise ValueError("covariance must be real (complex input rejected)")

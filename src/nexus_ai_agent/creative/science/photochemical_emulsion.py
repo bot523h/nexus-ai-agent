@@ -100,22 +100,51 @@ class EmulsionLayer:
     t_ref: float = 293.15  # 20 °C
 
     def __post_init__(self) -> None:
+        if not isinstance(self.name, str) or not self.name.strip():
+            raise TypeError("name must be a non-empty string")
+        object.__setattr__(self, "d_min", _require_real_number(self.d_min, "d_min"))
+        object.__setattr__(self, "d_max", _require_real_number(self.d_max, "d_max"))
+        object.__setattr__(self, "log10_h0", _require_real_number(self.log10_h0, "log10_h0"))
+        object.__setattr__(self, "gamma_ref", _require_real_number(self.gamma_ref, "gamma_ref"))
+        object.__setattr__(self, "t_ref", _require_real_number(self.t_ref, "t_ref"))
+        object.__setattr__(self, "ea", _require_real_number(self.ea, "ea"))
         if not 0.0 < self.d_min < self.d_max:
             raise ValueError("require 0 < d_min < d_max")
-        if self.log10_h0 != self.log10_h0:  # NaN guard
-            raise ValueError("log10_h0 must be finite")
-        if not math.isfinite(self.log10_h0):
-            raise ValueError("log10_h0 must be finite")
         if self.gamma_ref <= 0.0:
             raise ValueError("gamma_ref must be positive")
         if self.t_ref <= 0.0:
             raise ValueError("t_ref must be positive (Kelvin)")
-        if not math.isfinite(self.ea):
-            raise ValueError("ea must be finite")
 
     @property
     def midpoint(self) -> float:
         return 0.5 * (self.d_min + self.d_max)
+
+
+def _require_real_number(value: object, name: str) -> float:
+    """Reject bool, non-number or non-finite input; return a float."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise TypeError(f"{name} must be a real number")
+    out = float(value)
+    if not math.isfinite(out):
+        raise ValueError(f"{name} must be finite")
+    return out
+
+
+def _require_finite_array(value: object, name: str) -> NDArray[np.float64]:
+    """Reject bool/non-numeric/empty/non-finite array input; return a float64 array."""
+    if type(value) is bool:
+        raise TypeError(f"{name} must be a real numeric array")
+    try:
+        arr = np.asarray(value, dtype=float)
+    except (TypeError, ValueError) as exc:
+        raise TypeError(
+            f"{name} must be a real numeric array (got {type(value).__name__})"
+        ) from exc
+    if arr.size == 0:
+        raise ValueError(f"{name} must not be empty")
+    if not np.all(np.isfinite(arr)):
+        raise ValueError(f"{name} must contain only finite values")
+    return np.asarray(arr, dtype=float)
 
 
 #: Canonical silver-halide layer set used by the cream/cinema science path.
@@ -149,19 +178,24 @@ def arrhenius_gamma(
     ``gamma(T) = gamma_ref * exp( -ea / R * (1/T - 1/t_ref) )``.
     Physically: higher temperature raises the slope (steeper, higher-contrast curve).
     """
+    gamma_ref = _require_real_number(gamma_ref, "gamma_ref")
+    r = _require_real_number(r, "R")
+    ea = _require_real_number(ea, "ea")
+    t_ref = _require_real_number(t_ref, "t_ref")
+    temperature = _require_real_number(temperature, "temperature")
     if temperature <= 0.0 or t_ref <= 0.0:
         raise ValueError("temperatures must be positive (Kelvin)")
     if gamma_ref <= 0.0:
         raise ValueError("gamma_ref must be positive")
-    if not math.isfinite(r) or r <= 0.0:
+    if r <= 0.0:
         raise ValueError("R must be positive and finite")
-    if not math.isfinite(ea):
-        raise ValueError("ea must be finite")
     return float(gamma_ref * math.exp(-ea / r * (1.0 / temperature - 1.0 / t_ref)))
 
 
 def layer_gamma(layer: EmulsionLayer, temperature: float, r: float = R_GAS) -> float:
     """Arrhenius slope of ``layer`` at ``temperature``."""
+    if not isinstance(layer, EmulsionLayer):
+        raise TypeError("layer must be an EmulsionLayer")
     return arrhenius_gamma(layer.gamma_ref, layer.ea, layer.t_ref, temperature, r=r)
 
 
@@ -177,10 +211,11 @@ def hurter_driffield_density(
     (``(D_min + D_max) / 2``) and the tangent slope ``dD/d ln H`` is exactly
     ``gamma(T)``.
     """
-    if layer is None:
+    if not isinstance(layer, EmulsionLayer):
         raise TypeError("layer must be an EmulsionLayer")
-    if not math.isfinite(log10_h_eff):
-        raise ValueError("log10_h_eff must be finite")
+    log10_h_eff = _require_real_number(log10_h_eff, "log10_h_eff")
+    temperature = _require_real_number(temperature, "temperature")
+    r = _require_real_number(r, "r")
     gamma = layer_gamma(layer, temperature, r=r)
     delta = layer.d_max - layer.d_min
     a = 4.0 * math.log(10.0) * gamma / delta
@@ -201,8 +236,11 @@ def hurt_driffield_slope_log10(
 
     Equals ``ln(10) * gamma(T)`` exactly at the inflection (``log10 H = log10 H_0``).
     """
-    if not math.isfinite(log10_h_eff):
-        raise ValueError("log10_h_eff must be finite")
+    if not isinstance(layer, EmulsionLayer):
+        raise TypeError("layer must be an EmulsionLayer")
+    log10_h_eff = _require_real_number(log10_h_eff, "log10_h_eff")
+    temperature = _require_real_number(temperature, "temperature")
+    r = _require_real_number(r, "r")
     gamma = layer_gamma(layer, temperature, r=r)
     delta = layer.d_max - layer.d_min
     a = 4.0 * math.log(10.0) * gamma / delta
@@ -245,37 +283,101 @@ def schwarzschild_reciprocity(
     time: exposure time, ``> 0``.
     p: Schwarzschild reciprocity exponent, ``[0.5, 1.0]``.
     """
-    if not math.isfinite(intensity) or intensity <= 0.0:
+    intensity = _require_real_number(intensity, "intensity")
+    time = _require_real_number(time, "time")
+    p = _require_real_number(p, "p")
+    if intensity <= 0.0:
         raise ValueError("intensity must be positive and finite")
-    if not math.isfinite(time) or time <= 0.0:
+    if time <= 0.0:
         raise ValueError("time must be positive and finite")
-    if not math.isfinite(p):
-        raise ValueError("p must be finite")
     if not PAIR_LOW <= p <= PAIR_HIGH:
         raise ValueError(f"p must be in [{PAIR_LOW}, {PAIR_HIGH}] (Schwarzschild band); got {p!r}")
     return float(intensity * (time**p))
 
 
-def _interior_laplacian(arr: NDArray[np.float64], grid_spacing: float = 1.0) -> NDArray[np.float64]:
-    """Interior discrete Laplacian with zero-Neumann edges (1D or 2D).
+def _neumann_laplacian_1d(arr: NDArray[np.float64], inv_dx_sq: float) -> NDArray[np.float64]:
+    """1-D Laplacian with zero-gradient Neumann boundaries (mirror ghost cells).
 
-    Returns ``(sum(neighbors) - d * D_i) / dx^2`` inside the grid; edge cells
-    keep ``laplacian == 0`` (zero-flux / Neumann boundary).
+    ``u_{-1} = u_{1}`` and ``u_{N} = u_{N-2}``: left edge
+    ``2 (u_1 - u_0) / dx^2``, right edge ``2 (u_{N-2} - u_{N-1}) / dx^2``, interior
+    standard ``(u_{i-1} - 2 u_i + u_{i+1}) / dx^2``.
+    """
+    n = arr.shape[0]
+    laplacian = np.zeros_like(arr)
+    if n < 2:
+        return laplacian
+    laplacian[0] = 2.0 * (arr[1] - arr[0]) * inv_dx_sq
+    laplacian[-1] = 2.0 * (arr[-2] - arr[-1]) * inv_dx_sq
+    if n > 2:
+        laplacian[1:-1] = (arr[:-2] - 2.0 * arr[1:-1] + arr[2:]) * inv_dx_sq
+    return laplacian
+
+
+def _neumann_laplacian(arr: NDArray[np.float64], grid_spacing: float) -> NDArray[np.float64]:
+    """2-D zero-flux Neumann Laplacian (sum of 1-D Neumann operators).
+
+    For ``H >= 2`` and ``W >= 2``: each row uses the 1-D Neumann operator along a
+    row; each column uses the 1-D Neumann operator along a column; the two are
+    summed.  Corners (e.g. ``(0, 0)``) carry both Neumann contributions.  For
+    degenerate grids (``1 x N``, ``N x 1``, ``1 x 1``) fall back to the 1-D
+    Neumann operator along the non-degenerate axis (``0`` for all-zeros).
     """
     inv_dx_sq = 1.0 / (grid_spacing * grid_spacing)
     if arr.ndim == 1:
-        n = arr.shape[0]
+        return _neumann_laplacian_1d(arr, inv_dx_sq)
+    if arr.ndim == 2 and arr.shape[0] >= 2 and arr.shape[1] >= 2:
+        rows, cols = arr.shape
         laplacian = np.zeros_like(arr)
-        if n > 2:
-            laplacian[1:-1] = (arr[:-2] - 2.0 * arr[1:-1] + arr[2:]) * inv_dx_sq
+        for i in range(rows):
+            laplacian[i, :] = _neumann_laplacian_1d(arr[i, :], inv_dx_sq)
+        for j in range(cols):
+            laplacian[:, j] = laplacian[:, j] + _neumann_laplacian_1d(arr[:, j], inv_dx_sq)
         return laplacian
-    rows, cols = arr.shape
-    laplacian = np.zeros_like(arr)
-    if rows > 2 and cols > 2:
-        laplacian[1:-1, 1:-1] = (
-            arr[:-2, 1:-1] + arr[2:, 1:-1] + arr[1:-1, :-2] + arr[1:-1, 2:] - 4.0 * arr[1:-1, 1:-1]
-        ) * inv_dx_sq
-    return laplacian
+    if arr.ndim == 2 and arr.shape[0] == 1 and arr.shape[1] >= 2:
+        return _neumann_laplacian_1d(arr[0, :], inv_dx_sq).reshape(1, -1)
+    if arr.ndim == 2 and arr.shape[1] == 1 and arr.shape[0] >= 2:
+        return _neumann_laplacian_1d(arr[:, 0], inv_dx_sq).reshape(-1, 1)
+    return np.zeros_like(arr)
+
+
+def _validate_reaction_diffusion(
+    density: np.ndarray,
+    kappa: float,
+    clip_lo: float,
+    clip_hi: float,
+    grid_spacing: float,
+    time_step: float,
+) -> tuple[NDArray[np.float64], float, float, float, float, float]:
+    """Shared validation core for the DIR reaction–diffusion family (fail-closed).
+
+    Rejects NaN/Inf/non-numeric input, non-finite or misordered clip bounds,
+    negative/non-finite kappa, invalid grid_spacing/time_step and CFL
+    violations (1-D ``r <= 0.5``; 2-D ``r <= 0.25``).
+    """
+    arr = _require_finite_array(density, "density")
+    if arr.ndim < 1 or arr.ndim > 2:
+        raise ValueError("density must be a 1D or 2D grid")
+    kappa_f = _require_real_number(kappa, "kappa")
+    if kappa_f < 0.0:
+        raise ValueError("kappa must be non-negative (diffusion, not anti-diffusion)")
+    clip_lo_f = _require_real_number(clip_lo, "clip_lo")
+    clip_hi_f = _require_real_number(clip_hi, "clip_hi")
+    if clip_lo_f >= clip_hi_f:
+        raise ValueError("require clip_lo < clip_hi")
+    grid_spacing_f = _require_real_number(grid_spacing, "grid_spacing")
+    if grid_spacing_f <= 0.0:
+        raise ValueError("grid_spacing must be positive and finite")
+    time_step_f = _require_real_number(time_step, "time_step")
+    if time_step_f <= 0.0:
+        raise ValueError("time_step must be positive and finite")
+    r = kappa_f * time_step_f / (grid_spacing_f * grid_spacing_f)
+    cfl_limit = 0.5 if arr.ndim == 1 else 0.25
+    if r > cfl_limit:
+        raise ValueError(
+            f"CFL violation: kappa * dt / dx^2 = {r:.6f} > {cfl_limit} "
+            f"({arr.ndim}D explicit diffusion); refusing the unstable step"
+        )
+    return arr, kappa_f, clip_lo_f, clip_hi_f, grid_spacing_f, time_step_f
 
 
 def dir_reaction_diffusion(
@@ -295,44 +397,22 @@ def dir_reaction_diffusion(
     smoothed out): interior Laplacian uses the standard discrete stencil
     ``sum(neighbors) - d * D_i`` (4-neighbourhood in 2D, 2-neighbourhood in 1D),
     ``nabla^2 D = (neighbours - d*D_i) / dx^2`` with zero-gradient Neumann
-    boundaries (edge Laplacian = 0).
+    boundaries (mirror ghost cells: left edge ``2 (u_1 - u_0) / dx^2``, right edge
+    ``2 (u_{N-2} - u_{N-1}) / dx^2``; 2-D sums of the two 1-D Neumann operators).
 
     Stability is fail-closed: the explicit Euler step requires the CFL
     condition ``kappa * dt / dx^2 <= 0.5`` (1D) or ``<= 0.25`` (2D); a grid
-    that violates it is refused.  ``clip[_lo, _hi]`` and Laplacian are
-    unchanged from the validated developer workflow.
+    that violates it is refused.  ``clip_lo``/``clip_hi`` must be finite with
+    ``clip_lo < clip_hi`` (invalid or non-finite clip bounds are rejected).
     """
-    if not math.isfinite(kappa):
-        raise ValueError("kappa must be finite")
-    if kappa < 0.0:
-        raise ValueError("kappa must be non-negative (diffusion, not anti-diffusion)")
-    if not math.isfinite(clip_lo) or not math.isfinite(clip_hi):
-        raise ValueError("clip bounds must be finite")
-    if clip_lo >= clip_hi:
-        raise ValueError("require clip_lo < clip_hi")
-    if not math.isfinite(grid_spacing) or grid_spacing <= 0.0:
-        raise ValueError("grid_spacing must be positive and finite")
-    if not math.isfinite(time_step) or time_step <= 0.0:
-        raise ValueError("time_step must be positive and finite")
-    arr = np.asarray(density, dtype=float)
-    if arr.ndim < 1 or arr.ndim > 2:
-        raise ValueError("density must be a 1D or 2D grid")
-    if arr.size == 0:
-        raise ValueError("density must not be empty")
+    arr, k, lo, hi, dx, dt = _validate_reaction_diffusion(
+        density, kappa, clip_lo, clip_hi, grid_spacing, time_step
+    )
 
-    r = kappa * time_step / (grid_spacing * grid_spacing)
-    # Explicit-Euler stability (2D requires the stricter 0.25 limit).
-    cfl_limit = 0.5 if arr.ndim == 1 else 0.25
-    if r > cfl_limit:
-        raise ValueError(
-            f"CFL violation: kappa * dt / dx^2 = {r:.6f} > {cfl_limit} "
-            f"({arr.ndim}D explicit diffusion); refusing the unstable step"
-        )
+    laplacian = _neumann_laplacian(arr, dx)
 
-    laplacian = _interior_laplacian(arr, grid_spacing=grid_spacing)
-
-    changed = arr + kappa * time_step * laplacian
-    return np.asarray(np.clip(changed, clip_lo, clip_hi), dtype=np.float64)
+    changed = arr + k * dt * laplacian
+    return np.asarray(np.clip(changed, lo, hi), dtype=np.float64)
 
 
 def dir_film_state(
@@ -341,32 +421,34 @@ def dir_film_state(
     clip_lo: float,
     clip_hi: float,
 ) -> DirFilmState:
-    """Structured wrapper: returns the density, Laplacian and clipped result."""
-    arr = np.asarray(density, dtype=float)
-    if arr.size == 0:
-        raise ValueError("density must not be empty")
-    lap = _interior_laplacian(arr, grid_spacing=1.0)
-    final = np.clip(arr + kappa * lap, clip_lo, clip_hi)
-    return DirFilmState(arr, lap, final, clip_lo, clip_hi)
+    """Structured wrapper: returns the density, Laplacian and clipped result.
+
+    Validates exactly like :func:`dir_reaction_diffusion` (shared validation
+    core); the grid uses the canonical ``grid_spacing = 1.0`` and
+    ``time_step = 1.0``, so the effective CFL bound is ``kappa <= 0.5`` (1D) or
+    ``kappa <= 0.25`` (2D).
+    """
+    arr, k, lo, hi, _dx, _dt = _validate_reaction_diffusion(
+        density, kappa, clip_lo, clip_hi, 1.0, 1.0
+    )
+    laplacian = _neumann_laplacian(arr, 1.0)
+    final = np.clip(arr + k * laplacian, lo, hi)
+    return DirFilmState(np.asarray(arr, dtype=np.float64), laplacian, final, lo, hi)
 
 
-def beer_lambert_rgb(
-    dye_matrix: np.ndarray,
-    d_final: np.ndarray,
-) -> NDArray[np.float64]:
+def beer_lambert_rgb(dye_matrix: object, d_final: object) -> NDArray[np.float64]:
     """Beer–Lambert transmission through a dye filter.
 
     ``T_RGB = 10^(-M_dye @ D_final)`` with result in ``(0, 1]`` and clipped for
     numerical safety at ``1e-300``.  ``M_dye`` is a 3x3 dye extinction matrix.
     """
-    M = np.asarray(dye_matrix, dtype=float)
-    D = np.asarray(d_final, dtype=float).ravel()
-    if M.shape != (3, 3):
+    M = _require_finite_array(dye_matrix, "dye_matrix")
+    D = _require_finite_array(d_final, "d_final")
+    if M.ndim != 2 or M.shape != (3, 3):
         raise ValueError("dye_matrix must be 3x3 (RGB channels)")
+    D = D.ravel()
     if D.shape != (3,):
         raise ValueError("d_final must have exactly 3 entries (RGB)")
-    if not (np.isfinite(M).all() and np.isfinite(D).all()):
-        raise ValueError("dye matrix and density must be finite")
     if (M < 0.0).any():
         raise ValueError("dye extinction coefficients must be non-negative")
     if (D < 0.0).any():

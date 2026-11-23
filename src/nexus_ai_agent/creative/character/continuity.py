@@ -136,6 +136,18 @@ def verify_dimensions(
     """
     if not measurements:
         raise ValueError("at least one dimension must be measured")
+    # Every (key, threshold) pair must be internally consistent: a threshold
+    # stored under one key must be calibrated for that same key.  A mismatch is
+    # a caller bug, not a valid calibration, so the verdict would silently
+    # misdirect the drift/review boundary for that dimension — refuse it.
+    for key, threshold in thresholds.items():
+        if not isinstance(threshold, ContinuityThreshold):
+            raise ValueError(f"thresholds[{key!r}] must be a ContinuityThreshold")
+        if threshold.dimension != key:
+            raise ValueError(
+                f"thresholds[{key!r}] is calibrated for {threshold.dimension!r} "
+                f"but stored under key {key!r}"
+            )
     results: dict[str, DimensionResult] = {}
     for name, raw_distance in measurements.items():
         if name not in thresholds:

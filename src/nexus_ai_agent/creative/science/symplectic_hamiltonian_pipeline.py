@@ -27,8 +27,13 @@ symmetric Strang splitting — exact half-step damping
 ``p <- p * exp(-c dt / (2 m))`` on both sides of a conservative Störmer–Verlet
 step — so the damping factor is always in ``(0, 1)`` and is unconditionally
 stable.  The conservative part still obeys the leapfrog/Verlet stability limit
-``omega_max * dt < 2`` with ``omega_max = sqrt(lambda_max(K) / m)``; that limit is
-enforced (fail-closed) at every step.
+``omega_max * dt < 2`` with ``omega_max = sqrt(lambda_max(K) / m)``; this is the
+**harmonic (K-only) frequency** — it ignores the quartic coupling, so it is a
+necessary but NOT sufficient stability condition for the nonlinear flow.  A
+stricter **local effective frequency** ``omega_eff(q) = sqrt(lambda_max(H_V(q))/m)``
+with ``H_V(q) = K + alpha (||q||^2 I + 2 q q^T)`` is ALSO enforced (fail-closed)
+at every step start and at the half-step midpoint ``q_{n+1/2}`` (both
+``omega_max * dt < 2`` and ``omega_eff(q) * dt < 2``, or the step is refused).
 
 The :class:`UnifiedCinemaSciencePipeline` then combines the four science
 modules (photochemical emulsion, physical optics radiometry, optimal
@@ -41,7 +46,11 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+from collections.abc import Mapping
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from pathlib import Path
+from types import MappingProxyType
 
 import numpy as np
 from numpy.typing import NDArray
@@ -136,6 +145,38 @@ def gradient_potential(
     return np.asarray(grad, dtype=np.float64)
 
 
+def local_effective_omega(spec: HamiltonianSpec, q: np.ndarray | list[float]) -> float:
+    """Local (nonlinear) effective frequency at ``q``: ``sqrt(lambda_max(H_V(q))/m)``.
+
+    ``H_V(q) = K + alpha * (||q||^2 * I + 2 q q^T)`` is the Hessian of the
+    potential ``V(q) = 1/2 q^T K q + 1/4 alpha ||q||^4`` at ``q``.  Unlike the
+    harmonic ``omega_max`` this is **q-dependent**: the nonlinear flow
+    accelerates as ``||q||`` grows, so the step must respect this tighter bound.
+    """
+    arr_q = np.asarray(q, dtype=float).ravel()
+    if arr_q.size != spec.dimension:
+        raise ValueError("q must match the stiffness dimension")
+    k = np.asarray(spec.stiffness, dtype=float)
+    alpha = spec.quartic_coupling
+    n_sq = float(arr_q @ arr_q)
+    eye = np.eye(arr_q.size)
+    hessian = k + alpha * (n_sq * eye + 2.0 * np.outer(arr_q, arr_q))
+    return math.sqrt(float(np.max(np.linalg.eigvalsh(hessian))) / spec.mass)
+
+
+def _require_local_stability(
+    spec: HamiltonianSpec, q: NDArray[np.float64], dt: float, label: str
+) -> None:
+    """Fail-closed local stability gate: ``omega_eff(q) * dt < 2``."""
+    omega_eff = local_effective_omega(spec, q)
+    if omega_eff * abs(dt) >= 2.0:
+        raise ValueError(
+            f"dt violates the local effective stability limit at {label}: omega_eff * dt = "
+            f"{omega_eff * abs(dt):.6f} >= 2.0 (omega_eff = {omega_eff:.6f}, "
+            f"||q||^2 = {float(q @ q):.6f})"
+        )
+
+
 def stormer_verlet_step(
     q: np.ndarray | list[float],
     p: np.ndarray | list[float],
@@ -169,12 +210,16 @@ def stormer_verlet_step(
             f"dt violates the symplectic stability limit: omega_max * dt = "
             f"{omega_max * dt:.6f} >= 2.0 (omega_max = {omega_max:.6f})"
         )
+    _require_local_stability(spec, arr_q, dt, "step start")
     damp_half = math.exp(-rayleigh_damping * dt / (2.0 * spec.mass))
     # Half-step damping (exact).
     p_half = arr_p * damp_half
     # Conservative Störmer–Verlet step.
     grad_q = gradient_potential(arr_q, spec)
     p_half2 = p_half - 0.5 * dt * grad_q
+    # Gate the mid-step position q_{n+1/2} (half-drift) before committing to it.
+    q_half = arr_q + 0.5 * dt * p_half2 / spec.mass
+    _require_local_stability(spec, q_half, dt, "mid-step q_{n+1/2}")
     q_next = arr_q + dt * p_half2 / spec.mass
     grad_q_next = gradient_potential(q_next, spec)
     p_next = p_half2 - 0.5 * dt * grad_q_next
@@ -189,6 +234,8 @@ def jacobian_of_step(
     dt: float,
     spec: HamiltonianSpec,
     eps: float = 1e-6,
+    *,
+    rayleigh_damping: float = 0.0,
 ) -> NDArray[np.float64]:
     """Numerical Jacobian of one Störmer–Verlet step (centrally differenced)."""
     if not math.isfinite(eps) or eps <= 0.0:
@@ -202,15 +249,23 @@ def jacobian_of_step(
         # q direction
         delta = np.zeros(d)
         delta[i] = eps
-        qp, pp = stormer_verlet_step(arr_q + delta, arr_p, dt, spec)
-        qm, pm = stormer_verlet_step(arr_q - delta, arr_p, dt, spec)
+        qp, pp = stormer_verlet_step(
+            arr_q + delta, arr_p, dt, spec, rayleigh_damping=rayleigh_damping
+        )
+        qm, pm = stormer_verlet_step(
+            arr_q - delta, arr_p, dt, spec, rayleigh_damping=rayleigh_damping
+        )
         jacobian[:d, i] = (qp - qm) / (2.0 * eps)
         jacobian[d:, i] = (pp - pm) / (2.0 * eps)
         # p direction
         delta = np.zeros(d)
         delta[i] = eps
-        qp, pp = stormer_verlet_step(arr_q, arr_p + delta, dt, spec)
-        qm, pm = stormer_verlet_step(arr_q, arr_p - delta, dt, spec)
+        qp, pp = stormer_verlet_step(
+            arr_q, arr_p + delta, dt, spec, rayleigh_damping=rayleigh_damping
+        )
+        qm, pm = stormer_verlet_step(
+            arr_q, arr_p - delta, dt, spec, rayleigh_damping=rayleigh_damping
+        )
         jacobian[:d, d + i] = (qp - qm) / (2.0 * eps)
         jacobian[d:, d + i] = (pp - pm) / (2.0 * eps)
     return jacobian
@@ -238,11 +293,18 @@ def integrate_verlet(
     *,
     rayleigh_damping: float = 0.0,
 ) -> tuple[NDArray[np.float64], NDArray[np.float64], NDArray[np.float64]]:
-    """Integrate Störmer–Verlet, returning ``(q_traj, p_traj, H_traj)``."""
+    """Integrate Störmer–Verlet, returning ``(q_traj, p_traj, H_traj)``.
+
+    Every step is fail-closed on the symplectic leapfrog stability limits,
+    enforced inside :func:`stormer_verlet_step` (harmonic ``omega_max * dt`` and
+    the stricter local ``omega_eff(q) * dt`` at the start and midpoint of every
+    step).  The initial position is additionally gated here at step start.
+    """
     if n_steps < 0:
         raise ValueError("n_steps must be non-negative")
     arr_q = np.asarray(q0, dtype=float).ravel()
     arr_p = np.asarray(p0, dtype=float).ravel()
+    _require_local_stability(spec, arr_q, dt, "step start")
     traj_q = [arr_q.copy()]
     traj_p = [arr_p.copy()]
     traj_h = [hamiltonian(arr_q, arr_p, spec)]
@@ -261,24 +323,88 @@ def integrate_verlet(
 # ---------------------------------------------------------------------------
 
 
+def _freeze_receipt_value(value: object) -> object:
+    """Deep-copy and freeze one receipt output value (fail-closed for the rest)."""
+    if isinstance(value, bool):
+        raise TypeError("receipt output values must not be booleans")
+    if isinstance(value, Mapping):
+        return MappingProxyType({str(k): _freeze_receipt_value(v) for k, v in value.items()})
+    if isinstance(value, (list, tuple)):
+        return tuple(_freeze_receipt_value(v) for v in value)
+    if isinstance(value, str):
+        return value
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise ValueError("receipt output floats must be finite")
+        return value
+    raise TypeError(
+        f"receipt output values must be JSON-scalars or JSON-containers; got {type(value).__name__}"
+    )
+
+
+def _unfreeze_receipt_value(value: object) -> object:
+    if isinstance(value, Mapping):
+        return {str(k): _unfreeze_receipt_value(v) for k, v in value.items()}
+    if isinstance(value, tuple):
+        return [_unfreeze_receipt_value(v) for v in value]
+    return value
+
+
+def _validate_executed_at(text: object) -> str:
+    """Validate the ISO-8601 timestamp, returning the normalized string."""
+    if not isinstance(text, str):
+        raise TypeError("executed_at must be a string")
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError as exc:
+        raise ValueError(f"executed_at must be an ISO-8601 timestamp, got {text!r}") from exc
+    if parsed.tzinfo is None:
+        raise ValueError("executed_at must be timezone-aware (e.g. '2026-11-22T00:00:00Z')")
+    return parsed.isoformat()
+
+
 @dataclass(frozen=True, slots=True)
 class ScientificPipelineReceipt:
-    """SHA-256-bound scientific receipt of the unified pipeline."""
+    """SHA-256-bound scientific receipt of the unified pipeline.
+
+    The receipt is **deep-frozen**: ``outputs`` is defensively copied at
+    construction time and stored as a :class:`MappingProxyType`; mutating it
+    raises :class:`TypeError`, never silently reverting to a live dict.
+
+    ``executed_at`` defaults to the real wall-clock time at pipeline
+    execution, UTC ISO-8601.  An explicit ``executed_at`` may be supplied as an
+    optional override; it is validated to be a timezone-aware ISO-8601 string
+    and raises :class:`ValueError` otherwise.
+    """
 
     schema_version: str
     pipeline: str
     inputs_digest: str
-    outputs: dict[str, float]
+    outputs: Mapping[str, float]
     modules_digest: str
     receipt_digest: str
-    executed_at: str
+    executed_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
+    def __post_init__(self) -> None:
+        executed_at = _validate_executed_at(self.executed_at)
+        frozen: dict[str, object] = {}
+        for key, value in self.outputs.items():
+            if isinstance(value, bool):
+                raise TypeError(f"receipt output value {key!r} must not be a boolean")
+            frozen[str(key)] = _freeze_receipt_value(value)
+        object.__setattr__(self, "executed_at", executed_at)
+        object.__setattr__(self, "outputs", MappingProxyType(frozen))
 
     def as_dict(self) -> dict[str, object]:
         return {
             "schema_version": self.schema_version,
             "pipeline": self.pipeline,
             "inputs_digest": self.inputs_digest,
-            "outputs": dict(self.outputs),
+            "outputs": {str(k): _unfreeze_receipt_value(v) for k, v in self.outputs.items()},
             "modules_digest": self.modules_digest,
             "receipt_digest": self.receipt_digest,
             "executed_at": self.executed_at,
@@ -308,6 +434,29 @@ class UnifiedCinemaScienceInputs:
     dt: float = 0.05
 
     def __post_init__(self) -> None:
+        """Fail-closed validation of every field (finiteness + physical domain)."""
+        for name in (
+            "temperature_k",
+            "exposure_intensity",
+            "exposure_time_s",
+            "reciprocity_p",
+            "lambda_peak_m",
+            "blackbody_temperature_k",
+            "film_index",
+            "film_thickness_m",
+            "hg_asymmetry",
+            "rayleigh_damping",
+            "dt",
+        ):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise TypeError(f"{name} must be a real number")
+            if not math.isfinite(value):
+                raise ValueError(f"{name} must be finite")
+        self._validate_means("transport_mean", self.transport_mean)
+        self._validate_means("transport_target_mean", self.transport_target_mean)
+        if isinstance(self.n_steps, bool) or not isinstance(self.n_steps, int):
+            raise TypeError("n_steps must be an integer")
         if self.temperature_k <= 0.0:
             raise ValueError("temperature_k must be positive")
         if self.exposure_intensity <= 0.0:
@@ -326,14 +475,23 @@ class UnifiedCinemaScienceInputs:
             raise ValueError("film_thickness_m must be non-negative")
         if not (-1.0 < self.hg_asymmetry < 1.0):
             raise ValueError("hg_asymmetry must lie in (-1, 1)")
-        if len(self.transport_mean) != 2 or len(self.transport_target_mean) != 2:
-            raise ValueError("transport means must have 2 entries")
         if self.rayleigh_damping < 0.0:
             raise ValueError("rayleigh_damping must be non-negative")
         if self.n_steps < 0:
             raise ValueError("n_steps must be non-negative")
         if self.dt <= 0.0:
             raise ValueError("dt must be positive")
+
+    def _validate_means(self, name: str, mean: object) -> None:
+        if not isinstance(mean, (list, tuple)):
+            raise TypeError(f"{name} must be a 2-element sequence (list or tuple)")
+        if len(mean) != 2:
+            raise ValueError(f"{name} must have 2 entries")
+        for i, entry in enumerate(mean):
+            if isinstance(entry, bool) or not isinstance(entry, (int, float)):
+                raise TypeError(f"{name}[{i}] must be a real number")
+            if not math.isfinite(entry):
+                raise ValueError(f"{name}[{i}] must be finite")
 
 
 def _digest_json(payload: object) -> str:
@@ -382,11 +540,21 @@ class UnifiedCinemaSciencePipeline:
         self.spec = spec or HamiltonianSpec()
 
     def module_digests(self) -> dict[str, str]:
-        """Digests binding each science module's contract to this pipeline."""
-        return {
-            name: _digest_json({"module": name, "rev": code})
-            for name, code in self.MODULE_CODES.items()
-        }
+        """Digests binding each science module's on-disk source bytes to this pipeline.
+
+        The digest is the SHA-256 of the literal source bytes of the
+        ``<module>.py`` file in this package, folded with the conventional
+        version id from :attr:`MODULE_CODES`.  A silent edit to any science
+        module therefore changes its digest (and the receipt), while the
+        shipped version id still binds the contract revision.
+        """
+        digests: dict[str, str] = {}
+        base = Path(__file__).resolve().parent
+        for name, code in self.MODULE_CODES.items():
+            source_path = base / f"{name}.py"
+            source_bytes = source_path.read_bytes()
+            digests[name] = hashlib.sha256(f"{name}:{code}\n".encode() + source_bytes).hexdigest()
+        return digests
 
     def execute(
         self, inputs: UnifiedCinemaScienceInputs | None = None
@@ -459,7 +627,6 @@ class UnifiedCinemaSciencePipeline:
             outputs=outputs,
             modules_digest=modules_digest,
             receipt_digest=receipt_digest,
-            executed_at="2026-11-22T00:00:00Z",
         )
 
 
@@ -495,7 +662,7 @@ def analytic_jacobian_of_step(
     eye = np.eye(d)
 
     def hessian(x: NDArray[np.float64]) -> NDArray[np.float64]:
-        return stiff + alpha * (4.0 * float(x @ x) * eye + 2.0 * np.outer(x, x))
+        return stiff + alpha * (1.0 * float(x @ x) * eye + 2.0 * np.outer(x, x))
 
     damp_half = math.exp(-rayleigh_damping * dt / (2.0 * mass))
 
@@ -534,6 +701,7 @@ __all__ = [
     "HamiltonianSpec",
     "hamiltonian",
     "gradient_potential",
+    "local_effective_omega",
     "stormer_verlet_step",
     "jacobian_of_step",
     "analytic_jacobian_of_step",

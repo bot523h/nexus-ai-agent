@@ -19,7 +19,6 @@ from time import perf_counter
 from typing import Any
 
 import numpy as np
-import scipy
 
 from nexus_ai_agent.creative.character import (
     CharacterCapsule,
@@ -133,7 +132,6 @@ def main() -> None:
             {
                 "python": platform.python_version(),
                 "numpy": np.__version__,
-                "scipy": scipy.__version__,
                 "platform": platform.platform(),
                 "batches": BATCHES,
                 "unit": "ms/batch",
