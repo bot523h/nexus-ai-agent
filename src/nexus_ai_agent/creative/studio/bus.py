@@ -78,9 +78,17 @@ from nexus_ai_agent.creative.studio.capabilities import (
     OperationSpec,
     build_wave1_registry,
 )
+from nexus_ai_agent.creative.studio.durable_dedupe import (
+    ApprovalBinding,
+    ApprovalBindingError,
+    ApprovalVerifier,
+    PlanApprovalRequirement,
+    verify_approval_binding,
+)
 from nexus_ai_agent.creative.studio.lifecycle import check_required_packs
 from nexus_ai_agent.creative.studio.models import (
     PROTOCOL_VERSION,
+    ActorIdentity,
     AuthorizationError,
     CapabilityError,
     CommandExecutionError,
@@ -1009,6 +1017,143 @@ class CommandBus:
             if self._executing:
                 raise CommandExecutionError("nested plan dispatch during execution is forbidden")
             return self._dispatch_plan_locked(plan)
+
+    def durable_approval_requirements(
+        self, plan: PlanTransaction, *, policy_version: str, authenticated_actor: ActorIdentity
+    ) -> tuple[PlanApprovalRequirement, ...]:
+        """Derive approval scopes without reserving or executing the plan.
+
+        ``policy_version`` and ``authenticated_actor`` must come from trusted
+        composition or authenticated request context, not the plan's claims.
+        Only registry-backed commands with independently authorized actors are
+        eligible; legacy arbitrary execute closures are refused here. Calling
+        this method grants no execution authority and consumes no nonce.
+        """
+        if not isinstance(plan, PlanTransaction):
+            raise CommandValidationError("approval preflight requires a PlanTransaction")
+        validate_plan_identity(policy_version, name="policy_version")
+        if not isinstance(authenticated_actor, ActorIdentity):
+            raise AuthorizationError("authenticated actor context is required")
+        try:
+            authenticated_actor = ActorIdentity.model_validate(
+                authenticated_actor.model_dump(mode="json")
+            )
+        except ValidationError as exc:
+            raise AuthorizationError("authenticated actor context is invalid") from exc
+        with self._lock:
+            if self._executing or plan.state is not PlanTransactionState.PENDING:
+                raise PlanTransactionError("plan is not available for approval preflight")
+            if self._authorizer is None:
+                raise AuthorizationError("durable approval requires a trusted project authorizer")
+            if not 1 <= len(plan.steps) <= 128:
+                raise PlanTransactionError("durable plan must contain 1 to 128 steps")
+            plan._preflight(self)
+            descriptions: list[tuple[str, str, str, str]] = []
+            step_hashes: list[str] = []
+            for index, step in enumerate(plan.steps):
+                if step.command is None:
+                    raise PlanTransactionError(
+                        "durable approval refuses arbitrary execute callbacks"
+                    )
+                command = _parse(step.command)
+                if command.actor is None:
+                    raise AuthorizationError("durable approval requires an authenticated actor")
+                if command.actor != authenticated_actor:
+                    raise AuthorizationError("command actor differs from authenticated actor")
+                spec, validated, project_id = self._validate_dispatch(command)
+                self._resolver.validate_input_refs(command.input_refs, self._project)
+                input_data = validated.model_dump(mode="json")
+                for field_name in spec.reference_fields:
+                    raw_value: Any = getattr(validated, field_name)
+                    if raw_value is not None:
+                        if isinstance(raw_value, Playhead):
+                            pinned = raw_value.model_copy(update={"captured_at_command": True})
+                        else:
+                            pinned = self._resolver.resolve(raw_value, self._project)
+                        input_data[field_name] = pinned.model_dump(mode="json")
+                normalized = json.dumps(
+                    input_data,
+                    sort_keys=True,
+                    ensure_ascii=True,
+                    separators=(",", ":"),
+                    allow_nan=False,
+                )
+                params_hash = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+                capability_version = self._registry.describe(command.operation).version
+                descriptions.append(
+                    (project_id, command.actor.actor_id, capability_version, params_hash)
+                )
+                step_hashes.append(plan._step_input_hash(index, step))
+            if not plan._replay_safe:
+                raise PlanTransactionError("durable approval refuses opaque callback state")
+            plan_hash = _canonical_hash(
+                {
+                    "project_id": self._project.project_id,
+                    "plan_id": plan.plan_id,
+                    "state_revision": self._project.state_revision,
+                    "state_hash": self._project.state_hash,
+                    "policy_version": policy_version,
+                    "step_hashes": step_hashes,
+                    "scopes": descriptions,
+                }
+            )
+            return tuple(
+                PlanApprovalRequirement(
+                    project_id,
+                    plan.plan_id,
+                    plan_hash,
+                    actor_id,
+                    f"step-{index}",
+                    capability_version,
+                    params_hash,
+                    policy_version,
+                )
+                for index, (project_id, actor_id, capability_version, params_hash) in enumerate(
+                    descriptions
+                )
+            )
+
+    def verify_durable_approvals(
+        self,
+        plan: PlanTransaction,
+        bindings: tuple[ApprovalBinding, ...],
+        *,
+        policy_version: str,
+        authenticated_actor: ActorIdentity,
+        now: float,
+        verifier: ApprovalVerifier,
+    ) -> tuple[PlanApprovalRequirement, ...]:
+        """Revalidate every approval against current bus authority without execution.
+
+        This is preflight only: it does not consume nonces or authorize effects.
+        The future durable execution path must atomically consume all nonces and
+        recheck each binding at step boundaries before performing any effect.
+        """
+        with self._lock:
+            requirements = self.durable_approval_requirements(
+                plan, policy_version=policy_version, authenticated_actor=authenticated_actor
+            )
+            if not isinstance(bindings, tuple) or len(bindings) != len(requirements):
+                raise ApprovalBindingError("one approval binding is required per step")
+            if any(not isinstance(binding, ApprovalBinding) for binding in bindings):
+                raise ApprovalBindingError("invalid approval binding")
+            if len({binding.nonce for binding in bindings}) != len(bindings):
+                raise ApprovalBindingError("approval nonces must be unique")
+            for binding, expected in zip(bindings, requirements, strict=True):
+                verify_approval_binding(
+                    binding,
+                    project_id=expected.project_id,
+                    plan_id=expected.plan_id,
+                    plan_hash=expected.plan_hash,
+                    actor_id=expected.actor_id,
+                    step_id=expected.step_id,
+                    capability_version=expected.capability_version,
+                    normalized_params_hash=expected.normalized_params_hash,
+                    policy_version=expected.policy_version,
+                    now=now,
+                    verifier=verifier,
+                )
+            return requirements
 
     def _dispatch_plan_locked(self, plan: PlanTransaction) -> PlanTransaction | PlanResultSummary:
         """Transactional plan execution (see :meth:`dispatch_plan`)."""

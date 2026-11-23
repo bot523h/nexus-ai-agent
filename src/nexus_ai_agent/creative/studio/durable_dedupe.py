@@ -125,6 +125,20 @@ class ApprovalBinding:
             raise ValueError("approval expiry must follow issuance")
 
 
+@dataclass(frozen=True)
+class PlanApprovalRequirement:
+    """Trusted bus-derived approval scope; this is not itself an approval."""
+
+    project_id: str
+    plan_id: str
+    plan_hash: str
+    actor_id: str
+    step_id: str
+    capability_version: str
+    normalized_params_hash: str
+    policy_version: str
+
+
 class ApprovalVerifier(Protocol):
     """Trusted application verifier: authenticate the actor and approval claims."""
 
