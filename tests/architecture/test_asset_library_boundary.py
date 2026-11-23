@@ -30,10 +30,12 @@ ALLOWED_TOP_LEVEL = {
     "datetime",
     "enum",
     "hashlib",
+    "logging",  # Operational warnings when staging cleanup is deferred.
     "os",
     "pathlib",
     "secrets",
     "stat",
+    "threading",  # Synchronizes the in-process cleanup queue.
     "typing",
     "uuid",
     "weakref",

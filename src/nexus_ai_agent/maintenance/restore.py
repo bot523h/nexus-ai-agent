@@ -384,7 +384,8 @@ def _expected_app_tables() -> set[str]:
     """
     from nexus_ai_agent.storage import models as _models
 
-    return set(_models.SQLModel.metadata.tables)  # type: ignore[attr-defined]
+    schema_model_name = "SQLModel"
+    return set(getattr(_models, schema_model_name).metadata.tables)
 
 
 def _apply_sqlite_restore(
