@@ -377,3 +377,38 @@ def test_cleanup_marker_never_follows_staging_symlink(
     assert restarted.cleanup_orphaned_staging(active_staging_keys=set()) == 0
     assert target.read_bytes() == b"outside"
     assert path.is_symlink()
+
+
+def test_cleanup_marker_repairs_incomplete_prior_marker(tmp_path: Path) -> None:
+    import hashlib
+
+    store = LocalContentAddressedBlobStore(tmp_path)
+    staging, _, _ = store.stage(io.BytesIO(b"payload"), max_bytes=100)
+    marker = tmp_path / "staging" / (".cleanup-" + hashlib.sha256(staging.encode()).hexdigest())
+    marker.write_bytes(b"truncated")
+    store._record_cleanup_marker(staging)
+    assert marker.read_bytes() == staging.encode()
+    restarted = LocalContentAddressedBlobStore(tmp_path)
+    assert restarted.cleanup_orphaned_staging(active_staging_keys={staging}) == 0
+    assert (tmp_path / staging).exists()
+
+
+def test_cleanup_marker_refuses_symlink_target(tmp_path: Path) -> None:
+    import hashlib
+
+    store = LocalContentAddressedBlobStore(tmp_path / "store")
+    staging, _, _ = store.stage(io.BytesIO(b"payload"), max_bytes=100)
+    outside = tmp_path / "outside"
+    outside.write_bytes(b"untouched")
+    marker = (
+        tmp_path
+        / "store"
+        / "staging"
+        / (".cleanup-" + hashlib.sha256(staging.encode()).hexdigest())
+    )
+    marker.symlink_to(outside)
+    from nexus_ai_agent.tools.filesystem_policy import FilesystemBoundaryError
+
+    with pytest.raises(FilesystemBoundaryError):
+        store._record_cleanup_marker(staging)
+    assert outside.read_bytes() == b"untouched"

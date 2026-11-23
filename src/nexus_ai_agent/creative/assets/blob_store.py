@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import io
 import logging
 import os
 import secrets
@@ -157,30 +158,15 @@ class LocalContentAddressedBlobStore:
         return sha256, size, not published
 
     def _record_cleanup_marker(self, staging_key: str) -> None:
-        """Persist a cleanup hint; ingest state remains the recovery authority."""
+        """Atomically persist a cleanup hint; ingest state remains authoritative.
+
+        ``write_stream`` uses a no-follow temporary file, fsyncs its bytes,
+        replaces the marker, and fsyncs the parent directory. A pre-existing
+        corrupt marker is replaced rather than treated as proof of persistence.
+        """
         payload = staging_key.encode("utf-8")
         marker = ".cleanup-" + hashlib.sha256(payload).hexdigest()
-        parent = self._fs._open_dir((_STAGING_PREFIX,))
-        try:
-            try:
-                fd = os.open(
-                    marker,
-                    os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
-                    0o600,
-                    dir_fd=parent,
-                )
-            except FileExistsError:
-                return
-            try:
-                with os.fdopen(fd, "wb", closefd=False) as stream:
-                    stream.write(payload)
-                    stream.flush()
-                    os.fsync(fd)
-            finally:
-                os.close(fd)
-            os.fsync(parent)
-        finally:
-            os.close(parent)
+        self._fs.write_stream(f"{_STAGING_PREFIX}/{marker}", io.BytesIO(payload), max_bytes=4096)
 
     def cleanup_orphaned_staging(
         self, *, active_staging_keys: set[str], max_entries: int = 100

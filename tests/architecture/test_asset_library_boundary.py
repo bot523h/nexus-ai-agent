@@ -30,6 +30,7 @@ ALLOWED_TOP_LEVEL = {
     "datetime",
     "enum",
     "hashlib",
+    "io",  # In-memory marker payload for the safe filesystem writer.
     "logging",  # Operational warnings when staging cleanup is deferred.
     "os",
     "pathlib",
