@@ -346,6 +346,44 @@ def test_unresolved_effect_intent_cannot_be_committed(tmp_path: Path) -> None:
     assert store.compensation_journal("p", HASH)[0].status == "PENDING"
 
 
+def test_failed_old_compensation_cannot_be_hidden_by_a_new_attempt(tmp_path: Path) -> None:
+    """An authorized takeover cannot manufacture a receipt over failed evidence."""
+    import sqlite3
+
+    path = tmp_path / "db"
+    # MOCK: the callback models a trusted repair authority, not real authentication.
+    store = DurablePlanDedupeStore(
+        path, clock=lambda: 10.0, repair_authorizer=lambda _p, _actor, _state, _attempt: True
+    )
+    first = store.reserve_and_start("p", HASH, external_effects=True, nonce="n1")
+    args: dict[str, Any] = {"attempt": first.attempt, "owner_token": first.owner_token}
+    store.record_compensation_intent("p", HASH, step_id="step", effect_key=KEY1, **args)
+    store.mark_compensating("p", HASH, **args)
+    store.record_compensation_step(
+        "p", HASH, step_id="step", effect_key=KEY1, succeeded=False, evidence={}, **args
+    )
+    store.record_compensation("p", HASH, succeeded=False, evidence={}, **args)
+    store.repair_in_doubt(
+        "default",
+        "p",
+        HASH,
+        expected_status="ROLLBACK_FAILED",
+        expected_attempt=first.attempt,
+        operator_id="admin",
+        resolution_action="authorize_takeover",
+        reason="investigated",
+    )
+    second = store.reserve_and_start("p", HASH, external_effects=True, nonce="n2")
+    with pytest.raises(PlanInDoubtQuarantineError, match="unresolved effect intent"):
+        store.finish("p", HASH, attempt=second.attempt, owner_token=second.owner_token, evidence={})
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("SELECT status, evidence_json FROM plans").fetchone() == (
+            "IN_DOUBT",
+            None,
+        )
+    assert store.compensation_journal("p", HASH)[0].status == "FAILED"
+
+
 def test_finish_rechecks_lease_after_reading_the_intent_journal(tmp_path: Path) -> None:
     """Expiry between the fence read and final write cannot publish a receipt."""
     import sqlite3

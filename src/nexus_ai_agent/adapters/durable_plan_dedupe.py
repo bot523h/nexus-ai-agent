@@ -675,7 +675,7 @@ class DurablePlanDedupeStore:
         body = _encode_evidence(evidence)
         unresolved = False
         with self._transaction() as conn:
-            # A pending intent is an unknown external outcome, never a receipt.
+            # A pending or failed journal entry remains unresolved, never a receipt.
             # Check and transition under the same transaction and live fence.
             now = self._now()
             live = conn.execute(
@@ -690,7 +690,7 @@ class DurablePlanDedupeStore:
             unresolved = (
                 conn.execute(
                     "SELECT 1 FROM compensation_journal WHERE project_id=? AND plan_id=? "
-                    "AND plan_hash=? AND status='PENDING' LIMIT 1",
+                    "AND plan_hash=? AND status!='COMPENSATED' LIMIT 1",
                     (project_id, plan_id, plan_hash),
                 ).fetchone()
                 is not None
