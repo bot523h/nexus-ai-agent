@@ -267,7 +267,8 @@ class DurablePlanDedupeStore:
                     conn.close()
                 remaining = deadline - time.monotonic()
                 retryable = any(word in str(exc).lower() for word in ("locked", "busy")) or (
-                    getattr(exc, "sqlite_errorcode", None) == sqlite3.SQLITE_PROTOCOL
+                    getattr(exc, "sqlite_errorcode", None)
+                    == getattr(sqlite3, "SQLITE_PROTOCOL", 15)
                 )
                 if remaining <= 0 or not retryable:
                     raise

@@ -419,6 +419,28 @@ def test_wal_setup_retries_only_busy_errors(
     assert store.path.exists()
 
 
+def test_wal_setup_retries_protocol_error_without_sqlite_constant(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    connect = sqlite3.connect
+    attempts = 0
+
+    def flaky_connect(*args: Any, **kwargs: Any) -> sqlite3.Connection:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            error = sqlite3.OperationalError("protocol error")
+            error.sqlite_errorcode = 15
+            raise error
+        return cast(sqlite3.Connection, connect(*args, **kwargs))
+
+    monkeypatch.delattr(sqlite3, "SQLITE_PROTOCOL", raising=False)
+    monkeypatch.setattr(sqlite3, "connect", flaky_connect)
+    store = DurablePlanDedupeStore(tmp_path / "db")
+    assert attempts == 2
+    assert store.path.exists()
+
+
 @pytest.mark.parametrize("message", ["disk I/O error", "database is busy"])
 def test_wal_setup_fails_closed_on_nonbusy_or_expired_retry(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, message: str
@@ -427,6 +449,7 @@ def test_wal_setup_fails_closed_on_nonbusy_or_expired_retry(
         raise sqlite3.OperationalError(message)
 
     monotonic_values = iter([0.0, 0.0, 3.0 if "busy" in message else 0.0])
+    monkeypatch.delattr(sqlite3, "SQLITE_PROTOCOL", raising=False)
     monkeypatch.setattr(sqlite3, "connect", failed_connect)
     monkeypatch.setattr(
         store_module, "time", SimpleNamespace(monotonic=lambda: next(monotonic_values))
@@ -452,6 +475,7 @@ def test_setup_error_closes_open_connection(
     def create_connection(*args: Any, **kwargs: Any) -> sqlite3.Connection:
         return cast(sqlite3.Connection, connect(*args, **kwargs, factory=FailingConnection))
 
+    monkeypatch.delattr(sqlite3, "SQLITE_PROTOCOL", raising=False)
     monkeypatch.setattr(sqlite3, "connect", create_connection)
     with pytest.raises(sqlite3.OperationalError, match="disk I/O error"):
         DurablePlanDedupeStore(tmp_path / "db")
