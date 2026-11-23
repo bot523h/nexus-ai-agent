@@ -149,8 +149,98 @@ class LocalContentAddressedBlobStore:
         except (OSError, FilesystemBoundaryError):
             with self._cleanup_lock:
                 self._pending_staging_cleanups.add(staging_key)
+            try:
+                self._record_cleanup_marker(staging_key)
+            except (OSError, FilesystemBoundaryError):
+                _LOGGER.warning("blob published; durable cleanup marker could not be recorded")
             _LOGGER.warning("blob published; staging cleanup deferred")
         return sha256, size, not published
+
+    def _record_cleanup_marker(self, staging_key: str) -> None:
+        """Persist a cleanup hint; ingest state remains the recovery authority."""
+        payload = staging_key.encode("utf-8")
+        marker = ".cleanup-" + hashlib.sha256(payload).hexdigest()
+        parent = self._fs._open_dir((_STAGING_PREFIX,))
+        try:
+            try:
+                fd = os.open(
+                    marker,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+                    0o600,
+                    dir_fd=parent,
+                )
+            except FileExistsError:
+                return
+            try:
+                with os.fdopen(fd, "wb", closefd=False) as stream:
+                    stream.write(payload)
+                    stream.flush()
+                    os.fsync(fd)
+            finally:
+                os.close(fd)
+            os.fsync(parent)
+        finally:
+            os.close(parent)
+
+    def cleanup_orphaned_staging(
+        self, *, active_staging_keys: set[str], max_entries: int = 100
+    ) -> int:
+        """Retry marked removals using a caller-supplied, authoritative active set.
+
+        Caller must fence new ingest/recovery work while collecting and using the
+        active set. Unmarked files are never guessed to be orphans. Advisory
+        coordination does not protect against a non-cooperating same-UID writer.
+        """
+        if type(max_entries) is not int or max_entries < 1:
+            raise ValueError("max_entries must be a positive integer")
+        parent = self._fs._open_dir((_STAGING_PREFIX,))
+        removed = 0
+        try:
+            for marker in sorted(os.listdir(parent)):
+                if removed >= max_entries:
+                    break
+                if not marker.startswith(".cleanup-") or len(marker) != 73:
+                    continue
+                try:
+                    fd = os.open(
+                        marker,
+                        os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK,
+                        dir_fd=parent,
+                    )
+                    try:
+                        if not stat.S_ISREG(os.fstat(fd).st_mode):
+                            continue
+                        payload = os.read(fd, 4097)
+                    finally:
+                        os.close(fd)
+                    if len(payload) > 4096 or hashlib.sha256(payload).hexdigest() != marker[9:]:
+                        continue
+                    key = payload.decode("utf-8")
+                    parts = key.split("/")
+                    if (
+                        len(parts) != 2
+                        or parts[0] != _STAGING_PREFIX
+                        or parts[1] in ("", ".", "..")
+                        or key in active_staging_keys
+                    ):
+                        continue
+                    try:
+                        info = os.stat(parts[1], dir_fd=parent, follow_symlinks=False)
+                    except FileNotFoundError:
+                        info = None
+                    if info is not None and not stat.S_ISREG(info.st_mode):
+                        continue
+                    self._fs.unlink(key)
+                    os.unlink(marker, dir_fd=parent)
+                    os.fsync(parent)
+                    with self._cleanup_lock:
+                        self._pending_staging_cleanups.discard(key)
+                    removed += 1
+                except (OSError, FilesystemBoundaryError, UnicodeError):
+                    continue
+            return removed
+        finally:
+            os.close(parent)
 
     def reconcile_staging_cleanups(self) -> tuple[str, ...]:
         """Retry this process's deferred cleanups; return keys still pending.

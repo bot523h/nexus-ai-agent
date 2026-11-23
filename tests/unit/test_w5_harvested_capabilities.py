@@ -333,3 +333,47 @@ def test_publication_flock_across_real_processes(tmp_path: Path) -> None:
     assert store.verify(store.blob_key_for(digest), sha256=digest, size_bytes=size)
     result.close()
     result.join_thread()
+
+
+def test_cleanup_marker_survives_restart_and_protects_active_ingest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = LocalContentAddressedBlobStore(tmp_path)
+    staging, digest, size = store.stage(io.BytesIO(b"payload"), max_bytes=100)
+    key = store.blob_key_for(digest)
+    original_unlink = store._fs.unlink
+
+    def fail_staging(name: str) -> None:
+        if name == staging:
+            raise PermissionError("simulated failure")
+        original_unlink(name)
+
+    monkeypatch.setattr(store._fs, "unlink", fail_staging)
+    assert store.store(staging, key) == (digest, size, False)
+    assert len(list((tmp_path / "staging").glob(".cleanup-*"))) == 1
+    restarted = LocalContentAddressedBlobStore(tmp_path)
+    assert restarted.cleanup_orphaned_staging(active_staging_keys={staging}) == 0
+    assert (tmp_path / staging).exists()
+    assert restarted.cleanup_orphaned_staging(active_staging_keys=set()) == 1
+    assert not (tmp_path / staging).exists()
+    assert not list((tmp_path / "staging").glob(".cleanup-*"))
+    assert restarted.cleanup_orphaned_staging(active_staging_keys=set()) == 0
+    assert restarted.verify(key, sha256=digest, size_bytes=size)
+
+
+def test_cleanup_marker_never_follows_staging_symlink(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = LocalContentAddressedBlobStore(tmp_path / "root")
+    staging, digest, _ = store.stage(io.BytesIO(b"payload"), max_bytes=100)
+    monkeypatch.setattr(store._fs, "unlink", lambda _key: (_ for _ in ()).throw(PermissionError()))
+    store.store(staging, store.blob_key_for(digest))
+    target = tmp_path / "outside"
+    target.write_bytes(b"outside")
+    path = tmp_path / "root" / staging
+    path.unlink()
+    path.symlink_to(target)
+    restarted = LocalContentAddressedBlobStore(tmp_path / "root")
+    assert restarted.cleanup_orphaned_staging(active_staging_keys=set()) == 0
+    assert target.read_bytes() == b"outside"
+    assert path.is_symlink()

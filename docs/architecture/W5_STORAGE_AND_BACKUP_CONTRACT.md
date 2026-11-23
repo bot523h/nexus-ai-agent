@@ -56,10 +56,14 @@ Checks of
 source-directory permissions and pre/post inode identity detect some path
 replacements, but a swap-and-restore between checks remains possible. The
 64 MiB absolute read cap is not a bound on total process RSS: encryption and
-verification require multiple in-memory copies. Cleanup retry tracking for
-blob staging is process-local and is lost on restart. Publication from the
-shared ingestion and recovery path uses worker threads; cancellation does not
-stop an already-running worker, so existing recovery remains necessary.
+verification require multiple in-memory copies. A failed staging unlink records a durable cleanup hint when the marker write
+succeeds. An explicit sweeper handles marked files after restart and never
+guesses that unmarked staging is orphaned. Callers must fence concurrent ingest
+and provide an authoritative active-key set; this sweeper is not wired to
+startup reconciliation, and marker-write failure or a crash before recording
+the marker still requires ingest-state recovery. Publication from the shared
+ingestion and recovery path uses worker threads; cancellation does not stop an
+already-running worker, so existing recovery remains necessary.
 
 ## Cryptographic evidence
 
