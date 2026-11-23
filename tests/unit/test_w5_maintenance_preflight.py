@@ -76,3 +76,27 @@ def test_invalid_postgres_or_bucket_rejected_before_backup_effects(
     monkeypatch.setattr(backup, "_dump_postgres", lambda *_: pytest.fail("database was dumped"))
     with pytest.raises(BackupPreflightError):
         backup.create_backup(settings=settings)
+
+
+def test_maintenance_import_and_preflight_without_crypto() -> None:
+    """A fresh process must not need cryptography for structural preflight."""
+    import subprocess
+    import sys
+
+    script = """
+import builtins
+original = builtins.__import__
+def blocked(name, *args, **kwargs):
+    if name == 'cryptography' or name.startswith('cryptography.'):
+        raise ModuleNotFoundError('cryptography deliberately unavailable')
+    return original(name, *args, **kwargs)
+builtins.__import__ = blocked
+from nexus_ai_agent.maintenance import backup, restore
+from nexus_ai_agent.storage.encrypted_backup_drill import verify_production_backup_preflight
+assert verify_production_backup_preflight({}, require_remote_tier=False) == 'REMOTE_UNCONFIGURED'
+assert backup.create_backup and restore.restore_drill
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True, check=False
+    )
+    assert result.returncode == 0, result.stderr

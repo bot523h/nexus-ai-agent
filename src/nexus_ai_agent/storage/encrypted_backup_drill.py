@@ -25,9 +25,6 @@ from pathlib import Path
 from types import MappingProxyType
 from urllib.parse import parse_qs, urlsplit
 
-from cryptography.exceptions import InvalidTag
-from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-
 from nexus_ai_agent.config.settings import Settings
 
 _B2 = (
@@ -389,6 +386,9 @@ def verify_encrypted_sqlite_backup(
     max_database_bytes: int = 64 * 1024 * 1024,
 ) -> bytes:
     """Authenticate an artifact before returning any plaintext; never restore on failure."""
+    from cryptography.exceptions import InvalidTag
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
     _validate_size_limit(max_database_bytes)
     aes_key = _key(key)
     try:
@@ -461,6 +461,8 @@ def run_encrypted_sqlite_backup_restore_drill(
     The source directory and work directory must be controlled by the caller:
     Python's SQLite API opens paths independently of our no-follow descriptor.
     """
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
     _validate_size_limit(max_database_bytes)
     aes_key = _key(encryption_key)
     if (
