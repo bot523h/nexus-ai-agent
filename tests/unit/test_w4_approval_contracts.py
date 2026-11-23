@@ -139,3 +139,54 @@ def test_approval_binding_requires_trusted_verifier_and_current_matching_claims(
     for result in (False, 1, None):
         with pytest.raises(ApprovalBindingError, match="authority"):
             verify_approval_binding(binding, **{**args, "verifier": Verifier(result)})  # type: ignore[arg-type]
+
+
+def test_effect_key_is_versioned_canonical_and_scope_bound() -> None:
+    from nexus_ai_agent.creative.studio.plan_identifiers import derive_effect_key
+
+    args = {
+        "project_id": "پروژه",
+        "plan_id": "plan",
+        "node_id": "node",
+        "idempotency_key": "idempotency",
+        "fingerprint": "a" * 64,
+    }
+    key = derive_effect_key(**args)
+    assert key == "b272453d484e2ae7a386719ad2131a350e812472fe1d800279e4b35cc847e434"
+    for name in ("project_id", "plan_id", "node_id", "idempotency_key"):
+        assert derive_effect_key(**{**args, name: "other"}) != key
+    assert derive_effect_key(**{**args, "fingerprint": "b" * 64}) != key
+    # Concatenation boundaries cannot collide.
+    assert derive_effect_key(**{**args, "plan_id": "ab", "node_id": "c"}) != derive_effect_key(
+        **{**args, "plan_id": "a", "node_id": "bc"}
+    )
+
+
+@pytest.mark.parametrize("name", ["project_id", "plan_id", "node_id", "idempotency_key"])
+@pytest.mark.parametrize("invalid", ["", "  ", "é" * 129, "\ud800", None])
+def test_effect_key_refuses_invalid_identities(name: str, invalid: object) -> None:
+    from nexus_ai_agent.creative.studio.plan_identifiers import derive_effect_key
+
+    args = {
+        "project_id": "project",
+        "plan_id": "plan",
+        "node_id": "node",
+        "idempotency_key": "key",
+        "fingerprint": "a" * 64,
+    }
+    with pytest.raises(ValueError):
+        derive_effect_key(**{**args, name: invalid})  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("invalid", [None, "A" * 64, "g" * 64, "a" * 63, "a" * 65, "a" * 64 + "\n"])
+def test_effect_key_refuses_invalid_fingerprints(invalid: object) -> None:
+    from nexus_ai_agent.creative.studio.plan_identifiers import derive_effect_key
+
+    with pytest.raises(ValueError, match="fingerprint"):
+        derive_effect_key(
+            project_id="project",
+            plan_id="plan",
+            node_id="node",
+            idempotency_key="key",
+            fingerprint=invalid,  # type: ignore[arg-type]
+        )
