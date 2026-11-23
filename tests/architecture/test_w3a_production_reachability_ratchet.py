@@ -14,6 +14,8 @@ import importlib.util
 import numbers
 from pathlib import Path
 
+import pytest
+
 SRC_ROOT = Path(__file__).resolve().parents[2] / "src" / "nexus_ai_agent"
 PRODUCTION_ROOTS = (
     "nexus_ai_agent.api.app",
@@ -267,6 +269,65 @@ def test_worker_ast_registers_storyboard_render_job() -> None:
     assert handlers.get("storyboard_render") is storyboard_render_job, (
         'default_job_handlers() must map "storyboard_render" to the live storyboard handler'
     )
+
+
+def test_storyboard_registration_ratchet_kills_missing_mapping_mutant() -> None:
+    """Deleting the worker mapping makes the same registration invariant fail."""
+    import sys
+    from types import ModuleType
+    from typing import Any
+    from unittest.mock import patch
+
+    worker_path = SRC_ROOT / "worker.py"
+    mutated = ast.parse(worker_path.read_text(encoding="utf-8"), filename=str(worker_path))
+    function = next(
+        node
+        for node in mutated.body
+        if isinstance(node, ast.FunctionDef) and node.name == "default_job_handlers"
+    )
+    returned = next(
+        node.value
+        for node in ast.walk(function)
+        if isinstance(node, ast.Return) and isinstance(node.value, ast.Dict)
+    )
+    retained = [
+        (key, value)
+        for key, value in zip(returned.keys, returned.values, strict=True)
+        if not (isinstance(key, ast.Constant) and key.value == "storyboard_render")
+    ]
+    assert len(retained) + 1 == len(returned.keys), "mutation must remove exactly one mapping"
+    returned.keys = [key for key, _value in retained]
+    returned.values = [value for _key, value in retained]
+    ast.fix_missing_locations(mutated)
+
+    namespace: dict[str, Any] = {"__name__": "nexus_ai_agent.worker_mutant"}
+    exec(compile(mutated, str(worker_path), "exec"), namespace)
+    render_stub = ModuleType("nexus_ai_agent.creative.render_jobs")
+    render_stub.__dict__["creative_render_job"] = object()
+    slideshow_stub = ModuleType("nexus_ai_agent.creative.slideshow.worker_adapter")
+    slideshow_stub.__dict__["slideshow_render_job"] = object()
+    storyboard_stub = ModuleType("nexus_ai_agent.creative.storyboard_jobs")
+    storyboard_stub.__dict__["storyboard_render_job"] = object()
+    with patch.dict(
+        sys.modules,
+        {
+            "nexus_ai_agent.creative.render_jobs": render_stub,
+            "nexus_ai_agent.creative.slideshow.worker_adapter": slideshow_stub,
+            "nexus_ai_agent.creative.storyboard_jobs": storyboard_stub,
+        },
+    ):
+        mutant_handlers = namespace["default_job_handlers"]()
+
+    assert isinstance(mutant_handlers, dict)
+    assert "storyboard_render" not in mutant_handlers, (
+        "the mutation should reproduce the missing production registration"
+    )
+    # This is exactly the assertion used by the production reachability test:
+    # with the mapping deleted it must reject the mutant.
+    with pytest.raises(AssertionError, match="must map"):
+        assert mutant_handlers.get("storyboard_render") is storyboard_stub.storyboard_render_job, (
+            'default_job_handlers() must map "storyboard_render" to the live storyboard handler'
+        )
 
 
 def test_runtime_import_visitor_prunes_unreachable_import_mutant() -> None:

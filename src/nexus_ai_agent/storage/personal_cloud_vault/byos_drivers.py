@@ -1,22 +1,13 @@
-"""Zero-dependency BYOS (Bring Your Own Storage) vault drivers.
+"""Zero-dependency BYOS drivers and their shared storage protocol.
 
-Provides the :class:`BYOSStorageDriver` protocol and three stdlib-only drivers:
-
-1. :class:`LocalDeviceVaultDriver` — atomic (``.tmp`` + ``fsync`` + ``os.replace``)
-   storage on a local folder or external drive with strict ``max_quota_bytes``
-   enforcement.
-2. :class:`S3CompatibleSigV4Driver` — pure-stdlib AWS Signature Version 4
-   (``AWS4-HMAC-SHA256``) client compatible with Cloudflare R2, AWS S3, and MinIO,
-   supporting injectable ``http_transport`` for deterministic offline testing.
-3. :class:`PortableBundleVaultDriver` — single-file ``.nagarvault`` binary archive
-   with binary index table, per-entry CRC32 + SHA-256, and full-archive SHA-256
-   verification for air-gapped / offline cross-device transfer.
+Backends are atomic local storage, SigV4-compatible S3 (R2/MinIO included), and a
+verified single-file ``.nagarvault`` bundle for offline transfer. Each supports
+quota controls and fail-closed lease ownership; S3 transport is injectable for tests.
 """
 
 from __future__ import annotations
 
 import contextlib
-import email.utils
 import hashlib
 import hmac
 import json
@@ -28,12 +19,9 @@ import stat
 import struct
 import threading
 import time
-import urllib.error
 import urllib.parse
-import urllib.request
 import uuid
 import xml.etree.ElementTree as ET
-import zlib
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -56,6 +44,8 @@ from nexus_ai_agent.storage.personal_cloud_vault.errors import (
 
 class VaultDriverError(VaultTransportError):
     """Typed fail-closed driver error for missing or unverifiable lease authority."""
+
+    __slots__ = ()
 
 
 def _load_fcntl() -> Any:
@@ -480,6 +470,8 @@ def _parse_http_or_iso_timestamp(raw_ts: str) -> float | None:
             dt_iso = dt_iso.replace(tzinfo=timezone.utc)
         return dt_iso.timestamp()
     with contextlib.suppress(TypeError, ValueError):
+        import email.utils
+
         dt_http = email.utils.parsedate_to_datetime(cleaned)
         if dt_http.tzinfo is None:
             dt_http = dt_http.replace(tzinfo=timezone.utc)
@@ -876,6 +868,8 @@ _BUNDLE_VERIFY_BLOCK_BYTES = 64 * 1024
 class _StreamingBinaryReader(Protocol):
     """Seekable binary reader with ``readinto`` (what the streaming verifier needs)."""
 
+    __slots__ = ()
+
     def read(self, size: int = -1, /) -> bytes: ...
 
     def readinto(self, buffer: Any, /) -> int: ...
@@ -949,6 +943,8 @@ def _atomic_write_stream(
 @runtime_checkable
 class BYOSStorageDriver(Protocol):
     """Protocol implemented by all user-owned Personal Cloud & Local Vault backends."""
+
+    __slots__ = ()
 
     def put_chunk(self, chunk_id: str, data: bytes | bytearray | memoryview) -> None:
         """Persist an encrypted chunk envelope under ``chunk_id``."""
@@ -1035,6 +1031,17 @@ class VaultStagingJournal:
 
 class LocalDeviceVaultDriver:
     """Atomic local-folder / external-drive BYOS vault driver with quota enforcement."""
+
+    __slots__ = (
+        "_root_dir",
+        "_chunks_dir",
+        "_manifests_dir",
+        "_leases_dir",
+        "_staging_dir",
+        "_max_quota_bytes",
+        "_owned_lease_etags",
+        "_owned_lease_tokens",
+    )
 
     def __init__(
         self,
@@ -1360,7 +1367,7 @@ class LocalDeviceVaultDriver:
         project_id: str,
         lease_id: str,
         lease_token: str,
-        expected_etag: str,
+        expected_etag: str | None = None,
     ) -> str:
         """Prove the secret token against an active lease verifier before restoring ownership."""
         valid_id = _validate_snapshot_id(lease_id)
@@ -1718,6 +1725,9 @@ def compute_sigv4_signature(
 
 def _default_urllib_transport(request: S3HttpRequest, *, timeout: float) -> S3HttpResponse:
     """Execute ``request`` using Python's stdlib :mod:`urllib.request`."""
+    import urllib.error
+    import urllib.request
+
     parsed = urllib.parse.urlsplit(request.url)
     if parsed.scheme not in ("http", "https"):
         raise VaultTransportError(f"Disallowed URL scheme: {parsed.scheme!r}")
@@ -1815,6 +1825,22 @@ def _parse_s3_list_xml(xml_bytes: bytes) -> tuple[list[str], str | None]:
 
 class S3CompatibleSigV4Driver:
     """Direct user-bucket BYOS driver (Cloudflare R2 / AWS S3 / MinIO) via SigV4."""
+
+    __slots__ = (
+        "_config",
+        "_transport",
+        "_clock",
+        "_clean_prefix",
+        "_chunk_mtimes",
+        "_owned_lease_etags",
+        "_owned_lease_tokens",
+        "_coord_lock",
+        "_fence_race_probe",
+        "_post_final_check_race_probe",
+        "_pre_lease_put_race_probe",
+        "_clock_skew_margin",
+        "__dict__",  # preserve the instance-level test seams and subclass compatibility
+    )
 
     def __init__(
         self,
@@ -2654,7 +2680,7 @@ class S3CompatibleSigV4Driver:
         project_id: str,
         lease_id: str,
         lease_token: str,
-        expected_etag: str,
+        expected_etag: str | None = None,
     ) -> str:
         """Recover only an active remote lease whose one-way owner verifier matches."""
         valid_id = _validate_snapshot_id(lease_id)
@@ -3356,29 +3382,27 @@ _STAGING_ENTRY_KEY_RE = re.compile(r"^staging/stage-[0-9a-f]{32}\.json$")
 
 
 class PortableBundleVaultDriver:
-    """Single-file ``.nagarvault`` binary archive driver with integrity verification.
+    """Integrity-verified single-file ``.nagarvault`` backend.
 
-    Memory characteristics (this backend is *storage*, not a pass-through):
-
-    * **Write** — the archive is serialized region by region and handed to
-      ``_atomic_write_stream`` (:meth:`_ArchiveLayout.iter_segments`), so persisting a
-      bundle never holds the archive in RAM. Only the index (one record per entry) is
-      materialised.
-    * **Load/verify** — :meth:`_load_and_verify` opens the file, checks the header, and
-      streams the remainder through a fixed 64 KiB scratch buffer to recompute the
-      archive-level SHA-256. It then reads the index and ``seek``-es to each blob
-      individually, so it never holds the whole file (plus a slice copy of every chunk)
-      at once.
-    * **Retained** — because the archive is self-contained, the driver necessarily
-      keeps every stored chunk in ``self._chunks``::
-
-          M_backend(N) = O(sum(S_chunk))
-
-      i.e. the *backend* cost equals the vault size. That is inherent to a portable
-      single-file vault and is exactly why the push path's payload bound
-      (``O(S_chunk)``, see :mod:`sync_journal_manager`) is described separately from
-      this backend term.
+    Writes stream archive segments; loads hash through a fixed 64 KiB buffer, parse
+    the compact index, and read one blob at a time. Because the bundle is self-contained,
+    retained storage is necessarily ``O(sum(S_chunk))``; this backend cost is separate
+    from the manager's ``O(S_chunk)`` transient push-payload bound.
     """
+
+    __slots__ = (
+        "_bundle_path",
+        "_max_quota_bytes",
+        "_chunks",
+        "_manifests",
+        "_leases",
+        "_staging_journals",
+        "_chunk_mtimes",
+        "_owned_lease_etags",
+        "_owned_lease_tokens",
+        "_lock_path",
+        "_owner_path",
+    )
 
     def __init__(
         self,
@@ -3527,6 +3551,8 @@ class PortableBundleVaultDriver:
 
     def _verify_and_load_from_handle(self, handle: _StreamingBinaryReader) -> None:
         """Streaming body of :meth:`_load_and_verify` over an already-open ``rb`` handle."""
+        import zlib
+
         file_size = os.fstat(handle.fileno()).st_size
         header = _read_exact(handle, _BUNDLE_HEADER_TOTAL, what="bundle header")
         header_prefix = header[: _BUNDLE_HEADER_PREFIX.size]
@@ -3654,6 +3680,8 @@ class PortableBundleVaultDriver:
         staging: Mapping[str, bytes] | None = None,
     ) -> _ArchiveLayout:
         """Compute the binary index and header without concatenating the payload."""
+        import zlib
+
         ordered_entries: list[tuple[int, str, bytes]] = []
         for chunk_id in sorted(chunks):
             ordered_entries.append((_ENTRY_CHUNK, chunk_id, chunks[chunk_id]))
@@ -4043,7 +4071,7 @@ class PortableBundleVaultDriver:
         project_id: str,
         lease_id: str,
         lease_token: str,
-        expected_etag: str,
+        expected_etag: str | None = None,
     ) -> str:
         """Recover only an active bundle lease whose one-way verifier proves the token."""
         valid_id = _validate_snapshot_id(lease_id)

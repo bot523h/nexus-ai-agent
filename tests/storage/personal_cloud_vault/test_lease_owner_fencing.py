@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import inspect
 import json
 import os
 import types
@@ -21,6 +22,21 @@ from nexus_ai_agent.storage.personal_cloud_vault.errors import (
     VaultRevisionConflictError,
     VaultTransportError,
 )
+
+
+@pytest.mark.parametrize(
+    "driver_type",
+    [
+        byos_drivers.LocalDeviceVaultDriver,
+        byos_drivers.S3CompatibleSigV4Driver,
+        byos_drivers.PortableBundleVaultDriver,
+    ],
+)
+def test_recover_owned_lease_keeps_optional_etag_call_signature(driver_type: type[Any]) -> None:
+    """Omitting the ETag remains callable, but the default is explicitly fail-closed."""
+    parameter = inspect.signature(driver_type.recover_owned_lease).parameters["expected_etag"]
+    assert parameter.default is None
+    assert parameter.annotation == "str | None"
 
 
 @pytest.mark.parametrize("backend", ["local", "bundle"])

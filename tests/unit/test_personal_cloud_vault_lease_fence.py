@@ -1187,6 +1187,48 @@ def test_update_push_lease_aborts_before_put_when_prior_get_fails_or_disagrees_w
     assert [entry for entry in disagreeing.requests if entry[0] == "DELETE"] == []
 
 
+def test_release_refuses_peer_lease_even_when_peer_has_a_real_etag() -> None:
+    """An observed ETag is not authority to release a peer's replacement lease.
+
+    The peer preserves the public lease id and project id but writes a different
+    owner verifier. Its transport returns a real, distinct ETag. The original
+    owner's recorded ETag and verifier must remain the only release authority.
+    """
+    transport = _VersionedBucketTransport()
+    owner = _driver(transport)
+    owner.put_chunk(CHUNK, b"precious-bytes")
+    lease_id = owner.acquire_push_lease(
+        [CHUNK], project_id="project-1", ttl_seconds=600.0, lease_id="peer-etag-1"
+    )
+    lease_key = f"{PREFIX}/leases/{lease_id}.json"
+    owner_etag = owner.export_lease_credential(lease_id)["etag"]
+
+    peer_body = json.dumps(
+        {
+            "lease_id": lease_id,
+            "pid": 41,
+            "project_id": "project-1",
+            "lease_token": "peer-secret-token",
+            "created_at_epoch": time.time(),
+            "expires_at_epoch": time.time() + 900.0,
+            "ttl_seconds": 900.0,
+            "chunk_ids": [CHUNK],
+        }
+    ).encode()
+    transport.write(lease_key, peer_body)
+    peer_etag = transport.etags[lease_key]
+    assert peer_etag and peer_etag != owner_etag
+
+    deletes_before = [request for request in transport.requests if request[0] == "DELETE"]
+    with pytest.raises(VaultRevisionConflictError):
+        owner.release_push_lease(lease_id)
+    deletes_after = [request for request in transport.requests if request[0] == "DELETE"]
+
+    assert deletes_after == deletes_before
+    assert transport.objects[lease_key] == peer_body
+    assert transport.etags[lease_key] == peer_etag
+
+
 def test_release_without_private_owner_proof_cannot_adopt_observed_etag() -> None:
     """No-argument release is same-instance only; observation is not authority.
 
