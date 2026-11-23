@@ -553,3 +553,68 @@ def test_preflight_settings_and_b2_root_endpoint() -> None:
     settings.b2_region = "us-east-005"
     with pytest.raises(BackupPreflightError):
         verify_production_backup_preflight(settings)
+
+
+def test_drill_archive_decrypts_with_independently_constructed_aad(tmp_path: Path) -> None:
+    """Decrypt an actual drill artifact without using its verification helpers."""
+    import json
+
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+    from nexus_ai_agent.storage.encrypted_backup_drill import (
+        run_encrypted_sqlite_backup_restore_drill,
+    )
+
+    source, work = tmp_path / "source.sqlite", tmp_path / "work"
+    work.mkdir()
+    _source(source)
+    raw_key = hashlib.sha256(b"independent drill test key").digest()
+    evidence = run_encrypted_sqlite_backup_restore_drill(source, work, raw_key)
+    manifest_bytes = evidence.manifest_path.read_bytes()
+    manifest = json.loads(manifest_bytes)
+    aad = {
+        name: manifest[name]
+        for name in ("schema_version", "source_sha256", "row_counts", "nonce_hex")
+    }
+    serialized = json.dumps(aad, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode(
+        "ascii"
+    )
+    key = hashlib.sha256(b"nexus-local-drill-aesgcm-v1\x00" + raw_key).digest()
+    plaintext = AESGCM(key).decrypt(
+        bytes.fromhex(manifest["nonce_hex"]),
+        evidence.archive_path.read_bytes() + bytes.fromhex(manifest["auth_tag_hex"]),
+        serialized,
+    )
+    assert plaintext == evidence.restored_path.read_bytes()
+    assert hashlib.sha256(plaintext).hexdigest() == manifest["source_sha256"]
+    assert raw_key not in manifest_bytes
+    assert raw_key.hex().encode() not in manifest_bytes
+
+
+@pytest.mark.parametrize("field", ["nonce_hex", "source_sha256", "row_counts"])
+def test_authentication_rejects_every_mutated_aad_field(tmp_path: Path, field: str) -> None:
+    import json
+
+    from nexus_ai_agent.storage.encrypted_backup_drill import (
+        BackupIntegrityTamperError,
+        run_encrypted_sqlite_backup_restore_drill,
+        verify_encrypted_sqlite_backup,
+    )
+
+    source, work = tmp_path / "source.sqlite", tmp_path / "work"
+    work.mkdir()
+    _source(source)
+    key = hashlib.sha256(b"distinct aad regression test key").digest()
+    evidence = run_encrypted_sqlite_backup_restore_drill(source, work, key)
+    manifest = json.loads(evidence.manifest_path.read_bytes())
+    if field == "nonce_hex":
+        nonce = bytearray.fromhex(manifest[field])
+        nonce[0] ^= 1
+        manifest[field] = nonce.hex()
+    elif field == "source_sha256":
+        manifest[field] = "0" * 64
+    else:
+        manifest[field] = {"forged": 10}
+    evidence.manifest_path.write_text(json.dumps(manifest))
+    with pytest.raises(BackupIntegrityTamperError):
+        verify_encrypted_sqlite_backup(evidence.archive_path, evidence.manifest_path, key)
