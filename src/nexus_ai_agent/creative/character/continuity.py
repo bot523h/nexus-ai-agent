@@ -14,8 +14,10 @@ dimensions with no source):
 * ``IDENTITY_DRIFT`` — measured distance is at or above the drift threshold.
 
 The aggregate verdict is the lowest-precedence state present: ``IDENTITY_DRIFT``
-dominates, then ``REVIEW_REQUIRED``, then ``VERIFIED``, then ``NOT_MEASURED``,
-then ``INSUFFICIENT_EVIDENCE``.
+dominates, then ``REVIEW_REQUIRED``, then ``INSUFFICIENT_EVIDENCE``, then
+``NOT_MEASURED``, then ``VERIFIED``.  ``VERIFIED`` is fail-closed: it is only
+emitted when every measured dimension is ``VERIFIED``; any unmeasured or
+insufficient-evidence dimension outranks it.
 
 A dimension with no measurement is reported as ``NOT_MEASURED``, never scored as zero.
 
@@ -44,13 +46,14 @@ class VerificationState(str, Enum):
     INSUFFICIENT_EVIDENCE = "INSUFFICIENT_EVIDENCE"
 
 
-#: Precedence: first match wins. DRIFT dominates.
+#: Precedence: first match wins. DRIFT dominates; VERIFIED is last so the
+#: aggregate verdict can only be VERIFIED when every dimension is VERIFIED.
 STATE_PRECEDENCE = (
     VerificationState.IDENTITY_DRIFT,
     VerificationState.REVIEW_REQUIRED,
-    VerificationState.VERIFIED,
-    VerificationState.NOT_MEASURED,
     VerificationState.INSUFFICIENT_EVIDENCE,
+    VerificationState.NOT_MEASURED,
+    VerificationState.VERIFIED,
 )
 
 

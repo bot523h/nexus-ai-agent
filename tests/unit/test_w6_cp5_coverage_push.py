@@ -233,6 +233,34 @@ class TestCapsuleValidationBranches:
         with pytest.raises(ValidationError):
             capsule.new_identity_version(face_changes={"nope": 1})
 
+    def test_apply_revision_changes_voice_branch(self):
+        # Voice fields are all IDENTITY-scoped, so the elif voice branch of
+        # apply_revision_changes is unreachable through the stock public API.
+        # Hand-construct the capsule with a non-voice voice slot so the branch
+        # is exercised honestly (the capsule dataclass carries no runtime type
+        # check on its slots).
+        capsule = CharacterCapsule(
+            character_id="NAGAR-CHAR-000001",
+            identity_version=1,
+            revision_no=1,
+            voice=WardrobeModule(era="present"),  # type-mismatched on purpose
+        )
+        updated = capsule.apply_revision_changes("voice", {"era": "2026"})
+        assert updated.voice.era == "2026"
+        assert updated.voice.revision == 2
+
+    def test_identity_version_assembly_guard_fires_on_type_mismatch(self):
+        # The isinstance guard: a hand-constructed capsule whose face slot is
+        # not a FaceModule must be refused at identity-version assembly.
+        capsule = CharacterCapsule(
+            character_id="NAGAR-CHAR-000001",
+            identity_version=1,
+            revision_no=1,
+            face=VoiceModule(),  # type-mismatched on purpose
+        )
+        with pytest.raises(ValidationError, match="identity version assembly failed"):
+            capsule.new_identity_version(face_changes={"f0_hz": 150.0})
+
     def test_next_character_id_never_reuses(self):
         assert next_character_id(["NAGAR-CHAR-000001", "NAGAR-CHAR-000007"]) == "NAGAR-CHAR-000008"
         assert next_character_id(set()) == "NAGAR-CHAR-000001"
