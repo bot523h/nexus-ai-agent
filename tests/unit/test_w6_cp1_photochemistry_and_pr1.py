@@ -18,6 +18,7 @@ from nexus_ai_agent.creative.science.photochemical_emulsion import (
     EmulsionLayer,
     arrhenius_gamma,
     beer_lambert_rgb,
+    canonical_dir_chain,
     dir_film_state,
     dir_reaction_diffusion,
     hurt_driffield_slope_ln,
@@ -418,3 +419,243 @@ class TestEdgeCaseBranches:
         grid2d = np.ones((3, 3))
         final = dir_reaction_diffusion(grid2d, 0.25, 0.0, 3.0)
         assert final.shape == (3, 3)
+
+
+# ---------------------------------------------------------------------------
+# Zero-flux Neumann boundary stencils (1-D + 2-D) + mass conservation
+# ---------------------------------------------------------------------------
+
+
+def _neumann_mass_1d(arr: np.ndarray) -> float:
+    """Trapezoidal 1-D mass estimate (half weights at the Neumann edges)."""
+    return float(0.5 * arr[0] + arr[1:-1].sum() + 0.5 * arr[-1])
+
+
+def _neumann_mass_2d(arr: np.ndarray) -> float:
+    """Tensor-product 2-D trapezoidal mass."""
+    rows, cols = arr.shape
+    w = np.ones(rows)
+    w[0] = 0.5
+    w[-1] = 0.5
+    v = np.ones(cols)
+    v[0] = 0.5
+    v[-1] = 0.5
+    return float((w[:, None] * arr * v[None, :]).sum())
+
+
+class TestNeumannBoundaryStencils:
+    def test_left_edge_is_two_deltas_over_dx_squared(self):
+        grid = np.array([0.5, 2.0, 0.25, 1.5, 0.0])
+        state = dir_film_state(grid, 0.0, 0.0, 3.0)
+        # Neumann left edge: 2 (u_1 - u_0) / dx^2 = 2 * (2.0 - 0.5) = 3.0
+        assert state.laplacian[0] == pytest.approx(3.0)
+        # Neumann right edge: 2 (u_{N-2} - u_{N-1}) = 2 * (1.5 - 0.0) = 3.0
+        assert state.laplacian[-1] == pytest.approx(3.0)
+        # Interior unchanged: u_1 - 2 u_2 + u_3
+        assert state.laplacian[2] == pytest.approx(2.0 - 2.0 * 0.25 + 1.5)
+
+    def test_right_edge_sign_flips_when_decreasing(self):
+        grid = np.array([1.0, 0.2, 0.1])
+        state = dir_film_state(grid, 0.0, 0.0, 3.0)
+        # right edge: 2 (u_{N-2} - u_{N-1}) = 2 * (0.2 - 0.1) = 0.2
+        assert state.laplacian[-1] == pytest.approx(0.2)
+
+    def test_2d_corner_sums_both_axis_contributions(self):
+        grid = np.array([[0.5, 2.0, 0.1], [3.0, 1.5, 0.8], [0.4, 1.0, 0.6]])
+        state = dir_film_state(grid, 0.0, 0.0, 3.0)
+        # Corner (0, 0): x-Neumann row 0 at col 0 = 2(u_01 - u_00) = 2(2.0 - 0.5) = 3.0;
+        # y-Neumann col 0 at row 0 = 2(u_10 - u_00) = 2(3.0 - 0.5) = 5.0; sum = 8.0
+        assert state.laplacian[0, 0] == pytest.approx(3.0 + 5.0)
+        # Corner (0, 2): x-Neumann row 0 at col 2 = 2(u_01 - u_02) = 2(2.0 - 0.1) = 3.8;
+        # y-Neumann col 2 at row 0 = 2(u_12 - u_02) = 2(0.8 - 0.1) = 1.4; sum = 5.2
+        assert state.laplacian[0, 2] == pytest.approx(3.8 + 1.4)
+
+    def test_2d_right_and_bottom_edges(self):
+        grid = np.array([[0.5, 2.0], [3.0, 0.25]])
+        state = dir_film_state(grid, 0.0, 0.0, 3.0)
+        # bottom-left (1, 0): x-edge row 1 at col 0 = 2(u_11 - u_10) = 2(0.25 - 3.0) = -5.5;
+        # y-edge col 0 at row 1 = 2(u_01 - u_11) = 2(0.5 - 3.0) = -5.0; sum = -10.5
+        assert state.laplacian[1, 0] == pytest.approx(-5.5 - 5.0)
+
+
+class TestPureDiffusionMassConservation:
+    def test_1d_trapezoidal_mass_conserved(self):
+        # Pure diffusion (no binding clip), trapezoidal mass is exactly
+        # conserved by the Neumann Neumann stencil (up to roundoff).
+        grid = np.array([0.2, 1.5, 0.7, 2.3, 0.3, 1.1])
+        clip_lo, clip_hi = -1e6, 1e6
+        kappa = 0.2
+        initial_mass = _neumann_mass_1d(grid)
+        arr = grid.copy()
+        for _ in range(50):
+            arr = dir_reaction_diffusion(arr, kappa, clip_lo, clip_hi)
+        assert abs(_neumann_mass_1d(arr) - initial_mass) < 1e-12
+
+    def test_2d_tensor_product_mass_conserved(self):
+        grid = np.array(
+            [
+                [0.2, 1.5, 0.7],
+                [2.3, 0.3, 1.1],
+                [0.9, 0.4, 1.8],
+            ]
+        )
+        clip_lo, clip_hi = -1e6, 1e6
+        kappa = 0.2
+        initial_mass = _neumann_mass_2d(grid)
+        arr = grid.copy()
+        for _ in range(50):
+            arr = dir_reaction_diffusion(arr, kappa, clip_lo, clip_hi)
+        assert abs(_neumann_mass_2d(arr) - initial_mass) < 1e-12
+
+    def test_nonuniform_profile_converges_to_mean(self):
+        rng = np.random.default_rng(20261122)
+        grid = rng.random(16) * 3.0
+        clip_lo, clip_hi = -1e6, 1e6
+        kappa = 0.2
+        initial_mass = _neumann_mass_1d(grid)
+        arr = grid.copy()
+        for _ in range(2000):
+            arr = dir_reaction_diffusion(arr, kappa, clip_lo, clip_hi)
+        # Profile must be nearly flat and mass must stay near the initial value
+        # over steps (Neumann zero-flux).
+        assert np.std(arr) < 1e-3
+        assert abs(_neumann_mass_1d(arr) - initial_mass) < 1e-12
+
+
+class TestDirFilmStateValidation:
+    """dir_film_state must reject the same inputs as dir_reaction_diffusion."""
+
+    def test_negative_kappa_refused(self):
+        with pytest.raises(ValueError, match="non-negative"):
+            dir_film_state(np.ones(3), -0.5, 0.0, 3.0)
+
+    def test_nonfinite_kappa_refused(self):
+        with pytest.raises(ValueError, match="finite"):
+            dir_film_state(np.ones(3), float("nan"), 0.0, 3.0)
+
+    def test_nonfinite_array_refused(self):
+        with pytest.raises(ValueError, match="finite"):
+            dir_film_state(np.array([np.nan, 1.0, 2.0]), 0.1, 0.0, 3.0)
+
+    def test_nonfinite_clip_bounds_refused(self):
+        with pytest.raises(ValueError, match="finite"):
+            dir_film_state(np.ones(3), 0.1, float("-inf"), 3.0)
+        with pytest.raises(ValueError, match="finite"):
+            dir_film_state(np.ones(3), 0.1, 0.0, float("inf"))
+
+    def test_clip_ordering_refused(self):
+        with pytest.raises(ValueError, match="clip_lo < clip_hi"):
+            dir_film_state(np.ones(3), 0.1, 3.0, 0.5)
+
+    def test_cfl_violation_refused(self):
+        # 1-D CFL limit is r <= 0.5; kappa = 0.75 (dx = 1, dt = 1) violates it.
+        with pytest.raises(ValueError, match="CFL"):
+            dir_film_state(np.ones(3), 0.75, 0.0, 3.0)
+        # 2-D CFL limit is r <= 0.25.
+        with pytest.raises(ValueError, match="CFL"):
+            dir_film_state(np.ones((3, 3)), 0.30, 0.0, 3.0)
+
+    def test_bool_kappa_refused(self):
+        with pytest.raises(TypeError):
+            dir_film_state(np.ones(3), True, 0.0, 3.0)
+
+    def test_bool_clip_bounds_refused(self):
+        with pytest.raises(TypeError):
+            dir_film_state(np.ones(3), 0.1, True, 3.0)
+
+
+class TestPhotochemicalBoolRejection:
+    """Entry points must reject booleans (even though bools are ints)."""
+
+    def test_arrhenius_rejects_bools(self):
+        layer = EmulsionLayer("test-layer")
+        with pytest.raises(TypeError):
+            arrhenius_gamma(True, 42000.0, 293.15, 293.15)  # type: ignore[arg-type]
+        with pytest.raises(TypeError):
+            arrhenius_gamma(2.0, 42000.0, 293.15, True)  # type: ignore[arg-type]
+        with pytest.raises(TypeError):
+            arrhenius_gamma(2.0, 42000.0, 293.15, 293.15, r=True)  # type: ignore[arg-type]
+        with pytest.raises(TypeError):
+            layer_gamma(layer, True)  # type: ignore[arg-type]
+
+    def test_hurter_driffield_rejects_bools(self):
+        layer = EmulsionLayer("test-layer")
+        with pytest.raises(TypeError):
+            hurter_driffield_density(layer, True, 293.15)  # type: ignore[arg-type]
+        with pytest.raises(TypeError):
+            hurter_driffield_density(layer, 1.0, True)  # type: ignore[arg-type]
+        with pytest.raises(TypeError):
+            hurt_driffield_slope_log10(layer, True, 293.15)  # type: ignore[arg-type]
+        with pytest.raises(TypeError):
+            hurt_driffield_slope_ln(layer, 1.0, True)  # type: ignore[arg-type]
+
+    def test_schwarzschild_rejects_bools(self):
+        with pytest.raises(TypeError):
+            schwarzschild_reciprocity(True, 100.0)  # type: ignore[arg-type]
+        with pytest.raises(TypeError):
+            schwarzschild_reciprocity(11.0, 100.0, True)  # type: ignore[arg-type]
+
+    def test_beer_lambert_rejects_bools(self):
+        with pytest.raises(TypeError):
+            beer_lambert_rgb(True, np.array([0.1, 0.1, 0.1]))  # type: ignore[arg-type]
+        with pytest.raises(TypeError):
+            beer_lambert_rgb(np.eye(3), True)  # type: ignore[arg-type]
+
+    def test_canonical_chain_rejects_bools(self):
+        with pytest.raises(TypeError):
+            canonical_dir_chain(np.array([0.1, 0.2, 0.3]), 0.1, True, 0.0, 3.0)  # type: ignore[arg-type]
+
+
+# ---------------------------------------------------------------------------
+# G4 coverage push: fail-closed branches in EmulsionLayer / helpers /
+# degenerate 2-D grids
+# ---------------------------------------------------------------------------
+
+
+class TestEmulsionLayerBranches:
+    def test_name_must_be_non_empty(self):
+        with pytest.raises(TypeError, match="non-empty"):
+            EmulsionLayer(name="")
+
+    def test_layer_gamma_rejects_non_layer(self):
+        with pytest.raises(TypeError, match="EmulsionLayer"):
+            layer_gamma("not-a-layer", 293.15)  # type: ignore[arg-type]
+
+    def test_hurt_driffield_slope_log10_rejects_non_layer(self):
+        with pytest.raises(TypeError, match="EmulsionLayer"):
+            hurt_driffield_slope_log10("not-a-layer", 1.0, 293.15)  # type: ignore[arg-type]
+
+
+class TestRequireFiniteArrayBranches:
+    def test_non_numeric_density_rejected(self):
+        with pytest.raises(TypeError):
+            dir_reaction_diffusion(object(), 0.1, -1.0, 1.0)  # type: ignore[arg-type]
+
+    def test_empty_density_rejected(self):
+        with pytest.raises(ValueError, match="empty"):
+            dir_reaction_diffusion(np.array([]), 0.1, -1.0, 1.0)  # type: ignore[arg-type]
+
+
+class TestDegenerateNeumannGrids:
+    def test_1d_single_element_returns_zeros(self):
+        arr = np.array([1.5])
+        out = dir_film_state(arr, 0.2, -1e6, 1e6)
+        assert np.allclose(out.laplacian, np.zeros_like(arr))
+
+    def test_2d_single_row_uses_1d_along_columns(self):
+        grid = np.array([[0.1, 0.4, 0.2, 0.6]])
+        state = dir_film_state(grid, 0.2, -1e6, 1e6)
+        assert state.laplacian.shape == (1, 4)
+        # left edge Neumann value: 2 * (u1 - u0) / dx^2 = 2 * 0.3
+        assert state.laplacian[0, 0] == pytest.approx(0.6)
+
+    def test_2d_single_column_uses_1d_along_rows(self):
+        grid = np.array([[0.1], [0.4], [0.2]])
+        state = dir_film_state(grid, 0.2, -1e6, 1e6)
+        assert state.laplacian.shape == (3, 1)
+        assert state.laplacian[0, 0] == pytest.approx(0.6)
+
+    def test_2d_1x1_returns_zeros(self):
+        grid = np.array([[0.5]])
+        state = dir_film_state(grid, 0.2, -1e6, 1e6)
+        assert np.allclose(state.laplacian, np.zeros_like(grid))

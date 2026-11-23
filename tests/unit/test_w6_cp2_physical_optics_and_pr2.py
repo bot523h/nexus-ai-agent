@@ -23,6 +23,7 @@ from nexus_ai_agent.creative.science.physical_optics_radiometry import (
     H_PLANCK,
     KB_BOLTZMANN,
     WIEN_CONSTANT_M_K,
+    FresnelAmplitudes,
     brester_angle_deg,
     brester_reflectance,
     critical_angle_deg,
@@ -372,3 +373,116 @@ class TestHGNormalizationOnUnitSphere:
             w = 1.0 if 0 < i < n_points else 0.5
             total += w * henyey_greenstein_phase_function(u, g) * 2.0 * math.pi * du
         assert total == pytest.approx(1.0, rel=1e-6)
+
+
+class TestFinitenessAndBoolRejectionAtFunctionEntry:
+    """Every public entry point rejects bool/non-finite input fail-closed."""
+
+    def test_bool_and_nan_rejection_planck_and_wien(self):
+        with pytest.raises(TypeError):
+            planck_blackbody_spectral_radiance(True, 293.15)  # type: ignore[arg-type]
+        with pytest.raises(ValueError):
+            planck_blackbody_spectral_radiance(550e-9, float("nan"))
+        with pytest.raises(TypeError):
+            wien_max_wavelength(True)  # type: ignore[arg-type]
+        with pytest.raises(ValueError):
+            wien_max_wavelength(float("inf"))
+        with pytest.raises(TypeError):
+            wien_temperature(True)  # type: ignore[arg-type]
+        with pytest.raises(ValueError):
+            wien_temperature(float("nan"))
+        with pytest.raises(TypeError):
+            planck_max_radiance(True)  # type: ignore[arg-type]
+        with pytest.raises(ValueError):
+            planck_max_radiance(float("inf"))
+
+    def test_critical_angle_rejects_bool_and_nan_indices(self):
+        with pytest.raises(TypeError):
+            critical_angle_deg(True, 1.0)  # type: ignore[arg-type]
+        with pytest.raises(TypeError):
+            critical_angle_deg(1.5, True)  # type: ignore[arg-type]
+        with pytest.raises(ValueError):
+            critical_angle_deg(float("nan"), 1.0)
+        with pytest.raises(ValueError):
+            critical_angle_deg(1.5, float("inf"))
+
+    def test_fresnel_and_transmittance_reject_bool_and_nan(self):
+        with pytest.raises(TypeError):
+            fresnel_amplitudes(True, 1.5, 30.0)  # type: ignore[arg-type]
+        with pytest.raises(ValueError):
+            fresnel_amplitudes(1.5, float("nan"), 30.0)
+        with pytest.raises(TypeError):
+            fresnel_amplitudes(1.5, 1.5, True)  # type: ignore[arg-type]
+        with pytest.raises(TypeError):
+            fresnel_transmittance_s(True, 1.5, 30.0)  # type: ignore[arg-type]
+        with pytest.raises(ValueError):
+            fresnel_transmittance_p(1.5, 1.5, float("inf"))
+
+    def test_brester_and_thin_film_reject_bool_and_nan(self):
+        with pytest.raises(TypeError):
+            brester_angle_deg(True, 1.5)  # type: ignore[arg-type]
+        with pytest.raises(ValueError):
+            brester_reflectance(1.5, float("inf"))
+        with pytest.raises(TypeError):
+            thin_film_phase(True, 1.5, 200e-9, 0.0)  # type: ignore[arg-type]
+        with pytest.raises(ValueError):
+            thin_film_reflectance(0.2, float("nan"), 550e-9, 1.5, 200e-9)
+        with pytest.raises(ValueError):
+            thin_film_phase(550e-9, 1.5, 200e-9, float("inf"))
+
+    def test_film_materials_volumetric_and_hg_reject_bool_and_nan(self):
+        with pytest.raises(TypeError):
+            film_materials_from_air(1.0, True, 1.5, 30.0)  # type: ignore[arg-type]
+        with pytest.raises(ValueError):
+            film_materials_from_air(1.0, 1.5, 1.5, float("nan"))
+        with pytest.raises(TypeError):
+            volumetric_radiative_transfer(True, 0.5, 0.4)  # type: ignore[arg-type]
+        with pytest.raises(ValueError):
+            volumetric_radiative_transfer(1.0, 0.5, float("inf"))
+        with pytest.raises(TypeError):
+            henyey_greenstein_phase_function(True, 0.4)  # type: ignore[arg-type]
+        with pytest.raises(ValueError):
+            henyey_greenstein_norm(float("nan"))
+        with pytest.raises(TypeError):
+            henyey_greenstein_norm(0.4, True)  # type: ignore[arg-type]
+        with pytest.raises(TypeError):
+            henyey_greenstein_norm(0.4, 1.5)  # type: ignore[arg-type]
+
+
+# ---------------------------------------------------------------------------
+# G4 coverage push: fail-closed branches in Fresnel amplitudes / HG norm
+# ---------------------------------------------------------------------------
+
+
+class TestFresnelAmplitudesBranches:
+    def test_bool_amplitude_rejected(self):
+        with pytest.raises(TypeError):
+            FresnelAmplitudes(True, 0.5)  # type: ignore[arg-type]
+
+    def test_non_numeric_amplitude_rejected(self):
+        with pytest.raises(TypeError):
+            FresnelAmplitudes("not-a-number", 0.5)  # type: ignore[arg-type]
+
+    def test_finite_magnitude_infinite_rejected(self):
+        with pytest.raises(ValueError, match="finite"):
+            FresnelAmplitudes(complex(float("inf"), 0.0), 0.5)
+
+
+class TestHenyeyGreensteinNormBranches:
+    def test_zero_n_points_rejected(self):
+        with pytest.raises(ValueError, match="at least 1"):
+            henyey_greenstein_norm(0.5, 0)
+
+
+class TestFilmAngleAndPlanckClipPolicy:
+    def test_film_materials_rejects_theta_outside_range(self):
+        with pytest.raises(ValueError, match="theta_air"):
+            film_materials_from_air(1.0, 1.5, 1.0, -5.0)
+        with pytest.raises(ValueError, match="theta_air"):
+            film_materials_from_air(1.0, 1.5, 1.0, 90.0)
+
+    def test_planck_x_beyond_700_is_zero_not_subnormal(self):
+        # x > 700 at ~1e-11 m * 1e3 K << typical usage; just assert the policy.
+        tiny_lambda = H_PLANCK * C_LIGHT / (700.1 * KB_BOLTZMANN * 5778.0)
+        value = planck_blackbody_spectral_radiance(tiny_lambda, 5778.0)
+        assert value == 0.0

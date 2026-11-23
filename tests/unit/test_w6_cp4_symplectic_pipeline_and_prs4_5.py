@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import math
+from datetime import datetime
 
 import numpy as np
 import pytest
@@ -41,6 +42,7 @@ from nexus_ai_agent.creative.science.symplectic_hamiltonian_pipeline import (
     hamiltonian,
     integrate_verlet,
     jacobian_of_step,
+    local_effective_omega,
     stormer_verlet_step,
     symplectic_volume_preservation_error,
 )
@@ -181,6 +183,77 @@ class TestUnifiedPipeline:
             UnifiedCinemaScienceInputs(reciprocity_p=0.3)
         with pytest.raises(ValueError):
             UnifiedCinemaScienceInputs(hg_asymmetry=1.0)
+
+    def test_every_input_field_rejects_nan_and_inf(self):
+        # Every scalar/field must reject NaN/Inf, fail-closed.
+        bad_kwargs: list[dict] = [
+            {"temperature_k": float("nan")},
+            {"temperature_k": float("inf")},
+            {"exposure_intensity": float("nan")},
+            {"exposure_intensity": float("inf")},
+            {"exposure_time_s": float("nan")},
+            {"exposure_time_s": float("inf")},
+            {"reciprocity_p": float("nan")},
+            {"reciprocity_p": float("inf")},
+            {"lambda_peak_m": float("nan")},
+            {"lambda_peak_m": float("inf")},
+            {"blackbody_temperature_k": float("nan")},
+            {"blackbody_temperature_k": float("inf")},
+            {"film_index": float("nan")},
+            {"film_index": float("inf")},
+            {"film_thickness_m": float("nan")},
+            {"film_thickness_m": float("inf")},
+            {"hg_asymmetry": float("nan")},
+            {"hg_asymmetry": float("inf")},
+            {"rayleigh_damping": float("nan")},
+            {"rayleigh_damping": float("inf")},
+            {"dt": float("nan")},
+            {"dt": float("inf")},
+            {"transport_mean": (float("nan"), 0.0)},
+            {"transport_mean": (float("inf"), -1.0)},
+            {"transport_target_mean": (1.0, float("nan"))},
+            {"transport_target_mean": (float("inf"), 0.0)},
+        ]
+        for kwargs in bad_kwargs:
+            with pytest.raises((ValueError, TypeError)):
+                UnifiedCinemaScienceInputs(**kwargs)
+
+    def test_every_scalar_field_rejects_bool(self):
+        for name in (
+            "temperature_k",
+            "exposure_intensity",
+            "exposure_time_s",
+            "reciprocity_p",
+            "lambda_peak_m",
+            "blackbody_temperature_k",
+            "film_index",
+            "film_thickness_m",
+            "hg_asymmetry",
+            "rayleigh_damping",
+            "dt",
+        ):
+            with pytest.raises(TypeError):
+                UnifiedCinemaScienceInputs(**{name: True})
+
+    def test_n_steps_rejects_bool_and_non_integer(self):
+        with pytest.raises(TypeError):
+            UnifiedCinemaScienceInputs(n_steps=True)  # type: ignore[arg-type]
+        with pytest.raises(TypeError):
+            UnifiedCinemaScienceInputs(n_steps=3.5)  # type: ignore[arg-type]
+
+    def test_n_steps_rejects_negative(self):
+        with pytest.raises(ValueError):
+            UnifiedCinemaScienceInputs(n_steps=-1)
+
+    def test_transport_mean_rejects_bad_lengths_and_types(self):
+        with pytest.raises(ValueError):
+            UnifiedCinemaScienceInputs(transport_mean=(1.0,))  # type: ignore[arg-type]
+        with pytest.raises(ValueError):
+            UnifiedCinemaScienceInputs(transport_mean=(1.0, 2.0, 3.0))  # type: ignore[arg-type]
+        with pytest.raises(TypeError):
+            UnifiedCinemaScienceInputs(transport_mean=(True, 0.0))  # type: ignore[arg-type]
+        with pytest.raises(TypeError):
+            UnifiedCinemaScienceInputs(transport_mean=(1.0, "x"))  # type: ignore[arg-type]
 
     def test_receipt_outputs_are_finite(self):
         receipt = UnifiedCinemaSciencePipeline().execute()
@@ -453,13 +526,152 @@ class TestRayleighDampingTheory:
             stormer_verlet_step(np.array([1.0, 1.0]), np.zeros(2), 1.5, spec)
 
     def test_zero_damping_recovers_symplectic_flow(self):
-        spec = HamiltonianSpec(stiffness=np.eye(2))
-        q = np.array([0.7, 0.3])
-        p = np.array([0.4, -0.1])
-        q_next, p_next = stormer_verlet_step(q, p, 0.05, spec, rayleigh_damping=0.0)
-        jac = jacobian_of_step(q, p, 0.05, spec, eps=1e-7)
-        jac_damp = jacobian_of_step(q, p, 0.05, spec, eps=1e-7)
-        assert np.allclose(jac, jac_damp, atol=1e-12)
+        # Independent, executable reference Störmer–Verlet (conservative only):
+        # the implementation under test must reproduce it to machine precision.
+        spec = HamiltonianSpec(mass=1.0, stiffness=np.eye(2), quartic_coupling=0.0)
+        q0 = np.array([0.7, 0.3])
+        p0 = np.array([0.4, -0.1])
+        dt = 0.05
+        n_steps = 200
+
+        def reference_step(q, p, mass, stiffness):
+            p_half = p - 0.5 * dt * (stiffness @ q)
+            q_next = q + dt * p_half / mass
+            p_next = p_half - 0.5 * dt * (stiffness @ q_next)
+            return q_next, p_next
+
+        q_ref, p_ref = q0.copy(), p0.copy()
+        for _ in range(n_steps):
+            q_ref, p_ref = reference_step(q_ref, p_ref, 1.0, np.eye(2))
+        q, p = q0.copy(), p0.copy()
+        for _ in range(n_steps):
+            q, p = stormer_verlet_step(q, p, dt, spec, rayleigh_damping=0.0)
+        assert np.allclose(q, q_ref, atol=1e-12)
+        assert np.allclose(p, p_ref, atol=1e-12)
+
+        # SHO energy conservation (K isotropic, alpha = 0): energy must be
+        # conserved over the trajectory (symplecticity, bounded drift).
+        h_initial = hamiltonian(q0, p0, spec)
+        q, p = q0.copy(), p0.copy()
+        for _ in range(n_steps):
+            q, p = stormer_verlet_step(q, p, dt, spec, rayleigh_damping=0.0)
+        assert abs(hamiltonian(q, p, spec) - h_initial) < 1e-3
+
+        # Symplectic condition on the FD-verified Jacobian (machine precision).
+        fd = jacobian_of_step(q, p, dt, spec)
+        an = analytic_jacobian_of_step(q, p, dt, spec)
+        assert np.linalg.norm(an - fd, ord="fro") < 1e-7
+        omega = _omega(spec.dimension)
+        residual = np.linalg.norm(an.T @ omega @ an - omega, ord="fro")
+        assert residual < 1e-12
+
+
+class TestAnalyticJacobianFDVerification:
+    """The exact analytic Jacobian must match the finite-difference Jacobian."""
+
+    @pytest.mark.parametrize("alpha", (0.0, 0.3))
+    @pytest.mark.parametrize("damping", (0.0, 0.4))
+    def test_analytic_matches_fd_central(self, alpha, damping):
+        spec = HamiltonianSpec(mass=1.3, stiffness=np.diag([1.1, 2.2]), quartic_coupling=alpha)
+        q = np.array([0.4, -0.7])  # nonzero q, nonzero p
+        p = np.array([0.5, 0.2])
+        dt = 0.02
+        fd = jacobian_of_step(q, p, dt, spec, rayleigh_damping=damping)
+        an = analytic_jacobian_of_step(q, p, dt, spec, rayleigh_damping=damping)
+        err = np.linalg.norm(an - fd, ord="fro")
+        assert err < 1e-7, f"FD vs analytic residual {err:.3e}"
+
+
+class TestLocalEffectiveOmegaGate:
+    """The harmonic ``omega_max`` gate alone is not sufficient for nonlinear flows."""
+
+    def test_local_omega_is_larger_than_harmonic(self):
+        spec = HamiltonianSpec(stiffness=np.eye(2), quartic_coupling=5.0)
+        q = np.array([1.5, 0.3])
+        omega_eff = local_effective_omega(spec, q)
+        assert omega_eff > spec.omega_max
+
+    def test_harmonic_gate_passes_but_local_gate_refuses(self):
+        # omega_max * dt < 2 (harmonic gate passes) but the local Hessian
+        # bound omega_eff(q) * dt >= 2 for large alpha * ||q||^2.
+        spec = HamiltonianSpec(mass=1.0, stiffness=np.eye(2), quartic_coupling=5.0)
+        q = np.array([3.0, 0.0])
+        p = np.zeros(2)
+        dt = 0.2
+        assert spec.omega_max * dt < 2.0  # harmonic gate passes
+        with pytest.raises(ValueError, match="local effective"):
+            stormer_verlet_step(q, p, dt, spec)
+
+    def test_local_gate_applies_along_midpoint(self):
+        # q at the start is small enough to pass every gate, but the half-step
+        # position q_{n+1/2} crosses the local bound at the same dt.
+        spec = HamiltonianSpec(mass=1.0, stiffness=np.eye(2), quartic_coupling=8.0)
+        q = np.array([1.2, 0.0])
+        p = np.array([30.0, 0.0])
+        dt = 0.3
+        assert spec.omega_max * dt < 2.0
+        assert local_effective_omega(spec, q) * dt < 2.0
+        with pytest.raises(ValueError, match="mid-step"):
+            stormer_verlet_step(q, p, dt, spec)
+
+
+class TestReceiptDeepFreeze:
+    def test_outputs_mapping_is_frozen(self):
+        from types import MappingProxyType
+
+        receipt = UnifiedCinemaSciencePipeline().execute()
+        assert isinstance(receipt.outputs, MappingProxyType)
+        with pytest.raises(TypeError):
+            receipt.outputs["photochemical_density"] = 0.0  # type: ignore[index]
+        with pytest.raises(TypeError):
+            receipt.outputs["extra"] = 0.0  # type: ignore[index]
+
+    def test_as_dict_is_plain_copy(self):
+        receipt = UnifiedCinemaSciencePipeline().execute()
+        as_dict = receipt.as_dict()
+        as_dict["outputs"]["photochemical_density"] = 999.0  # mutate the copy
+        assert receipt.outputs["photochemical_density"] != 999.0
+
+    def test_executed_at_is_real_iso8601_utc(self):
+        receipt = UnifiedCinemaSciencePipeline().execute()
+        assert receipt.executed_at
+        parsed = datetime.fromisoformat(receipt.executed_at)
+        assert parsed.tzinfo is not None
+
+    def test_executed_at_override_validated(self):
+        with pytest.raises(ValueError, match="ISO-8601"):
+            ScientificPipelineReceipt(
+                "1",
+                "unified-cinema-science",
+                "0" * 64,
+                {"k": 1.0},
+                "0" * 64,
+                "0" * 64,
+                executed_at="not-a-timestamp",
+            )
+
+    def test_modules_digest_binds_source_bytes(self):
+        pipe = UnifiedCinemaSciencePipeline()
+        digests = pipe.module_digests()
+        names = set(digests)
+        assert names == {
+            "photochemical_emulsion",
+            "physical_optics_radiometry",
+            "optimal_transport_spd",
+            "symplectic_hamiltonian_pipeline",
+        }
+        assert all(len(v) == 64 for v in digests.values())
+        # A single extra byte in any science module must change its digest.
+        import hashlib
+        from pathlib import Path
+
+        base = (
+            Path(__file__).resolve().parents[2] / "src" / "nexus_ai_agent" / "creative" / "science"
+        )
+        probe = base / "photochemical_emulsion.py"
+        content = probe.read_bytes()
+        real = hashlib.sha256(b"photochemical_emulsion:W6-EMULSION-1\n" + content).hexdigest()
+        assert digests["photochemical_emulsion"] == real
 
 
 class TestExactSymplecticity:
@@ -620,3 +832,183 @@ class TestAnalyticJacobianGuards:
         # still seals deterministically with the INSUFFICIENT_EVIDENCE verdict.
         report = ContinuityReport(verdict=VerificationState.INSUFFICIENT_EVIDENCE, dimensions={})
         assert report.seal().startswith("sha256:")
+
+
+# ---------------------------------------------------------------------------
+# G4 coverage push: fail-closed branches of the receipt / inputs / local omega
+# ---------------------------------------------------------------------------
+
+
+class TestLocalEffectiveOmegaGateBranches:
+    def test_wrong_q_size_rejected(self):
+        spec = HamiltonianSpec(mass=1.0, stiffness=np.diag([1.0, 4.0]), quartic_coupling=0.2)
+        with pytest.raises(ValueError, match="must match"):
+            local_effective_omega(spec, np.array([1.0, 2.0, 3.0]))
+
+
+class TestReceiptFreezeBranches:
+    def test_top_level_bool_output_rejected(self):
+        with pytest.raises(TypeError, match="boolean"):
+            ScientificPipelineReceipt(
+                "1",
+                "pipeline",
+                "0" * 64,
+                {"bad": True},  # type: ignore[arg-type]
+                "0" * 64,
+                "0" * 64,
+            )
+
+    def test_nested_mapping_is_frozen_and_unfrozen(self):
+        from types import MappingProxyType
+
+        receipt = ScientificPipelineReceipt(
+            "1",
+            "pipeline",
+            "0" * 64,
+            {"nested": {"inner": 1.0}},  # type: ignore[arg-type]
+            "0" * 64,
+            "0" * 64,
+        )
+        assert isinstance(receipt.outputs["nested"], MappingProxyType)
+        with pytest.raises(TypeError):
+            receipt.outputs["nested"]["inner"] = 2.0  # type: ignore[index]
+        assert receipt.as_dict()["outputs"]["nested"] == {"inner": 1.0}
+
+    def test_list_output_becomes_tuple_and_back(self):
+        receipt = ScientificPipelineReceipt(
+            "1",
+            "pipeline",
+            "0" * 64,
+            {"seq": [1.0, 2.0]},  # type: ignore[arg-type]
+            "0" * 64,
+            "0" * 64,
+        )
+        assert isinstance(receipt.outputs["seq"], tuple)
+        assert receipt.as_dict()["outputs"]["seq"] == [1.0, 2.0]
+
+    def test_scalar_output_types_pass_through(self):
+        receipt = ScientificPipelineReceipt(
+            "1",
+            "pipeline",
+            "0" * 64,
+            {"s": "text", "i": 3, "f": 1.5},  # type: ignore[arg-type]
+            "0" * 64,
+            "0" * 64,
+        )
+        out = receipt.as_dict()["outputs"]
+        assert out["s"] == "text"
+        assert out["i"] == 3
+        assert out["f"] == 1.5
+
+    def test_non_finite_float_output_rejected(self):
+        with pytest.raises(ValueError, match="finite"):
+            ScientificPipelineReceipt(
+                "1",
+                "pipeline",
+                "0" * 64,
+                {"bad": float("nan")},
+                "0" * 64,
+                "0" * 64,
+            )
+
+    def test_unknown_output_type_rejected(self):
+        class NotSerializable:
+            pass
+
+        with pytest.raises(TypeError, match="JSON-scalars"):
+            ScientificPipelineReceipt(
+                "1",
+                "pipeline",
+                "0" * 64,
+                {"bad": NotSerializable()},  # type: ignore[arg-type]
+                "0" * 64,
+                "0" * 64,
+            )
+
+    def test_nested_bool_inside_mapping_rejected(self):
+        with pytest.raises(TypeError):
+            ScientificPipelineReceipt(
+                "1",
+                "pipeline",
+                "0" * 64,
+                {"nested": {"inner": True}},  # type: ignore[arg-type]
+                "0" * 64,
+                "0" * 64,
+            )
+
+    def test_executed_at_non_string_rejected(self):
+        with pytest.raises(TypeError):
+            ScientificPipelineReceipt(
+                "1",
+                "pipeline",
+                "0" * 64,
+                {"k": 1.0},
+                "0" * 64,
+                "0" * 64,
+                executed_at=123,  # type: ignore[arg-type]
+            )
+
+    def test_executed_at_z_suffix_accepted(self):
+        receipt = ScientificPipelineReceipt(
+            "1",
+            "pipeline",
+            "0" * 64,
+            {"k": 1.0},
+            "0" * 64,
+            "0" * 64,
+            executed_at="2026-11-22T00:00:00Z",
+        )
+        assert receipt.executed_at.endswith("+00:00")
+
+    def test_executed_at_naive_rejected(self):
+        with pytest.raises(ValueError, match="timezone"):
+            ScientificPipelineReceipt(
+                "1",
+                "pipeline",
+                "0" * 64,
+                {"k": 1.0},
+                "0" * 64,
+                "0" * 64,
+                executed_at="2026-11-22T00:00:00",
+            )
+
+
+class TestMeanValidationBranches:
+    def test_transport_mean_must_be_a_sequence(self):
+        with pytest.raises(TypeError, match="2-element"):
+            UnifiedCinemaScienceInputs(transport_mean=1.5)  # type: ignore[arg-type]
+
+
+class TestContinuityThresholdConsistency:
+    def test_non_threshold_object_rejected(self):
+        with pytest.raises(ValueError, match="must be a ContinuityThreshold"):
+            verify_dimensions({"face": 0.1}, {"face": "not-a-threshold"})  # type: ignore[dict-item]
+
+    def test_mismatched_dimension_rejected(self):
+        with pytest.raises(ValueError, match="calibrated for"):
+            verify_dimensions({"face": 0.1}, {"body": ContinuityThreshold("face", 0.2, 0.6)})
+
+
+class TestCharacterCapsuleBranches:
+    def test_apply_revision_changes_bumps_wardrobe_module(self):
+        capsule = CharacterCapsule(
+            character_id="NAGAR-CHAR-000001",
+            identity_version=1,
+            revision_no=1,
+        )
+        updated = capsule.apply_revision_changes("wardrobe", {"outfit": "trench coat"})
+        assert updated.wardrobe.outfit == "trench coat"
+        assert updated.wardrobe.revision == 2
+        assert updated.face.revision == 1
+        assert updated.voice.revision == 1
+
+    def test_voice_module_has_no_revision_scoped_fields(self):
+        # Voice fields are identity-scoped; revision is capsule-managed.
+        capsule = CharacterCapsule(
+            character_id="NAGAR-CHAR-000001",
+            identity_version=1,
+            revision_no=1,
+        )
+        with pytest.raises(ScopeViolation):
+            capsule.apply_revision_changes("voice", {"timbre": "warm"})
+        assert capsule.voice.revision == 1
