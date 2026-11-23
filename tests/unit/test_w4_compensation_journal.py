@@ -409,6 +409,33 @@ def test_finish_rechecks_lease_after_reading_the_intent_journal(tmp_path: Path) 
         assert conn.execute("SELECT status FROM plans").fetchone() == ("IN_DOUBT",)
 
 
+@pytest.mark.parametrize("succeeded", [True, False])
+def test_compensation_rechecks_lease_after_fence_read(tmp_path: Path, succeeded: bool) -> None:
+    """An owner expiring during journal checks cannot finalize compensation."""
+    import sqlite3
+
+    path = tmp_path / "db"
+    store = DurablePlanDedupeStore(path, clock=lambda: 10.0)
+    lease = store.reserve_and_start(
+        "p", HASH, external_effects=True, nonce="n", lease_ttl_seconds=1
+    )
+    args = {"attempt": lease.attempt, "owner_token": lease.owner_token}
+    store.mark_compensating("p", HASH, **args)
+    values = iter((10.0, 11.0))
+    store._clock = lambda: next(values)
+    with pytest.raises(PlanFencingTokenMismatchError):
+        store.record_compensation("p", HASH, succeeded=succeeded, evidence={}, **args)
+    with sqlite3.connect(path) as conn:
+        assert conn.execute(
+            "SELECT status, compensation_status, compensation_evidence_json FROM plans"
+        ).fetchone() == ("COMPENSATING", "STARTED", None)
+    store._clock = lambda: 11.0
+    with pytest.raises(PlanInDoubtQuarantineError):
+        store.reserve_and_start("p", HASH, external_effects=True, nonce="fresh")
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("SELECT status FROM plans").fetchone() == ("IN_DOUBT",)
+
+
 def test_finish_refuses_a_suppressed_fenced_transition(tmp_path: Path) -> None:
     """A database trigger suppressing an update cannot produce a false receipt."""
     import sqlite3
