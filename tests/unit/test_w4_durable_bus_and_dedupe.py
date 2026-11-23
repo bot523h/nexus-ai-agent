@@ -4,6 +4,7 @@ import json
 import os
 import sqlite3
 import stat
+import sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
@@ -422,6 +423,7 @@ def test_wal_setup_retries_only_busy_errors(
 def test_wal_setup_retries_protocol_error_without_sqlite_constant(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # This is a synthetic coded error, not evidence of the Python 3.10 API.
     connect = sqlite3.connect
     attempts = 0
 
@@ -439,6 +441,33 @@ def test_wal_setup_retries_protocol_error_without_sqlite_constant(
     store = DurablePlanDedupeStore(tmp_path / "db")
     assert attempts == 2
     assert store.path.exists()
+
+
+def test_wal_setup_propagates_real_sqlite_connect_error_across_python_versions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # SQLite itself creates the exception; no error-code attribute is injected.
+    connect = sqlite3.connect
+    seen: list[sqlite3.OperationalError] = []
+    missing = tmp_path / "does-not-exist.sqlite"
+    uri = f"{missing.as_uri()}?mode=ro"
+
+    def fail_connect(*_args: Any, **_kwargs: Any) -> sqlite3.Connection:
+        try:
+            return connect(uri, uri=True)
+        except sqlite3.OperationalError as exc:
+            seen.append(exc)
+            raise
+
+    monkeypatch.delattr(sqlite3, "SQLITE_PROTOCOL", raising=False)
+    monkeypatch.setattr(sqlite3, "connect", fail_connect)
+    with pytest.raises(sqlite3.OperationalError, match="unable to open database file"):
+        DurablePlanDedupeStore(tmp_path / "db")
+    assert len(seen) == 1  # A real non-busy error must not be retried.
+    if sys.version_info < (3, 11):
+        assert not hasattr(seen[0], "sqlite_errorcode")
+    else:
+        assert getattr(seen[0], "sqlite_errorcode", None) == getattr(sqlite3, "SQLITE_CANTOPEN", 14)
 
 
 @pytest.mark.parametrize("message", ["disk I/O error", "database is busy"])
