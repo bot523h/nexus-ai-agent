@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import types
 from collections.abc import Callable
@@ -99,34 +100,62 @@ def _owned_local_lease(tmp_path: Path) -> tuple[LocalDeviceVaultDriver, str, Pat
 
 
 @pytest.mark.parametrize("backend", ["local", "bundle"])
-def test_restarted_lease_owner_recovers_only_with_token_then_releases(
+def test_restarted_lease_owner_recovers_only_with_token_and_etag_then_releases(
     backend: str, tmp_path: Path
 ) -> None:
     restarted: LocalDeviceVaultDriver | PortableBundleVaultDriver
     if backend == "local":
         path = tmp_path / "restart-vault"
         local_owner = LocalDeviceVaultDriver(path)
-        lease_id = local_owner.acquire_push_lease([], lease_id="restart-owner")
+        lease_id = local_owner.acquire_push_lease(
+            [], project_id="project-1", lease_id="restart-owner"
+        )
+        credential = local_owner.export_lease_credential(lease_id)
         raw = local_owner._lease_path(lease_id).read_bytes()
         restarted = LocalDeviceVaultDriver(path)
     else:
         path = tmp_path / "restart.nagarvault"
         bundle_owner = PortableBundleVaultDriver(path)
-        lease_id = bundle_owner.acquire_push_lease([], lease_id="restart-owner")
+        lease_id = bundle_owner.acquire_push_lease(
+            [], project_id="project-1", lease_id="restart-owner"
+        )
+        credential = bundle_owner.export_lease_credential(lease_id)
         bundle_owner._read_locked()
         raw = bundle_owner._leases[lease_id]
         restarted = PortableBundleVaultDriver(path)
 
-    token = byos_drivers._parse_lease_token(raw)
-    assert token
+    assert credential["lease_token"] not in raw.decode("utf-8")
+    assert '"lease_token"' not in raw.decode("utf-8")
+    assert byos_drivers._parse_lease_token_verifier(raw)
     with pytest.raises(VaultRevisionConflictError):
         restarted.release_push_lease(lease_id)
-    with pytest.raises(VaultRevisionConflictError):
-        restarted.recover_owned_lease(lease_id, "stranger-token")
-    assert restarted.recover_owned_lease(lease_id, token)
-    restarted.release_push_lease(lease_id)
     with pytest.raises(VaultTransportError):
-        restarted.recover_owned_lease(lease_id, token)
+        restarted.export_lease_credential(lease_id)
+    with pytest.raises(VaultTransportError):
+        restarted.recover_owned_lease(
+            "wrong-project", lease_id, credential["lease_token"], credential["etag"]
+        )
+    with pytest.raises(VaultTransportError):
+        restarted.recover_owned_lease("project-1", lease_id, "stranger-token", credential["etag"])
+    with pytest.raises(VaultTransportError):
+        restarted.recover_owned_lease("project-1", lease_id, credential["lease_token"], "0" * 64)
+    assert (
+        restarted.recover_owned_lease(
+            "project-1",
+            lease_id,
+            credential["lease_token"],
+            credential["etag"],
+        )
+        == credential["etag"]
+    )
+    assert restarted.release_push_lease(lease_id)
+    with pytest.raises(VaultTransportError):
+        restarted.recover_owned_lease(
+            "project-1",
+            lease_id,
+            credential["lease_token"],
+            credential["etag"],
+        )
 
 
 def _s3_ambiguous_fixture(
@@ -206,7 +235,8 @@ def _s3_ambiguous_fixture(
 
     driver = byos_drivers.S3CompatibleSigV4Driver(config, http_transport=transport)
     obj_key = driver._object_key("leases", f"{lease_id}.json")
-    driver._owned_lease_etags[lease_id] = (str(state["etag"]), prior_token)
+    driver._owned_lease_etags[lease_id] = str(state["etag"])
+    driver._owned_lease_tokens[lease_id] = prior_token
     state["object_key"] = obj_key
     return driver, state, lease_id, prior_token
 
@@ -218,9 +248,20 @@ def test_restarted_s3_owner_recovers_only_with_token_then_releases() -> None:
     )
     with pytest.raises(VaultRevisionConflictError):
         restarted.release_push_lease(lease_id)
-    with pytest.raises(VaultRevisionConflictError):
-        restarted.recover_owned_lease(lease_id, "stranger-token")
-    assert restarted.recover_owned_lease(lease_id, token) == state["etag"]
+    with pytest.raises(VaultTransportError):
+        restarted.export_lease_credential(lease_id)
+    with pytest.raises(VaultTransportError):
+        restarted.recover_owned_lease("wrong-project", lease_id, token, state["etag"])
+    with pytest.raises(VaultTransportError):
+        restarted.recover_owned_lease("project-1", lease_id, "stranger-token", state["etag"])
+    with pytest.raises(VaultTransportError):
+        restarted.recover_owned_lease("project-1", lease_id, token, "0" * 64)
+    body = bytes(state["body"]).decode("utf-8")
+    assert token not in body
+    assert '"lease_token"' not in body
+    assert (
+        restarted.recover_owned_lease("project-1", lease_id, token, state["etag"]) == state["etag"]
+    )
     restarted.release_push_lease(lease_id)
     assert state["body"] == b""
 
@@ -228,9 +269,10 @@ def test_restarted_s3_owner_recovers_only_with_token_then_releases() -> None:
 def test_s3_ambiguous_put_committed_response_lost_reconciles_and_releases() -> None:
     driver, state, lease_id, _prior_token = _s3_ambiguous_fixture("committed")
     driver.update_push_lease(lease_id, [], project_id="project-1")
-    written_token = byos_drivers._parse_lease_token(bytes(state["body"]))
+    written_token = byos_drivers._parse_lease_token_verifier(bytes(state["body"]))
     assert written_token
-    assert driver._owned_lease_etags[lease_id] == (str(state["etag"]), written_token)
+    assert driver._owned_lease_tokens[lease_id] != written_token
+    assert driver._owned_lease_etags[lease_id] == str(state["etag"])
     driver.release_push_lease(lease_id)
     assert state["body"] == b""
 
@@ -240,23 +282,28 @@ def test_s3_ambiguous_put_not_committed_fails_without_claiming_prior() -> None:
     prior_etag = str(state["etag"])
     with pytest.raises(VaultTransportError, match="prior version remains"):
         driver.update_push_lease(lease_id, [], project_id="project-1")
-    assert driver._owned_lease_etags[lease_id] == (prior_etag, prior_token)
+    assert driver._owned_lease_etags[lease_id] == prior_etag
+    assert driver._owned_lease_tokens[lease_id] == prior_token
 
 
 def test_s3_ambiguous_put_never_claims_competing_writer() -> None:
     driver, state, lease_id, _prior_token = _s3_ambiguous_fixture("competitor")
     with pytest.raises(VaultRevisionConflictError, match="another writer"):
         driver.update_push_lease(lease_id, [], project_id="project-1")
-    assert byos_drivers._parse_lease_token(bytes(state["body"])) == "rival-owner-token"
-    assert driver._owned_lease_etags[lease_id][0] != state["etag"]
+    rival_verifier = byos_drivers._compute_lease_token_verifier(
+        "project-1", lease_id, "rival-owner-token"
+    )
+    assert byos_drivers._parse_lease_token_verifier(bytes(state["body"])) == rival_verifier
+    assert driver._owned_lease_etags[lease_id] != state["etag"]
 
 
 def test_s3_ambiguous_put_reconciliation_get_failure_fails_closed() -> None:
     driver, state, lease_id, prior_token = _s3_ambiguous_fixture("get-fails")
-    prior_etag = str(driver._owned_lease_etags[lease_id][0])
+    prior_etag = str(driver._owned_lease_etags[lease_id])
     with pytest.raises(VaultTransportError, match="reconciliation read failed"):
         driver.update_push_lease(lease_id, [], project_id="project-1")
-    assert driver._owned_lease_etags[lease_id] == (prior_etag, prior_token)
+    assert driver._owned_lease_etags[lease_id] == prior_etag
+    assert driver._owned_lease_tokens[lease_id] == prior_token
     assert state["body"] != b""
 
 
@@ -413,3 +460,110 @@ def test_bundle_refresh_refuses_a_blank_etag(tmp_path: Path) -> None:
     lease_id = bundle.acquire_push_lease([], lease_id="bundle-blank")
     with pytest.raises(VaultTransportError):
         bundle.update_push_lease(lease_id, [], expected_etag="  ")
+
+
+@pytest.mark.skipif(
+    byos_drivers._FCNTL is None or not hasattr(os, "O_NONBLOCK"),
+    reason="POSIX O_NONBLOCK fail-closed gate",
+)
+@pytest.mark.parametrize("backend", ["local", "bundle"])
+def test_posix_missing_o_nonblock_fails_closed(
+    backend: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Never fall back to a potentially blocking open when POSIX lacks O_NONBLOCK."""
+    import os
+
+    if backend == "local":
+        local_driver = LocalDeviceVaultDriver(tmp_path / "missing-nonblock")
+        lease_id = local_driver.acquire_push_lease([], lease_id="nonblock-required")
+        target = local_driver._lease_path(lease_id)
+    else:
+        bundle_driver = PortableBundleVaultDriver(tmp_path / "missing-nonblock.nagarvault")
+        bundle_driver.acquire_push_lease([], lease_id="nonblock-required")
+        target = None
+
+    monkeypatch.delattr(os, "O_NONBLOCK")
+    with pytest.raises(VaultTransportError, match="O_NONBLOCK"):
+        if backend == "local":
+            assert target is not None
+            byos_drivers._read_lease_file_once(target)
+        else:
+            bundle_driver.verify_bundle()
+
+
+@pytest.mark.parametrize("backend", ["local", "bundle"])
+def test_recovery_kills_raw_token_verifier_mutant(
+    backend: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A raw-token-as-verifier implementation cannot recover a hashed lease record."""
+    if backend == "local":
+        owner: LocalDeviceVaultDriver | PortableBundleVaultDriver = LocalDeviceVaultDriver(
+            tmp_path / "raw-token-mutant"
+        )
+        lease_id = owner.acquire_push_lease([], project_id="project-1", lease_id="raw-token-mutant")
+    else:
+        owner = PortableBundleVaultDriver(tmp_path / "raw-token-mutant.nagarvault")
+        lease_id = owner.acquire_push_lease([], project_id="project-1", lease_id="raw-token-mutant")
+    credential = owner.export_lease_credential(lease_id)
+    restarted: LocalDeviceVaultDriver | PortableBundleVaultDriver
+    restarted = (
+        LocalDeviceVaultDriver(tmp_path / "raw-token-mutant")
+        if backend == "local"
+        else PortableBundleVaultDriver(tmp_path / "raw-token-mutant.nagarvault")
+    )
+
+    monkeypatch.setattr(
+        byos_drivers,
+        "_compute_lease_token_verifier",
+        lambda _project, _lease, token: token,
+    )
+    with pytest.raises(VaultTransportError, match="owner token did not verify"):
+        restarted.recover_owned_lease(
+            "project-1",
+            lease_id,
+            credential["lease_token"],
+            credential["etag"],
+        )
+
+
+def test_lease_owner_helpers_fail_closed_on_malformed_and_wrong_owner_data() -> None:
+    """Malformed JSON, missing verifiers, and mismatched owner IDs prove nothing."""
+    raw = byos_drivers._build_lease_json_bytes(
+        lease_id="helper-owner",
+        project_id="project-1",
+        now_epoch=1_900_000_000.0,
+        ttl_seconds=60.0,
+        chunk_ids=[],
+        lease_token="private-helper-token",
+    )
+    assert byos_drivers._lease_owner_fields(b"not-json") == ("", "", "")
+    assert byos_drivers._lease_owner_fields(b"[]") == ("", "", "")
+    assert not byos_drivers._lease_record_matches_owner(
+        raw,
+        project_id="different-project",
+        lease_id="helper-owner",
+        lease_token="private-helper-token",
+    )
+    with pytest.raises(VaultTransportError, match="requested owner"):
+        byos_drivers._lease_verifier_for_recovery(
+            raw,
+            project_id="different-project",
+            lease_id="helper-owner",
+            source_label="test lease",
+        )
+
+    payload = json.loads(raw)
+    payload.pop("lease_token_verifier")
+    without_verifier = json.dumps(payload).encode("utf-8")
+    assert byos_drivers._lease_owner_fields(without_verifier)[2] == ""
+    with pytest.raises(VaultTransportError, match="no recoverable owner verifier"):
+        byos_drivers._lease_verifier_for_recovery(
+            without_verifier,
+            project_id="project-1",
+            lease_id="helper-owner",
+            source_label="legacy lease",
+        )
+
+    assert byos_drivers._owned_lease_pair({"id": "secret"}, {"id": "etag"}, "id", "wrong") is None
+    with pytest.raises(VaultTransportError, match="non-empty expected ETag"):
+        byos_drivers._owned_lease_pair({"id": "secret"}, {"id": "etag"}, "id", " ")

@@ -33,6 +33,9 @@ from nexus_ai_agent.storage.personal_cloud_vault import (
     VaultRevisionConflictError,
     VaultTransportError,
 )
+from nexus_ai_agent.storage.personal_cloud_vault.byos_drivers import (
+    _compute_lease_token_verifier,
+)
 from nexus_ai_agent.storage.personal_cloud_vault.errors import VaultTamperDetectedError
 
 CHUNK = "c" * 64
@@ -62,7 +65,11 @@ class _LeaseRaceTransport:
         self._stamp(LEASE_KEY)
         self.objects[LEASE_KEY] = json.dumps(
             {
-                "lease_token": "foreign-writer-token",
+                "lease_id": "newcomer",
+                "project_id": "",
+                "lease_token_verifier": _compute_lease_token_verifier(
+                    "", "newcomer", "foreign-writer-token"
+                ),
                 "expires_at_epoch": expires_at_epoch,
                 "chunk_ids": [CHUNK],
             }
@@ -910,6 +917,7 @@ def test_failed_rollback_never_deletes_a_third_writers_newer_lease() -> None:
         [CHUNK], project_id="project-1", ttl_seconds=600.0, lease_id="shared-1"
     )
     lease_key = f"{PREFIX}/leases/{lease_id}.json"
+    credential = writer.export_lease_credential(lease_id)
 
     third_writer = json.dumps(
         {
@@ -938,6 +946,7 @@ def test_failed_rollback_never_deletes_a_third_writers_newer_lease() -> None:
         return response
 
     racer = _driver(_third_writer_lands_after_our_put)
+    racer.recover_owned_lease("project-1", lease_id, credential["lease_token"], credential["etag"])
 
     def _collector_claims_the_chunk() -> None:
         # A live fence makes the post-write check refuse, which is what triggers the
@@ -952,7 +961,7 @@ def test_failed_rollback_never_deletes_a_third_writers_newer_lease() -> None:
             [CHUNK],
             project_id="project-1",
             ttl_seconds=600.0,
-            expected_etag=writer._owned_lease_etags[lease_id][0],
+            expected_etag=credential["etag"],
         )
 
     assert state["replaced"] is True
@@ -1178,14 +1187,12 @@ def test_update_push_lease_aborts_before_put_when_prior_get_fails_or_disagrees_w
     assert [entry for entry in disagreeing.requests if entry[0] == "DELETE"] == []
 
 
-def test_release_push_lease_without_explicit_etag_is_still_bound_to_owner_etag() -> None:
-    """Omitting ``expected_etag`` no longer means "delete unconditionally".
+def test_release_without_private_owner_proof_cannot_adopt_observed_etag() -> None:
+    """No-argument release is same-instance only; observation is not authority.
 
-    Driver A writes the lease, driver B refreshes it, then A releases *without* an
-    argument — the shape ``sync_journal_manager._release_driver_lease`` uses. A's
-    recorded ETag is the one its own write produced, so the DELETE is a 412 and B's
-    lease survives. A driver that never wrote the lease has no record, so it must read
-    the object first; if the backend reports no ETag there, no DELETE is sent at all.
+    A peer that can read a shared object must not adopt its ETag as release
+    authority. A restart can recover, but only with the private token and exact
+    ETag exported by the owner; a refreshed version fences out the old owner.
     """
     transport = _VersionedBucketTransport()
     driver_a = _driver(transport)
@@ -1196,36 +1203,52 @@ def test_release_push_lease_without_explicit_etag_is_still_bound_to_owner_etag()
     )
     lease_key = f"{PREFIX}/leases/{lease_id}.json"
     acquired = transport.objects[lease_key]
+    credential = driver_a.export_lease_credential(lease_id)
 
-    driver_b.update_push_lease(
+    with pytest.raises(VaultRevisionConflictError):
+        driver_b.update_push_lease(
+            lease_id,
+            [CHUNK],
+            project_id="project-1",
+            ttl_seconds=900.0,
+            expected_etag=credential["etag"],
+        )
+    with pytest.raises(VaultRevisionConflictError):
+        driver_b.release_push_lease(lease_id)
+    assert transport.objects[lease_key] == acquired
+
+    assert (
+        driver_b.recover_owned_lease(
+            "project-1", lease_id, credential["lease_token"], credential["etag"]
+        )
+        == credential["etag"]
+    )
+    assert driver_b.update_push_lease(
         lease_id,
         [CHUNK],
         project_id="project-1",
         ttl_seconds=900.0,
-        expected_etag=driver_a._owned_lease_etags[lease_id][0],
+        expected_etag=credential["etag"],
     )
     refreshed = transport.objects[lease_key]
     assert refreshed != acquired
+
     deletes_before = [entry for entry in transport.requests if entry[0] == "DELETE"]
-
-    with pytest.raises(VaultRevisionConflictError, match="no longer owns"):
+    with pytest.raises(VaultRevisionConflictError):
         driver_a.release_push_lease(lease_id)
-
     assert transport.objects[lease_key] == refreshed
     deletes_after = [entry for entry in transport.requests if entry[0] == "DELETE"]
-    assert len(deletes_after) == len(deletes_before) + 1  # the attempt, refused by 412
+    assert len(deletes_after) == len(deletes_before)
 
-    # Without a recorded ETag the driver reads first; no ETag anywhere => no DELETE.
-    etagless = _NoLeaseEtagTransport()
-    stranger = _driver(etagless)
-    etagless.write(lease_key, refreshed)
-    with pytest.raises(VaultTransportError, match="reported no ETag"):
+    # A stranger cannot promote a read ETag into authority, even if the bucket
+    # supplies an ETag. The failed attempt sends no DELETE and preserves the lease.
+    stranger = _driver(transport)
+    with pytest.raises(VaultRevisionConflictError):
         stranger.release_push_lease(lease_id)
-    assert [entry for entry in etagless.requests if entry[0] == "DELETE"] == []
-    assert lease_key in etagless.objects
+    assert [entry for entry in transport.requests if entry[0] == "DELETE"] == deletes_after
+    assert lease_key in transport.objects
 
-    # The owner can still release its own lease when nothing moved under it.
-    driver_b.release_push_lease(lease_id)
+    assert driver_b.release_push_lease(lease_id)
     assert lease_key not in transport.objects
 
 
