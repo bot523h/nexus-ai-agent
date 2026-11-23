@@ -18,6 +18,7 @@ from __future__ import annotations
 import io
 from collections.abc import Iterator, Mapping
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import BinaryIO
 
 import pytest
@@ -45,6 +46,15 @@ from nexus_ai_agent.storage.object_store import (
 )
 
 NOW = datetime(2026, 10, 22, 12, 0, tzinfo=timezone.utc)
+
+
+def _tamper_published(path: Path, data: bytes) -> None:
+    """Model a same-owner writer, preserving the published read-only mode."""
+    path.chmod(0o600)
+    try:
+        path.write_bytes(data)
+    finally:
+        path.chmod(0o400)
 
 
 # --------------------------------------------------------------------------- #
@@ -313,7 +323,7 @@ def test_local_store_detects_tampered_bytes(tmp_path) -> None:
     store = LocalObjectStore(tmp_path / "objects")
     result = store.put_stream(io.BytesIO(b"authentic"), max_bytes=1024)
     blob = tmp_path / "objects" / result.key
-    blob.write_bytes(b"tampered!")
+    _tamper_published(blob, b"tampered!")
 
     with pytest.raises(IntegrityMismatch):
         store.open_bytes(result.key)
@@ -404,7 +414,7 @@ def test_default_prefix_is_the_store_namespace(tmp_path) -> None:
 def test_head_reports_recorded_metadata_without_reading_bytes(tmp_path) -> None:
     store = LocalObjectStore(tmp_path / "objects")
     result = store.put_stream(io.BytesIO(b"original"), max_bytes=64)
-    (tmp_path / "objects" / result.key).write_bytes(b"tampered")
+    _tamper_published(tmp_path / "objects" / result.key, b"tampered")
 
     # head() answers from the filesystem listing and a re-hash of the file, so for
     # the local adapter the size changes visibly; the point of the law is that the
@@ -423,7 +433,7 @@ def test_verify_bytes_detects_tampering_that_preserves_metadata(tmp_path) -> Non
     assert store.verify_bytes(result.key) is True
 
     # Same length, different bytes: size checks alone cannot see this.
-    (tmp_path / "objects" / result.key).write_bytes(b"TAMPERED!")
+    _tamper_published(tmp_path / "objects" / result.key, b"TAMPERED!")
 
     assert store.verify_bytes(result.key) is False, (
         "verify_bytes must re-read and hash the bytes, not trust the key/metadata"
@@ -458,7 +468,7 @@ def test_a_byte_verification_claim_is_provable(store) -> None:
     assert corrupt is not None, (
         "a backend claiming byte verification must expose mutable storage here"
     )
-    corrupt.write_bytes(b"BADAB")  # same length, different bytes
+    _tamper_published(corrupt, b"BADAB")  # same length, different bytes
     with pytest.raises(IntegrityMismatch):
         store.put_stream(io.BytesIO(b"fresh"), max_bytes=64)
 
@@ -473,7 +483,7 @@ def tmp_path_blob_for(store, key: str):
 def test_verify_existing_refuses_a_corrupted_duplicate(tmp_path) -> None:
     store = LocalObjectStore(tmp_path / "objects")
     result = store.put_stream(io.BytesIO(b"payload"), max_bytes=64)
-    (tmp_path / "objects" / result.key).write_bytes(b"corrupt")
+    _tamper_published(tmp_path / "objects" / result.key, b"corrupt")
     with pytest.raises(IntegrityMismatch):
         store.put_stream(io.BytesIO(b"payload"), max_bytes=64, verify_existing=True)
 
@@ -735,7 +745,7 @@ def test_local_full_iteration_verifies_but_a_partial_read_is_unverified(tmp_path
     """The contract says a verified *prefix* does not exist; this pins that behaviour."""
     store = LocalObjectStore(tmp_path / "objects")
     result = store.put_stream(io.BytesIO(b"z" * 1024), max_bytes=1 << 20)
-    store.blob_path(result.key).write_bytes(b"tampered")
+    _tamper_published(store.blob_path(result.key), b"tampered")
 
     iterator = store.iter_chunks(result.key, chunk_size=256)
     assert next(iterator)  # bytes are served before the digest can be checked

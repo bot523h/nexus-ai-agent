@@ -16,9 +16,9 @@ verifies its digest, and uses a no-clobber hard link. Publishers cooperating
 with the repository protocol serialize promotion and rollback using a thread
 lock and an advisory file lock with a deadline. The candidate file and the
 publication directory are fsynced. Rollback checks the inode under this lock.
-Published candidates have owner-only read/write permissions (0600), not
-immutable permissions. Integrity verification detects later modifications; it
-does not prevent the owner or a same-UID process from modifying the bytes.
+Published candidates have owner-only read permissions (0400). This is not
+immutability: the owner or a same-UID process can change the mode and modify
+the bytes. Integrity verification detects modifications, but cannot prevent them.
 The inode check and unlink are separate syscalls: a same-UID process which
 ignores the lock can race them and delete another inode. The protocol cannot
 fence such a process, and a private directory and file permissions do not

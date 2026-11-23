@@ -277,13 +277,59 @@ def test_ingestion_publishes_in_worker_without_blocking_loop(
     asyncio.run(exercise())
 
 
-def test_published_blob_is_owner_read_write_only(tmp_path: Path) -> None:
+def test_published_blob_is_owner_read_only(tmp_path: Path) -> None:
     import stat
 
     store = LocalContentAddressedBlobStore(tmp_path)
     staging, digest, size = store.stage(io.BytesIO(b"private payload"), max_bytes=1024)
     key = store.blob_key_for(digest)
     store.store(staging, key)
-    assert stat.S_IMODE((tmp_path / key).stat().st_mode) == 0o600
+    assert stat.S_IMODE((tmp_path / key).stat().st_mode) == 0o400
+    (tmp_path / key).chmod(0o600)
     (tmp_path / key).write_bytes(b"tampered")
+    (tmp_path / key).chmod(0o400)
     assert not store.verify(key, sha256=digest, size_bytes=size)
+
+
+def _publish_in_process(root: str, staging: str, digest: str, result: object) -> None:
+    store = LocalContentAddressedBlobStore(root, lock_timeout_seconds=0.15)
+    try:
+        store.store(staging, store.blob_key_for(digest))
+    except TimeoutError:
+        result.put("timeout")  # type: ignore[attr-defined]
+    else:
+        result.put("published")  # type: ignore[attr-defined]
+
+
+def test_publication_flock_across_real_processes(tmp_path: Path) -> None:
+    import fcntl
+    import multiprocessing
+
+    store = LocalContentAddressedBlobStore(tmp_path)
+    staging, digest, size = store.stage(io.BytesIO(b"payload"), max_bytes=100)
+    context = multiprocessing.get_context("spawn")
+    result = context.Queue()
+    fd = os.open(tmp_path / ".blob_publish.lock", os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        child = context.Process(
+            target=_publish_in_process, args=(str(tmp_path), staging, digest, result)
+        )
+        child.start()
+        child.join(10)
+        assert child.exitcode == 0
+        assert result.get(timeout=2) == "timeout"
+        assert (tmp_path / staging).exists()
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+    child = context.Process(
+        target=_publish_in_process, args=(str(tmp_path), staging, digest, result)
+    )
+    child.start()
+    child.join(10)
+    assert child.exitcode == 0
+    assert result.get(timeout=2) == "published"
+    assert store.verify(store.blob_key_for(digest), sha256=digest, size_bytes=size)
+    result.close()
+    result.join_thread()
