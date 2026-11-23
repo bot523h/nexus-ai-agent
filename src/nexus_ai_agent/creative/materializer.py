@@ -358,8 +358,9 @@ def merkle_root_sha256(leaf_payloads: Sequence[bytes]) -> str:
     """Return the RFC 6962 Merkle Tree Hash of ``leaf_payloads`` as lowercase hex.
 
     The empty tree hashes ``SHA-256("")``, a single leaf hashes ``0x00 || leaf``
-    and internal nodes hash ``0x01 || left || right``; the odd tail is promoted,
-    never duplicated. This is the value sealed in an artifact passport.
+    and internal nodes hash ``0x01 || left || right``. Recursion splits at the largest
+    power of two below ``n`` per RFC 6962; an odd tail forms its own right subtree,
+    and no node is duplicated. This is the value sealed in an artifact passport.
     """
     return _merkle_hash(leaf_payloads, 0, len(leaf_payloads)).hex()
 

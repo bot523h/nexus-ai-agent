@@ -73,7 +73,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from uuid import uuid4
 
 import structlog
@@ -525,6 +525,9 @@ class InProcessJobQueue:
         # across processes.  ``_promotion_lock`` guards only the dictionary.
         self._promotion_lock = threading.RLock()
         self._promotion_path_locks: dict[str, threading.RLock] = {}
+        # Counts both owners and threads waiting to acquire each path lock.
+        # Eviction is safe only when the count reaches zero under the parent lock.
+        self._promotion_path_lock_refs: dict[str, int] = {}
         self._held_promotion_locks: dict[str, int] = {}
         self._db_lock = threading.Lock()
         # In-flight artifact publications.  ``asyncio.to_thread`` hands the
@@ -680,7 +683,9 @@ class InProcessJobQueue:
             ).fetchone()
             return row is not None and row["unknown_outcome"] == "unknown"
 
-    def reconcile(self, job_id: str, outcome: str, evidence: dict | None = None) -> bool:
+    def reconcile(
+        self, job_id: str, outcome: str, evidence: dict[str, object] | None = None
+    ) -> bool:
         """Reconcile a previous UNKNOWN outcome before retry.
 
         Phase 4: the previous outcome must be reconciled before the next
@@ -1229,10 +1234,15 @@ class InProcessJobQueue:
         return job_ids
 
     async def recover_job(self, job_id: str, *, stale_after: timedelta | None = None) -> list[str]:
-        """Recover a job for retry.
+        """Recover one orphaned job with expiry-gated takeover.
 
-        Phase 4: jobs with UNKNOWN outcomes are NOT automatically retried.
-        The previous outcome must be reconciled first via reconcile().
+        UNKNOWN outcomes are not retried until reconciled. Unlike
+        :meth:`resume_pending` (whole-sidecar startup recovery), this primitive
+        can touch only ``job_id``. With ``stale_after=None`` it observes only;
+        otherwise takeover requires a valid queue-owned heartbeat strictly
+        older than the cutoff. Fresh, boundary, missing, malformed and future
+        heartbeats are refused; ``started_at`` is never a liveness proof.
+        Terminal rows are never touched.
         """
         if await asyncio.to_thread(self.is_unknown, job_id):
             logger.warning(
@@ -1241,23 +1251,6 @@ class InProcessJobQueue:
                 job_id,
             )
             return []
-        """Recover **one** orphaned job (job-scoped, expiry-gated takeover).
-
-        Unlike :meth:`resume_pending` (whole-sidecar startup recovery), this is
-        the small, precise primitive an arbitrary runtime reconciliation may
-        use: it can only ever touch ``job_id``, so recovering one job can never
-        reset an unrelated in-flight row.  It is **never** the silent
-        ``stale_after=None`` startup takeover: with ``stale_after=None`` the
-        call observes only and takes nothing over (a runtime caller must pass
-        an explicit stale window, otherwise a live peer could still own the
-        row). When a window is supplied, only a row whose valid queue-owned
-        heartbeat is strictly older than the cutoff is taken over. Fresh,
-        equal-boundary, missing, null, malformed and future heartbeats are
-        refused; ``started_at`` age is never a fallback liveness proof.
-
-        Returns the list of job ids actually recovered (empty when nothing was
-        eligible).  Terminal rows are never touched.
-        """
         if stale_after is None:
             return []  # observe-only: a runtime reconcile must opt in explicitly
         live = {jid for jid, task in self._tasks.items() if not task.done()}
@@ -2716,9 +2709,15 @@ class InProcessJobQueue:
         new descriptor in the same process would deadlock against the first.
         """
         key = str(final_out_path.parent / f".{final_out_path.name}.promote.lock")
-        with self._promotion_lock:  # guards only the per-path lock dictionary
+        with self._promotion_lock:
             path_lock = self._promotion_path_locks.setdefault(key, threading.RLock())
-        with path_lock:
+            self._promotion_path_lock_refs[key] = self._promotion_path_lock_refs.get(key, 0) + 1
+
+        acquired = False
+        lock_fd: int | None = None
+        try:
+            path_lock.acquire()
+            acquired = True
             depth = self._held_promotion_locks.get(key, 0)
             if depth:
                 self._held_promotion_locks[key] = depth + 1
@@ -2727,25 +2726,36 @@ class InProcessJobQueue:
                 finally:
                     self._held_promotion_locks[key] = depth
                 return
-            lock_fd: int | None = None
+
             if _HAS_FCNTL and fcntl is not None:
                 try:
                     lock_fd = os.open(
                         key, os.O_CREAT | os.O_RDWR | os.O_CLOEXEC | os.O_NOFOLLOW, 0o600
                     )
+                    fcntl.flock(lock_fd, fcntl.LOCK_EX)
                 except OSError as exc:
                     raise _PromotionRefused("promotion_lock_unavailable") from exc
+            self._held_promotion_locks[key] = 1
+            try:
+                yield
+            finally:
+                self._held_promotion_locks.pop(key, None)
+        finally:
             try:
                 if lock_fd is not None:
-                    fcntl.flock(lock_fd, fcntl.LOCK_EX)
-                self._held_promotion_locks[key] = 1
-                try:
-                    yield
-                finally:
-                    del self._held_promotion_locks[key]
-            finally:
-                if lock_fd is not None:
                     os.close(lock_fd)
+            finally:
+                try:
+                    if acquired:
+                        path_lock.release()
+                finally:
+                    with self._promotion_lock:
+                        remaining = self._promotion_path_lock_refs.get(key, 0) - 1
+                        if remaining <= 0 and self._promotion_path_locks.get(key) is path_lock:
+                            self._promotion_path_locks.pop(key, None)
+                            self._promotion_path_lock_refs.pop(key, None)
+                        else:
+                            self._promotion_path_lock_refs[key] = remaining
 
     def _verify_idempotent_pair(
         self,
@@ -3510,15 +3520,17 @@ class InProcessJobQueue:
 
     def _fetch_row(self, job_id: str) -> sqlite3.Row | None:
         with self._db_lock, self._connection() as connection:
-            return connection.execute(
+            row = connection.execute(
                 "SELECT * FROM nexus_job_queue WHERE id = ?", (job_id,)
             ).fetchone()
+            return cast(sqlite3.Row | None, row)
 
     def _fetch_row_full(self, job_id: str) -> sqlite3.Row | None:
         with self._db_lock, self._connection() as connection:
-            return connection.execute(
+            row = connection.execute(
                 "SELECT * FROM nexus_job_queue WHERE id = ?", (job_id,)
             ).fetchone()
+            return cast(sqlite3.Row | None, row)
 
     def _decode_attempt_history(self, raw: str) -> list[dict[str, object]]:
         """Decode the queue-owned, row-atomic attempt ledger."""
