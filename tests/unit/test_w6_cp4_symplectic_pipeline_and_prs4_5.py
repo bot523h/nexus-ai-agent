@@ -559,7 +559,7 @@ class TestRayleighDampingTheory:
 
         # Symplectic condition on the FD-verified Jacobian (machine precision).
         fd = jacobian_of_step(q, p, dt, spec)
-        an = analytic_jacobian_of_step(q, p, dt, spec)
+        an = analytic_jacobian_of_step(spec, q, p, dt)
         assert np.linalg.norm(an - fd, ord="fro") < 1e-7
         omega = _omega(spec.dimension)
         residual = np.linalg.norm(an.T @ omega @ an - omega, ord="fro")
@@ -577,7 +577,7 @@ class TestAnalyticJacobianFDVerification:
         p = np.array([0.5, 0.2])
         dt = 0.02
         fd = jacobian_of_step(q, p, dt, spec, rayleigh_damping=damping)
-        an = analytic_jacobian_of_step(q, p, dt, spec, rayleigh_damping=damping)
+        an = analytic_jacobian_of_step(spec, q, p, dt, rayleigh_damping=damping)
         err = np.linalg.norm(an - fd, ord="fro")
         assert err < 1e-7, f"FD vs analytic residual {err:.3e}"
 
@@ -683,7 +683,7 @@ class TestExactSymplecticity:
         q = np.array([0.5, 0.3])
         p = np.array([0.2, -0.1])
         for dt in (0.05, 0.01, 0.001):
-            jac = analytic_jacobian_of_step(q, p, dt, spec)
+            jac = analytic_jacobian_of_step(spec, q, p, dt)
             residual = np.linalg.norm(jac.T @ omega @ jac - omega, ord="fro")
             assert residual < 1e-12, f"residual {residual:.3e} at dt={dt}"
 
@@ -797,24 +797,24 @@ class TestAnalyticJacobianGuards:
     def test_zero_dt_rejected(self):
         spec = HamiltonianSpec(mass=1.0, stiffness=np.eye(1))
         with pytest.raises(ValueError, match="non-zero"):
-            analytic_jacobian_of_step(np.array([1.0]), np.zeros(1), 0.0, spec)
+            analytic_jacobian_of_step(spec, np.array([1.0]), np.zeros(1), 0.0)
 
     def test_infinite_dt_rejected(self):
         spec = HamiltonianSpec(mass=1.0, stiffness=np.eye(1))
         with pytest.raises(ValueError, match="non-zero"):
-            analytic_jacobian_of_step(np.array([1.0]), np.zeros(1), float("inf"), spec)
+            analytic_jacobian_of_step(spec, np.array([1.0]), np.zeros(1), float("inf"))
 
     def test_negative_damping_rejected(self):
         spec = HamiltonianSpec(mass=1.0, stiffness=np.eye(1))
         with pytest.raises(ValueError, match="non-negative"):
             analytic_jacobian_of_step(
-                np.array([1.0]), np.zeros(1), 0.5, spec, rayleigh_damping=-0.1
+                spec, np.array([1.0]), np.zeros(1), 0.5, rayleigh_damping=-0.1
             )
 
     def test_shape_mismatch_rejected(self):
         spec = HamiltonianSpec(mass=1.0, stiffness=np.eye(2))
         with pytest.raises(ValueError, match="equal length"):
-            analytic_jacobian_of_step(np.array([1.0, 2.0]), np.zeros(1), 0.5, spec)
+            analytic_jacobian_of_step(spec, np.array([1.0, 2.0]), np.zeros(1), 0.5)
 
     def test_non_dimension_result_rejected_on_report_construction(self):
         with pytest.raises(ValueError, match="DimensionResult"):

@@ -237,7 +237,14 @@ def jacobian_of_step(
     *,
     rayleigh_damping: float = 0.0,
 ) -> NDArray[np.float64]:
-    """Numerical Jacobian of one Störmer–Verlet step (centrally differenced)."""
+    """Numerical (finite-difference) Jacobian of one Störmer–Verlet step.
+
+    Central-difference oracle: for each state direction the step is evaluated
+    at ``x ± eps`` and ``(F(x + eps) − F(x − eps)) / (2 eps)`` is taken, with
+    the default ``eps = 1e-6``.  This is a *separate* code path from the exact
+    analytic derivative (``analytic_jacobian_of_step``) and is used only as an
+    independent check on it — never as the definition of the Jacobian.
+    """
     if not math.isfinite(eps) or eps <= 0.0:
         raise ValueError("eps must be positive and finite")
     arr_q = np.asarray(q, dtype=float).ravel()
@@ -631,21 +638,40 @@ class UnifiedCinemaSciencePipeline:
 
 
 def analytic_jacobian_of_step(
+    spec: HamiltonianSpec,
     q: np.ndarray | list[float],
     p: np.ndarray | list[float],
     dt: float,
-    spec: HamiltonianSpec,
     rayleigh_damping: float = 0.0,
 ) -> NDArray[np.float64]:
     """Exact (analytic) Jacobian of one Störmer-Verlet step.
 
-    Uses the chain rule through the half-kick / drift / half-kick decomposition,
-    so for the conservative flow (``rayleigh_damping == 0``) the result
-    satisfies ``M^T Ω M = Ω`` to machine precision — no finite-difference ``eps``.
+    Closed-form matrix — zero finite-difference ``eps`` — obtained by the exact
+    chain rule through the half-step damping + conservative Störmer-Verlet
+    "kick/drift/kick" decomposition::
 
-    For ``c > 0`` (Rayleigh damping) the accumulated exact linearization is the
-    conservative blocks congruenced by the scalar half-step damping factor
-    ``d = exp(-c dt / (2 m))``: ``M = [[A, d B], [d C, d^2 D]]``.
+        half-step damping   p <- p * d,  d = exp(-c dt / (2m))
+        kick 1              p_half2 = p * d - 0.5 * dt * H_V(q)
+        drift               q_next = q + dt * p_half2 / m
+        kick 2              p_next = p_half2 - 0.5 * dt * H_V(q_next)
+        half-step damping   p_next <- p_next * d
+
+    where ``H_V(x) = K x + alpha * ||x||^2 * x`` is the gradient of the
+    potential ``V(q) = 1/2 q^T K q + 1/4 alpha ||q||^4`` whose Hessian
+    ``H_V(q) = K + alpha (||q||^2 I + 2 q q^T)`` enters kick 1 (at ``q``) and
+    kick 2 (at ``q_next``).  For the conservative flow (``rayleigh_damping == 0``)
+    the result satisfies ``M^T Ω M = Ω`` to machine precision.
+
+    For ``c > 0`` (Rayleigh damping) the accumulated blocks are
+    ``M = [[A, d B], [d C, d^2 D]]`` (``A``/``D`` the conservative q-blocks,
+    ``B = (dt/m) I``, ``C`` the p-block kick chain).  Because the conservative
+    core is exactly symplectic (``det = 1``), ``det(M) = (det D_half)^2
+    = d^{2n} = exp(-n c dt / m)`` where ``n`` is the number of degrees of
+    freedom — proven by the full symplectic-identity test in
+    ``tests/unit/test_w6_cp5_symplectic_unified.py``.
+
+    The finite-difference oracle (``jacobian_of_step``, central differences
+    ``eps=1e-6``) is a separate function and shares no code with this path.
     """
     if not math.isfinite(dt) or dt == 0.0:
         raise ValueError("dt must be finite and non-zero")

@@ -73,7 +73,7 @@ MUTATIONS: tuple[Mutation, ...] = (
         "(1.0 / temperature - 1.0 / t_ref)",
         "(1.0 / t_ref - 1.0 / temperature)",
         "inverting the Arrhenius direction flips the sign of the slope term",
-        (
+        expected_node_ids=(
             f"{CP1_NODES}::TestArrhenius::test_gamma_rises_with_temperature",
             f"{CP1_NODES}::TestArrhenius::test_higher_activation_barrier_amplifies_temperature_response",
             f"{CP1_NODES}::TestArrhenius::test_negative_ea_decreases_with_temperature",
@@ -85,7 +85,7 @@ MUTATIONS: tuple[Mutation, ...] = (
         "delta / (1.0 + math.exp(clipped))",
         "delta / (1.0 - math.exp(clipped))",
         "flipping the sign of the Hill term inverts the D-logH branch",
-        (
+        expected_node_ids=(
             f"{CP1_NODES}::TestHurterDriffield4thOrderFD::test_ln_slope_matches_4th_order_central_difference[layer0]",
             f"{CP1_NODES}::TestHurterDriffield4thOrderFD::test_ln_slope_matches_4th_order_central_difference[layer1]",
             f"{CP1_NODES}::TestHurterDriffield4thOrderFD::test_ln_slope_matches_4th_order_central_difference[layer2]",
@@ -105,7 +105,7 @@ MUTATIONS: tuple[Mutation, ...] = (
         "if not PAIR_LOW <= p <= PAIR_HIGH:",
         "if not p <= PAIR_HIGH:",
         "removing the Schwarzschild lower bound admits reciprocity failure",
-        (f"{CP1_NODES}::TestSchwarzschildReciprocity::test_invalid_p_refused",),
+        expected_node_ids=(f"{CP1_NODES}::TestSchwarzschildReciprocity::test_invalid_p_refused",),
     ),
     Mutation(
         "W6_M04_dir_reaction_sign_flip",
@@ -113,7 +113,7 @@ MUTATIONS: tuple[Mutation, ...] = (
         "changed = arr + k * dt * laplacian",
         "changed = arr - k * dt * laplacian",
         "flipping the diffusion sign re-opens the anti-diffusion defect",
-        (
+        expected_node_ids=(
             f"{CP1_NODES}::TestDirReactionDiffusion::test_diffusion_is_physical_not_anti_diffusive",
             f"{CP1_NODES}::TestDirReactionDiffusion::test_reaction_term_moves_in_right_direction_and_clips",
         ),
@@ -124,7 +124,7 @@ MUTATIONS: tuple[Mutation, ...] = (
         "math.expm1(x)",
         "math.exp(x) + 1.0",
         "using exp(x) + 1.0 as the Planck denominator changes the radiance fundamentally",
-        (f"{CP2_NODES}::TestPlanck::test_blackbody_known_answer_value",),
+        expected_node_ids=(f"{CP2_NODES}::TestPlanck::test_blackbody_known_answer_value",),
     ),
     Mutation(
         "W6_M06_wien_wavelength_inverse",
@@ -132,7 +132,7 @@ MUTATIONS: tuple[Mutation, ...] = (
         "return WIEN_CONSTANT_M_K / temperature_k",
         "return WIEN_CONSTANT_M_K * temperature_k",
         "swapping the Wien displacement law inverts T-law behaviour",
-        (f"{CP2_NODES}::TestPlanck::test_wien_peak_wavelength_matches",),
+        expected_node_ids=(f"{CP2_NODES}::TestPlanck::test_wien_peak_wavelength_matches",),
     ),
     Mutation(
         "W6_M07_hg_numerator_sign_flip",
@@ -140,7 +140,7 @@ MUTATIONS: tuple[Mutation, ...] = (
         "(1.0 - g**2) / (4.0 * math.pi * denominator)",
         "(1.0 + g**2) / (4.0 * math.pi * denominator)",
         "flipping the Henyey-Greenstein numerator breaks normalization",
-        (
+        expected_node_ids=(
             f"{CP2_NODES}::TestHGNormalizationOnUnitSphere::test_unit_sphere_integral_equals_one_to_high_precision[-0.1]",
             f"{CP2_NODES}::TestHGNormalizationOnUnitSphere::test_unit_sphere_integral_equals_one_to_high_precision[-0.5]",
             f"{CP2_NODES}::TestHGNormalizationOnUnitSphere::test_unit_sphere_integral_equals_one_to_high_precision[-0.9]",
@@ -160,7 +160,9 @@ MUTATIONS: tuple[Mutation, ...] = (
         "numerator = r01**2 + r12**2 + 2.0 * r01 * r12 * math.cos(2.0 * delta)",
         "numerator = r01**2 + r12**2 + 2.0 * r01 * r12 * math.cos(delta)",
         "dropping the 2*delta factor inverts the interference term",
-        (f"{CP2_NODES}::TestThinFilm::test_extreme_amplitude_still_yields_unit_interval",),
+        expected_node_ids=(
+            f"{CP2_NODES}::TestThinFilm::test_extreme_amplitude_still_yields_unit_interval",
+        ),
     ),
     Mutation(
         "W6_M09_volumetric_decay_sign_flip",
@@ -168,7 +170,7 @@ MUTATIONS: tuple[Mutation, ...] = (
         "decay = math.exp(-optical_depth)",
         "decay = math.exp(optical_depth)",
         "inverting the optical decay is an unbounded growth model",
-        (
+        expected_node_ids=(
             f"{CP2_NODES}::TestTransfer::test_deep_medium_converges_to_source_function",
             f"{CP2_NODES}::TestTransfer::test_optical_depth_one_g_is_half",
         ),
@@ -179,7 +181,9 @@ MUTATIONS: tuple[Mutation, ...] = (
         "return float(math.degrees(math.asin(ratio)))",
         "return float(math.degrees(math.acos(ratio)))",
         "flipping asin to acos inverts the critical-angle meaning",
-        (f"{CP2_NODES}::TestFresnel::test_tsr_angle_and_total_internal_reflection",),
+        expected_node_ids=(
+            f"{CP2_NODES}::TestFresnel::test_tsr_angle_and_total_internal_reflection",
+        ),
     ),
     Mutation(
         "W6_M11_matrix_square_root_anti_symmetrize",
@@ -193,7 +197,7 @@ MUTATIONS: tuple[Mutation, ...] = (
             "    root = np.asarray(0.5 * (root - root.T), dtype=np.float64)"
         ),
         "keeping an anti-symmetric root destroys SPD structure",
-        (
+        expected_node_ids=(
             f"{CP3_NODES}::TestBuresNegativeClamp::test_identical_gaussians_give_machine_noise_zero_clamped_to_zero",
             f"{CP3_NODES}::TestBuresNegativeClamp::test_identical_with_mean_shift_positive",
             f"{CP3_NODES}::TestBuresWasserstein::test_distance_equals_mean_shift_for_equal_covariances",
@@ -227,7 +231,7 @@ MUTATIONS: tuple[Mutation, ...] = (
         "- 2.0 * np.trace(root_product)",
         "+ 2.0 * np.trace(root_product)",
         "flipping the Bures-Wasserstein covariance term sign",
-        (
+        expected_node_ids=(
             f"{CP3_NODES}::TestBuresNegativeClamp::test_identical_gaussians_give_machine_noise_zero_clamped_to_zero",
             f"{CP3_NODES}::TestBuresNegativeClamp::test_identical_with_mean_shift_positive",
             f"{CP3_NODES}::TestBuresWasserstein::test_distance_equals_mean_shift_for_equal_covariances",
@@ -241,7 +245,7 @@ MUTATIONS: tuple[Mutation, ...] = (
         "a = c1_inv_half @ root_product @ c1_inv_half",
         "a = c1_inv_half @ c2 @ c1_inv_half",
         "dropping the matrix square root in the Monge construction",
-        (
+        expected_node_ids=(
             f"{CP3_NODES}::TestMcCannGeodesic::test_geodesic_distance_scales_quadratically",
             f"{CP3_NODES}::TestMcCannGeodesic::test_geodesic_mean_is_linear_interpolation",
             f"{CP3_NODES}::TestMcCannGeodesic::test_t_one_is_target",
@@ -262,7 +266,7 @@ MUTATIONS: tuple[Mutation, ...] = (
         "mean_t = (1.0 - t) * m1 + t * m2",
         "mean_t = t * m1 + (1.0 - t) * m2",
         "interpolating in the wrong direction",
-        (
+        expected_node_ids=(
             f"{CP3_NODES}::TestMcCannGeodesic::test_geodesic_distance_scales_quadratically",
             f"{CP3_NODES}::TestMcCannGeodesic::test_geodesic_mean_is_linear_interpolation",
             f"{CP3_NODES}::TestMcCannGeodesic::test_t_one_is_target",
@@ -277,7 +281,7 @@ MUTATIONS: tuple[Mutation, ...] = (
         "kinetic = float(arr_p @ arr_p) / (2.0 * spec.mass)",
         "kinetic = float(arr_p @ arr_p) / spec.mass",
         "dropping the 1/2 kinetic factor doubles the kinetic energy",
-        (
+        expected_node_ids=(
             f"{CP4_NODES}::TestExactSymplecticity::test_second_order_convergence_of_energy",
             f"{CP4_NODES}::TestRayleighDampingTheory::test_zero_damping_recovers_symplectic_flow",
             f"{CP4_NODES}::TestSymplectic::test_energy_bounded_without_damping",
@@ -291,7 +295,7 @@ MUTATIONS: tuple[Mutation, ...] = (
         "p_next = p_half2 - 0.5 * dt * grad_q_next",
         "p_next = p_half2 + 0.5 * dt * grad_q_next",
         "flipping the second half-step sign breaks symplecticity",
-        (
+        expected_node_ids=(
             f"{CP4_NODES}::TestAnalyticJacobianFDVerification::test_analytic_matches_fd_central[0.0-0.0]",
             f"{CP4_NODES}::TestAnalyticJacobianFDVerification::test_analytic_matches_fd_central[0.0-0.3]",
             f"{CP4_NODES}::TestAnalyticJacobianFDVerification::test_analytic_matches_fd_central[0.4-0.0]",
@@ -309,7 +313,7 @@ MUTATIONS: tuple[Mutation, ...] = (
         "grad = k @ arr_q + spec.quartic_coupling * float(arr_q @ arr_q) * arr_q",
         "grad = k @ arr_q - spec.quartic_coupling * float(arr_q @ arr_q) * arr_q",
         "inverting the quartic gradient term replaces harmonic attraction by repulsion",
-        (
+        expected_node_ids=(
             f"{CP4_NODES}::TestAnalyticJacobianFDVerification::test_analytic_matches_fd_central[0.0-0.3]",
             f"{CP4_NODES}::TestAnalyticJacobianFDVerification::test_analytic_matches_fd_central[0.4-0.3]",
             f"{CP4_NODES}::TestExactSymplecticity::test_second_order_convergence_of_energy",
@@ -324,7 +328,7 @@ MUTATIONS: tuple[Mutation, ...] = (
         "return float(abs(det - 1.0))",
         "return float(abs(det + 1.0))",
         "inverting the volume-preservation error sign makes the check vacuous",
-        (f"{CP4_NODES}::TestSymplectic::test_volume_preservation_is_near_exact",),
+        expected_node_ids=(f"{CP4_NODES}::TestSymplectic::test_volume_preservation_is_near_exact",),
     ),
     Mutation(
         "W6_M19_identity_version_decrement",
@@ -332,7 +336,7 @@ MUTATIONS: tuple[Mutation, ...] = (
         "identity_version=self.identity_version + 1,",
         "identity_version=self.identity_version - 1,",
         "minting identity versions in the wrong direction makes identity versioning meaningless",
-        (
+        expected_node_ids=(
             f"{CP4_NODES}::TestCharacterCapsuleSupersession::test_identity_version_is_monotone",
             f"{CP4_NODES}::TestCharacterCapsuleSupersession::test_identity_version_mints_and_bumps_only_identity_fields",
         ),
@@ -343,7 +347,7 @@ MUTATIONS: tuple[Mutation, ...] = (
         "if distance >= threshold.drift_min:",
         "if distance < threshold.drift_min:",
         "inverting the drift comparison marks small distances as drift",
-        (
+        expected_node_ids=(
             f"{CP4_NODES}::TestCharacterCapsuleSupersession::test_continuity_verifier_three_state_bands",
         ),
     ),
