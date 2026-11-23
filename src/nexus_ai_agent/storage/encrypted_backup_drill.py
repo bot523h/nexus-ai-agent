@@ -28,6 +28,8 @@ from urllib.parse import parse_qs, urlsplit
 from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
+from nexus_ai_agent.config.settings import Settings
+
 _B2 = (
     "NEXUS_B2_KEY_ID",
     "NEXUS_B2_APPLICATION_KEY",
@@ -37,6 +39,7 @@ _B2 = (
 )
 _R2 = ("R2_ACCOUNT_ID", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "R2_BUCKET")
 _DATABASE = "NEXUS_DATABASE_URL"
+ABSOLUTE_MAX_DRILL_DATABASE_BYTES = 64 * 1024 * 1024
 _ALIASES = {
     _DATABASE: (_DATABASE, "DATABASE_URL"),
     _B2[0]: (_B2[0], "B2_KEY_ID", "B2_APPLICATION_KEY_ID"),
@@ -101,12 +104,55 @@ def _valid_url(value: str, schemes: frozenset[str], *, database: bool) -> bool:
         return False
 
 
-def _valid_bucket(value: str) -> bool:
-    return bool(re.fullmatch(r"[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]", value)) and ".." not in value
+def _valid_bucket(value: str, *, b2: bool) -> bool:
+    minimum = 6 if b2 else 3
+    return minimum <= len(value) <= 63 and bool(re.fullmatch(r"[a-z0-9][a-z0-9-]*[a-z0-9]", value))
+
+
+def _valid_credential(value: str) -> bool:
+    lower = value.lower()
+    return (
+        _valid_value(value)
+        and not any(char.isspace() for char in value)
+        and lower not in {"changeme", "example", "dummy", "test", "todo"}
+        and not lower.startswith("your-")
+    )
+
+
+def _valid_b2_endpoint(endpoint: str, region: str) -> bool:
+    try:
+        parts = urlsplit(endpoint)
+        match = re.fullmatch(r"s3\.([a-z0-9-]+)\.backblazeb2\.com", parts.hostname or "")
+        return bool(
+            _valid_url(endpoint, frozenset({"https"}), database=False)
+            and not parts.query
+            and not parts.fragment
+            and parts.path in ("", "/")
+            and parts.port in (None, 443)
+            and match
+            and match.group(1) == region
+        )
+    except ValueError:
+        return False
+
+
+def _valid_r2_endpoint(endpoint: str, account: str) -> bool:
+    try:
+        parts = urlsplit(endpoint)
+        return bool(
+            _valid_url(endpoint, frozenset({"https"}), database=False)
+            and not parts.query
+            and not parts.fragment
+            and not parts.path
+            and parts.port in (None, 443)
+            and parts.hostname == account + ".r2.cloudflarestorage.com"
+        )
+    except ValueError:
+        return False
 
 
 def verify_production_backup_preflight(
-    env_mapping: Mapping[str, str], *, require_remote_tier: bool = True
+    env_mapping: Mapping[str, str] | Settings, *, require_remote_tier: bool = True
 ) -> str:
     """Validate configuration only; never claim a remote backup took place.
 
@@ -116,6 +162,20 @@ def verify_production_backup_preflight(
     """
     if not isinstance(require_remote_tier, bool):
         raise BackupPreflightError("FAILED_PREFLIGHT_REMOTE_MISSING")
+    if isinstance(env_mapping, Settings):
+        fields = {
+            _DATABASE: env_mapping.database_url,
+            _B2[0]: env_mapping.b2_key_id,
+            _B2[1]: env_mapping.b2_application_key,
+            _B2[2]: env_mapping.b2_bucket,
+            _B2[3]: env_mapping.b2_endpoint,
+            _B2[4]: env_mapping.b2_region,
+            _R2[0]: env_mapping.r2_account_id,
+            _R2[1]: env_mapping.r2_access_key_id,
+            _R2[2]: env_mapping.r2_secret_access_key,
+            _R2[3]: env_mapping.r2_bucket,
+        }
+        env_mapping = {name: value for name, value in fields.items() if value is not None}
     normalized: dict[str, str] = {}
     for canonical, aliases in _ALIASES.items():
         values = [env_mapping[name] for name in aliases if env_mapping.get(name) not in (None, "")]
@@ -142,15 +202,16 @@ def verify_production_backup_preflight(
         or not (b2 or r2)
         or (bool(present.intersection(_B2)) and not b2)
         or (bool(present.intersection(_R2)) and not r2)
-        or (b2 and not _valid_url(normalized[_B2[3]], frozenset({"https"}), database=False))
-        or (b2 and not _valid_bucket(normalized[_B2[2]]))
-        or (r2 and not _valid_bucket(normalized[_R2[3]]))
-        or (b2 and any(char.isspace() for char in normalized[_B2[4]]))
-        or (r2 and any(char.isspace() for char in normalized[_R2[0]]))
+        or (b2 and not _valid_b2_endpoint(normalized[_B2[3]], normalized[_B2[4]]))
+        or (b2 and not _valid_bucket(normalized[_B2[2]], b2=True))
+        or (r2 and not _valid_bucket(normalized[_R2[3]], b2=False))
+        or (b2 and not all(_valid_credential(normalized[key]) for key in _B2[:2]))
+        or (r2 and not all(_valid_credential(normalized[key]) for key in _R2[1:3]))
+        or (r2 and not re.fullmatch(r"[a-f0-9]{32}", normalized[_R2[0]]))
         or ("R2_ENDPOINT_URL" in present and not r2)
         or (
             "R2_ENDPOINT_URL" in present
-            and not _valid_url(normalized["R2_ENDPOINT_URL"], frozenset({"https"}), database=False)
+            and not _valid_r2_endpoint(normalized["R2_ENDPOINT_URL"], normalized[_R2[0]])
         )
     ):
         raise BackupPreflightError("FAILED_PREFLIGHT_REMOTE_MISSING")
@@ -191,7 +252,25 @@ def _key(key: bytes | bytearray | memoryview) -> bytes:
     return hashlib.sha256(b"nexus-local-drill-aesgcm-v1\x00" + raw).digest()
 
 
-def _read_regular(path: Path, limit: int = 64 * 1024 * 1024) -> bytes:
+def generate_drill_encryption_key() -> bytes:
+    """Generate a key with the OS CSPRNG, rejecting disallowed patterns."""
+    for _ in range(128):
+        candidate = secrets.token_bytes(32)
+        try:
+            _key(candidate)
+        except ValueError:
+            continue
+        return candidate
+    raise RuntimeError("could not generate an acceptable drill key")
+
+
+def _validate_size_limit(limit: int) -> None:
+    if type(limit) is not int or not 0 < limit <= ABSOLUTE_MAX_DRILL_DATABASE_BYTES:
+        raise ValueError("max_database_bytes must be within (0, ABSOLUTE_MAX_DRILL_DATABASE_BYTES]")
+
+
+def _read_regular(path: Path, limit: int = ABSOLUTE_MAX_DRILL_DATABASE_BYTES) -> bytes:
+    _validate_size_limit(limit)
     fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK)
     try:
         info = os.fstat(fd)
@@ -299,9 +378,8 @@ def verify_encrypted_sqlite_backup(
     max_database_bytes: int = 64 * 1024 * 1024,
 ) -> bytes:
     """Authenticate an artifact before returning any plaintext; never restore on failure."""
+    _validate_size_limit(max_database_bytes)
     aes_key = _key(key)
-    if type(max_database_bytes) is not int or max_database_bytes <= 0:
-        raise ValueError("database size exceeds drill limit")
     try:
         manifest = _parse_manifest(_read_regular(manifest_path, 1024 * 1024))
         ciphertext = _read_regular(archive_path, max_database_bytes)
@@ -330,6 +408,32 @@ def verify_encrypted_sqlite_backup(
         raise BackupIntegrityTamperError("encrypted backup authentication failed") from exc
 
 
+def _check_trusted_directory(path: Path, *, forbidden_mode: int) -> None:
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK)
+    try:
+        info = os.fstat(fd)
+        if (
+            not stat.S_ISDIR(info.st_mode)
+            or (hasattr(os, "geteuid") and info.st_uid != os.geteuid())
+            or info.st_mode & forbidden_mode
+        ):
+            raise PermissionError("untrusted drill directory")
+    finally:
+        os.close(fd)
+
+
+def _check_source_identity(source: Path, info: os.stat_result) -> None:
+    try:
+        current = os.stat(source, follow_symlinks=False)
+    except FileNotFoundError:
+        raise ValueError("source database inode changed during drill") from None
+    if not stat.S_ISREG(current.st_mode) or (current.st_dev, current.st_ino) != (
+        info.st_dev,
+        info.st_ino,
+    ):
+        raise ValueError("source database inode changed during drill")
+
+
 def run_encrypted_sqlite_backup_restore_drill(
     source_db_path: Path,
     drill_workdir: Path,
@@ -346,9 +450,8 @@ def run_encrypted_sqlite_backup_restore_drill(
     The source directory and work directory must be controlled by the caller:
     Python's SQLite API opens paths independently of our no-follow descriptor.
     """
+    _validate_size_limit(max_database_bytes)
     aes_key = _key(encryption_key)
-    if type(max_database_bytes) is not int or max_database_bytes <= 0:
-        raise ValueError("database size exceeds drill limit")
     if (
         isinstance(backup_timeout_seconds, bool)
         or not isinstance(backup_timeout_seconds, (int, float))
@@ -365,6 +468,8 @@ def run_encrypted_sqlite_backup_restore_drill(
         status = "LOCAL_DRILL_VERIFIED_REMOTE_NOT_CHECKED"
     source = Path(source_db_path).absolute()
     work = Path(drill_workdir).absolute()
+    _check_trusted_directory(source.parent, forbidden_mode=stat.S_IWOTH)
+    _check_trusted_directory(work, forbidden_mode=stat.S_IWGRP | stat.S_IWOTH)
     source_fd = os.open(source, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK)
     try:
         source_info = os.fstat(source_fd)
@@ -372,6 +477,7 @@ def run_encrypted_sqlite_backup_restore_drill(
             raise ValueError("source is not a regular file")
         if source_info.st_size > max_database_bytes:
             raise ValueError("database size exceeds drill limit")
+        _check_source_identity(source, source_info)
         deadline = time.monotonic() + backup_timeout_seconds
 
         def progress(_status: int, _remaining: int, _total: int) -> None:
@@ -387,6 +493,7 @@ def run_encrypted_sqlite_backup_restore_drill(
             ) as src:
                 with closing(sqlite3.connect(snapshot, timeout=backup_timeout_seconds)) as dst:
                     src.backup(dst, pages=128, progress=progress, sleep=0.005)
+                    _check_source_identity(source, source_info)
                     counts = _inventory(dst)
                     if not counts and not allow_empty_database:
                         raise ValueError("source database has no user tables")

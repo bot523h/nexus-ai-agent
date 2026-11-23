@@ -19,15 +19,15 @@ def b2_config() -> dict[str, str]:
         "NEXUS_B2_KEY_ID": "key-id",
         "NEXUS_B2_APPLICATION_KEY": "private-cloud-secret",
         "NEXUS_B2_BUCKET": "bucket",
-        "NEXUS_B2_ENDPOINT": "https://storage.example",
-        "NEXUS_B2_REGION": "region",
+        "NEXUS_B2_ENDPOINT": "https://s3.us-west-004.backblazeb2.com",
+        "NEXUS_B2_REGION": "us-west-004",
     }
 
 
 def r2_config() -> dict[str, str]:
     return {
         "NEXUS_DATABASE_URL": "postgres://user:private-db-secret@db.example/app?sslmode=verify-full",
-        "R2_ACCOUNT_ID": "account",
+        "R2_ACCOUNT_ID": "0123456789abcdef0123456789abcdef",
         "R2_ACCESS_KEY_ID": "access",
         "R2_SECRET_ACCESS_KEY": "private-cloud-secret",
         "R2_BUCKET": "bucket",
@@ -347,7 +347,7 @@ def test_r2_aliases_and_optional_endpoint() -> None:
         "NEXUS_R2_ACCESS_KEY_ID": config["R2_ACCESS_KEY_ID"],
         "NEXUS_R2_SECRET_ACCESS_KEY": config["R2_SECRET_ACCESS_KEY"],
         "NEXUS_R2_BUCKET_NAME": config["R2_BUCKET"],
-        "NEXUS_R2_ENDPOINT_URL": "https://r2.example",
+        "NEXUS_R2_ENDPOINT_URL": "https://0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com",
     }
     assert verify_production_backup_preflight(aliases) == "REMOTE_CONFIGURATION_VALIDATED"
     aliases["NEXUS_R2_ENDPOINT_URL"] = "http://r2.example"
@@ -396,3 +396,160 @@ def test_authentication_failure_publishes_no_generation(tmp_path: Path) -> None:
     with pytest.raises(BackupIntegrityTamperError):
         run_encrypted_sqlite_backup_restore_drill(source, work, key, inject_tamper_byte=True)
     assert not list(work.iterdir())
+
+
+def test_generated_key_and_hard_limit_before_io(tmp_path: Path) -> None:
+    from nexus_ai_agent.storage.encrypted_backup_drill import (
+        ABSOLUTE_MAX_DRILL_DATABASE_BYTES,
+        _key,
+        generate_drill_encryption_key,
+        run_encrypted_sqlite_backup_restore_drill,
+        verify_encrypted_sqlite_backup,
+    )
+
+    key = generate_drill_encryption_key()
+    assert len(key) == 32 and len(_key(key)) == 32
+    for limit in (0, -1, ABSOLUTE_MAX_DRILL_DATABASE_BYTES + 1, True):
+        with pytest.raises(ValueError, match="max_database_bytes must be within"):
+            run_encrypted_sqlite_backup_restore_drill(
+                tmp_path / "missing", tmp_path, key, max_database_bytes=limit
+            )
+        with pytest.raises(ValueError, match="max_database_bytes must be within"):
+            verify_encrypted_sqlite_backup(
+                tmp_path / "missing", tmp_path / "missing2", key, max_database_bytes=limit
+            )
+    assert not list(tmp_path.iterdir())
+
+
+@pytest.mark.parametrize(
+    "name,value",
+    [
+        ("NEXUS_B2_BUCKET", "short"),
+        ("NEXUS_B2_BUCKET", "bad.name"),
+        ("NEXUS_B2_ENDPOINT", "https://s3.us-east-005.backblazeb2.com"),
+        ("NEXUS_B2_ENDPOINT", "https://s3.us-west-004.backblazeb2.com?foo=1"),
+        ("NEXUS_B2_KEY_ID", "your-key"),
+        ("NEXUS_B2_APPLICATION_KEY", "changeme"),
+    ],
+)
+def test_b2_provider_strict_configuration(name: str, value: str) -> None:
+    config = b2_config()
+    config[name] = value
+    with pytest.raises(BackupPreflightError):
+        verify_production_backup_preflight(config)
+
+
+def test_r2_endpoint_account_mismatch_is_rejected() -> None:
+    config = r2_config()
+    config["R2_ENDPOINT_URL"] = "https://ffffffffffffffffffffffffffffffff.r2.cloudflarestorage.com"
+    with pytest.raises(BackupPreflightError):
+        verify_production_backup_preflight(config)
+
+
+def test_real_sqlite_busy_times_out_without_publication(tmp_path: Path) -> None:
+    import sqlite3
+    import time
+
+    from nexus_ai_agent.storage.encrypted_backup_drill import (
+        run_encrypted_sqlite_backup_restore_drill,
+    )
+
+    source, work = tmp_path / "source.sqlite", tmp_path / "work"
+    work.mkdir()
+    _source(source)
+    key = hashlib.sha256(b"busy test secret").digest()
+    with sqlite3.connect(source) as locker:
+        locker.execute("BEGIN EXCLUSIVE")
+        started = time.monotonic()
+        with pytest.raises(TimeoutError, match="sqlite backup timed out"):
+            run_encrypted_sqlite_backup_restore_drill(
+                source, work, key, backup_timeout_seconds=0.05
+            )
+        assert time.monotonic() - started < 2.0
+        locker.rollback()
+    assert not list(work.iterdir())
+
+
+def test_work_directory_rejects_group_writable_permissions(tmp_path: Path) -> None:
+    from nexus_ai_agent.storage.encrypted_backup_drill import (
+        run_encrypted_sqlite_backup_restore_drill,
+    )
+
+    source, work = tmp_path / "source.sqlite", tmp_path / "work"
+    work.mkdir()
+    work.chmod(0o770)
+    _source(source)
+    with pytest.raises(PermissionError, match="untrusted drill directory"):
+        run_encrypted_sqlite_backup_restore_drill(source, work, hashlib.sha256(b"key").digest())
+
+
+def test_source_inode_replacement_during_backup_is_rejected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import time
+
+    from nexus_ai_agent.storage import encrypted_backup_drill as drill
+
+    source, work, replacement = (
+        tmp_path / "source.sqlite",
+        tmp_path / "work",
+        tmp_path / "other.sqlite",
+    )
+    work.mkdir()
+    _source(source)
+    _source(replacement)
+    original = time.monotonic
+    calls = 0
+
+    def swap_during_progress() -> float:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            replacement.replace(source)
+        return original()
+
+    monkeypatch.setattr(time, "monotonic", swap_during_progress)
+    with pytest.raises(ValueError, match="source database inode changed during drill"):
+        drill.run_encrypted_sqlite_backup_restore_drill(
+            source, work, hashlib.sha256(b"key").digest()
+        )
+    assert not list(work.iterdir())
+
+
+@pytest.mark.parametrize("tier,minimum", [("b2", 6), ("r2", 3)])
+@pytest.mark.parametrize("length", [2, 3, 5, 6, 63, 64])
+def test_provider_bucket_length_boundaries(tier: str, minimum: int, length: int) -> None:
+    config = b2_config() if tier == "b2" else r2_config()
+    config["NEXUS_B2_BUCKET" if tier == "b2" else "R2_BUCKET"] = "a" * length
+    if minimum <= length <= 63:
+        assert verify_production_backup_preflight(config) == "REMOTE_CONFIGURATION_VALIDATED"
+    else:
+        with pytest.raises(BackupPreflightError):
+            verify_production_backup_preflight(config)
+
+
+@pytest.mark.parametrize("tier", ["b2", "r2"])
+@pytest.mark.parametrize("bucket", ["abc.def", "-bucket", "bucket-", "Bucket", "abc_def"])
+def test_provider_bucket_rejects_invalid_characters(tier: str, bucket: str) -> None:
+    config = b2_config() if tier == "b2" else r2_config()
+    config["NEXUS_B2_BUCKET" if tier == "b2" else "R2_BUCKET"] = bucket
+    with pytest.raises(BackupPreflightError):
+        verify_production_backup_preflight(config)
+
+
+def test_preflight_settings_and_b2_root_endpoint() -> None:
+    from nexus_ai_agent.config.settings import Settings
+
+    config = b2_config()
+    settings = Settings.model_construct(
+        database_url=config["NEXUS_DATABASE_URL"],
+        b2_key_id=config["NEXUS_B2_KEY_ID"],
+        b2_application_key=config["NEXUS_B2_APPLICATION_KEY"],
+        b2_bucket=config["NEXUS_B2_BUCKET"],
+        b2_endpoint=config["NEXUS_B2_ENDPOINT"] + "/",
+        b2_region=config["NEXUS_B2_REGION"],
+    )
+    assert verify_production_backup_preflight(settings) == "REMOTE_CONFIGURATION_VALIDATED"
+    settings.b2_region = "us-east-005"
+    with pytest.raises(BackupPreflightError):
+        verify_production_backup_preflight(settings)

@@ -736,7 +736,7 @@ class WorkspaceFilesystem:
                                                 )
                                             remaining = remaining[written:]
                                     os.fsync(candidate_file)
-                                    os.fchmod(candidate_file, 0o400)
+                                    os.fchmod(candidate_file, 0o600)
                                     return self._promote_candidate(
                                         candidate_file,
                                         candidate_fd,

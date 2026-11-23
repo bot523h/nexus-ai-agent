@@ -1,5 +1,13 @@
 # W5 storage and local backup contract
 
+## Governance & Multi-Stream Merge Isolation Note
+
+The project owner has directed this W5 branch not to modify `.agents/board.json`
+ or `docs/DECISION_LOG.md` while parallel W3-A, W4 and W6 streams are active.
+This document records the W5 decision and its limitations for this branch; it
+is not a claim that the normal repository decision-log requirement was met.
+Reconciliation with that log remains necessary when the exclusive owner permits it.
+
 ## Status and threat boundary
 
 This is a draft design and implementation record for PR #356, not a claim of
@@ -8,6 +16,9 @@ verifies its digest, and uses a no-clobber hard link. Publishers cooperating
 with the repository protocol serialize promotion and rollback using a thread
 lock and an advisory file lock with a deadline. The candidate file and the
 publication directory are fsynced. Rollback checks the inode under this lock.
+Published candidates have owner-only read/write permissions (0600), not
+immutable permissions. Integrity verification detects later modifications; it
+does not prevent the owner or a same-UID process from modifying the bytes.
 The inode check and unlink are separate syscalls: a same-UID process which
 ignores the lock can race them and delete another inode. The protocol cannot
 fence such a process, and a private directory and file permissions do not
@@ -35,7 +46,14 @@ one directory is renamed into the work directory and the directory is fsynced.
 Independent three-file replacements are not an atomic transaction. Reruns
 create distinct generations, rather than a byte-identical idempotent result;
 retention and recovery after process or power failure remain unverified.
-The drill is not wired into the production maintenance scheduler.
+The drill is not wired into the production maintenance scheduler. Checks of
+source-directory permissions and pre/post inode identity detect some path
+replacements, but a swap-and-restore between checks remains possible. The
+64 MiB absolute read cap is not a bound on total process RSS: encryption and
+verification require multiple in-memory copies. Cleanup retry tracking for
+blob staging is process-local and is lost on restart. Publication from the
+shared ingestion and recovery path uses worker threads; cancellation does not
+stop an already-running worker, so existing recovery remains necessary.
 
 ## Cryptographic evidence
 

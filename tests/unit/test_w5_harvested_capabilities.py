@@ -199,3 +199,91 @@ def test_async_publication_and_directory_sync(
         False,
     )
     assert directories
+
+
+def test_successful_publication_survives_cleanup_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = LocalContentAddressedBlobStore(tmp_path)
+    staging, digest, size = store.stage(io.BytesIO(b"payload"), max_bytes=100)
+    key = store.blob_key_for(digest)
+    unlink = store._fs.unlink
+
+    def fail(_key: str) -> None:
+        raise PermissionError("simulated cleanup failure")
+
+    monkeypatch.setattr(store._fs, "unlink", fail)
+    assert store.store(staging, key) == (digest, size, False)
+    assert store.open(key) == b"payload"
+    assert store.reconcile_staging_cleanups() == (staging,)
+    monkeypatch.setattr(store._fs, "unlink", unlink)
+    assert store.reconcile_staging_cleanups() == ()
+    assert not (tmp_path / staging).exists()
+
+
+def test_ingestion_publishes_in_worker_without_blocking_loop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import asyncio
+    import threading
+    from typing import Any, cast
+    from unittest.mock import AsyncMock
+
+    from nexus_ai_agent.creative.assets.ingestion import publish_and_commit
+    from nexus_ai_agent.creative.assets.ports import AssetRepository
+
+    store = LocalContentAddressedBlobStore(tmp_path)
+    staging, digest, size = store.stage(io.BytesIO(b"payload"), max_bytes=100)
+    real_store = store.store
+    release = threading.Event()
+    worker_threads: list[int] = []
+    repo = AsyncMock()
+    repo.complete_ingest.return_value = True
+
+    async def exercise() -> None:
+        loop = asyncio.get_running_loop()
+        main_thread = threading.get_ident()
+        started = asyncio.Event()
+
+        def blocking_publish(staging_key: str, blob_key: str) -> tuple[str, int, bool]:
+            worker_threads.append(threading.get_ident())
+            loop.call_soon_threadsafe(started.set)
+            if not release.wait(timeout=5):
+                raise TimeoutError("test worker was not released")
+            return real_store(staging_key, blob_key)
+
+        monkeypatch.setattr(store, "store", blocking_publish)
+        task = asyncio.create_task(
+            publish_and_commit(
+                cast(AssetRepository, repo),
+                store,
+                ingest_id="i",
+                project_id="p",
+                staging_key=staging,
+                content_sha256=digest,
+                size_bytes=size,
+                media_kind=cast(Any, "image"),
+                media_type="image/png",
+            )
+        )
+        try:
+            await asyncio.wait_for(started.wait(), timeout=2)
+            assert not task.done()
+            assert worker_threads[0] != main_thread
+        finally:
+            release.set()
+        assert (await task)[2] is False
+
+    asyncio.run(exercise())
+
+
+def test_published_blob_is_owner_read_write_only(tmp_path: Path) -> None:
+    import stat
+
+    store = LocalContentAddressedBlobStore(tmp_path)
+    staging, digest, size = store.stage(io.BytesIO(b"private payload"), max_bytes=1024)
+    key = store.blob_key_for(digest)
+    store.store(staging, key)
+    assert stat.S_IMODE((tmp_path / key).stat().st_mode) == 0o600
+    (tmp_path / key).write_bytes(b"tampered")
+    assert not store.verify(key, sha256=digest, size_bytes=size)

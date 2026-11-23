@@ -14,9 +14,11 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import logging
 import os
 import secrets
 import stat
+import threading
 from pathlib import Path
 from typing import BinaryIO
 
@@ -34,6 +36,7 @@ from nexus_ai_agent.tools.filesystem_policy import (
 
 _STAGING_PREFIX = "staging"
 _BLOB_PREFIX = "blobs"
+_LOGGER = logging.getLogger(__name__)
 
 
 class LocalContentAddressedBlobStore:
@@ -52,6 +55,8 @@ class LocalContentAddressedBlobStore:
         finally:
             os.close(fd)
         self._fs = WorkspaceFilesystem(root, lock_timeout_seconds=lock_timeout_seconds)
+        self._pending_staging_cleanups: set[str] = set()
+        self._cleanup_lock = threading.Lock()
         self._fs.ensure_directory(_STAGING_PREFIX)
         self._fs.ensure_directory(_BLOB_PREFIX)
         stage_fd = self._fs._open_dir((_STAGING_PREFIX,))
@@ -120,6 +125,9 @@ class LocalContentAddressedBlobStore:
         existing blob is verified before reuse (never silently overwritten with
         mismatched bytes). Publication is an atomic no-overwrite hard link.
         """
+        parts = staging_key.split("/")
+        if len(parts) != 2 or parts[0] != _STAGING_PREFIX or parts[1] in ("", ".", ".."):
+            raise BlobStoreError("staging key is outside the staging namespace")
         try:
             sha256, size = self._fs.hash_file(staging_key)
         except (FilesystemBoundaryError, OSError) as exc:
@@ -136,12 +144,36 @@ class LocalContentAddressedBlobStore:
             raise
         except (FilesystemBoundaryError, OSError) as exc:
             raise BlobStoreError("blob publication failed inside the boundary") from exc
-        self._fs.unlink(staging_key)
+        try:
+            self._fs.unlink(staging_key)
+        except (OSError, FilesystemBoundaryError):
+            with self._cleanup_lock:
+                self._pending_staging_cleanups.add(staging_key)
+            _LOGGER.warning("blob published; staging cleanup deferred")
         return sha256, size, not published
+
+    def reconcile_staging_cleanups(self) -> tuple[str, ...]:
+        """Retry this process's deferred cleanups; return keys still pending.
+
+        This in-memory queue does not survive process restart; durable ingest
+        recovery remains responsible for crash reconciliation.
+        """
+        with self._cleanup_lock:
+            for key in tuple(self._pending_staging_cleanups):
+                try:
+                    self._fs.unlink(key)
+                except (OSError, FilesystemBoundaryError):
+                    continue
+                self._pending_staging_cleanups.discard(key)
+            return tuple(sorted(self._pending_staging_cleanups))
 
     def publish_from_staging(self, staging_key: str, blob_key: str) -> tuple[str, int, bool]:
         """Publish a staged blob using the canonical synchronous operation."""
         return self.store(staging_key, blob_key)
+
+    async def store_async(self, staging_key: str, blob_key: str) -> tuple[str, int, bool]:
+        """Publish in a worker thread without blocking the event loop."""
+        return await asyncio.to_thread(self.store, staging_key, blob_key)
 
     async def publish_from_staging_async(
         self, staging_key: str, blob_key: str
