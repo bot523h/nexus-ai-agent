@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any
 
 from nexus_ai_agent.creative.studio.durable_dedupe import (
+    CompensationJournalEntry,
     DurablePlanRecord,
     ExecutionLease,
     PlanExecutionInProgressError,
@@ -38,6 +39,9 @@ from nexus_ai_agent.creative.studio.plan_identifiers import validate_plan_identi
 
 MAX_RECORDS = 4096
 MAX_EVIDENCE_BYTES = 65536
+MAX_COMPENSATION_ENTRIES = 131072
+MAX_APPROVAL_NONCES = 128
+MAX_CONSUMED_NONCES = MAX_RECORDS * MAX_APPROVAL_NONCES
 _HASH = re.compile(r"[0-9a-f]{64}\Z")
 
 
@@ -132,7 +136,7 @@ class DurablePlanDedupeStore:
         path: str | Path,
         *,
         clock: Callable[[], float] = time.time,
-        repair_authorizer: Callable[[str, str], bool] | None = None,
+        repair_authorizer: Callable[[str, str, str, int], bool] | None = None,
     ) -> None:
         if not callable(clock):
             raise ValueError("clock must be callable")
@@ -196,6 +200,14 @@ class DurablePlanDedupeStore:
             "event_id INTEGER PRIMARY KEY, project_id TEXT NOT NULL, plan_id TEXT NOT NULL, "
             "plan_hash TEXT NOT NULL, evidence_json TEXT NOT NULL)"
         )
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS compensation_journal ("
+            "entry_id INTEGER PRIMARY KEY, project_id TEXT NOT NULL, plan_id TEXT NOT NULL, "
+            "plan_hash TEXT NOT NULL, attempt INTEGER NOT NULL, step_id TEXT NOT NULL, "
+            "effect_key TEXT NOT NULL, status TEXT NOT NULL, evidence_json TEXT, "
+            "UNIQUE(project_id, plan_id, step_id), "
+            "UNIQUE(project_id, plan_id, effect_key))"
+        )
         if plans and "project_id" not in plans:
             conn.execute(
                 "INSERT INTO plans SELECT 'default', plan_id, plan_hash, status, "
@@ -215,6 +227,7 @@ class DurablePlanDedupeStore:
             ("compensation_status", "TEXT"),
             ("compensation_evidence_json", "TEXT"),
             ("repair_evidence_json", "TEXT"),
+            ("takeover_ready", "INTEGER NOT NULL DEFAULT 0"),
         ):
             if name not in columns:
                 conn.execute(f"ALTER TABLE plans ADD COLUMN {name} {definition}")
@@ -388,6 +401,158 @@ class DurablePlanDedupeStore:
             raise ValueError("lease expiry is not finite and increasing")
         return expires
 
+    @staticmethod
+    def _validate_nonces(nonce: str, additional_nonces: tuple[str, ...]) -> tuple[str, ...]:
+        if (
+            not isinstance(additional_nonces, tuple)
+            or len(additional_nonces) >= MAX_APPROVAL_NONCES
+        ):
+            raise ValueError("additional_nonces must be a bounded tuple")
+        nonces = (nonce, *additional_nonces)
+        for value in nonces:
+            if not isinstance(value, str) or not 1 <= len(value) <= 256:
+                raise ValueError("nonce must contain 1 to 256 UTF-8 bytes")
+            if len(value.encode("utf-8")) > 256:
+                raise ValueError("nonce must contain 1 to 256 UTF-8 bytes")
+        if len(set(nonces)) != len(nonces):
+            raise PlanStoreStateError("nonce repeated within approval set")
+        return nonces
+
+    @staticmethod
+    def _consume_nonces(conn: sqlite3.Connection, project_id: str, nonces: tuple[str, ...]) -> None:
+        count = conn.execute("SELECT count(*) FROM consumed_nonces").fetchone()[0]
+        if count + len(nonces) > MAX_CONSUMED_NONCES:
+            raise PlanStoreCapacityError("nonce capacity reached")
+        try:
+            conn.executemany(
+                "INSERT INTO consumed_nonces VALUES (?, ?)",
+                ((project_id, value) for value in nonces),
+            )
+        except sqlite3.IntegrityError as exc:
+            raise PlanStoreStateError("nonce already consumed") from exc
+
+    def reserve_and_start(
+        self,
+        plan_id: str,
+        plan_hash: str,
+        *,
+        external_effects: bool,
+        nonce: str,
+        project_id: str = "default",
+        lease_ttl_seconds: float = 30.0,
+        additional_nonces: tuple[str, ...] = (),
+    ) -> ExecutionLease:
+        """Atomically reserve a new identity and consume its execution nonces.
+
+        Existing reservations are not stolen. An authorized operator may mark a
+        quarantined record takeover-ready; only that state can be restarted.
+        This API never returns previously committed evidence or authorizes an
+        actor; authentication and approval must precede calling it.
+        """
+        self._validate_identity(plan_id, plan_hash, project_id)
+        if not isinstance(external_effects, bool):
+            raise ValueError("external_effects must be boolean")
+        nonces = self._validate_nonces(nonce, additional_nonces)
+        self._expiry(0.0, lease_ttl_seconds)
+        quarantined = False
+        lease: ExecutionLease | None = None
+        with self._transaction() as conn:
+            row = conn.execute(
+                "SELECT plan_hash, status, external_effects, attempt, lease_expires_at, "
+                "takeover_ready FROM plans WHERE project_id=? AND plan_id=?",
+                (project_id, plan_id),
+            ).fetchone()
+            now = self._now()
+            if row is not None and (row[0] != plan_hash or bool(row[2]) != external_effects):
+                raise PlanReplayConflictError("plan identity differs from stored identity")
+            if row is not None and row[1] in ("EXECUTING", "COMPENSATING"):
+                if row[4] is not None and now < row[4]:
+                    raise PlanExecutionInProgressError("plan execution is still live")
+                conn.execute(
+                    "UPDATE plans SET status='IN_DOUBT' WHERE project_id=? AND plan_id=? "
+                    "AND plan_hash=? AND status=? AND attempt=?",
+                    (project_id, plan_id, plan_hash, row[1], row[3]),
+                )
+                quarantined = True
+            elif row is not None and not (row[1] == "RESERVED" and row[5] == 1):
+                raise PlanInDoubtQuarantineError("plan identity cannot be automatically replayed")
+            else:
+                if row is None:
+                    if conn.execute("SELECT count(*) FROM plans").fetchone()[0] >= MAX_RECORDS:
+                        raise PlanStoreCapacityError("plan record capacity reached")
+                    attempt = 1
+                else:
+                    if row[3] < 0 or row[3] >= 2**63 - 1:
+                        raise PlanStoreStateError("execution attempt counter exhausted")
+                    attempt = row[3] + 1
+                expires = self._expiry(now, lease_ttl_seconds)
+                self._consume_nonces(conn, project_id, nonces)
+                owner = secrets.token_hex(32)
+                if row is None:
+                    conn.execute(
+                        "INSERT INTO plans (project_id, plan_id, plan_hash, status, "
+                        "external_effects, attempt, owner_token, lease_expires_at) "
+                        "VALUES (?, ?, ?, 'EXECUTING', ?, ?, ?, ?)",
+                        (
+                            project_id,
+                            plan_id,
+                            plan_hash,
+                            int(external_effects),
+                            attempt,
+                            owner,
+                            expires,
+                        ),
+                    )
+                else:
+                    changed = conn.execute(
+                        "UPDATE plans SET status='EXECUTING', attempt=?, owner_token=?, "
+                        "lease_expires_at=?, takeover_ready=0 WHERE project_id=? AND plan_id=? "
+                        "AND plan_hash=? AND status='RESERVED' AND takeover_ready=1 AND attempt=?",
+                        (attempt, owner, expires, project_id, plan_id, plan_hash, row[3]),
+                    ).rowcount
+                    if changed != 1:
+                        raise PlanStoreStateError("takeover changed while starting")
+                lease = ExecutionLease(project_id, plan_id, plan_hash, attempt, owner, expires)
+        if quarantined:
+            raise PlanInDoubtQuarantineError("expired execution is quarantined")
+        assert lease is not None
+        return lease
+
+    def replay_committed(
+        self,
+        plan_id: str,
+        plan_hash: str,
+        *,
+        external_effects: bool,
+        nonce: str,
+        project_id: str = "default",
+        additional_nonces: tuple[str, ...] = (),
+    ) -> DurablePlanRecord:
+        """Consume fresh approval nonces before returning an exact committed receipt.
+
+        The caller is responsible for current actor and approval authorization;
+        stored evidence alone is never authority to disclose it. Reusing any
+        nonce fails atomically, including on replay.
+        """
+        self._validate_identity(plan_id, plan_hash, project_id)
+        if not isinstance(external_effects, bool):
+            raise ValueError("external_effects must be boolean")
+        nonces = self._validate_nonces(nonce, additional_nonces)
+        with self._transaction() as conn:
+            row = conn.execute(
+                "SELECT plan_hash, status, external_effects, evidence_json "
+                "FROM plans WHERE project_id=? AND plan_id=?",
+                (project_id, plan_id),
+            ).fetchone()
+            if row is None:
+                raise PlanStoreStateError("committed plan not found")
+            if row[0] != plan_hash or bool(row[2]) != external_effects:
+                raise PlanReplayConflictError("plan identity differs from stored identity")
+            if row[1] != "COMMITTED" or row[3] is None:
+                raise PlanStoreStateError("plan has no committed receipt")
+            self._consume_nonces(conn, project_id, nonces)
+            return DurablePlanRecord(plan_id, plan_hash, row[1], bool(row[2]), row[3])
+
     def start(
         self,
         plan_id: str,
@@ -429,15 +594,13 @@ class DurablePlanDedupeStore:
                 if row[2] < 0 or row[2] >= 2**63 - 1:
                     raise PlanStoreStateError("execution attempt counter exhausted")
                 expires = self._expiry(now, lease_ttl_seconds)
-                try:
-                    conn.execute("INSERT INTO consumed_nonces VALUES (?, ?)", (project_id, nonce))
-                except sqlite3.IntegrityError as exc:
-                    raise PlanStoreStateError("nonce already consumed") from exc
+                self._consume_nonces(conn, project_id, (nonce,))
                 attempt = row[2] + 1
                 owner = secrets.token_hex(32)
                 changed = conn.execute(
                     "UPDATE plans SET status='EXECUTING', attempt=?, owner_token=?, "
-                    "lease_expires_at=? WHERE project_id=? AND plan_id=? AND plan_hash=? "
+                    "lease_expires_at=?, takeover_ready=0 "
+                    "WHERE project_id=? AND plan_id=? AND plan_hash=? "
                     "AND status='RESERVED' AND attempt=?",
                     (attempt, owner, expires, project_id, plan_id, plan_hash, row[2]),
                 ).rowcount
@@ -479,7 +642,8 @@ class DurablePlanDedupeStore:
             expiry = self._expiry(now, lease_ttl_seconds)
             changed = conn.execute(
                 "UPDATE plans SET lease_expires_at=MAX(lease_expires_at, ?) "
-                "WHERE project_id=? AND plan_id=? AND plan_hash=? AND status='EXECUTING' "
+                "WHERE project_id=? AND plan_id=? AND plan_hash=? "
+                "AND status IN ('EXECUTING', 'COMPENSATING') "
                 "AND attempt=? AND owner_token=? AND lease_expires_at>?",
                 (expiry, project_id, plan_id, plan_hash, attempt, owner_token, now),
             ).rowcount
@@ -569,6 +733,125 @@ class DurablePlanDedupeStore:
                     "execution is stale or its owner does not match"
                 )
 
+    def record_compensation_intent(
+        self,
+        plan_id: str,
+        plan_hash: str,
+        *,
+        attempt: int,
+        owner_token: str,
+        step_id: str,
+        effect_key: str,
+        project_id: str = "default",
+    ) -> None:
+        """Durably record intent before a forward or compensation effect.
+
+        Reusing a step or effect key is refused, including after a crash. A
+        PENDING entry is uncertain, not permission to repeat an effect.
+        """
+        self._validate_identity(plan_id, plan_hash, project_id)
+        self._validate_fence(attempt, owner_token)
+        validate_plan_identity(step_id, name="step_id")
+        if not isinstance(effect_key, str) or _HASH.fullmatch(effect_key) is None:
+            raise ValueError("effect_key must be lowercase SHA-256 hex")
+        with self._transaction() as conn:
+            if (
+                conn.execute("SELECT count(*) FROM compensation_journal").fetchone()[0]
+                >= MAX_COMPENSATION_ENTRIES
+            ):
+                raise PlanStoreCapacityError("compensation journal capacity reached")
+            try:
+                changed = conn.execute(
+                    "INSERT INTO compensation_journal "
+                    "(project_id, plan_id, plan_hash, attempt, step_id, effect_key, status) "
+                    "SELECT project_id, plan_id, plan_hash, attempt, ?, ?, 'PENDING' FROM plans "
+                    "WHERE project_id=? AND plan_id=? AND plan_hash=? "
+                    "AND status IN ('EXECUTING', 'COMPENSATING') "
+                    "AND attempt=? AND owner_token=? AND lease_expires_at>?",
+                    (
+                        step_id,
+                        effect_key,
+                        project_id,
+                        plan_id,
+                        plan_hash,
+                        attempt,
+                        owner_token,
+                        self._now(),
+                    ),
+                ).rowcount
+            except sqlite3.IntegrityError as exc:
+                raise PlanStoreStateError("compensation intent already exists") from exc
+            if changed != 1:
+                raise PlanFencingTokenMismatchError(
+                    "compensation is stale or its owner does not match"
+                )
+
+    def record_compensation_step(
+        self,
+        plan_id: str,
+        plan_hash: str,
+        *,
+        attempt: int,
+        owner_token: str,
+        step_id: str,
+        effect_key: str,
+        succeeded: bool,
+        evidence: Any,
+        project_id: str = "default",
+    ) -> None:
+        """Finish one pending intent only while the matching fence is live."""
+        self._validate_identity(plan_id, plan_hash, project_id)
+        self._validate_fence(attempt, owner_token)
+        validate_plan_identity(step_id, name="step_id")
+        if not isinstance(effect_key, str) or _HASH.fullmatch(effect_key) is None:
+            raise ValueError("effect_key must be lowercase SHA-256 hex")
+        if not isinstance(succeeded, bool):
+            raise ValueError("succeeded must be boolean")
+        body = _encode_evidence(evidence)
+        status = "COMPENSATED" if succeeded else "FAILED"
+        with self._transaction() as conn:
+            changed = conn.execute(
+                "UPDATE compensation_journal SET status=?, evidence_json=? "
+                "WHERE project_id=? AND plan_id=? AND plan_hash=? AND attempt=? "
+                "AND step_id=? AND effect_key=? AND status='PENDING' AND EXISTS ("
+                "SELECT 1 FROM plans WHERE plans.project_id=compensation_journal.project_id "
+                "AND plans.plan_id=compensation_journal.plan_id "
+                "AND plans.plan_hash=compensation_journal.plan_hash "
+                "AND plans.status='COMPENSATING' AND plans.attempt=? "
+                "AND plans.owner_token=? AND plans.lease_expires_at>?)",
+                (
+                    status,
+                    body,
+                    project_id,
+                    plan_id,
+                    plan_hash,
+                    attempt,
+                    step_id,
+                    effect_key,
+                    attempt,
+                    owner_token,
+                    self._now(),
+                ),
+            ).rowcount
+            if changed != 1:
+                raise PlanFencingTokenMismatchError(
+                    "pending compensation or live fence does not match"
+                )
+
+    def compensation_journal(
+        self, plan_id: str, plan_hash: str, *, project_id: str = "default"
+    ) -> tuple[CompensationJournalEntry, ...]:
+        """Return ordered evidence; the caller must authorize its disclosure."""
+        self._validate_identity(plan_id, plan_hash, project_id)
+        with self._transaction() as conn:
+            rows = conn.execute(
+                "SELECT step_id, effect_key, attempt, status, evidence_json "
+                "FROM compensation_journal WHERE project_id=? AND plan_id=? AND plan_hash=? "
+                "ORDER BY entry_id",
+                (project_id, plan_id, plan_hash),
+            ).fetchall()
+        return tuple(CompensationJournalEntry(*row) for row in rows)
+
     def record_compensation(
         self,
         plan_id: str,
@@ -588,6 +871,29 @@ class DurablePlanDedupeStore:
         body = _encode_evidence(evidence)
         result = "ROLLED_BACK" if succeeded else "ROLLBACK_FAILED"
         with self._transaction() as conn:
+            now = self._now()
+            if (
+                conn.execute(
+                    "SELECT 1 FROM plans WHERE project_id=? AND plan_id=? AND plan_hash=? "
+                    "AND status='COMPENSATING' AND attempt=? AND owner_token=? "
+                    "AND lease_expires_at>?",
+                    (project_id, plan_id, plan_hash, attempt, owner_token, now),
+                ).fetchone()
+                is None
+            ):
+                raise PlanFencingTokenMismatchError(
+                    "compensation is stale or its owner does not match"
+                )
+            if (
+                succeeded
+                and conn.execute(
+                    "SELECT 1 FROM compensation_journal WHERE project_id=? AND plan_id=? "
+                    "AND plan_hash=? AND status!='COMPENSATED' LIMIT 1",
+                    (project_id, plan_id, plan_hash),
+                ).fetchone()
+                is not None
+            ):
+                raise PlanStoreStateError("compensation journal contains unresolved steps")
             changed = conn.execute(
                 "UPDATE plans SET status=?, compensation_status=?, compensation_evidence_json=? "
                 "WHERE project_id=? AND plan_id=? AND plan_hash=? AND status='COMPENSATING' "
@@ -601,7 +907,7 @@ class DurablePlanDedupeStore:
                     plan_hash,
                     attempt,
                     owner_token,
-                    self._now(),
+                    now,
                 ),
             ).rowcount
             if changed != 1:
@@ -616,6 +922,7 @@ class DurablePlanDedupeStore:
         plan_hash: str,
         *,
         expected_status: str,
+        expected_attempt: int,
         operator_id: str,
         resolution_action: str,
         reason: str,
@@ -631,6 +938,12 @@ class DurablePlanDedupeStore:
         validate_plan_identity(operator_id, name="operator_id")
         if expected_status not in ("IN_DOUBT", "ROLLBACK_FAILED"):
             raise ValueError("unsupported expected status")
+        if (
+            isinstance(expected_attempt, bool)
+            or not isinstance(expected_attempt, int)
+            or not 0 <= expected_attempt <= 2**63 - 1
+        ):
+            raise ValueError("expected_attempt must be a nonnegative bounded integer")
         if resolution_action not in ("confirm_rolled_back", "authorize_takeover"):
             raise ValueError("unsupported repair action")
         if not isinstance(reason, str) or not reason.strip() or len(reason) > 2048:
@@ -638,7 +951,10 @@ class DurablePlanDedupeStore:
         with self._transaction() as conn:
             if (
                 self._repair_authorizer is None
-                or self._repair_authorizer(project_id, operator_id) is not True
+                or self._repair_authorizer(
+                    project_id, operator_id, expected_status, expected_attempt
+                )
+                is not True
             ):
                 raise PlanStoreStateError("repair authorization denied")
             row = conn.execute(
@@ -646,8 +962,10 @@ class DurablePlanDedupeStore:
                 "AND plan_hash=?",
                 (project_id, plan_id, plan_hash),
             ).fetchone()
-            if row is None or row[0] != expected_status:
-                raise PlanStoreStateError("plan is not eligible for repair at expected status")
+            if row is None or row[0] != expected_status or row[1] != expected_attempt:
+                raise PlanStoreStateError(
+                    "plan is not eligible for repair at expected status/attempt"
+                )
             if conn.execute("SELECT count(*) FROM plan_repair_events").fetchone()[0] >= MAX_RECORDS:
                 raise PlanStoreCapacityError("repair audit capacity reached")
             evidence = _encode_evidence(
@@ -663,9 +981,18 @@ class DurablePlanDedupeStore:
             target = "ROLLED_BACK" if resolution_action == "confirm_rolled_back" else "RESERVED"
             changed = conn.execute(
                 "UPDATE plans SET status=?, repair_evidence_json=?, owner_token=NULL, "
-                "lease_expires_at=NULL WHERE project_id=? AND plan_id=? AND plan_hash=? "
-                "AND status=?",
-                (target, evidence, project_id, plan_id, plan_hash, expected_status),
+                "lease_expires_at=NULL, takeover_ready=? "
+                "WHERE project_id=? AND plan_id=? AND plan_hash=? AND status=? AND attempt=?",
+                (
+                    target,
+                    evidence,
+                    int(resolution_action == "authorize_takeover"),
+                    project_id,
+                    plan_id,
+                    plan_hash,
+                    expected_status,
+                    expected_attempt,
+                ),
             ).rowcount
             if changed != 1:
                 raise PlanStoreStateError("plan changed while repairing")

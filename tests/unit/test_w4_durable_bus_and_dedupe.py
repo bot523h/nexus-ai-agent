@@ -714,18 +714,24 @@ def test_repair_requires_authorization_and_persists_resolution(tmp_path: Path, s
             succeeded=False,
             evidence={"error": "failed"},
         )
-    kwargs = {
+    kwargs: dict[str, Any] = {
         "operator_id": "admin",
         "resolution_action": "confirm_rolled_back",
         "reason": "checked",
         "expected_status": status,
+        "expected_attempt": 1,
     }
     with pytest.raises(PlanStoreStateError, match="authorization"):
         store.repair_in_doubt("default", "p", HASH, **kwargs)
     authorized = DurablePlanDedupeStore(
         path,
         clock=lambda: clock[0],
-        repair_authorizer=lambda project, operator: project == "default" and operator == "admin",
+        repair_authorizer=lambda project, operator, status, attempt: (
+            project == "default"
+            and operator == "admin"
+            and status in ("IN_DOUBT", "ROLLBACK_FAILED")
+            and attempt == 1
+        ),
     )
     with pytest.raises(PlanStoreStateError, match="authorization"):
         authorized.repair_in_doubt("default", "p", HASH, **{**kwargs, "operator_id": "other"})
@@ -836,6 +842,7 @@ def test_repair_validation_and_compensation_validation(store: DurablePlanDedupeS
             HASH,
             operator_id="op",
             expected_status="IN_DOUBT",
+            expected_attempt=1,
             resolution_action="replay",
             reason="x",
         )
@@ -848,6 +855,7 @@ def test_repair_validation_and_compensation_validation(store: DurablePlanDedupeS
                 operator_id="op",
                 resolution_action="confirm_rolled_back",
                 expected_status="IN_DOUBT",
+                expected_attempt=1,
                 reason=notes,
             )
 
@@ -892,7 +900,14 @@ def test_authorized_takeover_fences_old_worker_and_preserves_new_owner(tmp_path:
     now = [100.0]
     path = tmp_path / "lease.db"
     store = DurablePlanDedupeStore(
-        path, clock=lambda: now[0], repair_authorizer=lambda p, o: p == "default" and o == "admin"
+        path,
+        clock=lambda: now[0],
+        repair_authorizer=lambda p, o, status, attempt: (
+            p == "default"
+            and o == "admin"
+            and status in ("IN_DOUBT", "ROLLBACK_FAILED")
+            and attempt == 1
+        ),
     )
     store.reserve("p", HASH, external_effects=True)
     old = store.start("p", HASH, nonce="old", lease_ttl_seconds=5)
@@ -912,6 +927,7 @@ def test_authorized_takeover_fences_old_worker_and_preserves_new_owner(tmp_path:
             "p",
             HASH,
             expected_status="ROLLBACK_FAILED",
+            expected_attempt=1,
             operator_id="admin",
             resolution_action="authorize_takeover",
             reason="old worker stopped",
@@ -921,6 +937,7 @@ def test_authorized_takeover_fences_old_worker_and_preserves_new_owner(tmp_path:
         "p",
         HASH,
         expected_status="IN_DOUBT",
+        expected_attempt=1,
         operator_id="admin",
         resolution_action="authorize_takeover",
         reason="old worker stopped",
@@ -990,7 +1007,9 @@ def test_repair_requires_valid_expected_status_and_bounded_audit(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     path = tmp_path / "db"
-    store = DurablePlanDedupeStore(path, clock=lambda: 1.0, repair_authorizer=lambda _p, _o: True)
+    store = DurablePlanDedupeStore(
+        path, clock=lambda: 1.0, repair_authorizer=lambda _p, _o, _status, _attempt: True
+    )
     store.reserve("p", HASH, external_effects=True)
     lease = store.start("p", HASH, nonce="n")
     store.quarantine("p", HASH, attempt=lease.attempt, owner_token=lease.owner_token)
@@ -1000,6 +1019,7 @@ def test_repair_requires_valid_expected_status_and_bounded_audit(
             "p",
             HASH,
             expected_status="EXECUTING",
+            expected_attempt=1,
             operator_id="admin",
             resolution_action="authorize_takeover",
             reason="investigated",
@@ -1011,6 +1031,7 @@ def test_repair_requires_valid_expected_status_and_bounded_audit(
             "p",
             HASH,
             expected_status="IN_DOUBT",
+            expected_attempt=1,
             operator_id="admin",
             resolution_action="authorize_takeover",
             reason="investigated",

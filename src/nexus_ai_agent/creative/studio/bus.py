@@ -882,6 +882,10 @@ class PlanTransaction:
                 continue
             try:
                 compensation_result = step.compensate(self._step_results.get(record.step_index))
+                if _failed_boolean(compensation_result):
+                    raise PlanTransactionError(
+                        f"compensation for step {record.step_index} returned an unsuccessful result"
+                    )
                 output_hash = _canonical_hash(compensation_result)
             except BaseException as exc:  # noqa: BLE001 - collect, never abandon
                 errors.append(exc)
