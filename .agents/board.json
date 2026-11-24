@@ -8751,6 +8751,8 @@
       ],
       "exclusive_paths": [
         "src/nexus_ai_agent/adapters/durable_plan_dedupe.py",
+        "src/nexus_ai_agent/adapters/fenced_filesystem_destination.py",
+        "src/nexus_ai_agent/adapters/ibpc_plan_approval.py",
         "src/nexus_ai_agent/creative/studio/bus.py",
         "src/nexus_ai_agent/creative/studio/capabilities.py",
         "src/nexus_ai_agent/creative/studio/durable_dedupe.py",
@@ -8769,11 +8771,13 @@
         "tests/unit/test_w4_atomic_acquisition.py",
         "tests/unit/test_w4_bus_approval_preflight.py",
         "tests/unit/test_w4_compensation_journal.py",
+        "tests/unit/test_w4_cp1_durable_dedupe_and_approvals.py",
         "tests/unit/test_w4_durable_bus_and_dedupe.py",
         "tests/unit/test_w4_plan_ir.py",
         "tests/unit/test_w4_storyboard_pipeline.py",
         "tests/unit/test_w4_catalog_convergence.py",
         "tests/unit/test_w4_mutations.py",
+        "tests/integration/test_w4_fenced_filesystem_destination.py",
         "tests/integration/test_w4_durable_execution.py",
         "tests/integration/test_w4_e2e.py",
         "tests/integration/test_w4_ingress_e2e.py"

@@ -20,6 +20,21 @@ byte-compared (and re-verified by SHA-256) against its pre-mutation digest;
 a mismatch aborts the campaign with exit code 4.  The whole campaign must
 start green and finish green again.
 
+Bytecode-cache determinism (W6.7): CPython validates a ``.pyc`` against the
+source's **size** and its **mtime in whole seconds**.  Every W6 mutant is an
+equal-byte-length text swap and the mutate -> pytest -> restore cycle finishes
+inside one second, so a cached ``.pyc`` can be considered valid for the wrong
+source: the mutant is then never imported (a false SURVIVED) or the restored
+tree still looks red (``FATAL: suite still red after restore``).  Both failure
+modes are timing flakes, never a false green.  The harness therefore removes
+every cached artefact for a target file *before* the pre-flight green run,
+after writing the mutated source, and after restoring the original bytes, and
+runs its pytest subprocesses with ``PYTHONDONTWRITEBYTECODE=1``.
+
+A campaign mutates the working tree in place, so exactly **one** campaign may
+run against a checkout at a time (pytest and CI are serial by construction);
+two concurrent campaigns would each snapshot the other's mutant as "original".
+
 Usage::
 
     python scripts/w6_mutations.py          # run every mutation
@@ -33,11 +48,17 @@ from __future__ import annotations
 import argparse
 import ast
 import hashlib
+import importlib.util
+import os
 import re
 import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+
+#: This process writes no bytecode of its own, so a campaign can never seed the
+#: cache it is about to reason about.
+sys.dont_write_bytecode = True
 
 ROOT = Path(__file__).resolve().parents[1]
 SCIENCE = ROOT / "src" / "nexus_ai_agent" / "creative" / "science"
@@ -411,13 +432,42 @@ def _is_valid_kill(
     return True, ""
 
 
+def _purge_bytecode_cache(source_path: Path) -> None:
+    """Drop every cached bytecode artefact for ``source_path``.
+
+    A ``.pyc`` is validated against the source's size and its mtime truncated
+    to whole seconds, so an equal-byte-length mutation written in the same
+    second as the last compile can be shadowed by the cached bytecode (or, after
+    the restore, a *mutated* ``.pyc`` can survive next to pristine source).
+    Removing the cache entry — plus every sibling ``<stem>.*.pyc`` left by
+    another interpreter — makes the next import recompile from the bytes that
+    are actually on disk.
+    """
+    try:
+        cache_path: Path | None = Path(importlib.util.cache_from_source(str(source_path)))
+    except (NotImplementedError, ValueError):  # pragma: no cover - exotic loaders
+        cache_path = None
+    if cache_path is not None:
+        cache_path.unlink(missing_ok=True)
+    pycache = source_path.parent / "__pycache__"
+    if pycache.is_dir():
+        for stale in pycache.glob(f"{source_path.stem}.*.pyc"):
+            stale.unlink(missing_ok=True)
+    importlib.invalidate_caches()
+
+
 def _run_pytest(args: list[str]) -> subprocess.CompletedProcess[str]:
+    env = dict(os.environ)
+    # Defence in depth: the subprocess must not write bytecode either, so a
+    # mutated module can never leave a poisoned ``.pyc`` behind.
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
     return subprocess.run(
         [sys.executable, "-m", "pytest", *args, "-q", "-o", "addopts="],
         capture_output=True,
         text=True,
         cwd=ROOT,
         timeout=600,
+        env=env,
     )
 
 
@@ -431,7 +481,11 @@ def main() -> int:
             print(f"{mutation.name}  ({node_count} expected nodes)  - {mutation.why}")
         return 0
 
-    # sanity: the tree must be green before we start
+    # sanity: the tree must be green before we start.  Purge the bytecode cache
+    # of every campaign target first, so the pre-flight run imports the shipped
+    # bytes rather than a stale (or previously mutated) ``.pyc``.
+    for target in sorted({mutation.path for mutation in MUTATIONS}):
+        _purge_bytecode_cache(target)
     for tests in (CP1, CP2, CP3, CP4):
         code = _run_pytest([tests]).returncode
         if code != 0:
@@ -463,6 +517,9 @@ def main() -> int:
             continue
         try:
             path.write_bytes(mutated.encode("utf-8"))
+            # The mutant must be the bytes pytest imports: drop the cache the
+            # previous compile of the unmutated source left behind.
+            _purge_bytecode_cache(path)
             result = _run_pytest(list(mutation.expected_node_ids))
             ok, reason = _is_valid_kill(result, mutation.expected_node_ids)
             if ok:
@@ -474,6 +531,8 @@ def main() -> int:
                 print(f"  SURVIVED {mutation.name}: {reason}")
         finally:
             path.write_bytes(original_bytes)
+            # …and never leave the mutant's bytecode behind the restored source.
+            _purge_bytecode_cache(path)
             restored_bytes = path.read_bytes()
             restored_digest = _sha256_bytes(restored_bytes)
             if restored_bytes != original_bytes or restored_digest != original_digest:
