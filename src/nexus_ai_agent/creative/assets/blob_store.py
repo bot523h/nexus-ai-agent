@@ -20,10 +20,14 @@ import os
 import secrets
 import stat
 import threading
+from contextlib import AbstractAsyncContextManager
 from pathlib import Path
 from typing import BinaryIO
 
-from nexus_ai_agent.creative.assets.admission import asset_admission_lock
+from nexus_ai_agent.creative.assets.admission import (
+    asset_admission_lock,
+    async_asset_admission_lock,
+)
 from nexus_ai_agent.creative.assets.errors import (
     BlobStoreError,
     ContentIntegrityError,
@@ -72,6 +76,12 @@ class LocalContentAddressedBlobStore:
                 raise BlobStoreError("staging permissions are unsafe")
         finally:
             os.close(stage_fd)
+
+    def admission(self) -> AbstractAsyncContextManager[None]:
+        """Hold shared admission for the surrounding async transaction."""
+        return async_asset_admission_lock(
+            self._fs.root, exclusive=False, timeout_seconds=self._admission_timeout_seconds
+        )
 
     @staticmethod
     def blob_key_for(sha256: str) -> str:
@@ -134,6 +144,12 @@ class LocalContentAddressedBlobStore:
         existing blob is verified before reuse (never silently overwritten with
         mismatched bytes). Publication is an atomic no-overwrite hard link.
         """
+        with asset_admission_lock(
+            self._fs.root, exclusive=False, timeout_seconds=self._admission_timeout_seconds
+        ):
+            return self._store_admitted(staging_key, blob_key)
+
+    def _store_admitted(self, staging_key: str, blob_key: str) -> tuple[str, int, bool]:
         parts = staging_key.split("/")
         if len(parts) != 2 or parts[0] != _STAGING_PREFIX or parts[1] in ("", ".", ".."):
             raise BlobStoreError("staging key is outside the staging namespace")
@@ -389,10 +405,13 @@ class LocalContentAddressedBlobStore:
 
     def remove_staging(self, staging_key: str) -> None:
         """Best-effort removal of a staging file (cleanup on controlled failure)."""
-        try:
-            self._fs.unlink(staging_key)
-        except (FilesystemBoundaryError, OSError):
-            return
+        with asset_admission_lock(
+            self._fs.root, exclusive=False, timeout_seconds=self._admission_timeout_seconds
+        ):
+            try:
+                self._fs.unlink(staging_key)
+            except (FilesystemBoundaryError, OSError):
+                return
 
     def stage_identity(self, staging_key: str) -> tuple[str, int]:
         """Measure ``(sha256, size)`` of a staged file (recovery path)."""

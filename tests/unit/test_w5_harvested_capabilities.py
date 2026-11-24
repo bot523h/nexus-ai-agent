@@ -630,3 +630,31 @@ async def test_cancellation_while_waiting_for_admission_releases_late_lease(tmp_
     assert (tmp_path / stage).read_bytes() == b"waiting payload"
     with asset_admission_lock(tmp_path, exclusive=True, timeout_seconds=0.5):
         pass
+
+
+@pytest.mark.asyncio
+async def test_async_transaction_admission_cancelled_wait_has_no_late_lease(tmp_path: Path) -> None:
+    import asyncio
+
+    from nexus_ai_agent.creative.assets.admission import (
+        asset_admission_lock,
+        async_asset_admission_lock,
+    )
+
+    async def wait_for_shared() -> None:
+        async with async_asset_admission_lock(tmp_path, exclusive=False, timeout_seconds=2):
+            pytest.fail("cancelled admission should not enter")
+
+    with asset_admission_lock(tmp_path, exclusive=True):
+        task = asyncio.create_task(wait_for_shared())
+        await asyncio.sleep(0.05)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    # The worker may be taking the lock after cancellation; it must close it.
+    def take_exclusive() -> None:
+        with asset_admission_lock(tmp_path, exclusive=True, timeout_seconds=1):
+            pass
+
+    await asyncio.to_thread(take_exclusive)

@@ -366,3 +366,79 @@ async def test_recovery_refuses_changed_staging_after_tx2(
     assert await _counts(tmp_path) == (0, 0, 0)
     assert stage.read_bytes() == expected  # kept for inspection, not silently deleted
     assert not any((tmp_path / "blobs" / "blobs").rglob("*"))
+
+
+@pytest.mark.asyncio
+async def test_ingest_transaction_fences_other_process_until_sigkill(tmp_path: Path) -> None:
+    import asyncio
+    import os
+    import signal
+    import subprocess
+    import sys
+
+    from nexus_ai_agent.creative.assets.admission import asset_admission_lock
+
+    program = r"""
+import asyncio, io, sys
+from contextlib import asynccontextmanager
+from pathlib import Path
+from nexus_ai_agent.creative.assets.authz import GrantTableAuthorizer, StudioAuthorizationSeam
+from nexus_ai_agent.creative.assets.blob_store import LocalContentAddressedBlobStore
+from nexus_ai_agent.creative.assets.models import IngestRequest
+from nexus_ai_agent.creative.assets.service import AssetLibraryService
+from nexus_ai_agent.storage.db import get_session
+root = Path(sys.argv[1])
+@asynccontextmanager
+async def factory():
+    async with get_session(str(root / "library.sqlite")) as session:
+        yield session
+def hook(point):
+    if point == "after_stage":
+        print("staged", flush=True)
+        sys.stdin.readline()
+auth = StudioAuthorizationSeam(
+    GrantTableAuthorizer({("user-1", "project-alpha"): frozenset({"project:write"})})
+)
+service = AssetLibraryService(
+    blob_store=LocalContentAddressedBlobStore(root / "blobs"),
+    authorizer=auth, session_factory=factory, fault_hook=hook,
+)
+asyncio.run(service.ingest(
+    actor_kind="user", actor_id="user-1", project_id="project-alpha",
+    request=IngestRequest(idempotency_key="k"),
+    stream=io.BytesIO(b"\x89PNG\r\n\x1a\n" + bytes(range(96))),
+))
+"""
+    process = subprocess.Popen(  # noqa: S603 - interpreter and fixed test program
+        [sys.executable, "-c", program, str(tmp_path)],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        assert process.stdout is not None
+        assert await asyncio.wait_for(asyncio.to_thread(process.stdout.readline), 10) == "staged\n"
+        row = await _only_ingest(tmp_path)
+        assert row.staging_key is not None
+        staging = tmp_path / "blobs" / row.staging_key
+        assert staging.read_bytes() == PNG
+
+        def attempt_exclusive() -> None:
+            with asset_admission_lock(tmp_path / "blobs", exclusive=True, timeout_seconds=0.1):
+                pytest.fail("maintenance acquired the lock during ingest")
+
+        with pytest.raises(TimeoutError):
+            await asyncio.to_thread(attempt_exclusive)
+        assert staging.read_bytes() == PNG
+        os.kill(process.pid, signal.SIGKILL)
+        assert await asyncio.to_thread(process.wait, 5) == -signal.SIGKILL
+        with asset_admission_lock(tmp_path / "blobs", exclusive=True, timeout_seconds=1):
+            pass
+        report = await _service(tmp_path).recover_ingest(row.ingest_id)
+        assert report.outcome is RecoveryOutcome.COMPLETED
+        assert await _counts(tmp_path) == (1, 1, 1)
+    finally:
+        if process.poll() is None:
+            process.kill()
+        await asyncio.to_thread(process.communicate, timeout=5)

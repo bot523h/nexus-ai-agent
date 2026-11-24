@@ -9,6 +9,7 @@ No web framework, Telegram, LLM provider or cloud SDK type appears here.
 
 from __future__ import annotations
 
+from contextlib import AbstractAsyncContextManager
 from typing import BinaryIO, Protocol
 
 from nexus_ai_agent.creative.assets.models import (
@@ -22,6 +23,10 @@ from nexus_ai_agent.creative.assets.models import (
 
 class BlobStore(Protocol):
     """Content-addressed storage of immutable bytes (synchronous, local I/O)."""
+
+    def admission(self) -> AbstractAsyncContextManager[None]:
+        """Fence an ingest or recovery transaction against maintenance."""
+        ...
 
     def new_staging_key(self) -> str:
         """Allocate a fresh, unguessable staging key."""

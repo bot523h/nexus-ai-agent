@@ -168,6 +168,14 @@ class AssetLibraryService:
     ) -> IngestResult:
         """Authorize, then stage, publish and commit one asset ingest."""
         self._authorizer.require(actor_kind, actor_id, project_id, PERMISSION_WRITE)
+        async with self._blob_store.admission():
+            return await self._ingest_admitted(
+                project_id=project_id, request=request, stream=stream
+            )
+
+    async def _ingest_admitted(
+        self, *, project_id: str, request: IngestRequest, stream: BinaryIO
+    ) -> IngestResult:
         fingerprint = _request_fingerprint(request)
 
         async with self._session_factory() as session:
@@ -458,6 +466,10 @@ class AssetLibraryService:
 
     # -- recovery ------------------------------------------------------- #
     async def recover_ingest(self, ingest_id: str) -> IngestRecoveryReport:
+        async with self._blob_store.admission():
+            return await self._recover_ingest_admitted(ingest_id)
+
+    async def _recover_ingest_admitted(self, ingest_id: str) -> IngestRecoveryReport:
         async with self._session_factory() as session:
             repo = SqlAssetRepository(session)
             record = await repo.get_ingest(ingest_id)
@@ -508,6 +520,10 @@ class AssetLibraryService:
 
     async def recover_all(self) -> list[IngestRecoveryReport]:
         """Reconcile every durable STAGING ingest; never invents success."""
+        async with self._blob_store.admission():
+            return await self._recover_all_admitted()
+
+    async def _recover_all_admitted(self) -> list[IngestRecoveryReport]:
         async with self._session_factory() as session:
             repo = SqlAssetRepository(session)
             pending = await repo.list_pending_ingests()

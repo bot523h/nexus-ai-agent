@@ -6,13 +6,15 @@ This is not an authority against a same-UID process that replaces the lock file.
 
 from __future__ import annotations
 
+import asyncio
 import fcntl
 import math
 import os
 import stat
+import threading
 import time
-from collections.abc import Iterator
-from contextlib import contextmanager
+from collections.abc import AsyncIterator, Iterator
+from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
 
 _LOCK_NAME = ".asset-library-maintenance.lock"
@@ -73,3 +75,50 @@ def asset_admission_lock(
             os.close(fd)
     finally:
         os.close(root_fd)
+
+
+@asynccontextmanager
+async def async_asset_admission_lock(
+    root: Path, *, exclusive: bool, timeout_seconds: float = 10.0
+) -> AsyncIterator[None]:
+    """Acquire off-loop; cancellation cannot leak a late-acquired lease.
+
+    The worker and caller synchronize the transfer of the context-manager
+    lease. In particular, the worker closes it itself if the loop is already
+    shutting down after cancellation, without relying on an event-loop callback.
+    """
+    lease = asset_admission_lock(root, exclusive=exclusive, timeout_seconds=timeout_seconds)
+    guard = threading.Lock()
+    abandoned = False
+    acquired = False
+
+    def acquire() -> None:
+        nonlocal acquired
+        lease.__enter__()
+        with guard:
+            if abandoned:
+                lease.__exit__(None, None, None)
+            else:
+                acquired = True
+
+    future = asyncio.get_running_loop().run_in_executor(None, acquire)
+    try:
+        await asyncio.shield(future)
+    except asyncio.CancelledError:
+        with guard:
+            abandoned = True
+            if acquired:
+                lease.__exit__(None, None, None)
+                acquired = False
+
+        # If acquisition fails after the caller has left, consume that exception.
+        def consume(done: asyncio.Future[None]) -> None:
+            if not done.cancelled():
+                done.exception()
+
+        future.add_done_callback(consume)
+        raise
+    try:
+        yield
+    finally:
+        lease.__exit__(None, None, None)

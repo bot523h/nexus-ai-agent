@@ -76,9 +76,12 @@ cancelled worker is still active, including across store instances sharing a roo
 Stage writes and async publications use a shared POSIX admission lock. Async
 publication acquires the lease before queueing its worker and retains it until
 worker completion even if its caller is cancelled. A cancelled lock acquisition
-is cleaned up after it completes. This is a partial fence: synchronous publication,
-the full ingest transaction, and startup recovery are not yet covered. The sweeper is still disconnected from startup; do not
-use this lock alone as authority to delete staging. It is cooperative and is
+is cleaned up after it completes. Service ingest and individual recovery now hold
+shared admission across their database transactions; synchronous publication and
+controlled staging removal also acquire shared admission. This remains a partial
+fence: startup recovery is not wired, direct sweeper callers are responsible for
+exclusive admission, and non-cooperating access is not protected. The sweeper is
+still disconnected from startup; do not use this lock alone as authority to delete staging. It is cooperative and is
 not a boundary against a same-UID process replacing the lock inode. Recovery
 compares staged bytes against the durable Tx2 digest and length before
 publishing; a mismatch fails the ingest without deleting the staged bytes. A
