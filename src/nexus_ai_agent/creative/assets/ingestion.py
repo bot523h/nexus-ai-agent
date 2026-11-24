@@ -76,8 +76,8 @@ async def publish_and_commit(
     happens once, after it returns.
     """
     blob_key = blob_store.blob_key_for(content_sha256)
-    measured_sha, measured_size, deduplicated = await asyncio.to_thread(
-        blob_store.store, staging_key, blob_key
+    measured_sha, measured_size, deduplicated = await blob_store.publish_from_staging_async(
+        staging_key, blob_key
     )
     if (measured_sha, measured_size) != (content_sha256, size_bytes):
         raise ContentIntegrityError("published bytes do not match the staged identity")

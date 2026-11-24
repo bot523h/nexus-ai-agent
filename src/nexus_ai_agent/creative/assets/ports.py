@@ -43,6 +43,12 @@ class BlobStore(Protocol):
         """Atomically publish staged bytes; return ``(sha256, size, deduplicated)``."""
         ...
 
+    async def publish_from_staging_async(
+        self, staging_key: str, blob_key: str
+    ) -> tuple[str, int, bool]:
+        """Publish without blocking the event loop."""
+        ...
+
     def verify(self, blob_key: str, *, sha256: str, size_bytes: int) -> bool:
         """True iff the stored blob exists and matches the recorded identity."""
         ...

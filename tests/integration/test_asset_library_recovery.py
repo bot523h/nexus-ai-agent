@@ -225,3 +225,56 @@ async def test_retry_of_interrupted_ingest_completes_it(tmp_path: Path) -> None:
     assert result.state is IngestState.READY
     assert result.reused_result is True
     assert await _counts(tmp_path) == (1, 1, 1)
+
+
+@pytest.mark.asyncio
+async def test_cancelled_worker_finishes_then_restart_recovers_without_false_ready(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import asyncio
+    import threading
+
+    service = _service(tmp_path)
+    store = service._blob_store
+    original_store = store.store
+    started = asyncio.Event()
+    release = threading.Event()
+    finished = threading.Event()
+    loop = asyncio.get_running_loop()
+
+    def blocked_publish(staging_key: str, blob_key: str) -> tuple[str, int, bool]:
+        loop.call_soon_threadsafe(started.set)
+        try:
+            if not release.wait(5):
+                raise TimeoutError("publication worker was not released")
+            return original_store(staging_key, blob_key)
+        finally:
+            finished.set()
+
+    monkeypatch.setattr(store, "store", blocked_publish)
+    task = asyncio.create_task(_ingest(service))
+    try:
+        await asyncio.wait_for(started.wait(), timeout=5)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        row = await _only_ingest(tmp_path)
+        assert row.state == IngestState.STAGING.value
+        assert await _counts(tmp_path) == (0, 0, 0)
+    finally:
+        release.set()
+        assert await asyncio.to_thread(finished.wait, 5)
+
+    assert row.content_sha256 is not None
+    assert store.verify(
+        store.blob_key_for(row.content_sha256),
+        sha256=row.content_sha256,
+        size_bytes=row.size_bytes,
+    )
+    restarted = _service(tmp_path)
+    report = await restarted.recover_ingest(row.ingest_id)
+    assert report.outcome is RecoveryOutcome.COMPLETED
+    assert await _counts(tmp_path) == (1, 1, 1)
+    repeated = await restarted.recover_ingest(row.ingest_id)
+    assert repeated.outcome is RecoveryOutcome.ALREADY_READY
+    assert await _counts(tmp_path) == (1, 1, 1)
