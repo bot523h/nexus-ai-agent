@@ -63,7 +63,10 @@ and provide an authoritative active-key set; this sweeper is not wired to
 startup reconciliation, and marker-write failure or a crash before recording
 the marker still requires ingest-state recovery. Publication from the shared
 ingestion and recovery path uses worker threads; cancellation does not stop an
-already-running worker, so existing recovery remains necessary.
+already-running worker. A process-local registry defers reconciliation while a
+cancelled worker is still active, including across store instances sharing a root.
+It does not fence other processes, concurrent fresh publications, or a crash;
+startup admission and cross-process recovery fencing remain necessary.
 
 ## Cryptographic evidence
 

@@ -278,3 +278,52 @@ async def test_cancelled_worker_finishes_then_restart_recovers_without_false_rea
     repeated = await restarted.recover_ingest(row.ingest_id)
     assert repeated.outcome is RecoveryOutcome.ALREADY_READY
     assert await _counts(tmp_path) == (1, 1, 1)
+
+
+@pytest.mark.asyncio
+async def test_recovery_defers_cancelled_inflight_worker_across_store_instances(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import asyncio
+    import threading
+
+    service = _service(tmp_path)
+    store = service._blob_store
+    original = store.store
+    started = asyncio.Event()
+    release = threading.Event()
+    finished = threading.Event()
+    loop = asyncio.get_running_loop()
+
+    def paused(staging_key: str, blob_key: str) -> tuple[str, int, bool]:
+        loop.call_soon_threadsafe(started.set)
+        try:
+            if not release.wait(5):
+                raise TimeoutError("worker was not released")
+            return original(staging_key, blob_key)
+        finally:
+            finished.set()
+
+    monkeypatch.setattr(store, "store", paused)
+    task = asyncio.create_task(_ingest(service, "in-flight"))
+    try:
+        await asyncio.wait_for(started.wait(), 5)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        row = await _only_ingest(tmp_path)
+        assert row.staging_key is not None
+        staging = tmp_path / "blobs" / row.staging_key
+        restarted = _service(tmp_path)
+        report = await restarted.recover_ingest(row.ingest_id)
+        assert report.outcome is RecoveryOutcome.STILL_STAGING
+        assert report.state is IngestState.STAGING
+        assert staging.is_file()
+        assert await _counts(tmp_path) == (0, 0, 0)
+    finally:
+        release.set()
+        assert await asyncio.to_thread(finished.wait, 5)
+    report = await restarted.recover_ingest(row.ingest_id)
+    assert report.outcome is RecoveryOutcome.COMPLETED
+    assert await _counts(tmp_path) == (1, 1, 1)
+    assert (await restarted.recover_ingest(row.ingest_id)).outcome is RecoveryOutcome.ALREADY_READY

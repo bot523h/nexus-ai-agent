@@ -38,6 +38,9 @@ from nexus_ai_agent.tools.filesystem_policy import (
 _STAGING_PREFIX = "staging"
 _BLOB_PREFIX = "blobs"
 _LOGGER = logging.getLogger(__name__)
+# Shared by all store instances in this process, keyed by canonical root and staging key.
+_IN_FLIGHT_LOCK = threading.Lock()
+_IN_FLIGHT_PUBLICATIONS: dict[tuple[Path, str], list[tuple[threading.Event, threading.Event]]] = {}
 
 
 class LocalContentAddressedBlobStore:
@@ -208,6 +211,7 @@ class LocalContentAddressedBlobStore:
                         or parts[0] != _STAGING_PREFIX
                         or parts[1] in ("", ".", "..")
                         or key in active_staging_keys
+                        or key in self.in_flight_staging_keys()
                     ):
                         continue
                     try:
@@ -228,7 +232,9 @@ class LocalContentAddressedBlobStore:
         finally:
             os.close(parent)
 
-    def reconcile_staging_cleanups(self) -> tuple[str, ...]:
+    def reconcile_staging_cleanups(
+        self, *, active_staging_keys: frozenset[str] = frozenset()
+    ) -> tuple[str, ...]:
         """Retry this process's deferred cleanups; return keys still pending.
 
         This in-memory queue does not survive process restart; durable ingest
@@ -236,6 +242,8 @@ class LocalContentAddressedBlobStore:
         """
         with self._cleanup_lock:
             for key in tuple(self._pending_staging_cleanups):
+                if key in active_staging_keys or key in self.in_flight_staging_keys():
+                    continue
                 try:
                     self._fs.unlink(key)
                 except (OSError, FilesystemBoundaryError):
@@ -254,8 +262,66 @@ class LocalContentAddressedBlobStore:
     async def publish_from_staging_async(
         self, staging_key: str, blob_key: str
     ) -> tuple[str, int, bool]:
-        """Run blocking publication in a worker thread."""
-        return await asyncio.to_thread(self.publish_from_staging, staging_key, blob_key)
+        """Track the worker until it actually finishes, including after cancellation.
+
+        This is process-local coordination, not a cross-process admission fence.
+        """
+        identity = (self._fs.root, staging_key)
+        completed, detached = threading.Event(), threading.Event()
+        entry = (completed, detached)
+        with _IN_FLIGHT_LOCK:
+            _IN_FLIGHT_PUBLICATIONS.setdefault(identity, []).append(entry)
+
+        def finish() -> None:
+            with _IN_FLIGHT_LOCK:
+                entries = _IN_FLIGHT_PUBLICATIONS[identity]
+                entries.remove(entry)
+                if not entries:
+                    del _IN_FLIGHT_PUBLICATIONS[identity]
+                completed.set()
+
+        def publish() -> tuple[str, int, bool]:
+            try:
+                return self.publish_from_staging(staging_key, blob_key)
+            finally:
+                finish()
+
+        try:
+            future = asyncio.get_running_loop().run_in_executor(None, publish)
+        except BaseException:
+            finish()
+            raise
+
+        def consume_result(done: asyncio.Future[tuple[str, int, bool]]) -> None:
+            if not done.cancelled():
+                done.exception()
+
+        future.add_done_callback(consume_result)
+        try:
+            return await asyncio.shield(future)
+        except asyncio.CancelledError:
+            detached.set()
+            raise
+
+    async def wait_for_in_flight_publication(
+        self, staging_key: str, *, timeout_seconds: float = 0.1
+    ) -> bool:
+        """Wait briefly for detached process-local publication workers."""
+        with _IN_FLIGHT_LOCK:
+            entries = tuple(_IN_FLIGHT_PUBLICATIONS.get((self._fs.root, staging_key), ()))
+        clock = asyncio.get_running_loop().time
+        deadline = clock() + timeout_seconds
+        for completed, detached in entries:
+            if detached.is_set() and not await asyncio.to_thread(
+                completed.wait, max(0.0, deadline - clock())
+            ):
+                return False
+        return True
+
+    def in_flight_staging_keys(self) -> set[str]:
+        """Return a snapshot, not a substitute for a cross-process fence."""
+        with _IN_FLIGHT_LOCK:
+            return {key for root, key in _IN_FLIGHT_PUBLICATIONS if root == self._fs.root}
 
     def verify(self, blob_key: str, *, sha256: str, size_bytes: int) -> bool:
         """True iff the stored blob exists and matches the recorded identity."""

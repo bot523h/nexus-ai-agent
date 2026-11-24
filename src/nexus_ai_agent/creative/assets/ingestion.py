@@ -153,6 +153,16 @@ async def reconcile_ingest(
             ingest.ingest_id, IngestState.FAILED, RecoveryOutcome.FAILED, "already failed"
         )
 
+    if ingest.staging_key and not await blob_store.wait_for_in_flight_publication(
+        ingest.staging_key
+    ):
+        return IngestRecoveryReport(
+            ingest.ingest_id,
+            IngestState.STAGING,
+            RecoveryOutcome.STILL_STAGING,
+            "publication worker remains in flight",
+        )
+
     # STAGING: prefer the staged bytes; otherwise finalise a published blob.
     if ingest.staging_key:
         try:

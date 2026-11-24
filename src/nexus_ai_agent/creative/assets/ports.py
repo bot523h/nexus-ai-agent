@@ -49,6 +49,12 @@ class BlobStore(Protocol):
         """Publish without blocking the event loop."""
         ...
 
+    async def wait_for_in_flight_publication(
+        self, staging_key: str, *, timeout_seconds: float = 0.1
+    ) -> bool:
+        """Wait briefly for a process-local publication worker."""
+        ...
+
     def verify(self, blob_key: str, *, sha256: str, size_bytes: int) -> bool:
         """True iff the stored blob exists and matches the recorded identity."""
         ...
