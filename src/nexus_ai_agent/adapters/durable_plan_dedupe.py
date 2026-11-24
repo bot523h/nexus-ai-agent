@@ -245,6 +245,11 @@ class DurablePlanDedupeStore:
             "project_id TEXT NOT NULL, nonce TEXT NOT NULL, PRIMARY KEY(project_id, nonce))"
         )
         conn.execute(
+            "CREATE TABLE IF NOT EXISTS nonce_plan_bindings ("
+            "project_id TEXT NOT NULL, nonce TEXT NOT NULL, plan_id TEXT NOT NULL, "
+            "plan_hash TEXT NOT NULL, PRIMARY KEY(project_id, nonce))"
+        )
+        conn.execute(
             "CREATE TABLE IF NOT EXISTS plan_repair_events ("
             "event_id INTEGER PRIMARY KEY, project_id TEXT NOT NULL, plan_id TEXT NOT NULL, "
             "plan_hash TEXT NOT NULL, evidence_json TEXT NOT NULL)"
@@ -483,7 +488,13 @@ class DurablePlanDedupeStore:
         return nonces
 
     @staticmethod
-    def _consume_nonces(conn: sqlite3.Connection, project_id: str, nonces: tuple[str, ...]) -> None:
+    def _consume_nonces(
+        conn: sqlite3.Connection,
+        project_id: str,
+        nonces: tuple[str, ...],
+        plan_id: str,
+        plan_hash: str,
+    ) -> None:
         count = conn.execute("SELECT count(*) FROM consumed_nonces").fetchone()[0]
         if count + len(nonces) > MAX_CONSUMED_NONCES:
             raise PlanStoreCapacityError("nonce capacity reached")
@@ -491,6 +502,10 @@ class DurablePlanDedupeStore:
             conn.executemany(
                 "INSERT INTO consumed_nonces VALUES (?, ?)",
                 ((project_id, value) for value in nonces),
+            )
+            conn.executemany(
+                "INSERT INTO nonce_plan_bindings VALUES (?, ?, ?, ?)",
+                ((project_id, value, plan_id, plan_hash) for value in nonces),
             )
         except sqlite3.IntegrityError as exc:
             raise PlanStoreStateError("nonce already consumed") from exc
@@ -550,7 +565,7 @@ class DurablePlanDedupeStore:
                         raise PlanStoreStateError("execution attempt counter exhausted")
                     attempt = row[3] + 1
                 expires = self._expiry(now, lease_ttl_seconds)
-                self._consume_nonces(conn, project_id, nonces)
+                self._consume_nonces(conn, project_id, nonces, plan_id, plan_hash)
                 owner = secrets.token_hex(32)
                 if row is None:
                     conn.execute(
@@ -582,6 +597,25 @@ class DurablePlanDedupeStore:
         assert lease is not None
         return lease
 
+    def find_committed(
+        self, plan_id: str, plan_hash: str, *, project_id: str
+    ) -> DurablePlanRecord | None:
+        """Look up a receipt without mutation; caller must authorize disclosure."""
+        self._validate_identity(plan_id, plan_hash, project_id)
+        with self._transaction() as conn:
+            row = conn.execute(
+                "SELECT plan_hash, status, external_effects, evidence_json FROM plans "
+                "WHERE project_id=? AND plan_id=?",
+                (project_id, plan_id),
+            ).fetchone()
+            if row is None or row[1] != "COMMITTED":
+                return None
+            if row[0] != plan_hash:
+                raise PlanReplayConflictError("plan identity differs from stored identity")
+            if row[3] is None:
+                raise PlanStoreStateError("committed receipt is missing")
+            return DurablePlanRecord(plan_id, row[0], row[1], bool(row[2]), row[3])
+
     def replay_committed(
         self,
         plan_id: str,
@@ -592,11 +626,10 @@ class DurablePlanDedupeStore:
         project_id: str = "default",
         additional_nonces: tuple[str, ...] = (),
     ) -> DurablePlanRecord:
-        """Consume fresh approval nonces before returning an exact committed receipt.
+        """Return a committed receipt only for fresh or same-plan approval nonces.
 
-        The caller is responsible for current actor and approval authorization;
-        stored evidence alone is never authority to disclose it. Reusing any
-        nonce fails atomically, including on replay.
+        The caller must independently authenticate actor and approvals. Legacy
+        consumed nonces without a recorded plan binding cannot be replayed.
         """
         self._validate_identity(plan_id, plan_hash, project_id)
         if not isinstance(external_effects, bool):
@@ -614,7 +647,23 @@ class DurablePlanDedupeStore:
                 raise PlanReplayConflictError("plan identity differs from stored identity")
             if row[1] != "COMMITTED" or row[3] is None:
                 raise PlanStoreStateError("plan has no committed receipt")
-            self._consume_nonces(conn, project_id, nonces)
+            fresh: list[str] = []
+            for value in nonces:
+                consumed = conn.execute(
+                    "SELECT 1 FROM consumed_nonces WHERE project_id=? AND nonce=?",
+                    (project_id, value),
+                ).fetchone()
+                if consumed is None:
+                    fresh.append(value)
+                    continue
+                binding = conn.execute(
+                    "SELECT plan_id, plan_hash FROM nonce_plan_bindings "
+                    "WHERE project_id=? AND nonce=?",
+                    (project_id, value),
+                ).fetchone()
+                if binding != (plan_id, plan_hash):
+                    raise PlanStoreStateError("nonce already consumed by another or unknown plan")
+            self._consume_nonces(conn, project_id, tuple(fresh), plan_id, plan_hash)
             return DurablePlanRecord(plan_id, plan_hash, row[1], bool(row[2]), row[3])
 
     def start(
@@ -658,7 +707,7 @@ class DurablePlanDedupeStore:
                 if row[2] < 0 or row[2] >= 2**63 - 1:
                     raise PlanStoreStateError("execution attempt counter exhausted")
                 expires = self._expiry(now, lease_ttl_seconds)
-                self._consume_nonces(conn, project_id, (nonce,))
+                self._consume_nonces(conn, project_id, (nonce,), plan_id, plan_hash)
                 attempt = row[2] + 1
                 owner = secrets.token_hex(32)
                 changed = conn.execute(

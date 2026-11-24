@@ -948,7 +948,7 @@ class CommandBus:
 
     def __init__(
         self,
-        state: Project,
+        state: Project | None,
         registry: CapabilityRegistry | None = None,
         resolver: ReferenceResolver | None = None,
         *,
@@ -991,7 +991,13 @@ class CommandBus:
         # model_copy(update=...) bypasses Pydantic's derived state_hash and
         # validation (the worker uses it when registering its staged asset).
         # Never let a stale/fabricated hash become an optimistic precondition.
-        self._project = Project.model_validate(state.model_dump(mode="json"))
+        if state is None and (self._durable_store is None or authorizer is None):
+            raise ValueError("a cold bus requires a durable store and project authorizer")
+        self._project: Project = (
+            Project.model_validate(state.model_dump(mode="json"))
+            if state is not None
+            else cast(Project, None)
+        )
         self._history: list[EditTransaction] = []
         self._idempotency: dict[tuple[str, str, str], _Reservation] = {}
         self._executing = False
@@ -999,10 +1005,15 @@ class CommandBus:
         self._plan_cache: OrderedDict[str, tuple[str, PlanTransaction]] = OrderedDict()
         self._plan_summaries: OrderedDict[str, tuple[str, PlanResultSummary]] = OrderedDict()
 
+    def _require_project(self) -> None:
+        if self._project is None:
+            raise PlanTransactionError("project is not loaded; only committed replay is available")
+
     @property
     def project(self) -> Project:
         """A deep copy of the central state (safe to read without the lock)."""
         with self._lock:
+            self._require_project()
             return self._project.model_copy(deep=True)
 
     @property
@@ -1023,11 +1034,13 @@ class CommandBus:
     @property
     def state_revision(self) -> int:
         with self._lock:
+            self._require_project()
             return self._project.state_revision
 
     @property
     def state_hash(self) -> str:
         with self._lock:
+            self._require_project()
             return self._project.state_hash
 
     def dispatch(self, command: TypedCommand | dict[str, Any] | str | bytes) -> CommandResult:
@@ -1036,6 +1049,7 @@ class CommandBus:
         with self._lock:
             if self._executing:
                 raise CommandExecutionError("nested command dispatch during execution is forbidden")
+            self._require_project()
             return self._dispatch_locked(parsed)
 
     def dispatch_plan(
@@ -1122,6 +1136,17 @@ class CommandBus:
 
         with self._lock:
             check_deadline()
+            cold_replay = self._try_cold_durable_replay(
+                plan,
+                bindings,
+                policy_version=policy_version,
+                authenticated_actor=authenticated_actor,
+                approval_verifier=approval_verifier,
+                deadline_monotonic_ns=deadline_monotonic_ns,
+            )
+            if cold_replay is not None:
+                return cold_replay
+            self._require_project()
             requirements = self.verify_durable_approvals(
                 plan,
                 bindings,
@@ -1276,6 +1301,10 @@ class CommandBus:
                         "deadline_monotonic_ns": deadline_monotonic_ns,
                         "fencing_epoch": lease.fencing_epoch,
                         "durable_heartbeat": heartbeat,
+                        "durable_owner_token": lease.owner_token,
+                        "durable_plan_id": plan.plan_id,
+                        "durable_plan_hash": first.plan_hash,
+                        "durable_project_id": first.project_id,
                     }
                     result = self._dispatch_locked(command, expected_spec=spec)
                     self._durable_context = {}
@@ -1446,6 +1475,7 @@ class CommandBus:
         with self._lock:
             if self._executing or self._durable_store is None or self._authorizer is None:
                 raise AuthorizationError("durable repair authority is not available")
+            self._require_project()
             if not isinstance(authenticated_operator, ActorIdentity):
                 raise AuthorizationError("authenticated operator is required")
             access = self._authorizer.authorize(authenticated_operator, self._project.project_id)
@@ -1520,6 +1550,169 @@ class CommandBus:
         if not binding.issued_at <= store.utc_timestamp() < binding.expires_at:
             raise ApprovalBindingError("approval expired during verification")
 
+    def _try_cold_durable_replay(
+        self,
+        plan: PlanTransaction,
+        bindings: tuple[ApprovalBinding, ...],
+        *,
+        policy_version: str,
+        authenticated_actor: ActorIdentity,
+        approval_verifier: ApprovalVerifier,
+        deadline_monotonic_ns: int,
+    ) -> PlanResultSummary | None:
+        """Authenticate and validate committed evidence before publishing any state."""
+        store = self._durable_store
+        if store is None or self._authorizer is None:
+            return None
+        if self._executing or not isinstance(plan, PlanTransaction):
+            raise PlanTransactionError("plan is not available for durable replay")
+        if plan.state is not PlanTransactionState.PENDING:
+            raise PlanTransactionError("plan is not available for durable replay")
+        if not isinstance(authenticated_actor, ActorIdentity):
+            raise AuthorizationError("authenticated actor context is required")
+        if (
+            not isinstance(bindings, tuple)
+            or not bindings
+            or any(not isinstance(binding, ApprovalBinding) for binding in bindings)
+        ):
+            raise ApprovalBindingError("invalid approval bindings")
+        first = bindings[0]
+        if first.actor_id != authenticated_actor.actor_id or first.plan_id != plan.plan_id:
+            raise ApprovalBindingError("approval does not match the plan")
+        access = self._authorizer.authorize(authenticated_actor, first.project_id)
+        if access.actor != authenticated_actor or access.project_id != first.project_id:
+            raise AuthorizationError("authorizer returned a mismatched project grant")
+        record = store.find_committed(plan.plan_id, first.plan_hash, project_id=first.project_id)
+        if record is None:
+            return None
+        # The authority is checked before parsing or disclosing any receipt data.
+        if len(bindings) != len(plan.steps) or len({b.nonce for b in bindings}) != len(bindings):
+            raise ApprovalBindingError("one unique approval binding is required per step")
+        for index, binding in enumerate(bindings):
+            verify_approval_binding(
+                binding,
+                project_id=first.project_id,
+                plan_id=plan.plan_id,
+                plan_hash=first.plan_hash,
+                actor_id=authenticated_actor.actor_id,
+                step_id=f"step-{index}",
+                capability_version=binding.capability_version,
+                normalized_params_hash=binding.normalized_params_hash,
+                policy_version=policy_version,
+                now=store.utc_timestamp(),
+                verifier=approval_verifier,
+            )
+        try:
+            raw = record.evidence_json
+            if raw is None or len(raw.encode("utf-8")) > 65536:
+                raise ValueError("invalid receipt size")
+            receipt = json.loads(raw, object_pairs_hook=_unique_json_pairs)
+            payload = receipt["payload"]
+            if receipt["digest"] != _durable_hash(payload):
+                raise ValueError("receipt digest mismatch")
+            if "before_project" not in payload:
+                if self._project is None:
+                    raise ValueError("legacy receipt lacks a base snapshot")
+                return None
+            before = Project.model_validate(payload["before_project"])
+            if (
+                before.project_id != first.project_id
+                or before.state_hash != payload["before_project"]["state_hash"]
+                or before.state_hash != payload["before_hash"]
+                or before.state_revision != payload["before_revision"]
+            ):
+                raise ValueError("invalid base project")
+            history = [EditTransaction.model_validate(item) for item in payload["before_history"]]
+            prior: dict[tuple[str, str, str], _Reservation] = {}
+            for item in payload["before_idempotency"]:
+                key = tuple(item["key"])
+                if (
+                    len(key) != 3
+                    or any(not isinstance(part, str) for part in key)
+                    or key[0] != first.project_id
+                    or key in prior
+                    or item["result"] is None
+                ):
+                    raise ValueError("invalid base reservation")
+                prior[cast(tuple[str, str, str], key)] = _Reservation(
+                    item["fingerprint"], CommandResult.model_validate(item["result"])
+                )
+            if self._project is not None:
+                current = self._project
+                if current.project_id != first.project_id:
+                    raise ValueError("project mismatch")
+                final = Project.model_validate(payload["project"])
+                ancestor = any(
+                    tx.parent_revision == current.state_revision
+                    and tx.previous_state_hash == current.state_hash
+                    and Project.model_validate(tx.state_before) == current
+                    for tx in history
+                )
+                if current != before and current != final and not ancestor:
+                    raise ValueError("in-memory project is not an ancestor of the receipt")
+            probe = CommandBus(
+                before,
+                registry=self._registry,
+                resolver=self._resolver,
+                authorizer=self._authorizer,
+                allow_experimental=self._allow_experimental,
+                audio_engine=self._audio_engine,
+                engine_ports=self._engine_ports,
+            )
+            probe._history = history
+            probe._idempotency = prior
+            requirements = probe.verify_durable_approvals(
+                plan,
+                bindings,
+                policy_version=policy_version,
+                authenticated_actor=authenticated_actor,
+                now=store.utc_timestamp(),
+                verifier=approval_verifier,
+            )
+            if bool(plan._external_step_indices) != record.external_effects:
+                raise ValueError("external effect declaration differs")
+            try:
+                result = probe._rehydrate_durable_receipt(plan, requirements[0], raw)
+            finally:
+                plan.state = PlanTransactionState.PENDING
+        except (TypeError, ValueError, KeyError, IndexError, ValidationError) as exc:
+            raise PlanStoreStateError("invalid durable receipt") from exc
+        if store.monotonic_ns() >= deadline_monotonic_ns:
+            raise TimeoutError("durable plan deadline expired")
+        authorized = store.replay_committed(
+            plan.plan_id,
+            first.plan_hash,
+            project_id=first.project_id,
+            external_effects=record.external_effects,
+            nonce=first.nonce,
+            additional_nonces=tuple(binding.nonce for binding in bindings[1:]),
+        )
+        if authorized.evidence_json != raw:
+            raise PlanStoreStateError("committed receipt changed during replay")
+        for binding, expected in zip(bindings, requirements, strict=True):
+            verify_approval_binding(
+                binding,
+                project_id=expected.project_id,
+                plan_id=expected.plan_id,
+                plan_hash=expected.plan_hash,
+                actor_id=expected.actor_id,
+                step_id=expected.step_id,
+                capability_version=expected.capability_version,
+                normalized_params_hash=expected.normalized_params_hash,
+                policy_version=expected.policy_version,
+                now=store.utc_timestamp(),
+                verifier=approval_verifier,
+            )
+        if store.monotonic_ns() >= deadline_monotonic_ns:
+            raise TimeoutError("durable plan deadline expired")
+        self._project, self._history, self._idempotency = (
+            probe._project,
+            probe._history,
+            probe._idempotency,
+        )
+        plan.state = PlanTransactionState.COMMITTED
+        return result
+
     def _durable_receipt(
         self,
         plan: PlanTransaction,
@@ -1534,6 +1727,16 @@ class CommandBus:
             "plan_hash": expected.plan_hash,
             "before_hash": before.state_hash,
             "before_revision": before.state_revision,
+            "before_project": before.model_dump(mode="json"),
+            "before_history": [json.loads(raw) for raw in snapshot["_history"]],
+            "before_idempotency": [
+                {
+                    "key": list(key),
+                    "fingerprint": value.fingerprint,
+                    "result": value.result.model_dump(mode="json") if value.result else None,
+                }
+                for key, value in sorted(snapshot["_idempotency"].items())
+            ],
             "project": self._project.model_dump(mode="json"),
             "history": [r.model_dump(mode="json") for r in self._history],
             "trace": [r.model_dump(mode="json") for r in trace],
@@ -1690,6 +1893,7 @@ class CommandBus:
         with self._lock:
             if self._executing or plan.state is not PlanTransactionState.PENDING:
                 raise PlanTransactionError("plan is not available for approval preflight")
+            self._require_project()
             if self._authorizer is None:
                 raise AuthorizationError("durable approval requires a trusted project authorizer")
             if not 1 <= len(plan.steps) <= 128:

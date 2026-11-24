@@ -168,6 +168,12 @@ class DurablePlanDedupePort(Protocol):
         additional_nonces: tuple[str, ...] = (),
     ) -> ExecutionLease: ...
 
+    def find_committed(
+        self, plan_id: str, plan_hash: str, *, project_id: str
+    ) -> DurablePlanRecord | None:
+        """Look up evidence only after independently authorizing its disclosure."""
+        ...
+
     def replay_committed(
         self,
         plan_id: str,

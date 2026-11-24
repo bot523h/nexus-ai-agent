@@ -110,6 +110,12 @@ class OperationContext:
     deadline_monotonic_ns: int | None = None
     fencing_epoch: int | None = None
     durable_heartbeat: Callable[[], None] | None = None
+    # Sensitive execution fence: only registered, trusted destination adapters
+    # should receive or use it, and it must not be included in receipts/logs.
+    durable_owner_token: str | None = None
+    durable_plan_id: str | None = None
+    durable_plan_hash: str | None = None
+    durable_project_id: str | None = None
 
 
 OperationHandler = Callable[[Project, OperationContext], OperationOutcome]

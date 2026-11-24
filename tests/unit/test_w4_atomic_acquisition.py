@@ -170,8 +170,8 @@ def test_multiple_approval_nonces_are_consumed_atomically(tmp_path: Path) -> Non
         "first", HASH, external_effects=True, nonce="fresh", additional_nonces=("fresh2",)
     )
     assert replay.evidence_json == '{"receipt":42}'
-    with pytest.raises(PlanStoreStateError, match="already consumed"):
-        store.replay_committed("first", HASH, external_effects=True, nonce="fresh")
+    assert store.replay_committed("first", HASH, external_effects=True, nonce="fresh") == replay
+    assert store.replay_committed("first", HASH, external_effects=True, nonce="n1") == replay
     with pytest.raises(PlanReplayConflictError):
         store.replay_committed("first", "b" * 64, external_effects=True, nonce="unused")
     with sqlite3.connect(path) as conn:

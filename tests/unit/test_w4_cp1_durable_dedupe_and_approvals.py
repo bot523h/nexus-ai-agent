@@ -1,7 +1,7 @@
 """CP1b's public plan entry point, using real SQLite and real file effects.
 
-Identity and destination fencing are test doubles; exclusive file creation only
-models effect deduplication, not a production destination's fencing authority.
+Identity is a test double. The cooperative file destination holds a real SQLite
+write transaction during fenced file creation; it is not a production destination.
 """
 
 import hashlib
@@ -35,6 +35,7 @@ from nexus_ai_agent.creative.studio.durable_dedupe import (
     ApprovalBindingError,
     PlanExecutionInProgressError,
     PlanInDoubtQuarantineError,
+    PlanStoreStateError,
 )
 from nexus_ai_agent.creative.studio.models import (
     ActorIdentity,
@@ -60,16 +61,39 @@ def make_bus(
     project = new_project("project", "before", Timeline(timeline_id="timeline", duration_us=0))
     project = project.model_copy(update={"state_revision": revision})
     registry = CapabilityRegistry()
+    store = DurablePlanDedupeStore(root / "plans.db")
 
     def handler(state: Project, context: OperationContext) -> OperationOutcome:
         assert context.effect_key is not None and context.durable_heartbeat is not None
         context.durable_heartbeat()
         path = root / context.effect_key
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
-        try:
-            os.write(fd, context.command.command_id.encode())
-        finally:
-            os.close(fd)
+        # The cooperative test destination serializes fence validation and
+        # publication with all SQLite-mediated lease takeovers.
+        with store._transaction() as conn:
+            live = conn.execute(
+                "SELECT 1 FROM plans p JOIN compensation_journal j "
+                "ON p.project_id=j.project_id AND p.plan_id=j.plan_id AND p.plan_hash=j.plan_hash "
+                "WHERE p.project_id=? AND p.plan_id=? AND p.plan_hash=? AND p.status='EXECUTING' "
+                "AND p.attempt=? AND p.owner_token=? AND p.lease_expires_at>? "
+                "AND j.attempt=p.attempt AND j.effect_key=? AND j.status='PENDING'",
+                (
+                    context.durable_project_id,
+                    context.durable_plan_id,
+                    context.durable_plan_hash,
+                    context.fencing_epoch,
+                    context.durable_owner_token,
+                    store._now(),
+                    context.effect_key,
+                ),
+            ).fetchone()
+            if live is None:
+                raise RuntimeError("file effect fenced")
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+            try:
+                os.write(fd, context.command.command_id.encode())
+                os.fsync(fd)
+            finally:
+                os.close(fd)
         if context.command.command_id == fail_at:
             raise RuntimeError("unknown external effect")
         state.name = "after"
@@ -100,7 +124,7 @@ def make_bus(
             project,
             registry=registry,
             authorizer=ProjectAccess(actor, "project", frozenset({"project:read"})),
-            durable_dedupe_store=DurablePlanDedupeStore(root / "plans.db"),
+            durable_dedupe_store=store,
             durable_verifiers={"example.play": verifier},
         ),
         actor,
@@ -174,16 +198,27 @@ def test_public_plan_path_replays_and_rehydrates_from_real_sqlite(tmp_path: Path
     receipt = dispatch(first, plan, actor, initial)
     expected_project, expected_history = first.project, first.history
     with sqlite3.connect(tmp_path / "plans.db") as conn:
-        assert conn.execute("SELECT status FROM plans").fetchone() == ("COMMITTED",)
+        status, owner_token, evidence = conn.execute(
+            "SELECT status, owner_token, evidence_json FROM plans"
+        ).fetchone()
+        assert status == "COMMITTED" and owner_token not in evidence
         (key, status) = conn.execute(
             "SELECT effect_key, status FROM compensation_journal"
         ).fetchone()
     assert status == "VERIFIED" and (tmp_path / key).read_bytes() == b"cmd-0"
     del first
-    second, actor2 = make_bus(tmp_path)
+    configured, actor2 = make_bus(tmp_path)
+    second = CommandBus(
+        None,
+        registry=configured.registry,
+        authorizer=ProjectAccess(actor2, "project", frozenset({"project:read"})),
+        durable_dedupe_store=DurablePlanDedupeStore(tmp_path / "plans.db"),
+        durable_verifiers=configured._durable_verifiers,
+    )
+    with pytest.raises(PlanTransactionError, match="project is not loaded"):
+        _ = second.project
     redelivery = make_plan(tmp_path, actor2)
-    # A fresh authenticated approval is deliberately required even on replay.
-    replay = dispatch(second, redelivery, actor2, approvals(second, redelivery, actor2, "replay"))
+    replay = dispatch(second, redelivery, actor2, initial)
     assert replay == receipt
     assert second.project == expected_project and second.history == expected_history
     assert (tmp_path / key).read_bytes() == b"cmd-0"
@@ -323,15 +358,277 @@ def test_expired_deadline_never_marks_pending_effect_verified(tmp_path: Path) ->
     assert store.compensation_journal("plan", plan_hash)[0].status == "PENDING"
 
 
-def test_redelivery_requires_fresh_approval_nonce(tmp_path: Path) -> None:
+def test_redelivery_accepts_same_plan_approval_nonce(tmp_path: Path) -> None:
     bus, actor = make_bus(tmp_path)
     plan = make_plan(tmp_path, actor)
     binding = approvals(bus, plan, actor, "first")
-    dispatch(bus, plan, actor, binding)
+    receipt = dispatch(bus, plan, actor, binding)
     other, actor2 = make_bus(tmp_path)
     same = make_plan(tmp_path, actor2)
-    with pytest.raises(PlanInDoubtQuarantineError):
-        dispatch(other, same, actor2, binding)
-    assert other.state_revision == 0
+    assert dispatch(other, same, actor2, binding) == receipt
+    assert other.project == bus.project
     with sqlite3.connect(tmp_path / "plans.db") as conn:
         assert conn.execute("SELECT count(*) FROM compensation_journal").fetchone() == (1,)
+
+
+def test_old_project_replays_from_authorized_ancestor(tmp_path: Path) -> None:
+    bus, actor = make_bus(tmp_path)
+    template = make_plan(tmp_path, actor)
+    command = TypedCommand(
+        command_id="earlier", operation="example.play", actor=actor, idempotency_key="earlier"
+    )
+    earlier = PlanTransaction(
+        plan_id="earlier", steps=(replace(template.steps[0], command=command),)
+    )
+    dispatch(bus, earlier, actor, approvals(bus, earlier, actor, "previous"))
+    plan = make_plan(tmp_path, actor)
+    binding = approvals(bus, plan, actor, "original")
+    receipt = dispatch(bus, plan, actor, binding)
+    stale, actor2 = make_bus(tmp_path)
+    assert stale.state_revision == 0
+    assert dispatch(stale, make_plan(tmp_path, actor2), actor2, binding) == receipt
+    assert stale.project == bus.project and stale.history == bus.history
+
+
+def test_cold_replay_refuses_bad_authority_or_receipt_without_publishing_state(
+    tmp_path: Path,
+) -> None:
+    first, actor = make_bus(tmp_path)
+    plan = make_plan(tmp_path, actor)
+    binding = approvals(first, plan, actor, "original")
+    dispatch(first, plan, actor, binding)
+    cold = CommandBus(
+        None,
+        registry=first.registry,
+        authorizer=ProjectAccess(actor, "project", frozenset({"project:read"})),
+        durable_store=DurablePlanDedupeStore(tmp_path / "plans.db"),
+        durable_verifiers=first._durable_verifiers,
+    )
+
+    class Denied:
+        def verify(self, _binding: ApprovalBinding) -> bool:
+            return False
+
+    with pytest.raises(ApprovalBindingError):
+        cold.dispatch_plan(
+            make_plan(tmp_path, actor),
+            approval_attestations=binding,
+            policy_version="v1",
+            authenticated_actor=actor,
+            approval_verifier=Denied(),
+            deadline_monotonic_ns=time.monotonic_ns() + 10**10,
+        )
+    with pytest.raises(PlanTransactionError, match="not loaded"):
+        _ = cold.project
+    with sqlite3.connect(tmp_path / "plans.db") as conn:
+        conn.execute("UPDATE plans SET evidence_json='{}'")
+    with pytest.raises(PlanStoreStateError, match="invalid durable receipt"):
+        dispatch(cold, make_plan(tmp_path, actor), actor, binding)
+    with pytest.raises(PlanTransactionError, match="not loaded"):
+        _ = cold.project
+
+
+def test_nonce_binding_requires_matching_committed_plan_and_legacy_unknown_fails_closed(
+    tmp_path: Path,
+) -> None:
+    store = DurablePlanDedupeStore(tmp_path / "plans.db")
+    h = "a" * 64
+    for name in ("first", "second"):
+        lease = store.reserve_and_start(name, h, external_effects=False, nonce=name)
+        store.finish(
+            name, h, attempt=lease.attempt, owner_token=lease.owner_token, evidence={"ok": True}
+        )
+    with pytest.raises(PlanStoreStateError, match="another or unknown plan"):
+        store.replay_committed("second", h, external_effects=False, nonce="first")
+    with sqlite3.connect(tmp_path / "plans.db") as conn:
+        conn.execute("DELETE FROM nonce_plan_bindings WHERE nonce='second'")
+    with pytest.raises(PlanStoreStateError, match="another or unknown plan"):
+        store.replay_committed("second", h, external_effects=False, nonce="second")
+
+
+def test_cooperative_file_destination_fences_expired_owner_after_takeover(tmp_path: Path) -> None:
+    """Real SQLite and filesystem; repair authority is a test double.
+
+    Every cooperating writer holds SQLite's write transaction across its final
+    lease check and file replacement, so takeover cannot race that replacement.
+    This is a test destination, not fencing for arbitrary filesystem writers.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+
+    from nexus_ai_agent.creative.studio.durable_dedupe import PlanFencingTokenMismatchError
+
+    store = DurablePlanDedupeStore(
+        tmp_path / "plans.db", repair_authorizer=lambda _p, _o, _s, _a: True
+    )
+    h = "a" * 64
+    old = store.reserve_and_start(
+        "plan", h, external_effects=True, nonce="old", lease_ttl_seconds=0.05
+    )
+    store.record_compensation_intent(
+        "plan",
+        h,
+        attempt=old.attempt,
+        owner_token=old.owner_token,
+        step_id="old",
+        effect_key="b" * 64,
+    )
+    ready = Event()
+
+    def writer(attempt: int, token: str, key: str, data: bytes) -> None:
+        # Lock out every database-mediated takeover during check and replacement.
+        with store._transaction() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM plans p JOIN compensation_journal j "
+                "ON p.project_id=j.project_id AND p.plan_id=j.plan_id AND p.plan_hash=j.plan_hash "
+                "WHERE p.project_id=? AND p.plan_id=? AND p.plan_hash=? AND p.status='EXECUTING' "
+                "AND p.attempt=? AND p.owner_token=? AND p.lease_expires_at>? "
+                "AND j.attempt=p.attempt AND j.effect_key=? AND j.status='PENDING'",
+                ("default", "plan", h, attempt, token, store._now(), key),
+            ).fetchone()
+            if row is None:
+                raise PlanFencingTokenMismatchError("file writer fenced")
+            target = tmp_path / "destination"
+            temp = tmp_path / ("staged-" + key)
+            fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+            try:
+                os.write(fd, data)
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+            # Deadline is sampled again immediately before publishing.
+            row = conn.execute(
+                "SELECT lease_expires_at FROM plans WHERE project_id='default' AND plan_id='plan'"
+            ).fetchone()
+            if row is None or store._now() >= row[0]:
+                raise PlanFencingTokenMismatchError("file writer lease expired")
+            os.replace(temp, target)
+
+    def stale_worker() -> None:
+        assert ready.wait(timeout=10)
+        writer(old.attempt, old.owner_token, "b" * 64, b"stale")
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        task = pool.submit(stale_worker)
+        time.sleep(0.08)
+        with pytest.raises(PlanInDoubtQuarantineError):
+            store.reserve_and_start("plan", h, external_effects=True, nonce="new")
+        store.repair_in_doubt(
+            "default",
+            "plan",
+            h,
+            expected_status="IN_DOUBT",
+            expected_attempt=old.attempt,
+            operator_id="operator",
+            resolution_action="authorize_takeover",
+            reason="investigated",
+        )
+        new = store.reserve_and_start("plan", h, external_effects=True, nonce="new")
+        store.record_compensation_intent(
+            "plan",
+            h,
+            attempt=new.attempt,
+            owner_token=new.owner_token,
+            step_id="new",
+            effect_key="c" * 64,
+        )
+        writer(new.attempt, new.owner_token, "c" * 64, b"current")
+        ready.set()
+        with pytest.raises(PlanFencingTokenMismatchError):
+            task.result(timeout=10)
+    assert (tmp_path / "destination").read_bytes() == b"current"
+    assert not (tmp_path / ("staged-" + "b" * 64)).exists()
+
+
+def test_same_approval_cold_replay_survives_process_restart(tmp_path: Path) -> None:
+    import json
+    import subprocess
+    import sys
+
+    first, actor = make_bus(tmp_path)
+    plan = make_plan(tmp_path, actor)
+    binding = approvals(first, plan, actor, "initial")
+    receipt = dispatch(first, plan, actor, binding)
+    script = """
+import json, runpy, sys
+from pathlib import Path
+m = runpy.run_path("tests/unit/test_w4_cp1_durable_dedupe_and_approvals.py")
+root = Path(sys.argv[1])
+configured, actor = m["make_bus"](root)
+access = m["ProjectAccess"](actor, "project", frozenset({"project:read"}))
+bus = m["CommandBus"](None, registry=configured.registry, authorizer=access,
+    durable_store=m["DurablePlanDedupeStore"](root / "plans.db"),
+    durable_verifiers=configured._durable_verifiers)
+plan = m["make_plan"](root, actor)
+binding = (m["ApprovalBinding"](**json.loads(sys.argv[2])),)
+result = m["dispatch"](bus, plan, actor, binding)
+print(json.dumps({"project": bus.project.model_dump(mode="json"),
+                  "revision": result.committed_revision}))
+"""
+    child = subprocess.run(
+        [sys.executable, "-c", script, str(tmp_path), json.dumps(asdict(binding[0]))],
+        check=True,
+        text=True,
+        capture_output=True,
+    )
+    result = json.loads(child.stdout)
+    assert result["project"] == first.project.model_dump(mode="json")
+    assert result["revision"] == receipt.committed_revision
+    with sqlite3.connect(tmp_path / "plans.db") as conn:
+        assert conn.execute("SELECT count(*) FROM compensation_journal").fetchone() == (1,)
+        assert conn.execute("SELECT count(*) FROM consumed_nonces").fetchone() == (1,)
+
+
+def test_repeat_same_request_on_current_bus_is_a_replay(tmp_path: Path) -> None:
+    bus, actor = make_bus(tmp_path)
+    first = make_plan(tmp_path, actor)
+    bindings = approvals(bus, first, actor, "initial")
+    receipt = dispatch(bus, first, actor, bindings)
+    assert dispatch(bus, make_plan(tmp_path, actor), actor, bindings) == receipt
+    with sqlite3.connect(tmp_path / "plans.db") as conn:
+        assert conn.execute("SELECT count(*) FROM compensation_journal").fetchone() == (1,)
+        assert conn.execute("SELECT count(*) FROM consumed_nonces").fetchone() == (1,)
+
+
+def test_cold_replay_does_not_overwrite_a_divergent_project(tmp_path: Path) -> None:
+    bus, actor = make_bus(tmp_path)
+    plan = make_plan(tmp_path, actor)
+    bindings = approvals(bus, plan, actor, "initial")
+    dispatch(bus, plan, actor, bindings)
+    stale, actor2 = make_bus(tmp_path, revision=7)
+    before = stale.project
+    with pytest.raises(PlanStoreStateError, match="invalid durable receipt"):
+        dispatch(stale, make_plan(tmp_path, actor2), actor2, bindings)
+    assert stale.project == before
+
+
+def test_preupgrade_unbound_nonce_cannot_authorize_same_plan_replay(tmp_path: Path) -> None:
+    store = DurablePlanDedupeStore(tmp_path / "plans.db")
+    lease = store.reserve_and_start("plan", "a" * 64, external_effects=False, nonce="old")
+    store.finish(
+        "plan", "a" * 64, attempt=lease.attempt, owner_token=lease.owner_token, evidence={}
+    )
+    with sqlite3.connect(tmp_path / "plans.db") as conn:
+        conn.execute("DELETE FROM nonce_plan_bindings")
+    with pytest.raises(PlanStoreStateError, match="another or unknown plan"):
+        DurablePlanDedupeStore(tmp_path / "plans.db").replay_committed(
+            "plan", "a" * 64, external_effects=False, nonce="old"
+        )
+
+
+def test_cold_bus_cannot_execute_new_plan_without_a_project(tmp_path: Path) -> None:
+    configured, actor = make_bus(tmp_path)
+    plan = make_plan(tmp_path, actor)
+    binding = approvals(configured, plan, actor, "nonce")
+    cold = CommandBus(
+        None,
+        registry=configured.registry,
+        authorizer=ProjectAccess(actor, "project", frozenset({"project:read"})),
+        durable_store=DurablePlanDedupeStore(tmp_path / "plans.db"),
+        durable_verifiers=configured._durable_verifiers,
+    )
+    with pytest.raises(PlanTransactionError, match="not loaded"):
+        dispatch(cold, plan, actor, binding)
+    with sqlite3.connect(tmp_path / "plans.db") as conn:
+        assert conn.execute("SELECT count(*) FROM plans").fetchone() == (0,)
+        assert conn.execute("SELECT count(*) FROM consumed_nonces").fetchone() == (0,)
