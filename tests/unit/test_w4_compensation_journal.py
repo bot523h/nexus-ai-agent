@@ -149,7 +149,12 @@ def test_repair_authority_and_cas_bind_expected_attempt(tmp_path: Path) -> None:
         store.repair_in_doubt(
             "default", "p", HASH, **{**kwargs, "operator_id": "attacker", "expected_attempt": 1}
         )
-    store.repair_in_doubt("default", "p", HASH, **{**kwargs, "expected_attempt": 1})
+    evidence = store.inspect_recovery(
+        "default", "p", HASH, expected_status="IN_DOUBT", expected_attempt=1, operator_id="admin"
+    )
+    store.repair_in_doubt(
+        "default", "p", HASH, recovery_evidence=evidence, **{**kwargs, "expected_attempt": 1}
+    )
     assert store.start("p", HASH, nonce="new").attempt == 2
 
 
@@ -224,23 +229,26 @@ def test_takeover_never_blindly_repeats_or_hides_previous_pending_intent(tmp_pat
     now[0] = 11.0
     with pytest.raises(PlanInDoubtQuarantineError):
         store.reserve("p", HASH, external_effects=True)
-    store.repair_in_doubt(
-        "default",
-        "p",
-        HASH,
-        expected_status="IN_DOUBT",
-        expected_attempt=first.attempt,
-        operator_id="admin",
-        resolution_action="authorize_takeover",
-        reason="old worker stopped",
-    )
-    second = store.start("p", HASH, nonce="n2")
-    new: dict[str, Any] = {"attempt": second.attempt, "owner_token": second.owner_token}
-    store.mark_compensating("p", HASH, **new)
-    with pytest.raises(PlanStoreStateError, match="already exists"):
-        store.record_compensation_intent("p", HASH, step_id="step", effect_key=KEY1, **new)
-    with pytest.raises(PlanStoreStateError, match="unresolved"):
-        store.record_compensation("p", HASH, succeeded=True, evidence={}, **new)
+    with pytest.raises(PlanStoreStateError, match="destination is unavailable"):
+        store.inspect_recovery(
+            "default",
+            "p",
+            HASH,
+            expected_status="IN_DOUBT",
+            expected_attempt=first.attempt,
+            operator_id="admin",
+        )
+    with pytest.raises(PlanStoreStateError, match="evidence is required"):
+        store.repair_in_doubt(
+            "default",
+            "p",
+            HASH,
+            expected_status="IN_DOUBT",
+            expected_attempt=first.attempt,
+            operator_id="admin",
+            resolution_action="authorize_takeover",
+            reason="investigated",
+        )
     assert store.compensation_journal("p", HASH)[0].status == "PENDING"
 
 
@@ -348,8 +356,6 @@ def test_unresolved_effect_intent_cannot_be_committed(tmp_path: Path) -> None:
 
 def test_failed_old_compensation_cannot_be_hidden_by_a_new_attempt(tmp_path: Path) -> None:
     """An authorized takeover cannot manufacture a receipt over failed evidence."""
-    import sqlite3
-
     path = tmp_path / "db"
     # MOCK: the callback models a trusted repair authority, not real authentication.
     store = DurablePlanDedupeStore(
@@ -363,23 +369,25 @@ def test_failed_old_compensation_cannot_be_hidden_by_a_new_attempt(tmp_path: Pat
         "p", HASH, step_id="step", effect_key=KEY1, succeeded=False, evidence={}, **args
     )
     store.record_compensation("p", HASH, succeeded=False, evidence={}, **args)
-    store.repair_in_doubt(
-        "default",
-        "p",
-        HASH,
-        expected_status="ROLLBACK_FAILED",
-        expected_attempt=first.attempt,
-        operator_id="admin",
-        resolution_action="authorize_takeover",
-        reason="investigated",
-    )
-    second = store.reserve_and_start("p", HASH, external_effects=True, nonce="n2")
-    with pytest.raises(PlanInDoubtQuarantineError, match="unresolved effect intent"):
-        store.finish("p", HASH, attempt=second.attempt, owner_token=second.owner_token, evidence={})
-    with sqlite3.connect(path) as conn:
-        assert conn.execute("SELECT status, evidence_json FROM plans").fetchone() == (
-            "IN_DOUBT",
-            None,
+    with pytest.raises(PlanStoreStateError, match="destination is unavailable"):
+        store.inspect_recovery(
+            "default",
+            "p",
+            HASH,
+            expected_status="ROLLBACK_FAILED",
+            expected_attempt=first.attempt,
+            operator_id="admin",
+        )
+    with pytest.raises(PlanStoreStateError, match="evidence is required"):
+        store.repair_in_doubt(
+            "default",
+            "p",
+            HASH,
+            expected_status="ROLLBACK_FAILED",
+            expected_attempt=first.attempt,
+            operator_id="admin",
+            resolution_action="authorize_takeover",
+            reason="investigated",
         )
     assert store.compensation_journal("p", HASH)[0].status == "FAILED"
 
@@ -587,19 +595,27 @@ def test_verified_old_attempt_cannot_be_committed_by_takeover(tmp_path: Path) ->
         "p", HASH, step_id="one", effect_key=KEY1, verification_digest=KEY2, **fence
     )
     store.quarantine("p", HASH, **fence)
-    store.repair_in_doubt(
-        "default",
-        "p",
-        HASH,
-        expected_status="IN_DOUBT",
-        expected_attempt=1,
-        operator_id="admin",
-        resolution_action="authorize_takeover",
-        reason="investigated",
-    )
-    second = store.reserve_and_start("p", HASH, external_effects=True, nonce="n2")
-    with pytest.raises(PlanInDoubtQuarantineError):
-        store.finish("p", HASH, attempt=second.attempt, owner_token=second.owner_token, evidence={})
+    with pytest.raises(PlanStoreStateError, match="destination is unavailable"):
+        store.inspect_recovery(
+            "default",
+            "p",
+            HASH,
+            expected_status="IN_DOUBT",
+            expected_attempt=1,
+            operator_id="admin",
+        )
+    with pytest.raises(PlanStoreStateError, match="evidence is required"):
+        store.repair_in_doubt(
+            "default",
+            "p",
+            HASH,
+            expected_status="IN_DOUBT",
+            expected_attempt=1,
+            operator_id="admin",
+            resolution_action="authorize_takeover",
+            reason="investigated",
+        )
+    assert store.compensation_journal("p", HASH)[0].status == "VERIFIED"
 
 
 def test_verified_and_pending_intents_cannot_publish_receipt(tmp_path: Path) -> None:

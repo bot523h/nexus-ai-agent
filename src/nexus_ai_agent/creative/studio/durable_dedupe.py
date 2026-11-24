@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Any, Literal, Protocol
+from typing import Any, Generic, Literal, Protocol, TypeVar
 
 from nexus_ai_agent.creative.studio.plan_identifiers import validate_plan_identity
 
@@ -129,6 +129,54 @@ class EffectObservationVerifier(Protocol):
     """Independent, trusted verifier of a destination's observed effect."""
 
     def verify(self, observation: ExternalEffectObservation) -> bool: ...
+
+
+@dataclass(frozen=True)
+class RecoveryRoute:
+    """Trusted, deployment-configured destination and separate verifier.
+
+    For ABSENT, the verifier must independently establish that the requested
+    epoch is durably fenced. A route supplied by a request is not authority.
+    """
+
+    destination: DurableEffectDestination
+    verifier: EffectObservationVerifier
+    verifier_id: str
+
+
+@dataclass(frozen=True)
+class VerifiedEffectRecoveryEvidence:
+    step_id: str
+    effect_key: str
+    fencing_epoch: int
+    observation_status: Literal["PRESENT", "ABSENT"]
+    observation_digest: str
+    verifier_id: str
+    destination_fenced: bool
+
+
+_RecoveryTime = TypeVar("_RecoveryTime")
+
+
+@dataclass(frozen=True)
+class RecoveryEvidence(Generic[_RecoveryTime]):
+    """A store-issued snapshot; its nonce alone is neither proof nor authority.
+
+    The generic timestamp permits the pure port to avoid a clock import; the
+    SQLite adapter issues timezone-aware datetime instances.
+    """
+
+    project_id: str
+    plan_id: str
+    plan_hash: str
+    expected_status: str
+    expected_attempt: int
+    operator_id: str
+    recovery_nonce: str
+    issued_at: _RecoveryTime
+    expires_at: _RecoveryTime
+    journal_digest: str
+    effect_evidences: tuple[VerifiedEffectRecoveryEvidence, ...]
 
 
 @dataclass(frozen=True)
@@ -346,6 +394,17 @@ class DurablePlanDedupePort(Protocol):
         project_id: str = "default",
     ) -> tuple[CompensationJournalEntry, ...]: ...
 
+    def inspect_recovery(
+        self,
+        project_id: str,
+        plan_id: str,
+        plan_hash: str,
+        *,
+        expected_status: str,
+        expected_attempt: int,
+        operator_id: str,
+    ) -> RecoveryEvidence[Any]: ...
+
     def record_compensation(
         self,
         plan_id: str,
@@ -369,6 +428,7 @@ class DurablePlanDedupePort(Protocol):
         operator_id: str,
         resolution_action: str,
         reason: str,
+        recovery_evidence: RecoveryEvidence[Any] | None = None,
     ) -> None: ...
 
     def quarantine(

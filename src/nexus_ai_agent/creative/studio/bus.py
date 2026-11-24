@@ -82,13 +82,11 @@ from nexus_ai_agent.creative.studio.durable_dedupe import (
     ApprovalBinding,
     ApprovalBindingError,
     ApprovalVerifier,
-    DurableEffectDestination,
     DurablePlanDedupePort,
-    EffectObservationVerifier,
-    ExternalEffectObservation,
     PlanApprovalRequirement,
     PlanInDoubtQuarantineError,
     PlanStoreStateError,
+    RecoveryEvidence,
     verify_approval_binding,
 )
 from nexus_ai_agent.creative.studio.lifecycle import check_required_packs
@@ -1467,17 +1465,8 @@ class CommandBus:
         authenticated_operator: ActorIdentity,
         expected_status: str,
         expected_attempt: int,
-        destinations: Mapping[str, DurableEffectDestination],
-        verifier: EffectObservationVerifier,
-    ) -> tuple[ExternalEffectObservation, ...]:
-        """Inspect journaled effects without executing, repairing, or publishing.
-
-        Destinations and the verifier must be independently trusted composition
-        components. A stable ABSENT result requires destination-side fencing;
-        even independently verified observations do not authorize repair. The
-        quarantine snapshot can become stale immediately after it is read; any
-        later repair must independently compare status and attempt atomically.
-        """
+    ) -> RecoveryEvidence[Any]:
+        """Inspect using store-configured trusted routes and issue one-use evidence."""
         with self._lock:
             if self._executing or self._durable_store is None or self._authorizer is None:
                 raise AuthorizationError("durable recovery authority is not available")
@@ -1491,37 +1480,14 @@ class CommandBus:
             ):
                 raise AuthorizationError("authorizer returned a mismatched operator or project")
             access.require_permissions(("project:repair",))
-            journal = self._durable_store.quarantined_journal(
+            return self._durable_store.inspect_recovery(
+                self._project.project_id,
                 plan_id,
                 plan_hash,
-                project_id=self._project.project_id,
                 expected_status=expected_status,
                 expected_attempt=expected_attempt,
+                operator_id=authenticated_operator.actor_id,
             )
-            if not journal:
-                raise PlanStoreStateError("durable recovery has no effect journal")
-            observations: list[ExternalEffectObservation] = []
-            for entry in journal:
-                destination = destinations.get(entry.step_id)
-                if destination is None:
-                    raise PlanStoreStateError("durable recovery destination is unavailable")
-                if cast(object, destination) is cast(object, verifier):
-                    raise PlanStoreStateError("durable recovery verifier must be independent")
-                observation = destination.inspect(
-                    effect_key=entry.effect_key, fencing_epoch=entry.attempt
-                )
-                if (
-                    not isinstance(observation, ExternalEffectObservation)
-                    or observation.effect_key != entry.effect_key
-                    or observation.fencing_epoch != entry.attempt
-                ):
-                    raise PlanStoreStateError("durable recovery observation does not match intent")
-                if observation.status != "UNKNOWN" and verifier.verify(observation) is not True:
-                    raise PlanStoreStateError(
-                        "durable recovery evidence was not independently verified"
-                    )
-                observations.append(observation)
-            return tuple(observations)
 
     def recover_durable_plan(
         self,
@@ -1533,6 +1499,7 @@ class CommandBus:
         expected_attempt: int,
         resolution_action: str,
         reason: str,
+        recovery_evidence: RecoveryEvidence[Any] | None = None,
     ) -> None:
         """Ask the trusted store to perform an authorized, audited CAS repair.
 
@@ -1563,6 +1530,7 @@ class CommandBus:
                 operator_id=authenticated_operator.actor_id,
                 resolution_action=resolution_action,
                 reason=reason,
+                recovery_evidence=recovery_evidence,
             )
 
     def _validate_durable_boundary(

@@ -56,6 +56,14 @@ def test_duplicate_and_authorized_takeover_acquisition(tmp_path: Path) -> None:
         operator_id="admin",
         resolution_action="authorize_takeover",
         reason="worker stopped",
+        recovery_evidence=store.inspect_recovery(
+            "default",
+            "p",
+            HASH,
+            expected_status="IN_DOUBT",
+            expected_attempt=old.attempt,
+            operator_id="admin",
+        ),
     )
     with pytest.raises(PlanStoreStateError, match="nonce already consumed"):
         store.reserve_and_start("p", HASH, external_effects=True, nonce="one")
@@ -131,6 +139,14 @@ def test_atomic_takeover_rejects_exhausted_attempt(tmp_path: Path) -> None:
         operator_id="op",
         resolution_action="authorize_takeover",
         reason="checked",
+        recovery_evidence=store.inspect_recovery(
+            "default",
+            "p",
+            HASH,
+            expected_status="IN_DOUBT",
+            expected_attempt=lease.attempt,
+            operator_id="op",
+        ),
     )
     with sqlite3.connect(path) as conn:
         conn.execute("UPDATE plans SET attempt=?", (2**63 - 1,))

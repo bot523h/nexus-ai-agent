@@ -10,6 +10,7 @@ import sqlite3
 import time
 from dataclasses import asdict, replace
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -446,7 +447,9 @@ def test_nonce_binding_requires_matching_committed_plan_and_legacy_unknown_fails
         store.replay_committed("second", h, external_effects=False, nonce="second")
 
 
-def test_cooperative_file_destination_fences_expired_owner_after_takeover(tmp_path: Path) -> None:
+def test_cooperative_file_destination_fences_expired_owner_and_denies_unproven_repair(
+    tmp_path: Path,
+) -> None:
     """An actual SQLite writer lock overlaps an attempted takeover.
 
     The clock and repair authority are test doubles. SQLite locking, threads,
@@ -543,21 +546,19 @@ def test_cooperative_file_destination_fences_expired_owner_after_takeover(tmp_pa
             takeover.result(timeout=5)
 
     assert not staging.exists() and not destination.exists()
-    store.repair_in_doubt(
-        "default",
-        "plan",
-        h,
-        expected_status="IN_DOUBT",
-        expected_attempt=old.attempt,
-        operator_id="operator",
-        resolution_action="authorize_takeover",
-        reason="investigated",
-    )
-    new = store.reserve_and_start("plan", h, external_effects=True, nonce="new")
-    assert new.attempt == old.attempt + 1 and new.owner_token != old.owner_token
-    # The old writer published nothing, including while the takeover waited.
-    assert not destination.exists()
+    with pytest.raises(PlanStoreStateError, match="evidence is required"):
+        store.repair_in_doubt(
+            "default",
+            "plan",
+            h,
+            expected_status="IN_DOUBT",
+            expected_attempt=old.attempt,
+            operator_id="operator",
+            resolution_action="authorize_takeover",
+            reason="investigated",
+        )
     with sqlite3.connect(path) as conn:
+        assert conn.execute("SELECT status, attempt FROM plans").fetchone() == ("IN_DOUBT", 1)
         assert conn.execute("SELECT status FROM compensation_journal").fetchone() == ("PENDING",)
 
 
@@ -807,9 +808,10 @@ def test_effect_observation_is_only_a_claim_not_verification() -> None:
 def test_recovery_inspects_real_pending_effect_without_executing_or_repairing(
     tmp_path: Path,
 ) -> None:
-    """Disk inspection is real; operator and destination authorities are test doubles."""
+    """Disk is real; operator and destination authorities are test doubles."""
     from nexus_ai_agent.creative.studio.durable_dedupe import (
         ExternalEffectObservation,
+        RecoveryRoute,
     )
     from nexus_ai_agent.creative.studio.models import AuthorizationError
 
@@ -841,40 +843,6 @@ def test_recovery_inspects_real_pending_effect_without_executing_or_repairing(
                 == observation.evidence_digest
             )
 
-    inspector = FileInspector()
-    verifier = IndependentFileVerifier()
-    bus._authorizer = ProjectAccess(actor, "project", frozenset({"project:repair"}))
-    with pytest.raises(AuthorizationError):
-        bus.inspect_durable_recovery(
-            plan.plan_id,
-            binding[0].plan_hash,
-            authenticated_operator=ActorIdentity(kind="user", actor_id="mallory"),
-            expected_status="IN_DOUBT",
-            expected_attempt=1,
-            destinations={"step-0": inspector},
-            verifier=verifier,
-        )
-    with pytest.raises(PlanStoreStateError, match="expected status/attempt"):
-        bus.inspect_durable_recovery(
-            plan.plan_id,
-            binding[0].plan_hash,
-            authenticated_operator=actor,
-            expected_status="IN_DOUBT",
-            expected_attempt=2,
-            destinations={"step-0": inspector},
-            verifier=verifier,
-        )
-    with pytest.raises(PlanStoreStateError, match="destination is unavailable"):
-        bus.inspect_durable_recovery(
-            plan.plan_id,
-            binding[0].plan_hash,
-            authenticated_operator=actor,
-            expected_status="IN_DOUBT",
-            expected_attempt=1,
-            destinations={},
-            verifier=verifier,
-        )
-
     class RefusingVerifier:
         def verify(self, _observation: ExternalEffectObservation) -> bool:
             return False
@@ -883,37 +851,68 @@ def test_recovery_inspects_real_pending_effect_without_executing_or_repairing(
         def inspect(self, *, effect_key: str, fencing_epoch: int) -> ExternalEffectObservation:
             return ExternalEffectObservation("f" * 64, fencing_epoch, "UNKNOWN", "")
 
-    with pytest.raises(PlanStoreStateError, match="does not match intent"):
+    inspector, verifier = FileInspector(), IndependentFileVerifier()
+    store = DurablePlanDedupeStore(
+        tmp_path / "plans.db",
+        repair_authorizer=lambda _p, _o, _s, _a: True,
+        recovery_routes={("project", "step-0"): RecoveryRoute(inspector, verifier, "test-reader")},
+    )
+    bus._durable_store = store
+    bus._authorizer = ProjectAccess(actor, "project", frozenset({"project:repair"}))
+    kwargs: dict[str, Any] = dict(expected_status="IN_DOUBT", expected_attempt=1)
+    with pytest.raises(AuthorizationError):
+        bus.inspect_durable_recovery(
+            plan.plan_id,
+            binding[0].plan_hash,
+            authenticated_operator=ActorIdentity(kind="user", actor_id="mallory"),
+            **kwargs,
+        )
+    with pytest.raises(PlanStoreStateError, match="expected status/attempt"):
         bus.inspect_durable_recovery(
             plan.plan_id,
             binding[0].plan_hash,
             authenticated_operator=actor,
             expected_status="IN_DOUBT",
-            expected_attempt=1,
-            destinations={"step-0": MismatchedInspector()},
-            verifier=verifier,
+            expected_attempt=2,
         )
+    store._recovery_routes = {}
+    with pytest.raises(PlanStoreStateError, match="destination is unavailable"):
+        bus.inspect_durable_recovery(
+            plan.plan_id, binding[0].plan_hash, authenticated_operator=actor, **kwargs
+        )
+    store._recovery_routes = {
+        ("project", "step-0"): RecoveryRoute(MismatchedInspector(), verifier, "test")
+    }
+    with pytest.raises(PlanStoreStateError, match="unknown or mismatched"):
+        bus.inspect_durable_recovery(
+            plan.plan_id, binding[0].plan_hash, authenticated_operator=actor, **kwargs
+        )
+    store._recovery_routes = {
+        ("project", "step-0"): RecoveryRoute(inspector, RefusingVerifier(), "test")
+    }
     with pytest.raises(PlanStoreStateError, match="not independently verified"):
         bus.inspect_durable_recovery(
+            plan.plan_id, binding[0].plan_hash, authenticated_operator=actor, **kwargs
+        )
+    store._recovery_routes = {("project", "step-0"): RecoveryRoute(inspector, verifier, "test")}
+    evidence = bus.inspect_durable_recovery(
+        plan.plan_id, binding[0].plan_hash, authenticated_operator=actor, **kwargs
+    )
+    assert (
+        len(evidence.effect_evidences) == 1
+        and evidence.effect_evidences[0].observation_status == "PRESENT"
+    )
+    assert evidence.effect_evidences[0].effect_key == key
+    with pytest.raises(PlanStoreStateError, match="fenced ABSENT"):
+        bus.recover_durable_plan(
             plan.plan_id,
             binding[0].plan_hash,
             authenticated_operator=actor,
-            expected_status="IN_DOUBT",
-            expected_attempt=1,
-            destinations={"step-0": inspector},
-            verifier=RefusingVerifier(),
+            resolution_action="authorize_takeover",
+            reason="checked",
+            recovery_evidence=evidence,
+            **kwargs,
         )
-    observed = bus.inspect_durable_recovery(
-        plan.plan_id,
-        binding[0].plan_hash,
-        authenticated_operator=actor,
-        expected_status="IN_DOUBT",
-        expected_attempt=1,
-        destinations={"step-0": inspector},
-        verifier=verifier,
-    )
-    assert len(observed) == 1 and observed[0].status == "PRESENT"
-    assert observed[0].effect_key == key
     with sqlite3.connect(tmp_path / "plans.db") as conn:
         assert conn.execute("SELECT status, evidence_json FROM plans").fetchone() == (
             "IN_DOUBT",
@@ -933,6 +932,7 @@ def test_bus_inspects_real_fenced_destination_without_repair(
         FilesystemObservationVerifier,
         StaleEpochError,
     )
+    from nexus_ai_agent.creative.studio.durable_dedupe import RecoveryRoute
 
     destination = FencedFilesystemEffectDestination(tmp_path, project_id="project")
     independent_reader = FilesystemObservationVerifier(tmp_path, project_id="project")
@@ -963,7 +963,13 @@ def test_bus_inspects_real_fenced_destination_without_repair(
             durable_effects=True,
         ),
     )
-    store = DurablePlanDedupeStore(tmp_path / "plans.db")
+    store = DurablePlanDedupeStore(
+        tmp_path / "plans.db",
+        repair_authorizer=lambda _p, _o, _s, _a: True,
+        recovery_routes={
+            ("project", "step-0"): RecoveryRoute(destination, independent_reader, "fs")
+        },
+    )
     bus = CommandBus(
         project,
         registry=registry,
@@ -984,12 +990,12 @@ def test_bus_inspects_real_fenced_destination_without_repair(
         authenticated_operator=actor,
         expected_status="IN_DOUBT",
         expected_attempt=1,
-        destinations={"step-0": destination},
-        verifier=independent_reader,
     )
-    assert len(observed) == 1
-    assert observed[0].effect_key == effect_key
-    assert observed[0].status == ("PRESENT" if publish_first else "ABSENT")
+    assert len(observed.effect_evidences) == 1
+    assert observed.effect_evidences[0].effect_key == effect_key
+    assert observed.effect_evidences[0].observation_status == (
+        "PRESENT" if publish_first else "ABSENT"
+    )
     if not publish_first:
         with pytest.raises(StaleEpochError):
             destination.apply(effect_key=effect_key, fencing_epoch=1, payload=b"late")
@@ -1035,6 +1041,14 @@ def test_store_rolls_back_when_takeover_cas_is_suppressed_by_database_trigger(
     store = DurablePlanDedupeStore(path, repair_authorizer=lambda *_args: True)
     lease = store.reserve_and_start("p", "a" * 64, external_effects=True, nonce="first")
     store.quarantine("p", "a" * 64, attempt=lease.attempt, owner_token=lease.owner_token)
+    evidence = store.inspect_recovery(
+        "default",
+        "p",
+        "a" * 64,
+        expected_status="IN_DOUBT",
+        expected_attempt=1,
+        operator_id="operator",
+    )
     store.repair_in_doubt(
         "default",
         "p",
@@ -1044,6 +1058,7 @@ def test_store_rolls_back_when_takeover_cas_is_suppressed_by_database_trigger(
         operator_id="operator",
         resolution_action="authorize_takeover",
         reason="test authority",
+        recovery_evidence=evidence,
     )
     with sqlite3.connect(path) as conn:
         conn.execute(
@@ -1053,7 +1068,7 @@ def test_store_rolls_back_when_takeover_cas_is_suppressed_by_database_trigger(
     with pytest.raises(PlanStoreStateError, match="takeover changed"):
         store.reserve_and_start("p", "a" * 64, external_effects=True, nonce="second")
     with sqlite3.connect(path) as conn:
-        assert conn.execute("SELECT status, attempt FROM plans").fetchone() == ("RESERVED", 1)
+        assert conn.execute("SELECT status, attempt FROM plans").fetchone() == ("RESERVED", 2)
         assert conn.execute("SELECT nonce FROM consumed_nonces").fetchall() == [("first",)]
 
 
@@ -1062,6 +1077,14 @@ def test_store_rolls_back_when_repair_cas_is_suppressed_by_database_trigger(tmp_
     store = DurablePlanDedupeStore(path, repair_authorizer=lambda *_args: True)
     lease = store.reserve_and_start("p", "a" * 64, external_effects=True, nonce="first")
     store.quarantine("p", "a" * 64, attempt=lease.attempt, owner_token=lease.owner_token)
+    evidence = store.inspect_recovery(
+        "default",
+        "p",
+        "a" * 64,
+        expected_status="IN_DOUBT",
+        expected_attempt=1,
+        operator_id="operator",
+    )
     with sqlite3.connect(path) as conn:
         conn.execute(
             "CREATE TRIGGER stop_repair BEFORE UPDATE OF status ON plans "
@@ -1077,7 +1100,333 @@ def test_store_rolls_back_when_repair_cas_is_suppressed_by_database_trigger(tmp_
             operator_id="operator",
             resolution_action="authorize_takeover",
             reason="test authority",
+            recovery_evidence=evidence,
         )
     with sqlite3.connect(path) as conn:
         assert conn.execute("SELECT status, attempt FROM plans").fetchone() == ("IN_DOUBT", 1)
         assert conn.execute("SELECT count(*) FROM plan_repair_events").fetchone() == (0,)
+
+
+def test_evidence_driven_recovery_fences_old_writer_and_consumes_nonce(tmp_path: Path) -> None:
+    """Real SQLite + filesystem; repair authority is explicitly a test double."""
+    from nexus_ai_agent.adapters.fenced_filesystem_destination import (
+        FencedFilesystemEffectDestination,
+        FilesystemObservationVerifier,
+        StaleEpochError,
+    )
+    from nexus_ai_agent.creative.studio.durable_dedupe import RecoveryRoute
+
+    destination = FencedFilesystemEffectDestination(tmp_path, project_id="project")
+    verifier = FilesystemObservationVerifier(tmp_path, project_id="project")
+    store = DurablePlanDedupeStore(
+        tmp_path / "plans.db",
+        clock=lambda: 10.0,
+        repair_authorizer=lambda p, o, s, a: (p, o, s, a) == ("project", "op", "IN_DOUBT", 1),
+        recovery_routes={("project", "step"): RecoveryRoute(destination, verifier, "fs-verifier")},
+    )
+    old = store.reserve_and_start(
+        "p", "a" * 64, project_id="project", external_effects=True, nonce="n"
+    )
+    store.record_compensation_intent(
+        "p",
+        "a" * 64,
+        project_id="project",
+        attempt=old.attempt,
+        owner_token=old.owner_token,
+        step_id="step",
+        effect_key="b" * 64,
+    )
+    store.quarantine(
+        "p", "a" * 64, project_id="project", attempt=old.attempt, owner_token=old.owner_token
+    )
+    kwargs: dict[str, Any] = dict(expected_status="IN_DOUBT", expected_attempt=1, operator_id="op")
+    with pytest.raises(PlanStoreStateError, match="evidence is required"):
+        store.repair_in_doubt(
+            "project",
+            "p",
+            "a" * 64,
+            resolution_action="authorize_takeover",
+            reason="checked",
+            **kwargs,
+        )
+    evidence = store.inspect_recovery("project", "p", "a" * 64, **kwargs)
+    assert evidence.effect_evidences[0].observation_status == "ABSENT"
+    assert evidence.effect_evidences[0].destination_fenced is True
+    store.repair_in_doubt(
+        "project",
+        "p",
+        "a" * 64,
+        resolution_action="authorize_takeover",
+        reason="checked",
+        recovery_evidence=evidence,
+        **kwargs,
+    )
+    with sqlite3.connect(tmp_path / "plans.db") as conn:
+        assert conn.execute(
+            "SELECT status,attempt,takeover_epoch_reserved FROM plans"
+        ).fetchone() == ("RESERVED", 2, 1)
+        assert conn.execute("SELECT status FROM compensation_journal").fetchone() == (
+            "NOT_APPLIED",
+        )
+        assert conn.execute("SELECT consumed FROM plan_recovery_inspections").fetchone() == (1,)
+        assert conn.execute("SELECT count(*) FROM plan_repair_events").fetchone() == (1,)
+    with pytest.raises(StaleEpochError):
+        destination.apply(effect_key="b" * 64, fencing_epoch=1, payload=b"late")
+    new = store.reserve_and_start(
+        "p", "a" * 64, project_id="project", external_effects=True, nonce="n2"
+    )
+    assert new.attempt == 2
+    store.record_compensation_intent(
+        "p",
+        "a" * 64,
+        project_id="project",
+        attempt=new.attempt,
+        owner_token=new.owner_token,
+        step_id="step",
+        effect_key="b" * 64,
+    )
+    assert (
+        destination.apply(effect_key="b" * 64, fencing_epoch=new.attempt, payload=b"new").status
+        == "PRESENT"
+    )
+
+
+@pytest.mark.parametrize(
+    "attack",
+    [
+        "project",
+        "plan",
+        "hash",
+        "attempt",
+        "status",
+        "operator",
+        "digest",
+        "unknown",
+        "unfenced",
+        "missing",
+        "nonce",
+        "expiry",
+        "clock_expiry",
+        "journal",
+        "replay",
+        "rollback",
+    ],
+)
+def test_recovery_evidence_adversarial_transactions(tmp_path: Path, attack: str) -> None:
+    """Real SQLite/filesystem, with injected clock and authorization test doubles."""
+    from concurrent.futures import ThreadPoolExecutor
+    from dataclasses import replace
+    from datetime import timedelta
+
+    from nexus_ai_agent.adapters.fenced_filesystem_destination import (
+        FencedFilesystemEffectDestination,
+        FilesystemObservationVerifier,
+    )
+    from nexus_ai_agent.creative.studio.durable_dedupe import RecoveryRoute
+
+    clock = [10.0]
+    path = tmp_path / "recovery.db"
+    destination = FencedFilesystemEffectDestination(tmp_path, project_id="project")
+    verifier = FilesystemObservationVerifier(tmp_path, project_id="project")
+    store = DurablePlanDedupeStore(
+        path,
+        clock=lambda: clock[0],
+        repair_authorizer=lambda *_args: True,
+        recovery_routes={("project", "step"): RecoveryRoute(destination, verifier, "reader")},
+    )
+    lease = store.reserve_and_start(
+        "p", "a" * 64, project_id="project", external_effects=True, nonce="n"
+    )
+    store.record_compensation_intent(
+        "p",
+        "a" * 64,
+        project_id="project",
+        attempt=lease.attempt,
+        owner_token=lease.owner_token,
+        step_id="step",
+        effect_key="b" * 64,
+    )
+    store.quarantine(
+        "p", "a" * 64, project_id="project", attempt=lease.attempt, owner_token=lease.owner_token
+    )
+    evidence = store.inspect_recovery(
+        "project", "p", "a" * 64, expected_status="IN_DOUBT", expected_attempt=1, operator_id="op"
+    )
+    effect = evidence.effect_evidences[0]
+    invalid_status: Any = "UNKNOWN"  # Deliberately bypass typing at the hostile input boundary.
+    changes: dict[str, dict[str, Any]] = {
+        "project": {"project_id": "other"},
+        "plan": {"plan_id": "other"},
+        "hash": {"plan_hash": "c" * 64},
+        "attempt": {"expected_attempt": 2},
+        "status": {"expected_status": "ROLLBACK_FAILED"},
+        "operator": {"operator_id": "other"},
+        "digest": {"effect_evidences": (replace(effect, observation_digest="c" * 64),)},
+        "unknown": {"effect_evidences": (replace(effect, observation_status=invalid_status),)},
+        "unfenced": {"effect_evidences": (replace(effect, destination_fenced=False),)},
+        "missing": {"effect_evidences": ()},
+        "nonce": {"recovery_nonce": "f" * 64},
+        "expiry": {"expires_at": evidence.issued_at - timedelta(seconds=1)},
+    }
+    evidence = replace(evidence, **changes.get(attack, {}))
+
+    def repair() -> None:
+        store.repair_in_doubt(
+            "project",
+            "p",
+            "a" * 64,
+            expected_status="IN_DOUBT",
+            expected_attempt=1,
+            operator_id="op",
+            resolution_action="authorize_takeover",
+            reason="checked",
+            recovery_evidence=evidence,
+        )
+
+    if attack == "clock_expiry":
+        clock[0] += 61
+    if attack == "journal":
+
+        def rival_write() -> None:
+            with sqlite3.connect(path) as conn:
+                conn.execute("UPDATE compensation_journal SET evidence_json='{}'")
+
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            pool.submit(rival_write).result(timeout=5)
+    if attack == "rollback":
+        with sqlite3.connect(path) as conn:
+            conn.execute(
+                "CREATE TRIGGER deny_nonce BEFORE UPDATE ON plan_recovery_inspections "
+                "BEGIN SELECT RAISE(IGNORE); END"
+            )
+    if attack == "replay":
+        repair()
+        # Restore the prior snapshot through a privileged test connection to isolate
+        # nonce consumption from the independent plan-state replay protection.
+        with sqlite3.connect(path) as conn:
+            conn.execute("UPDATE plans SET status='IN_DOUBT',attempt=1")
+            conn.execute("UPDATE compensation_journal SET status='PENDING',evidence_json=NULL")
+    with pytest.raises(PlanStoreStateError):
+        repair()
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("SELECT status,attempt FROM plans").fetchone() == ("IN_DOUBT", 1)
+        assert conn.execute("SELECT status FROM compensation_journal").fetchone() == ("PENDING",)
+        assert conn.execute("SELECT consumed FROM plan_recovery_inspections").fetchone() == (
+            int(attack == "replay"),
+        )
+        assert conn.execute("SELECT count(*) FROM plan_repair_events").fetchone() == (
+            int(attack == "replay"),
+        )
+
+
+def test_recovery_nonce_has_exactly_one_concurrent_consumer(tmp_path: Path) -> None:
+    """Two real SQLite connections contend; authority is a test double."""
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+
+    path = tmp_path / "race.db"
+    store = DurablePlanDedupeStore(path, repair_authorizer=lambda *_args: True)
+    lease = store.reserve_and_start("p", "a" * 64, external_effects=True, nonce="n")
+    store.quarantine("p", "a" * 64, attempt=lease.attempt, owner_token=lease.owner_token)
+    evidence = store.inspect_recovery(
+        "default", "p", "a" * 64, expected_status="IN_DOUBT", expected_attempt=1, operator_id="op"
+    )
+    barrier = Barrier(2)
+
+    def contender() -> bool:
+        rival = DurablePlanDedupeStore(path, repair_authorizer=lambda *_args: True)
+        barrier.wait(timeout=5)
+        try:
+            rival.repair_in_doubt(
+                "default",
+                "p",
+                "a" * 64,
+                expected_status="IN_DOUBT",
+                expected_attempt=1,
+                operator_id="op",
+                resolution_action="authorize_takeover",
+                reason="checked",
+                recovery_evidence=evidence,
+            )
+        except PlanStoreStateError:
+            return False
+        return True
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(contender) for _ in range(2)]
+        assert sorted(future.result(timeout=10) for future in futures) == [False, True]
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("SELECT consumed FROM plan_recovery_inspections").fetchone() == (1,)
+        assert conn.execute("SELECT count(*) FROM plan_repair_events").fetchone() == (1,)
+        assert conn.execute("SELECT status,attempt FROM plans").fetchone() == ("RESERVED", 2)
+
+
+@pytest.mark.parametrize("mode", ["unknown", "unfenced", "racing_journal"])
+def test_inspection_never_issues_nonce_for_unproven_or_racing_destination(
+    tmp_path: Path, mode: str
+) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+
+    from nexus_ai_agent.adapters.fenced_filesystem_destination import (
+        FencedFilesystemEffectDestination,
+        FilesystemObservationVerifier,
+    )
+    from nexus_ai_agent.creative.studio.durable_dedupe import (
+        ExternalEffectObservation,
+        RecoveryRoute,
+    )
+
+    path = tmp_path / "inspection.db"
+    real_destination = FencedFilesystemEffectDestination(tmp_path, project_id="default")
+    verifier = FilesystemObservationVerifier(tmp_path, project_id="default")
+
+    class InterruptedDestination:
+        def apply(
+            self, *, effect_key: str, fencing_epoch: int, payload: bytes
+        ) -> ExternalEffectObservation:
+            raise AssertionError("inspection must not apply")
+
+        def inspect(self, *, effect_key: str, fencing_epoch: int) -> ExternalEffectObservation:
+            if mode == "unknown":
+                return ExternalEffectObservation(effect_key, fencing_epoch, "UNKNOWN", "")
+            if mode == "unfenced":
+                return ExternalEffectObservation(effect_key, fencing_epoch, "ABSENT", "a" * 64)
+            result = real_destination.inspect(effect_key=effect_key, fencing_epoch=fencing_epoch)
+
+            def rival_write() -> None:
+                with sqlite3.connect(path) as conn:
+                    conn.execute("UPDATE compensation_journal SET evidence_json='{}'")
+
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                pool.submit(rival_write).result(timeout=5)
+            return result
+
+    store = DurablePlanDedupeStore(
+        path,
+        repair_authorizer=lambda *_args: True,
+        recovery_routes={
+            ("default", "step"): RecoveryRoute(InterruptedDestination(), verifier, "reader")
+        },
+    )
+    lease = store.reserve_and_start("p", "a" * 64, external_effects=True, nonce="n")
+    store.record_compensation_intent(
+        "p",
+        "a" * 64,
+        attempt=lease.attempt,
+        owner_token=lease.owner_token,
+        step_id="step",
+        effect_key="b" * 64,
+    )
+    store.quarantine("p", "a" * 64, attempt=lease.attempt, owner_token=lease.owner_token)
+    with pytest.raises(PlanStoreStateError):
+        store.inspect_recovery(
+            "default",
+            "p",
+            "a" * 64,
+            expected_status="IN_DOUBT",
+            expected_attempt=1,
+            operator_id="op",
+        )
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("SELECT count(*) FROM plan_recovery_inspections").fetchone() == (0,)
+        assert conn.execute("SELECT status,attempt FROM plans").fetchone() == ("IN_DOUBT", 1)

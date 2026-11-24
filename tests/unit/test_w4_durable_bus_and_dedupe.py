@@ -788,13 +788,18 @@ def test_repair_requires_authorization_and_persists_resolution(tmp_path: Path, s
     )
     with pytest.raises(PlanStoreStateError, match="authorization"):
         authorized.repair_in_doubt("default", "p", HASH, **{**kwargs, "operator_id": "other"})
-    authorized.repair_in_doubt("default", "p", HASH, **kwargs)
+    evidence = authorized.inspect_recovery(
+        "default", "p", HASH, expected_status=status, expected_attempt=1, operator_id="admin"
+    )
+    authorized.repair_in_doubt("default", "p", HASH, recovery_evidence=evidence, **kwargs)
     with sqlite3.connect(path) as conn:
         actual_status, evidence = conn.execute(
             "SELECT status, repair_evidence_json FROM plans"
         ).fetchone()
     assert actual_status == "ROLLED_BACK"
-    assert json.loads(evidence) == {
+    recorded = json.loads(evidence)
+    assert recorded.pop("recovery_evidence")["recovery_nonce"]
+    assert recorded == {
         "operator_id": "admin",
         "action": "confirm_rolled_back",
         "reason": "checked",
@@ -994,6 +999,14 @@ def test_authorized_takeover_fences_old_worker_and_preserves_new_owner(tmp_path:
         operator_id="admin",
         resolution_action="authorize_takeover",
         reason="old worker stopped",
+        recovery_evidence=store.inspect_recovery(
+            "default",
+            "p",
+            HASH,
+            expected_status="IN_DOUBT",
+            expected_attempt=1,
+            operator_id="admin",
+        ),
     )
     with pytest.raises(PlanStoreStateError, match="nonce already consumed"):
         store.start("p", HASH, nonce="old")
@@ -1077,6 +1090,9 @@ def test_repair_requires_valid_expected_status_and_bounded_audit(
             resolution_action="authorize_takeover",
             reason="investigated",
         )
+    evidence = store.inspect_recovery(
+        "default", "p", HASH, expected_status="IN_DOUBT", expected_attempt=1, operator_id="admin"
+    )
     monkeypatch.setattr(store_module, "MAX_RECORDS", 0)
     with pytest.raises(PlanStoreCapacityError, match="audit capacity"):
         store.repair_in_doubt(
@@ -1088,6 +1104,7 @@ def test_repair_requires_valid_expected_status_and_bounded_audit(
             operator_id="admin",
             resolution_action="authorize_takeover",
             reason="investigated",
+            recovery_evidence=evidence,
         )
     with sqlite3.connect(path) as conn:
         assert conn.execute("SELECT status FROM plans").fetchone()[0] == "IN_DOUBT"
@@ -1422,12 +1439,21 @@ def test_bus_durable_operator_repair_requires_permissions_and_attempt(tmp_path: 
     bus._durable_store._repair_authorizer = lambda _p, _o, _s, _a: True
     with pytest.raises(PlanStoreStateError, match="expected status/attempt"):
         bus.recover_durable_plan("plan", plan_hash, **{**kwargs, "expected_attempt": 2})
-    bus.recover_durable_plan("plan", plan_hash, **kwargs)
+    with pytest.raises(PlanStoreStateError, match="evidence is required"):
+        bus.recover_durable_plan("plan", plan_hash, **kwargs)
+    with pytest.raises(PlanStoreStateError, match="destination is unavailable"):
+        bus.inspect_durable_recovery(
+            "plan",
+            plan_hash,
+            authenticated_operator=actor,
+            expected_status="IN_DOUBT",
+            expected_attempt=1,
+        )
     with sqlite3.connect(path) as conn:
         assert conn.execute("SELECT status, attempt, takeover_ready FROM plans").fetchone() == (
-            "RESERVED",
+            "IN_DOUBT",
             1,
-            1,
+            0,
         )
 
 
