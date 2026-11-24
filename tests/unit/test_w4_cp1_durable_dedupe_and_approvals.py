@@ -914,3 +914,79 @@ def test_recovery_inspects_real_pending_effect_without_executing_or_repairing(
         )
         assert conn.execute("SELECT status FROM compensation_journal").fetchone() == ("PENDING",)
     assert (tmp_path / key).read_bytes() == b"cmd-0"
+
+
+@pytest.mark.parametrize("publish_first", [False, True])
+def test_bus_inspects_real_fenced_destination_without_repair(
+    tmp_path: Path, publish_first: bool
+) -> None:
+    """Real bus, SQLite and filesystem destination; identity and approval are mocks."""
+    from nexus_ai_agent.adapters.fenced_filesystem_destination import (
+        FencedFilesystemEffectDestination,
+        FilesystemObservationVerifier,
+        StaleEpochError,
+    )
+
+    destination = FencedFilesystemEffectDestination(tmp_path, project_id="project")
+    independent_reader = FilesystemObservationVerifier(tmp_path, project_id="project")
+    actor = ActorIdentity(kind="user", actor_id="alice")
+    project = new_project("project", "before", Timeline(timeline_id="timeline", duration_us=0))
+    registry = CapabilityRegistry()
+
+    def handler(_state: Project, context: OperationContext) -> OperationOutcome:
+        assert context.effect_key is not None and context.fencing_epoch is not None
+        if publish_first:
+            destination.apply(
+                effect_key=context.effect_key,
+                fencing_epoch=context.fencing_epoch,
+                payload=b"effect",
+            )
+        raise RuntimeError("simulated handler interruption")
+
+    registry.register_operation(
+        "example",
+        "playback",
+        OperationSpec(
+            "example.play",
+            "test",
+            PermissionLevel.IMMEDIATE,
+            PlayCommandInput,
+            handler,
+            external_effects=True,
+            durable_effects=True,
+        ),
+    )
+    store = DurablePlanDedupeStore(tmp_path / "plans.db")
+    bus = CommandBus(
+        project,
+        registry=registry,
+        authorizer=ProjectAccess(actor, "project", frozenset({"project:read", "project:repair"})),
+        durable_dedupe_store=store,
+        durable_verifiers={"example.play": lambda _p, _c, _r, _k: False},
+    )
+    plan = make_plan(tmp_path, actor)
+    binding = approvals(bus, plan, actor, "initial")
+    with pytest.raises(CommandExecutionError, match="simulated handler interruption"):
+        dispatch(bus, plan, actor, binding)
+    with sqlite3.connect(tmp_path / "plans.db") as conn:
+        assert conn.execute("SELECT status, attempt FROM plans").fetchone() == ("IN_DOUBT", 1)
+        (effect_key,) = conn.execute("SELECT effect_key FROM compensation_journal").fetchone()
+    observed = bus.inspect_durable_recovery(
+        plan.plan_id,
+        binding[0].plan_hash,
+        authenticated_operator=actor,
+        expected_status="IN_DOUBT",
+        expected_attempt=1,
+        destinations={"step-0": destination},
+        verifier=independent_reader,
+    )
+    assert len(observed) == 1
+    assert observed[0].effect_key == effect_key
+    assert observed[0].status == ("PRESENT" if publish_first else "ABSENT")
+    if not publish_first:
+        with pytest.raises(StaleEpochError):
+            destination.apply(effect_key=effect_key, fencing_epoch=1, payload=b"late")
+    with sqlite3.connect(tmp_path / "plans.db") as conn:
+        assert conn.execute("SELECT status, attempt FROM plans").fetchone() == ("IN_DOUBT", 1)
+        assert conn.execute("SELECT status FROM compensation_journal").fetchone() == ("PENDING",)
+        assert conn.execute("SELECT count(*) FROM plan_repair_events").fetchone() == (0,)
