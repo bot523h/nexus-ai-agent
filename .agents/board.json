@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-11-23T08:51:18Z",
+  "updated_at": "2026-11-24T09:08:55Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -8780,12 +8780,13 @@
       ],
       "owner_hint": "arena/f3f2c5f9-nexus-ai-agent; PR #355",
       "agent_branch": "arena/f3f2c5f9-nexus-ai-agent",
-      "claimed_at": "2026-11-23T08:51:18Z",
-      "generation": 1,
+      "claimed_at": "2026-11-24T09:08:55Z",
+      "generation": 2,
       "ttl_hours": 24,
       "gates_owner": false,
       "delivered": [],
-      "note": ""
+      "note": "",
+      "previous_release_reason": "auto-released by gc at 2026-11-24T09:08:55Z (stale active lease)"
     }
   ],
   "deferred_log": [
