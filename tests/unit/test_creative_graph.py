@@ -28,6 +28,8 @@ from typing import Any
 import pytest
 
 from nexus_ai_agent.provenance import (
+    ALLOWED_NODE_STATUS_TRANSITIONS,
+    CANONICAL_ENCODING_VERSION,
     GRAPH_CHAIN_GENESIS,
     CanonicalValueError,
     CausalEvent,
@@ -41,6 +43,8 @@ from nexus_ai_agent.provenance import (
     GraphCycleError,
     GraphIntegrityError,
     GraphStateError,
+    GraphStateTransitionError,
+    JobFacts,
     LedgerRecord,
     canonical_graph_digest,
     canonical_graph_json,
@@ -49,9 +53,19 @@ from nexus_ai_agent.provenance import (
     edge_identity,
     node_identity,
     normalize_canonical_value,
+    validate_hmac_sha256_signature,
     validate_sha256_digest,
     verify_epistemic_proof,
 )
+
+_TEST_KEY_ID = "veritas-key-2026"
+_TEST_SECRET_KEY = b"nexus-stage2a-veritas-hmac-secret-32b"
+_TEST_ALT_SECRET_KEY = b"nexus-stage2a-different-hmac-secret-9"
+_TEST_REVOKED_KEY_ID = "veritas-revoked-2025"
+_TEST_KEY_RING: dict[str, bytes] = {
+    _TEST_KEY_ID: _TEST_SECRET_KEY,
+    _TEST_REVOKED_KEY_ID: _TEST_ALT_SECRET_KEY,
+}
 
 
 def _sha256(data: bytes) -> str:
@@ -132,6 +146,8 @@ def _build_vertical_slice(graph: CreativeGraph) -> dict[str, str]:
     art_digest = _sha256(b"final-render-bytes")
     art_id = node_identity("ARTIFACT", {"artifact_id": "art-1"})
     art_proof = create_epistemic_proof(
+        secret_key=_TEST_SECRET_KEY,
+        key_id=_TEST_KEY_ID,
         subject_id=art_id,
         subject_digest=art_digest,
         verifier_id="veritas-omnia-v1",
@@ -477,13 +493,42 @@ def test_compute_causal_impact_set_diamond_and_atomic_propagation(tmp_path: Path
 
 
 # --------------------------------------------------------------------------- #
-# 5. Epistemology of Proof & Monotonic Promotion Gates
+# 5. Epistemology of Proof & Keyed HMAC-SHA256 Authentication Gates (F08)
 # --------------------------------------------------------------------------- #
 def test_epistemic_proof_gates_on_nodes_and_edges(tmp_path: Path) -> None:
-    graph = CreativeGraph(tmp_path / "epistemic.sqlite")
+    db_path = tmp_path / "epistemic.sqlite"
+    graph = CreativeGraph(
+        db_path,
+        proof_verification_keys=_TEST_KEY_RING,
+        revoked_proof_key_ids={_TEST_REVOKED_KEY_ID},
+    )
+    unconfigured_graph = CreativeGraph(tmp_path / "no_keys.sqlite")
     c_digest = _sha256(b"measured-frame")
     ev_digest = _sha256(b"telemetry-log")
     nid = node_identity("ARTIFACT", {"id": "e1"})
+
+    # Unkeyed sha256 signature rejected by validator & constructor
+    with pytest.raises(ValueError, match="hmac-sha256"):
+        validate_hmac_sha256_signature(_sha256(b"unkeyed"))
+    with pytest.raises(ValueError, match="hmac-sha256"):
+        EpistemicProof(
+            key_id=_TEST_KEY_ID,
+            verifier_id="veritas",
+            evidence_digest=ev_digest,
+            chain_signature=_sha256(b"unkeyed"),
+            issued_at_utc="2026-11-24T00:00:00Z",
+        )
+
+    # Weak/short HMAC key rejected fail-closed
+    with pytest.raises(EpistemicProofError, match="secret_key"):
+        create_epistemic_proof(
+            secret_key=b"short",
+            key_id=_TEST_KEY_ID,
+            subject_id=nid,
+            subject_digest=c_digest,
+            verifier_id="veritas",
+            evidence_digest=ev_digest,
+        )
 
     # MEASURED_EVIDENCE without evidence_digest fails closed
     with pytest.raises(EpistemicProofError, match="MEASURED_EVIDENCE"):
@@ -503,31 +548,133 @@ def test_epistemic_proof_gates_on_nodes_and_edges(tmp_path: Path) -> None:
             epistemic_status=EpistemicStatus.VERIFIED_COMMIT,
         )
 
-    # Forged proof signature fails closed
-    forged_proof = EpistemicProof(
-        verifier_id="veritas",
-        evidence_digest=ev_digest,
-        chain_signature=_sha256(b"forged"),
-        verified_at="2026-11-24T00:00:00Z",
-    )
-    assert verify_epistemic_proof(forged_proof, subject_id=nid, subject_digest=c_digest) is False
-    with pytest.raises(EpistemicProofError, match="chain_signature"):
-        graph.put_node(
-            "ARTIFACT",
-            {"id": "e1"},
-            content_digest=c_digest,
-            epistemic_status=EpistemicStatus.VERIFIED_COMMIT,
-            proof=forged_proof,
-        )
-
-    # Conflicting evidence_digest vs proof.evidence_digest fails closed
+    # Valid keyed proof minted with trusted HMAC key
     valid_proof = create_epistemic_proof(
+        secret_key=_TEST_SECRET_KEY,
+        key_id=_TEST_KEY_ID,
         subject_id=nid,
         subject_digest=c_digest,
         verifier_id="veritas",
         evidence_digest=ev_digest,
     )
-    assert verify_epistemic_proof(valid_proof, subject_id=nid, subject_digest=c_digest) is True
+    assert valid_proof.verified_at == valid_proof.issued_at_utc
+    assert valid_proof.canonical_version == CANONICAL_ENCODING_VERSION
+    assert (
+        verify_epistemic_proof(
+            valid_proof,
+            subject_id=nid,
+            subject_digest=c_digest,
+            proof_verification_keys=_TEST_KEY_RING,
+        )
+        is True
+    )
+
+    # Callable key resolver works and rejects weak/missing keys fail-closed
+    assert (
+        verify_epistemic_proof(
+            valid_proof,
+            subject_id=nid,
+            subject_digest=c_digest,
+            proof_verification_keys=lambda kid: _TEST_KEY_RING.get(kid),
+        )
+        is True
+    )
+    assert (
+        verify_epistemic_proof(
+            valid_proof,
+            subject_id=nid,
+            subject_digest=c_digest,
+            proof_verification_keys=lambda _kid: b"too-short",
+        )
+        is False
+    )
+
+    # Graph with NO configured key ring refuses VERIFIED_COMMIT even with valid proof
+    with pytest.raises(EpistemicProofError, match="HMAC-SHA256 authentication failed"):
+        unconfigured_graph.put_node(
+            "ARTIFACT",
+            {"id": "e1"},
+            content_digest=c_digest,
+            epistemic_status=EpistemicStatus.VERIFIED_COMMIT,
+            proof=valid_proof,
+        )
+
+    # Wrong HMAC key fails closed
+    wrong_key_proof = create_epistemic_proof(
+        secret_key=_TEST_ALT_SECRET_KEY,
+        key_id=_TEST_KEY_ID,
+        subject_id=nid,
+        subject_digest=c_digest,
+        verifier_id="veritas",
+        evidence_digest=ev_digest,
+    )
+    assert (
+        verify_epistemic_proof(
+            wrong_key_proof,
+            subject_id=nid,
+            subject_digest=c_digest,
+            proof_verification_keys=_TEST_KEY_RING,
+        )
+        is False
+    )
+    with pytest.raises(EpistemicProofError, match="HMAC-SHA256 authentication failed"):
+        graph.put_node(
+            "ARTIFACT",
+            {"id": "e1"},
+            content_digest=c_digest,
+            epistemic_status=EpistemicStatus.VERIFIED_COMMIT,
+            proof=wrong_key_proof,
+        )
+
+    # Revoked key_id fails closed even when signed with the exact key bytes
+    revoked_proof = create_epistemic_proof(
+        secret_key=_TEST_ALT_SECRET_KEY,
+        key_id=_TEST_REVOKED_KEY_ID,
+        subject_id=nid,
+        subject_digest=c_digest,
+        verifier_id="veritas",
+        evidence_digest=ev_digest,
+    )
+    with pytest.raises(EpistemicProofError, match="HMAC-SHA256 authentication failed"):
+        graph.put_node(
+            "ARTIFACT",
+            {"id": "e1"},
+            content_digest=c_digest,
+            epistemic_status=EpistemicStatus.VERIFIED_COMMIT,
+            proof=revoked_proof,
+        )
+
+    # Unknown canonical_version fails closed
+    bad_ver_proof = create_epistemic_proof(
+        secret_key=_TEST_SECRET_KEY,
+        key_id=_TEST_KEY_ID,
+        subject_id=nid,
+        subject_digest=c_digest,
+        verifier_id="veritas",
+        evidence_digest=ev_digest,
+        canonical_version="NEXUS_GRAPH_CANONICAL_V999",
+    )
+    assert (
+        verify_epistemic_proof(
+            bad_ver_proof,
+            subject_id=nid,
+            subject_digest=c_digest,
+            proof_verification_keys=_TEST_KEY_RING,
+        )
+        is False
+    )
+
+    # Payload/content_digest swap with valid proof fails closed
+    with pytest.raises(EpistemicProofError, match="HMAC-SHA256 authentication failed"):
+        graph.put_node(
+            "ARTIFACT",
+            {"id": "e1"},
+            content_digest=_sha256(b"swapped-bytes"),
+            epistemic_status=EpistemicStatus.VERIFIED_COMMIT,
+            proof=valid_proof,
+        )
+
+    # Conflicting evidence_digest vs proof.evidence_digest fails closed
     with pytest.raises(EpistemicProofError, match="conflicts"):
         graph.put_node(
             "ARTIFACT",
@@ -563,6 +710,20 @@ def test_epistemic_proof_gates_on_nodes_and_edges(tmp_path: Path) -> None:
     )
     assert verified.epistemic_status is EpistemicStatus.VERIFIED_COMMIT
 
+    # Reopening without trusted keys or with revoked key fails integrity_check
+    assert CreativeGraph(db_path).integrity_check().ok is False
+    assert (
+        CreativeGraph(
+            db_path,
+            proof_verification_keys=_TEST_KEY_RING,
+            revoked_proof_key_ids={_TEST_KEY_ID},
+        )
+        .integrity_check()
+        .ok
+        is False
+    )
+    assert CreativeGraph(db_path, proof_verification_keys=_TEST_KEY_RING).integrity_check().ok
+
     # Demotion refused via both promote_epistemic_status and put_node
     with pytest.raises(EpistemicProofError, match="cannot demote"):
         graph.promote_epistemic_status(nid, EpistemicStatus.HYPOTHESIS)
@@ -582,6 +743,8 @@ def test_epistemic_proof_gates_on_nodes_and_edges(tmp_path: Path) -> None:
     assert edge_res.edge is not None
     eid = edge_res.edge.edge_id
     e_proof = create_epistemic_proof(
+        secret_key=_TEST_SECRET_KEY,
+        key_id=_TEST_KEY_ID,
         subject_id=eid,
         subject_digest=edge_res.edge.payload_digest,
         verifier_id="veritas",
@@ -669,7 +832,7 @@ def test_lifecycle_idempotency_history_and_revocation(tmp_path: Path) -> None:
 
 
 def test_lineage_traversal_and_malformed_direction_sql_safety(tmp_path: Path) -> None:
-    graph = CreativeGraph(tmp_path / "lineage.sqlite")
+    graph = CreativeGraph(tmp_path / "lineage.sqlite", proof_verification_keys=_TEST_KEY_RING)
     ids = _build_vertical_slice(graph)
 
     lin = graph.lineage(ids["ARTIFACT"])
@@ -733,12 +896,14 @@ def test_lineage_traversal_and_malformed_direction_sql_safety(tmp_path: Path) ->
 # --------------------------------------------------------------------------- #
 def test_restart_persistence_in_fresh_subprocess_and_sealed_snapshot(tmp_path: Path) -> None:
     db_path = tmp_path / "durable.sqlite"
-    graph = CreativeGraph(db_path)
+    graph = CreativeGraph(db_path, proof_verification_keys=_TEST_KEY_RING)
     ids = _build_vertical_slice(graph)
     expected_digest = graph.graph_digest()
     expected_lineage_digest = graph.lineage_digest(ids["ARTIFACT"])
     # In-process reopen with verify_on_open=True succeeds cleanly
-    reopened_ok = CreativeGraph(db_path, verify_on_open=True)
+    reopened_ok = CreativeGraph(
+        db_path, verify_on_open=True, proof_verification_keys=_TEST_KEY_RING
+    )
     assert reopened_ok.graph_digest() == expected_digest
     snap_path = graph.export_sealed_snapshot(tmp_path / "snapshot.json")
 
@@ -770,7 +935,8 @@ def test_restart_persistence_in_fresh_subprocess_and_sealed_snapshot(tmp_path: P
     probe = (
         "import json\n"
         "from nexus_ai_agent.provenance import CreativeGraph\n"
-        f"g = CreativeGraph({str(db_path)!r}, verify_on_open=True)\n"
+        f"g = CreativeGraph({str(db_path)!r}, verify_on_open=True, "
+        f"proof_verification_keys={_TEST_KEY_RING!r})\n"
         f"print(json.dumps({{'digest': g.graph_digest(), "
         f"'lineage': g.lineage_digest({ids['ARTIFACT']!r}), "
         f"'complete': g.lineage({ids['ARTIFACT']!r})['complete'], "
@@ -793,7 +959,7 @@ def test_restart_persistence_in_fresh_subprocess_and_sealed_snapshot(tmp_path: P
 
 def test_integrity_detects_all_disk_tampering_classes_and_fails_on_reopen(tmp_path: Path) -> None:
     db_path = tmp_path / "tamper.sqlite"
-    graph = CreativeGraph(db_path)
+    graph = CreativeGraph(db_path, proof_verification_keys=_TEST_KEY_RING)
     ids = _build_vertical_slice(graph)
     assert graph.integrity_check().ok
     assert graph.integrity_check().to_dict()["ok"] is True
@@ -900,13 +1066,13 @@ def test_integrity_detects_all_disk_tampering_classes_and_fails_on_reopen(tmp_pa
 def test_backup_restore_scope_guard_and_memory_rollback(tmp_path: Path) -> None:
     db_path = tmp_path / "graph.sqlite"
     backup_path = tmp_path / "graph.bak.sqlite"
-    graph = CreativeGraph(db_path)
+    graph = CreativeGraph(db_path, proof_verification_keys=_TEST_KEY_RING)
     ids = _build_vertical_slice(graph)
     expected_counts = graph.counts()
     graph.backup(backup_path)
 
     # Restore into clean file succeeds
-    target = CreativeGraph(tmp_path / "restored.sqlite")
+    target = CreativeGraph(tmp_path / "restored.sqlite", proof_verification_keys=_TEST_KEY_RING)
     target.restore(backup_path)
     assert target.counts() == expected_counts
     assert target.integrity_check().ok
@@ -978,18 +1144,446 @@ def test_backup_restore_scope_guard_and_memory_rollback(tmp_path: Path) -> None:
 
 
 # --------------------------------------------------------------------------- #
-# 8. Journal Rebuild & Concurrency
+# 8. Journal Rebuild, Honest Semantics (F03/F04), State Machine (F01) & Races (F02)
 # --------------------------------------------------------------------------- #
-def test_rebuild_from_journal_store_idempotency_and_terminal_preservation(tmp_path: Path) -> None:
-    journal = CausalJournal(tmp_path / "causal.sqlite")
-    art_digest = _sha256(b"rendered-movie")
-    for kind, attempt, status, res_digest in (
+def _sample_job_facts(
+    job_id: str,
+    *,
+    result_digest: str | None = None,
+    verification: dict[str, Any] | None = None,
+    artifact_passport: dict[str, Any] | None = None,
+    artifact_passport_known: bool = True,
+) -> JobFacts:
+    return JobFacts(
+        job_id=job_id,
+        job_type="creative.render",
+        idempotency_key=f"k-{job_id}",
+        status="completed",
+        attempt=1,
+        error=None,
+        created_at="2026-11-24T00:00:00Z",
+        started_at="2026-11-24T00:00:01Z",
+        finished_at="2026-11-24T00:00:02Z",
+        payload={"scene": 1},
+        payload_digest=_sha256(b"scene-1"),
+        result={"artifact": "out.mov"},
+        result_digest=result_digest,
+        verification=verification,
+        artifact_passport=artifact_passport,
+        artifact_passport_known=artifact_passport_known,
+    )
+
+
+def test_terminal_state_resurrection_and_reassignment_refused(tmp_path: Path) -> None:
+    """F01: Terminal statuses (superseded/invalidated/revoked) are strictly absorbing."""
+    assert ALLOWED_NODE_STATUS_TRANSITIONS["revoked"] == frozenset({"revoked"})
+    assert ALLOWED_NODE_STATUS_TRANSITIONS["invalidated"] == frozenset({"invalidated"})
+    assert ALLOWED_NODE_STATUS_TRANSITIONS["superseded"] == frozenset({"superseded"})
+
+    graph = CreativeGraph(tmp_path / "fsm.sqlite")
+    nodes: dict[str, str] = {}
+    for term in ("revoked", "invalidated", "superseded"):
+        n = graph.put_node("ARTIFACT", {"term": term}).node
+        assert n is not None
+        graph.set_status(n.node_id, term)
+        nodes[term] = n.node_id
+
+    child = graph.put_node("ARTIFACT", {"term": "child"}).node
+    assert child is not None
+
+    for term, nid in nodes.items():
+        chain_before = graph.chain_entries()
+        hist_before = graph.history(nid)
+
+        # Resurrection to active & reassignment to other terminal statuses refused fail-closed
+        for forbidden_target in ("active", "revoked", "invalidated", "superseded"):
+            if forbidden_target == term:
+                continue
+            with pytest.raises(GraphStateTransitionError, match="illegal status transition"):
+                graph.set_status(nid, forbidden_target)
+            current = graph.get_node(nid)
+            assert current is not None and current.status == term
+            assert graph.chain_entries() == chain_before
+            assert graph.history(nid) == hist_before
+
+        # Idempotent re-assertion of the exact same terminal status is a clean no-op
+        same = graph.set_status(nid, term)
+        assert same.status == term
+        assert graph.chain_entries() == chain_before
+        assert graph.history(nid) == hist_before
+
+        # Attaching a new outgoing causal edge from a terminal node is refused fail-closed
+        with pytest.raises(GraphStateTransitionError, match="terminal node"):
+            graph.put_edge("ARTIFACT_DERIVED_FROM", nid, child.node_id)
+
+    assert graph.integrity_check().ok
+
+
+def test_two_process_concurrent_invalidation_and_edge_attachment_race(tmp_path: Path) -> None:
+    """F02: BEGIN IMMEDIATE serializes cross-process invalidation vs downstream edge insert."""
+    for trial in range(4):
+        db_path = tmp_path / f"race_{trial}.sqlite"
+        graph = CreativeGraph(db_path)
+        a = graph.put_node("INTENT", {"id": f"a-{trial}"}).node
+        b = graph.put_node("PLAN", {"id": f"b-{trial}"}).node
+        c = graph.put_node("EXECUTION", {"id": f"c-{trial}"}).node
+        d = graph.put_node("ARTIFACT", {"id": f"d-{trial}"}).node
+        assert a is not None and b is not None and c is not None and d is not None
+        graph.put_edge("INTENT_COMPILED_TO_REVISION", a.node_id, b.node_id)
+        graph.put_edge("REVISION_HAS_PLAN", b.node_id, c.node_id)
+
+        worker_code = (
+            "import json, sys\n"
+            "from nexus_ai_agent.provenance import CreativeGraph, GraphStateTransitionError\n"
+            f"g = CreativeGraph({str(db_path)!r})\n"
+            "try:\n"
+            f"    g.put_edge('EXECUTION_PRODUCED_ARTIFACT', {c.node_id!r}, {d.node_id!r})\n"
+            "    print(json.dumps({'outcome': 'attached'}))\n"
+            "except GraphStateTransitionError:\n"
+            "    print(json.dumps({'outcome': 'rejected_terminal'}))\n"
+        )
+        proc = subprocess.Popen(
+            [sys.executable, "-c", worker_code],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        try:
+            if trial % 2 == 1:
+                proc.wait(timeout=30)
+            graph.propagate_invalidation(a.node_id, reason=f"race-{trial}", apply=True)
+            stdout, stderr = proc.communicate(timeout=30)
+        finally:
+            if proc.poll() is None:  # pragma: no cover
+                proc.kill()
+        assert proc.returncode == 0, f"worker failed: {stderr}"
+        worker_outcome = json.loads(stdout)["outcome"]
+        assert worker_outcome in {"attached", "rejected_terminal"}
+
+        c_after = graph.get_node(c.node_id)
+        d_after = graph.get_node(d.node_id)
+        assert c_after is not None and c_after.status == "invalidated"
+        assert d_after is not None
+        c_out_edges = graph.edges(c.node_id, direction="out")
+        if worker_outcome == "attached":
+            assert len(c_out_edges) == 1
+            assert d_after.status == "invalidated"
+        else:
+            assert c_out_edges == []
+            assert d_after.status == "active"
+        assert graph.integrity_check().ok
+
+
+def test_rebuild_from_journal_refuses_tampered_or_malformed_source_chain(tmp_path: Path) -> None:
+    """F03: Source journal hash chain & column agreement enforced BEFORE any graph mutation."""
+    from nexus_ai_agent.provenance.models import compute_record_hash
+
+    art_digest = _sha256(b"source-art")
+    journal = CausalJournal(tmp_path / "valid_causal.sqlite")
+    for kind, attempt, status, res in (
         (EventKind.JOB_ENQUEUED, None, "pending", None),
         (EventKind.JOB_RESERVED, 1, "processing", None),
-        (EventKind.JOB_VERIFICATION_STARTED, 1, "verifying", None),
         (EventKind.JOB_COMPLETED, 1, "completed", art_digest),
     ):
         journal.append(
+            CausalEvent(
+                kind=kind,
+                job_id="job-src",
+                job_type="creative.render",
+                idempotency_key="k-src",
+                attempt=attempt,
+                status=status,
+                result_digest=res,
+                occurred_at="2026-11-24T00:00:00Z",
+            )
+        )
+    valid_records = journal.all_records()
+    assert len(valid_records) == 3
+
+    def _assert_refused(bad_records: list[LedgerRecord], match: str, tag: str) -> None:
+        g = CreativeGraph(tmp_path / f"refuse_{tag}.sqlite")
+        with pytest.raises(GraphIntegrityError, match=match):
+            g.rebuild_from_journal(bad_records)
+        assert g.counts() == {"nodes": 0, "edges": 0, "history": 0, "chain": 0}
+
+    # 1. Tampered record_hash
+    r0 = valid_records[0]
+    _assert_refused(
+        [
+            LedgerRecord(
+                seq=r0.seq,
+                record_hash=_sha256(b"tampered-hash"),
+                prev_hash=r0.prev_hash,
+                record_json=r0.record_json,
+                dedupe_key=r0.dedupe_key,
+                created_at=r0.created_at,
+            ),
+            *valid_records[1:],
+        ],
+        "record_hash",
+        "rec_hash",
+    )
+
+    # 2. Broken prev_hash linkage
+    r1 = valid_records[1]
+    _assert_refused(
+        [
+            valid_records[0],
+            LedgerRecord(
+                seq=r1.seq,
+                record_hash=r1.record_hash,
+                prev_hash=_sha256(b"wrong-prev"),
+                record_json=r1.record_json,
+                dedupe_key=r1.dedupe_key,
+                created_at=r1.created_at,
+            ),
+            valid_records[2],
+        ],
+        "prev_hash",
+        "prev_hash",
+    )
+
+    # 3. Deleted middle record (sequence gap 1, 3)
+    _assert_refused([valid_records[0], valid_records[2]], "sequence gap", "seq_gap")
+
+    # 4. Malformed JSON in record_json
+    _assert_refused(
+        [
+            LedgerRecord(
+                seq=1,
+                record_hash=compute_record_hash("{not-json"),
+                prev_hash=GRAPH_CHAIN_GENESIS,
+                record_json="{not-json",
+                dedupe_key=None,
+                created_at="2026-11-24T00:00:00Z",
+            )
+        ],
+        "malformed",
+        "bad_json",
+    )
+
+    # 5. Valid hash over non-object / invalid kind / missing job_id / invalid attempt / bad dedupe
+    def _signed_rec(raw_json: str, dedupe: str | None) -> list[LedgerRecord]:
+        return [
+            LedgerRecord(
+                seq=1,
+                record_hash=compute_record_hash(raw_json),
+                prev_hash=GRAPH_CHAIN_GENESIS,
+                record_json=raw_json,
+                dedupe_key=dedupe,
+                created_at="2026-11-24T00:00:00Z",
+            )
+        ]
+
+    _assert_refused(_signed_rec("[]", None), "malformed", "non_obj")
+    _assert_refused(
+        _signed_rec(
+            json.dumps({"seq": 1, "prev_hash": GRAPH_CHAIN_GENESIS, "kind": "bogus_kind"}),
+            None,
+        ),
+        "invalid kind",
+        "bad_kind",
+    )
+    _assert_refused(
+        _signed_rec(
+            json.dumps(
+                {
+                    "seq": 1,
+                    "prev_hash": GRAPH_CHAIN_GENESIS,
+                    "kind": "job_enqueued",
+                    "job_id": "",
+                }
+            ),
+            None,
+        ),
+        "missing a valid job_id",
+        "no_job_id",
+    )
+    _assert_refused(
+        _signed_rec(
+            json.dumps(
+                {
+                    "seq": 1,
+                    "prev_hash": GRAPH_CHAIN_GENESIS,
+                    "kind": "job_reserved",
+                    "job_id": "j1",
+                    "attempt": True,
+                }
+            ),
+            None,
+        ),
+        "invalid attempt",
+        "bad_attempt",
+    )
+    _assert_refused(
+        _signed_rec(
+            json.dumps(
+                {
+                    "seq": 1,
+                    "prev_hash": GRAPH_CHAIN_GENESIS,
+                    "kind": "job_enqueued",
+                    "job_id": "j1",
+                    "attempt": None,
+                }
+            ),
+            "wrong:dedupe:key",
+        ),
+        "dedupe_key mismatch",
+        "bad_dedupe",
+    )
+
+    # 6. Direct-SQL column/JSON disagreement in CausalJournal SQLite store
+    bad_store_path = tmp_path / "tampered_store.sqlite"
+    bad_journal = CausalJournal(bad_store_path)
+    bad_journal.append(
+        CausalEvent(
+            kind=EventKind.JOB_ENQUEUED,
+            job_id="job-real",
+            job_type="render",
+            idempotency_key="k-real",
+            attempt=None,
+            status="pending",
+            occurred_at="2026-11-24T00:00:00Z",
+        )
+    )
+    with sqlite3.connect(str(bad_store_path)) as conn:
+        conn.execute("UPDATE nexus_causal_journal SET job_id = 'job-spoofed' WHERE seq = 1")
+        conn.commit()
+    target_g = CreativeGraph(tmp_path / "target_store_refuse.sqlite")
+    with pytest.raises(GraphIntegrityError, match="indexed columns disagree"):
+        target_g.rebuild_from_journal_store(bad_journal)
+    assert target_g.counts() == {"nodes": 0, "edges": 0, "history": 0, "chain": 0}
+
+    # Unreadable or corrupt-JSON store refused too
+    corrupt_json_path = tmp_path / "corrupt_json_store.sqlite"
+    corrupt_journal = CausalJournal(corrupt_json_path)
+    corrupt_journal.append(
+        CausalEvent(
+            kind=EventKind.JOB_ENQUEUED,
+            job_id="j1",
+            job_type="render",
+            idempotency_key="k1",
+            attempt=None,
+            status="pending",
+            occurred_at="2026-11-24T00:00:00Z",
+        )
+    )
+    with sqlite3.connect(str(corrupt_json_path)) as conn:
+        conn.execute("UPDATE nexus_causal_journal SET record_json = '{bad' WHERE seq = 1")
+        conn.commit()
+    with pytest.raises(GraphIntegrityError, match="corrupt record_json"):
+        target_g.rebuild_from_journal_store(corrupt_journal)
+
+    with sqlite3.connect(str(corrupt_json_path)) as conn:
+        conn.execute("UPDATE nexus_causal_journal SET record_json = '[1,2]' WHERE seq = 1")
+        conn.commit()
+    with pytest.raises(GraphIntegrityError, match="not an object"):
+        target_g.rebuild_from_journal_store(corrupt_journal)
+
+    not_journal_path = tmp_path / "not_journal.sqlite"
+    not_journal = CausalJournal(not_journal_path)
+    with sqlite3.connect(str(not_journal_path)) as conn:
+        conn.execute("DROP TABLE nexus_causal_journal")
+        conn.commit()
+    with pytest.raises(GraphIntegrityError, match="unreadable causal journal"):
+        target_g.rebuild_from_journal_store(not_journal)
+
+
+def test_rebuild_from_journal_honest_verification_and_passport_semantics(tmp_path: Path) -> None:
+    """F04: Honest verification initiation vs authoritative verification & passport facts."""
+    # (a) Job with JOB_VERIFICATION_STARTED only -> HYPOTHESIS verification, no verified link
+    j_started = CausalJournal(tmp_path / "started.sqlite")
+    for kind, attempt, status in (
+        (EventKind.JOB_ENQUEUED, None, "pending"),
+        (EventKind.JOB_RESERVED, 1, "processing"),
+        (EventKind.JOB_VERIFICATION_STARTED, 1, "verifying"),
+    ):
+        j_started.append(
+            CausalEvent(
+                kind=kind,
+                job_id="job-started",
+                job_type="creative.render",
+                idempotency_key="k-started",
+                attempt=attempt,
+                status=status,
+                occurred_at="2026-11-24T00:00:00Z",
+            )
+        )
+    g_started = CreativeGraph(tmp_path / "g_started.sqlite")
+    res_a = g_started.rebuild_from_journal_store(j_started)
+    assert res_a["projected_nodes"] == {
+        "EXECUTION": 2,
+        "ARTIFACT": 0,
+        "VERIFICATION": 1,
+        "PASSPORT": 0,
+    }
+    assert res_a["projected_edges"] == 0
+    ver_id_a = node_identity("VERIFICATION", {"job_id": "job-started", "attempt": 1})
+    ver_node_a = g_started.get_node(ver_id_a)
+    assert ver_node_a is not None
+    assert ver_node_a.epistemic_status is EpistemicStatus.HYPOTHESIS
+    assert ver_node_a.payload["verification_state"] == "started"
+    assert ver_node_a.payload["verified"] is False
+    assert g_started.integrity_check().ok
+
+    # (b) JOB_COMPLETED without authoritative passport/verification -> NO fabricated PASSPORT
+    j_unverified = CausalJournal(tmp_path / "unverified.sqlite")
+    art_digest_b = _sha256(b"unverified-art")
+    for kind, attempt, status, res_d in (
+        (EventKind.JOB_ENQUEUED, None, "pending", None),
+        (EventKind.JOB_VERIFICATION_STARTED, 1, "verifying", None),
+        (EventKind.JOB_COMPLETED, 1, "completed", art_digest_b),
+    ):
+        j_unverified.append(
+            CausalEvent(
+                kind=kind,
+                job_id="job-unver",
+                job_type="creative.render",
+                idempotency_key="k-unver",
+                attempt=attempt,
+                status=status,
+                result_digest=res_d,
+                occurred_at="2026-11-24T00:00:00Z",
+            )
+        )
+    bad_facts = {
+        "job-unver": _sample_job_facts(
+            "job-unver",
+            result_digest=art_digest_b,
+            verification={"passed": False, "status": "failed"},
+            artifact_passport={"status": "compromised"},
+            artifact_passport_known=True,
+        )
+    }
+    g_unver = CreativeGraph(tmp_path / "g_unver.sqlite")
+    res_b = g_unver.rebuild_from_journal_store(j_unverified, job_facts=bad_facts)
+    assert res_b["projected_nodes"] == {
+        "EXECUTION": 2,
+        "ARTIFACT": 1,
+        "VERIFICATION": 1,
+        "PASSPORT": 0,
+    }
+    assert res_b["projected_edges"] == 1
+    art_id_b = node_identity("ARTIFACT", {"job_id": "job-unver", "result_digest": art_digest_b})
+    art_node_b = g_unver.get_node(art_id_b)
+    assert art_node_b is not None
+    assert art_node_b.epistemic_status is EpistemicStatus.HYPOTHESIS
+    assert art_node_b.payload["verification_state"] == "unverified"
+    assert art_node_b.payload["passport_present"] is False
+    assert g_unver.edges(art_id_b, direction="out", relation="ARTIFACT_VERIFIED_BY") == []
+    assert g_unver.edges(art_id_b, direction="out", relation="ARTIFACT_HAS_PASSPORT") == []
+    assert g_unver.integrity_check().ok
+
+    # (c) Full authoritative verification + passport JobFacts -> creates verified nodes & edges
+    j_full = CausalJournal(tmp_path / "full.sqlite")
+    art_digest_c = _sha256(b"rendered-movie")
+    for kind, attempt, status, res_d in (
+        (EventKind.JOB_ENQUEUED, None, "pending", None),
+        (EventKind.JOB_RESERVED, 1, "processing", None),
+        (EventKind.JOB_VERIFICATION_STARTED, 1, "verifying", None),
+        (EventKind.JOB_COMPLETED, 1, "completed", art_digest_c),
+    ):
+        j_full.append(
             CausalEvent(
                 kind=kind,
                 job_id="job-42",
@@ -997,13 +1591,22 @@ def test_rebuild_from_journal_store_idempotency_and_terminal_preservation(tmp_pa
                 idempotency_key="k-42",
                 attempt=attempt,
                 status=status,
-                result_digest=res_digest,
+                result_digest=res_d,
                 occurred_at="2026-11-24T00:00:00Z",
             )
         )
+    auth_facts = {
+        "job-42": _sample_job_facts(
+            "job-42",
+            result_digest=art_digest_c,
+            verification={"passed": True, "status": "verified", "verifier": "veritas"},
+            artifact_passport={"status": "verified", "artifact_digest": art_digest_c},
+            artifact_passport_known=True,
+        )
+    }
 
     graph = CreativeGraph(tmp_path / "projected.sqlite")
-    first = graph.rebuild_from_journal_store(journal)
+    first = graph.rebuild_from_journal_store(j_full, job_facts=auth_facts)
     assert first["projected_nodes"] == {
         "EXECUTION": 2,
         "ARTIFACT": 1,
@@ -1012,10 +1615,15 @@ def test_rebuild_from_journal_store_idempotency_and_terminal_preservation(tmp_pa
     }
     assert first["projected_edges"] == 3
     assert "PROJECT" in first["unmigrated_levels"]
+    ver_id_c = node_identity("VERIFICATION", {"job_id": "job-42", "attempt": 1})
+    ver_node_c = graph.get_node(ver_id_c)
+    assert ver_node_c is not None
+    assert ver_node_c.epistemic_status is EpistemicStatus.MEASURED_EVIDENCE
+    assert ver_node_c.payload["verified"] is True
     assert graph.integrity_check().ok
 
     # Idempotent second rebuild creates zero new nodes/edges
-    second = graph.rebuild_from_journal_store(journal)
+    second = graph.rebuild_from_journal_store(j_full, job_facts=auth_facts)
     assert second["projected_nodes"] == {
         "EXECUTION": 0,
         "ARTIFACT": 0,
@@ -1025,50 +1633,39 @@ def test_rebuild_from_journal_store_idempotency_and_terminal_preservation(tmp_pa
     assert second["projected_edges"] == 0
 
     # Mark passport terminal, then replace=True rebuild preserves terminal & restores edge
-    art_id = node_identity("ARTIFACT", {"job_id": "job-42", "result_digest": art_digest})
-    pass_id = node_identity("PASSPORT", {"job_id": "job-42", "result_digest": art_digest})
+    art_id = node_identity("ARTIFACT", {"job_id": "job-42", "result_digest": art_digest_c})
+    pass_id = node_identity("PASSPORT", {"job_id": "job-42", "result_digest": art_digest_c})
     graph.set_status(pass_id, "revoked")
 
-    rebuilt = graph.rebuild_from_journal_store(journal, replace=True)
+    rebuilt = graph.rebuild_from_journal_store(j_full, replace=True, job_facts=auth_facts)
     assert any(item["node_id"] == pass_id for item in rebuilt["skipped_terminal"])
     passport_node = graph.get_node(pass_id)
     assert passport_node is not None and passport_node.status == "revoked"
-    # Edge ARTIFACT_HAS_PASSPORT must still exist even though passport was terminal
     assert len(graph.edges(art_id, direction="out", relation="ARTIFACT_HAS_PASSPORT")) == 1
     assert graph.integrity_check().ok
 
-    # Job completed without an explicit verification-started event projects cleanly
-    journal_no_ver = CausalJournal(tmp_path / "causal_no_ver.sqlite")
-    journal_no_ver.append(
-        CausalEvent(
-            kind=EventKind.JOB_COMPLETED,
-            job_id="job-no-ver",
-            job_type="creative.render",
-            idempotency_key="k-no-ver",
-            attempt=1,
-            status="completed",
-            result_digest=_sha256(b"no-ver-artifact"),
-            occurred_at="2026-11-24T00:00:00Z",
+    # Passport-only authoritative facts -> passport_attested without verified link
+    passport_only_facts = {
+        "job-42": _sample_job_facts(
+            "job-42",
+            result_digest=art_digest_c,
+            verification=None,
+            artifact_passport={"status": "verified", "artifact_digest": art_digest_c},
+            artifact_passport_known=True,
         )
-    )
-    no_ver_graph = CreativeGraph(tmp_path / "no_ver_graph.sqlite")
-    no_ver_res = no_ver_graph.rebuild_from_journal_store(journal_no_ver)
-    assert no_ver_res["projected_nodes"]["VERIFICATION"] == 0
-    assert no_ver_res["projected_edges"] == 2
-    assert no_ver_graph.integrity_check().ok
+    }
+    g_pass_only = CreativeGraph(tmp_path / "pass_only.sqlite")
+    res_po = g_pass_only.rebuild_from_journal_store(j_full, job_facts=passport_only_facts)
+    assert res_po["projected_nodes"]["PASSPORT"] == 1
+    assert res_po["projected_edges"] == 2
+    po_art = g_pass_only.get_node(art_id)
+    assert po_art is not None and po_art.payload["verification_state"] == "passport_attested"
 
-    # Records missing job_id are safely ignored
-    blank = LedgerRecord(
-        seq=99,
-        record_hash="a" * 64,
-        prev_hash=GRAPH_CHAIN_GENESIS,
-        record_json='{"kind":"job_enqueued"}',
-        dedupe_key=None,
-        created_at="2026-11-24T00:00:00Z",
-    )
-    blank_res = graph.rebuild_from_journal([blank])
-    assert blank_res["records_read"] == 1
-    assert blank_res["projected_edges"] == 0
+    # Empty journal rebuild succeeds cleanly
+    empty_graph = CreativeGraph(tmp_path / "empty_rebuild.sqlite")
+    empty_res = empty_graph.rebuild_from_journal([])
+    assert empty_res["records_read"] == 0
+    assert empty_res["projected_edges"] == 0
 
 
 def test_concurrent_writers_preserve_chain_and_dag_integrity(tmp_path: Path) -> None:
@@ -1096,8 +1693,11 @@ def test_concurrent_writers_preserve_chain_and_dag_integrity(tmp_path: Path) -> 
     assert graph.counts()["edges"] == 12
     assert graph.integrity_check().ok
     assert compute_proof_signature(
+        secret_key=_TEST_SECRET_KEY,
+        key_id=_TEST_KEY_ID,
         subject_id="n",
         subject_digest=_sha256(b"a"),
         verifier_id="v",
         evidence_digest=_sha256(b"e"),
-    ).startswith("sha256:")
+        issued_at_utc="2026-11-24T00:00:00Z",
+    ).startswith("hmac-sha256:")

@@ -39,6 +39,7 @@ Upgrades codified by Stage 2-A (Law R28):
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import heapq
 import hmac
 import json
@@ -48,7 +49,8 @@ import sqlite3
 import tempfile
 import threading
 from collections import deque
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
@@ -61,7 +63,17 @@ from nexus_ai_agent.provenance.canonicalization import (
     canonical_digest,
 )
 from nexus_ai_agent.provenance.journal import CausalJournal
-from nexus_ai_agent.provenance.models import LedgerRecord
+from nexus_ai_agent.provenance.models import (
+    EventKind,
+    JobFacts,
+    LedgerRecord,
+)
+from nexus_ai_agent.provenance.models import (
+    dedupe_key as journal_dedupe_key,
+)
+from nexus_ai_agent.provenance.models import (
+    verify_chain as verify_journal_chain,
+)
 
 #: Closed vocabulary of creative-domain node kinds.
 NODE_KINDS: tuple[str, ...] = (
@@ -111,6 +123,15 @@ LINEAGE_ATTACHMENTS: tuple[str, ...] = ("ARTIFACT_VERIFIED_BY", "ARTIFACT_HAS_PA
 STATUSES: tuple[str, ...] = ("active", "superseded", "invalidated", "revoked")
 TERMINAL_STATUSES: frozenset[str] = frozenset({"superseded", "invalidated", "revoked"})
 
+#: Explicit finite-state transition matrix (F01): terminal statuses are absorbing
+#: and can NEVER be resurrected to ``active`` or rewritten to another terminal state.
+ALLOWED_NODE_STATUS_TRANSITIONS: dict[str, frozenset[str]] = {
+    "active": frozenset({"active", "superseded", "invalidated", "revoked"}),
+    "superseded": frozenset({"superseded"}),
+    "invalidated": frozenset({"invalidated"}),
+    "revoked": frozenset({"revoked"}),
+}
+
 #: Projection-owned SQLite tables (scope boundary for restore safety).
 GRAPH_TABLES: frozenset[str] = frozenset(
     {
@@ -124,9 +145,14 @@ GRAPH_TABLES: frozenset[str] = frozenset(
 #: Genesis hash for the internal tamper-evident mutation chain.
 GRAPH_CHAIN_GENESIS: str = "sha256:" + ("0" * 64)
 
+#: Layer-1 domain-to-JSON AST canonical encoding contract version (F07/F08).
+CANONICAL_ENCODING_VERSION: str = "NEXUS_GRAPH_CANONICAL_V1"
+
 _SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
+_HMAC_SHA256_RE = re.compile(r"^hmac-sha256:[0-9a-f]{64}$")
+_MIN_HMAC_KEY_BYTES: int = 16
 _RATIONAL_KEY = "__rational__"
-_PROOF_DOMAIN = "nexus.provenance.epistemic_proof.v1"
+_PROOF_DOMAIN = "nexus.provenance.epistemic_proof.v2"
 _CHAIN_DOMAIN = "nexus.provenance.graph_chain.v1"
 
 
@@ -147,6 +173,10 @@ _EPISTEMIC_RANK: dict[EpistemicStatus, int] = {
 
 class GraphStateError(RuntimeError):
     """A write or operation that would compromise graph truth, refused fail-closed."""
+
+
+class GraphStateTransitionError(GraphStateError):
+    """Raised on illegal lifecycle transitions (e.g. resurrecting a terminal node)."""
 
 
 class GraphCycleError(GraphStateError):
@@ -311,6 +341,15 @@ def validate_sha256_digest(digest: str, *, field_name: str = "content_digest") -
     return digest
 
 
+def validate_hmac_sha256_signature(signature: str, *, field_name: str = "chain_signature") -> str:
+    """Validate a lowercase ``hmac-sha256:<64-hex>`` authentication tag fail-closed."""
+    if not isinstance(signature, str) or not _HMAC_SHA256_RE.match(signature):
+        raise ValueError(
+            f"{field_name} must match 'hmac-sha256:<64 lowercase hex chars>', got {signature!r}"
+        )
+    return signature
+
+
 def _validate_non_empty(value: str, *, field_name: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{field_name} must be a non-empty string")
@@ -428,85 +467,152 @@ class EntityIdentityTriple:
 
 @dataclass(frozen=True)
 class EpistemicProof:
-    """Cryptographic verification witness required for ``VERIFIED_COMMIT``."""
+    """Keyed HMAC-SHA256 verification witness required for ``VERIFIED_COMMIT``."""
 
+    key_id: str
     verifier_id: str
     evidence_digest: str
     chain_signature: str
-    verified_at: str
+    issued_at_utc: str
+    canonical_version: str = CANONICAL_ENCODING_VERSION
 
     def __post_init__(self) -> None:
+        object.__setattr__(self, "key_id", _validate_non_empty(self.key_id, field_name="key_id"))
         object.__setattr__(
             self, "verifier_id", _validate_non_empty(self.verifier_id, field_name="verifier_id")
         )
         validate_sha256_digest(self.evidence_digest, field_name="evidence_digest")
-        validate_sha256_digest(self.chain_signature, field_name="chain_signature")
+        validate_hmac_sha256_signature(self.chain_signature, field_name="chain_signature")
         object.__setattr__(
-            self, "verified_at", _validate_non_empty(self.verified_at, field_name="verified_at")
+            self,
+            "issued_at_utc",
+            _validate_non_empty(self.issued_at_utc, field_name="issued_at_utc"),
         )
+        object.__setattr__(
+            self,
+            "canonical_version",
+            _validate_non_empty(self.canonical_version, field_name="canonical_version"),
+        )
+
+    @property
+    def verified_at(self) -> str:
+        """Alias for ``issued_at_utc``."""
+        return self.issued_at_utc
 
     def to_dict(self) -> dict[str, str]:
         return {
+            "key_id": self.key_id,
             "verifier_id": self.verifier_id,
             "evidence_digest": self.evidence_digest,
             "chain_signature": self.chain_signature,
-            "verified_at": self.verified_at,
+            "issued_at_utc": self.issued_at_utc,
+            "canonical_version": self.canonical_version,
         }
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> EpistemicProof:
         return cls(
+            key_id=str(data["key_id"]),
             verifier_id=str(data["verifier_id"]),
             evidence_digest=str(data["evidence_digest"]),
             chain_signature=str(data["chain_signature"]),
-            verified_at=str(data["verified_at"]),
+            issued_at_utc=str(data["issued_at_utc"]),
+            canonical_version=str(data["canonical_version"]),
         )
+
+
+def _validate_secret_key(secret_key: bytes) -> bytes:
+    if not isinstance(secret_key, (bytes, bytearray)) or len(secret_key) < _MIN_HMAC_KEY_BYTES:
+        raise EpistemicProofError(
+            f"HMAC verification secret_key must be bytes of length >= {_MIN_HMAC_KEY_BYTES}"
+        )
+    return bytes(secret_key)
 
 
 def compute_proof_signature(
     *,
+    secret_key: bytes,
+    key_id: str,
     subject_id: str,
     subject_digest: str,
     verifier_id: str,
     evidence_digest: str,
+    issued_at_utc: str,
+    canonical_version: str = CANONICAL_ENCODING_VERSION,
 ) -> str:
-    """Compute the deterministic cryptographic binding for an epistemic proof."""
+    """Compute a keyed ``hmac-sha256:<hex>`` tag over canonical proof fields."""
+    key_bytes = _validate_secret_key(secret_key)
+    resolved_key_id = _validate_non_empty(key_id, field_name="key_id")
     validate_sha256_digest(subject_digest, field_name="subject_digest")
     validate_sha256_digest(evidence_digest, field_name="evidence_digest")
     verifier = _validate_non_empty(verifier_id, field_name="verifier_id")
     subject = _validate_non_empty(subject_id, field_name="subject_id")
-    return canonical_graph_digest(
+    issued = _validate_non_empty(issued_at_utc, field_name="issued_at_utc")
+    version = _validate_non_empty(canonical_version, field_name="canonical_version")
+    envelope = canonical_graph_json(
         {
             "domain": _PROOF_DOMAIN,
+            "canonical_version": version,
+            "key_id": resolved_key_id,
+            "verifier_id": verifier,
             "subject_id": subject,
             "subject_digest": subject_digest,
-            "verifier_id": verifier,
             "evidence_digest": evidence_digest,
+            "issued_at_utc": issued,
         }
-    )
+    ).encode("utf-8")
+    tag = hmac.new(key_bytes, envelope, hashlib.sha256).hexdigest()
+    return f"hmac-sha256:{tag}"
 
 
 def create_epistemic_proof(
     *,
+    secret_key: bytes,
+    key_id: str,
     subject_id: str,
     subject_digest: str,
     verifier_id: str,
     evidence_digest: str,
-    verified_at: str | None = None,
+    issued_at_utc: str | None = None,
+    canonical_version: str = CANONICAL_ENCODING_VERSION,
 ) -> EpistemicProof:
-    """Mint a cryptographically bound :class:`EpistemicProof` for a node or edge."""
+    """Mint a keyed HMAC-SHA256 :class:`EpistemicProof` for a node or edge."""
+    issued = issued_at_utc or _now()
     signature = compute_proof_signature(
+        secret_key=secret_key,
+        key_id=key_id,
         subject_id=subject_id,
         subject_digest=subject_digest,
         verifier_id=verifier_id,
         evidence_digest=evidence_digest,
+        issued_at_utc=issued,
+        canonical_version=canonical_version,
     )
     return EpistemicProof(
+        key_id=key_id,
         verifier_id=verifier_id,
         evidence_digest=evidence_digest,
         chain_signature=signature,
-        verified_at=verified_at or _now(),
+        issued_at_utc=issued,
+        canonical_version=canonical_version,
     )
+
+
+def _resolve_verification_key(
+    key_id: str,
+    proof_verification_keys: Mapping[str, bytes] | Callable[[str], bytes | None] | None,
+    revoked_proof_key_ids: AbstractSet[str],
+) -> bytes | None:
+    if key_id in revoked_proof_key_ids or proof_verification_keys is None:
+        return None
+    raw_key = (
+        proof_verification_keys(key_id)
+        if callable(proof_verification_keys)
+        else proof_verification_keys.get(key_id)
+    )
+    if not isinstance(raw_key, (bytes, bytearray)) or len(raw_key) < _MIN_HMAC_KEY_BYTES:
+        return None
+    return bytes(raw_key)
 
 
 def verify_epistemic_proof(
@@ -514,13 +620,26 @@ def verify_epistemic_proof(
     *,
     subject_id: str,
     subject_digest: str,
+    proof_verification_keys: Mapping[str, bytes] | Callable[[str], bytes | None] | None,
+    revoked_proof_key_ids: AbstractSet[str] = frozenset(),
 ) -> bool:
-    """Verify constant-time cryptographic binding of an :class:`EpistemicProof`."""
+    """Verify constant-time keyed HMAC-SHA256 authentication of an :class:`EpistemicProof`."""
+    if proof.canonical_version != CANONICAL_ENCODING_VERSION:
+        return False
+    secret_key = _resolve_verification_key(
+        proof.key_id, proof_verification_keys, revoked_proof_key_ids
+    )
+    if secret_key is None:
+        return False
     expected = compute_proof_signature(
+        secret_key=secret_key,
+        key_id=proof.key_id,
         subject_id=subject_id,
         subject_digest=subject_digest,
         verifier_id=proof.verifier_id,
         evidence_digest=proof.evidence_digest,
+        issued_at_utc=proof.issued_at_utc,
+        canonical_version=proof.canonical_version,
     )
     return hmac.compare_digest(expected, proof.chain_signature)
 
@@ -544,8 +663,10 @@ def _validate_epistemic_requirements(
     subject_digest: str,
     proof: EpistemicProof | None,
     evidence_digest: str | None,
+    proof_verification_keys: Mapping[str, bytes] | Callable[[str], bytes | None] | None = None,
+    revoked_proof_key_ids: AbstractSet[str] = frozenset(),
 ) -> tuple[str | None, EpistemicProof | None]:
-    """Enforce fail-closed epistemic proof rules for nodes and edges."""
+    """Enforce fail-closed keyed epistemic proof rules for nodes and edges."""
     resolved_evidence = evidence_digest
     if proof is not None:
         if resolved_evidence is not None and resolved_evidence != proof.evidence_digest:
@@ -568,9 +689,16 @@ def _validate_epistemic_requirements(
             raise EpistemicProofError(
                 f"{subject_id} cannot enter VERIFIED_COMMIT without a verified EpistemicProof"
             )
-        if not verify_epistemic_proof(proof, subject_id=subject_id, subject_digest=subject_digest):
+        if not verify_epistemic_proof(
+            proof,
+            subject_id=subject_id,
+            subject_digest=subject_digest,
+            proof_verification_keys=proof_verification_keys,
+            revoked_proof_key_ids=revoked_proof_key_ids,
+        ):
             raise EpistemicProofError(
-                f"{subject_id} proof chain_signature does not bind to subject digest"
+                f"{subject_id} proof HMAC-SHA256 authentication failed "
+                f"(key_id={proof.key_id!r} untrusted, revoked, or forged)"
             )
     return resolved_evidence, proof
 
@@ -806,10 +934,20 @@ class CreativeGraph:
         *,
         connect_timeout: float = 30.0,
         verify_on_open: bool = False,
+        proof_verification_keys: (
+            Mapping[str, bytes] | Callable[[str], bytes | None] | None
+        ) = None,
+        revoked_proof_key_ids: AbstractSet[str] = frozenset(),
     ) -> None:
         self.db_path = Path(db_path)
         self._sqlite_path = str(db_path)
         self._connect_timeout = connect_timeout
+        self._proof_verification_keys: dict[str, bytes] | Callable[[str], bytes | None] | None = (
+            dict(proof_verification_keys)
+            if isinstance(proof_verification_keys, Mapping)
+            else proof_verification_keys
+        )
+        self._revoked_proof_key_ids: frozenset[str] = frozenset(revoked_proof_key_ids)
         self._lock = threading.RLock()
         self._memory_connection: sqlite3.Connection | None = None
         if self._sqlite_path == ":memory:":
@@ -979,6 +1117,8 @@ class CreativeGraph:
             subject_digest=triple.content_digest,
             proof=proof,
             evidence_digest=evidence_digest,
+            proof_verification_keys=self._proof_verification_keys,
+            revoked_proof_key_ids=self._revoked_proof_key_ids,
         )
         proof_json = (
             None if resolved_proof is None else canonical_graph_json(resolved_proof.to_dict())
@@ -1196,12 +1336,14 @@ class CreativeGraph:
         epistemic = _coerce_epistemic_status(epistemic_status)
         stamp = _now()
 
+        endpoint_statuses: dict[str, str] = {}
         for endpoint in (src, dst):
-            exists = connection.execute(
-                "SELECT 1 FROM nexus_graph_node WHERE node_id = ?", (endpoint,)
+            endpoint_row = connection.execute(
+                "SELECT status FROM nexus_graph_node WHERE node_id = ?", (endpoint,)
             ).fetchone()
-            if exists is None:
+            if endpoint_row is None:
                 raise GraphStateError(f"cannot link {relation}: endpoint {endpoint} does not exist")
+            endpoint_statuses[endpoint] = str(endpoint_row[0])
 
         if src == dst:
             raise GraphCycleError(f"strict DAG violation: self-loop refused on {src}")
@@ -1216,6 +1358,8 @@ class CreativeGraph:
             subject_digest=body_digest,
             proof=proof,
             evidence_digest=evidence_digest,
+            proof_verification_keys=self._proof_verification_keys,
+            revoked_proof_key_ids=self._revoked_proof_key_ids,
         )
         proof_json = (
             None if resolved_proof is None else canonical_graph_json(resolved_proof.to_dict())
@@ -1226,6 +1370,11 @@ class CreativeGraph:
             " FROM nexus_graph_edge WHERE edge_id = ?",
             (edge_id,),
         ).fetchone()
+        if existing is None and endpoint_statuses[src] in TERMINAL_STATUSES:
+            raise GraphStateTransitionError(
+                f"cannot attach outgoing edge {relation} from terminal node {src} "
+                f"(status={endpoint_statuses[src]!r})"
+            )
         if existing is not None:
             prev_digest = str(existing[0])
             prev_status = str(existing[1])
@@ -1332,6 +1481,8 @@ class CreativeGraph:
                     subject_digest=edge.payload_digest,
                     proof=proof,
                     evidence_digest=evidence_digest or edge.evidence_digest,
+                    proof_verification_keys=self._proof_verification_keys,
+                    revoked_proof_key_ids=self._revoked_proof_key_ids,
                 )
                 proof_json = (
                     None
@@ -1373,6 +1524,8 @@ class CreativeGraph:
                 subject_digest=node.content_digest,
                 proof=proof,
                 evidence_digest=evidence_digest or node.evidence_digest,
+                proof_verification_keys=self._proof_verification_keys,
+                revoked_proof_key_ids=self._revoked_proof_key_ids,
             )
             proof_json = (
                 None if resolved_proof is None else canonical_graph_json(resolved_proof.to_dict())
@@ -1431,10 +1584,20 @@ class CreativeGraph:
         stamp: str,
     ) -> None:
         row = connection.execute(
-            "SELECT 1 FROM nexus_graph_node WHERE node_id = ?", (node_id,)
+            "SELECT status, superseded_by FROM nexus_graph_node WHERE node_id = ?", (node_id,)
         ).fetchone()
         if row is None:
             raise GraphStateError(f"unknown node {node_id}")
+        current_status = str(row[0])
+        allowed_targets = ALLOWED_NODE_STATUS_TRANSITIONS.get(current_status, frozenset())
+        if status not in allowed_targets:
+            raise GraphStateTransitionError(
+                f"illegal status transition for {node_id}: {current_status!r} -> {status!r} "
+                "(terminal statuses cannot be resurrected or reassigned)"
+            )
+        if current_status in TERMINAL_STATUSES:
+            # Absorbing terminal state: idempotent no-op when re-asserting the exact same status.
+            return
         connection.execute(
             "INSERT INTO nexus_graph_node_history"
             " (node_id, revision_id, content_digest, payload_json, payload_digest,"
@@ -1546,17 +1709,27 @@ class CreativeGraph:
             for row in rows
         ]
 
+    def _edges_conn(
+        self,
+        connection: sqlite3.Connection,
+        node_id: str,
+        *,
+        direction: str = "out",
+        relation: str | None = None,
+    ) -> list[GraphEdge]:
+        sql = _EDGE_QUERY_TABLE[(direction, relation is not None)]
+        params: tuple[str, ...] = (node_id,) if relation is None else (node_id, relation)
+        rows = connection.execute(sql, params).fetchall()
+        return [self._edge_from_row(row) for row in rows]
+
     def edges(
         self, node_id: str, *, direction: str = "out", relation: str | None = None
     ) -> list[GraphEdge]:
         """Query active incident edges using strictly static SQL statements."""
         if direction not in ("in", "out"):
             raise ValueError(f"direction must be 'in' or 'out', not {direction!r}")
-        sql = _EDGE_QUERY_TABLE[(direction, relation is not None)]
-        params: tuple[str, ...] = (node_id,) if relation is None else (node_id, relation)
         with self._lock, self._connection() as connection:
-            rows = connection.execute(sql, params).fetchall()
-            return [self._edge_from_row(row) for row in rows]
+            return self._edges_conn(connection, node_id, direction=direction, relation=relation)
 
     def _lexicographic_kahn(self, node_ids: set[str], adjacency: dict[str, set[str]]) -> list[str]:
         """Deterministic Lexicographic Kahn's Algorithm (min-heap on ``node_id``)."""
@@ -1839,6 +2012,92 @@ class CreativeGraph:
             {"target_node_id": node_id, "nodes": chain_nodes, "edges": chain_edges}
         )
 
+    def _compute_causal_impact_set_conn(
+        self,
+        connection: sqlite3.Connection,
+        node_id: str,
+        *,
+        relations: tuple[str, ...] | None = None,
+        include_inactive: bool = False,
+    ) -> CausalImpactResult:
+        """Compute exact downstream causal invalidation set on an active SQLite connection."""
+        allowed = set(relations) if relations is not None else None
+        origin = self._node(connection, node_id)
+        if origin is None:
+            raise GraphStateError(f"unknown origin node {node_id}")
+
+        depths: dict[str, int] = {}
+        paths: dict[str, tuple[str, ...]] = {}
+        impacted_nodes: dict[str, GraphNode] = {}
+        sub_adjacency: dict[str, set[str]] = {}
+
+        # Deterministic level-by-level BFS for shortest lexicographic witness paths.
+        frontier: dict[str, tuple[str, ...]] = {node_id: (node_id,)}
+        visited: set[str] = {node_id}
+        depth = 0
+        while frontier:
+            depth += 1
+            next_frontier: dict[str, tuple[str, ...]] = {}
+            for current in sorted(frontier.keys()):
+                current_path = frontier[current]
+                outgoing = self._edges_conn(connection, current, direction="out")
+                for edge in outgoing:
+                    if allowed is not None and edge.relation not in allowed:
+                        continue
+                    nxt = edge.dst
+                    target_node = self._node(connection, nxt)
+                    if target_node is None:
+                        continue
+                    if target_node.status != "active" and not include_inactive:
+                        continue
+                    if current != node_id:
+                        sub_adjacency.setdefault(current, set()).add(nxt)
+                    candidate_path = current_path + (nxt,)
+                    if nxt not in visited:
+                        prev_best = next_frontier.get(nxt)
+                        if prev_best is None or candidate_path < prev_best:
+                            next_frontier[nxt] = candidate_path
+                        impacted_nodes[nxt] = target_node
+            for nxt, best_path in sorted(next_frontier.items()):
+                visited.add(nxt)
+                depths[nxt] = depth
+                paths[nxt] = best_path
+            frontier = next_frontier
+
+        # Capture edges between already-visited impacted nodes for exact topological order.
+        impacted_id_set = set(impacted_nodes.keys())
+        for nid in impacted_id_set:
+            sub_adjacency.setdefault(nid, set())
+            for edge in self._edges_conn(connection, nid, direction="out"):
+                if allowed is not None and edge.relation not in allowed:
+                    continue
+                if edge.dst in impacted_id_set:
+                    sub_adjacency[nid].add(edge.dst)
+
+        ordered_impacted = tuple(self._lexicographic_kahn(impacted_id_set, sub_adjacency))
+        by_kind_mut: dict[str, list[str]] = {}
+        for nid in ordered_impacted:
+            kind = impacted_nodes[nid].kind
+            by_kind_mut.setdefault(kind, []).append(nid)
+        by_kind = {kind: tuple(sorted(ids)) for kind, ids in sorted(by_kind_mut.items())}
+        impact_digest = canonical_graph_digest(
+            {
+                "canonical_version": CANONICAL_ENCODING_VERSION,
+                "origin_node_id": node_id,
+                "impacted_node_ids": list(ordered_impacted),
+                "impact_depths": {k: depths[k] for k in ordered_impacted},
+                "causal_paths": {k: list(paths[k]) for k in ordered_impacted},
+            }
+        )
+        return CausalImpactResult(
+            origin_node_id=node_id,
+            impacted_node_ids=ordered_impacted,
+            impact_depths={k: depths[k] for k in ordered_impacted},
+            causal_paths={k: paths[k] for k in ordered_impacted},
+            by_kind=by_kind,
+            impact_digest=impact_digest,
+        )
+
     def compute_causal_impact_set(
         self,
         node_id: str,
@@ -1853,111 +2112,46 @@ class CreativeGraph:
         ``node_id`` changes, ordered in deterministic Lexicographic Kahn order
         for reproducible recomputation.
         """
-        allowed = set(relations) if relations is not None else None
-        with self._lock:
-            origin = self.get_node(node_id)
-            if origin is None:
-                raise GraphStateError(f"unknown origin node {node_id}")
-
-            depths: dict[str, int] = {}
-            paths: dict[str, tuple[str, ...]] = {}
-            impacted_nodes: dict[str, GraphNode] = {}
-            sub_adjacency: dict[str, set[str]] = {}
-
-            # Deterministic level-by-level BFS for shortest lexicographic witness paths.
-            frontier: dict[str, tuple[str, ...]] = {node_id: (node_id,)}
-            visited: set[str] = {node_id}
-            depth = 0
-            while frontier:
-                depth += 1
-                next_frontier: dict[str, tuple[str, ...]] = {}
-                for current in sorted(frontier.keys()):
-                    current_path = frontier[current]
-                    outgoing = self.edges(current, direction="out")
-                    for edge in outgoing:
-                        if allowed is not None and edge.relation not in allowed:
-                            continue
-                        nxt = edge.dst
-                        target_node = self.get_node(nxt)
-                        if target_node is None:
-                            continue
-                        if target_node.status != "active" and not include_inactive:
-                            continue
-                        if current != node_id:
-                            sub_adjacency.setdefault(current, set()).add(nxt)
-                        candidate_path = current_path + (nxt,)
-                        if nxt not in visited:
-                            prev_best = next_frontier.get(nxt)
-                            if prev_best is None or candidate_path < prev_best:
-                                next_frontier[nxt] = candidate_path
-                            impacted_nodes[nxt] = target_node
-                for nxt, best_path in sorted(next_frontier.items()):
-                    visited.add(nxt)
-                    depths[nxt] = depth
-                    paths[nxt] = best_path
-                frontier = next_frontier
-
-            # Capture edges between already-visited impacted nodes for exact topological order.
-            impacted_id_set = set(impacted_nodes.keys())
-            for nid in impacted_id_set:
-                sub_adjacency.setdefault(nid, set())
-                for edge in self.edges(nid, direction="out"):
-                    if allowed is not None and edge.relation not in allowed:
-                        continue
-                    if edge.dst in impacted_id_set:
-                        sub_adjacency[nid].add(edge.dst)
-
-            ordered_impacted = tuple(self._lexicographic_kahn(impacted_id_set, sub_adjacency))
-            by_kind_mut: dict[str, list[str]] = {}
-            for nid in ordered_impacted:
-                kind = impacted_nodes[nid].kind
-                by_kind_mut.setdefault(kind, []).append(nid)
-            by_kind = {kind: tuple(sorted(ids)) for kind, ids in sorted(by_kind_mut.items())}
-            impact_digest = canonical_graph_digest(
-                {
-                    "origin_node_id": node_id,
-                    "impacted_node_ids": list(ordered_impacted),
-                    "impact_depths": {k: depths[k] for k in ordered_impacted},
-                    "causal_paths": {k: list(paths[k]) for k in ordered_impacted},
-                }
-            )
-            return CausalImpactResult(
-                origin_node_id=node_id,
-                impacted_node_ids=ordered_impacted,
-                impact_depths={k: depths[k] for k in ordered_impacted},
-                causal_paths={k: paths[k] for k in ordered_impacted},
-                by_kind=by_kind,
-                impact_digest=impact_digest,
+        with self._lock, self._connection() as connection:
+            return self._compute_causal_impact_set_conn(
+                connection,
+                node_id,
+                relations=relations,
+                include_inactive=include_inactive,
             )
 
     def propagate_invalidation(
         self, node_id: str, *, reason: str, apply: bool = False
     ) -> CausalImpactResult:
-        """Preview or atomically apply causal invalidation across downstream nodes."""
+        """Preview or atomically apply causal invalidation across downstream nodes.
+
+        When ``apply=True``, SQLite ``BEGIN IMMEDIATE`` is acquired BEFORE
+        computing the causal impact cone so concurrent OS processes cannot
+        attach an active child downstream of an invalidated ancestor (F02).
+        """
         _validate_non_empty(reason, field_name="reason")
-        with self._lock:
-            impact = self.compute_causal_impact_set(node_id)
-            if not apply:
-                return impact
-            stamp = _now()
-            with self._write_connection() as connection:
-                for target_id in (node_id, *impact.impacted_node_ids):
-                    self._set_status_tx(
-                        connection,
-                        target_id,
-                        "invalidated",
-                        superseded_by=None,
-                        stamp=stamp,
-                    )
-                self._append_chain_tx(
+        if not apply:
+            return self.compute_causal_impact_set(node_id)
+        stamp = _now()
+        with self._lock, self._write_connection() as connection:
+            impact = self._compute_causal_impact_set_conn(connection, node_id)
+            for target_id in (node_id, *impact.impacted_node_ids):
+                self._set_status_tx(
                     connection,
-                    operation="causal_invalidation_propagate",
-                    target_id=node_id,
-                    entry_digest=canonical_graph_digest(
-                        {"reason": reason, "impact_digest": impact.impact_digest}
-                    ),
-                    recorded_at=stamp,
+                    target_id,
+                    "invalidated",
+                    superseded_by=None,
+                    stamp=stamp,
                 )
+            self._append_chain_tx(
+                connection,
+                operation="causal_invalidation_propagate",
+                target_id=node_id,
+                entry_digest=canonical_graph_digest(
+                    {"reason": reason, "impact_digest": impact.impact_digest}
+                ),
+                recorded_at=stamp,
+            )
             return impact
 
     def invalidation_candidates(self, node_id: str) -> dict[str, Any]:
@@ -2219,6 +2413,8 @@ class CreativeGraph:
                 subject_digest=subject_digest,
                 proof=proof_obj,
                 evidence_digest=raw_evidence,
+                proof_verification_keys=self._proof_verification_keys,
+                revoked_proof_key_ids=self._revoked_proof_key_ids,
             )
         except (EpistemicProofError, ValueError):
             report.findings.append(
@@ -2354,16 +2550,129 @@ class CreativeGraph:
         finally:
             origin.close()
 
+    @staticmethod
+    def _is_verification_passed(verification: dict[str, Any] | None) -> bool:
+        if not isinstance(verification, dict) or not verification:
+            return False
+        if verification.get("passed") is False or verification.get("verified") is False:
+            return False
+        if verification.get("passed") is True or verification.get("verified") is True:
+            return True
+        status_val = str(verification.get("status", "")).strip().lower()
+        return status_val in {"passed", "verified", "ok"}
+
+    @staticmethod
+    def _is_passport_authoritative(facts: JobFacts | None) -> bool:
+        if (
+            facts is None
+            or not facts.artifact_passport_known
+            or not isinstance(facts.artifact_passport, dict)
+            or not facts.artifact_passport
+        ):
+            return False
+        status_val = str(facts.artifact_passport.get("status", "")).strip().lower()
+        return status_val not in {"compromised", "failed", "invalid", "unverified", "degraded"}
+
+    @staticmethod
+    def _validate_source_journal_records(records: list[LedgerRecord]) -> None:
+        """Fail-closed cryptographic & schema verification of source ledger records (F03)."""
+        try:
+            verdict = verify_journal_chain(records)
+        except (ValueError, TypeError, KeyError, json.JSONDecodeError) as exc:
+            raise GraphIntegrityError(f"malformed source causal journal record: {exc}") from exc
+        if not verdict.ok:
+            raise GraphIntegrityError(
+                f"source causal journal chain invalid at seq={verdict.first_broken_seq}: "
+                f"{verdict.reason}"
+            )
+        for record in sorted(records, key=lambda item: item.seq):
+            try:
+                payload = record.payload
+                kind = EventKind(str(payload["kind"]))
+            except (ValueError, TypeError, KeyError, json.JSONDecodeError) as exc:
+                raise GraphIntegrityError(
+                    f"source causal journal seq={record.seq} has invalid kind/payload: {exc}"
+                ) from exc
+            job_id = payload.get("job_id")
+            if not isinstance(job_id, str) or not job_id.strip():
+                raise GraphIntegrityError(
+                    f"source causal journal seq={record.seq} is missing a valid job_id"
+                )
+            attempt_val = payload.get("attempt")
+            if attempt_val is not None and (
+                isinstance(attempt_val, bool) or not isinstance(attempt_val, int)
+            ):
+                raise GraphIntegrityError(
+                    f"source causal journal seq={record.seq} has invalid attempt {attempt_val!r}"
+                )
+            expected_dedupe = journal_dedupe_key(kind, job_id, attempt_val)
+            if record.dedupe_key != expected_dedupe:
+                raise GraphIntegrityError(
+                    f"source causal journal seq={record.seq} dedupe_key mismatch: "
+                    f"expected {expected_dedupe!r}, got {record.dedupe_key!r}"
+                )
+
+    @staticmethod
+    def _validate_journal_store_columns(journal: CausalJournal) -> None:
+        """Verify indexed columns in ``nexus_causal_journal`` match ``record_json`` (F03)."""
+        if not journal.db_path.exists():
+            return
+        conn = sqlite3.connect(str(journal.db_path))
+        try:
+            rows = conn.execute(
+                "SELECT seq, record_hash, prev_hash, kind, job_id, attempt, dedupe_key,"
+                " record_json FROM nexus_causal_journal ORDER BY seq ASC"
+            ).fetchall()
+        except sqlite3.DatabaseError as exc:
+            raise GraphIntegrityError(f"unreadable causal journal store: {exc}") from exc
+        finally:
+            conn.close()
+        for row in rows:
+            seq, rec_hash, prev_hash, col_kind, col_job_id, col_attempt, col_dedupe, raw_json = row
+            try:
+                parsed = json.loads(str(raw_json))
+            except json.JSONDecodeError as exc:
+                raise GraphIntegrityError(
+                    f"causal journal seq={seq} has corrupt record_json: {exc}"
+                ) from exc
+            if not isinstance(parsed, dict):
+                raise GraphIntegrityError(f"causal journal seq={seq} record_json is not an object")
+            if (
+                str(parsed.get("kind", "")) != str(col_kind)
+                or str(parsed.get("job_id", "")) != str(col_job_id)
+                or parsed.get("attempt") != col_attempt
+                or str(parsed.get("prev_hash", "")) != str(prev_hash)
+                or int(parsed.get("seq", -1)) != int(seq)
+            ):
+                raise GraphIntegrityError(
+                    f"causal journal seq={seq} indexed columns disagree with record_json "
+                    f"(record_hash={rec_hash}, dedupe_key={col_dedupe!r})"
+                )
+
     def rebuild_from_journal_store(
-        self, journal: CausalJournal, *, replace: bool = False
+        self,
+        journal: CausalJournal,
+        *,
+        replace: bool = False,
+        job_facts: Mapping[str, JobFacts] | None = None,
     ) -> dict[str, Any]:
         """Rebuild the projection by reading records through :class:`CausalJournal`."""
-        return self.rebuild_from_journal(journal.all_records(), replace=replace)
+        self._validate_journal_store_columns(journal)
+        return self.rebuild_from_journal(
+            journal.all_records(), replace=replace, job_facts=job_facts
+        )
 
     def rebuild_from_journal(
-        self, records: list[LedgerRecord], *, replace: bool = False
+        self,
+        records: list[LedgerRecord],
+        *,
+        replace: bool = False,
+        job_facts: Mapping[str, JobFacts] | None = None,
     ) -> dict[str, Any]:
-        """Atomically reconstruct ledger-witnessed facts and report unmigrated levels."""
+        """Atomically reconstruct ledger-witnessed facts with chain & proof honesty (F03/F04)."""
+        self._validate_source_journal_records(records)
+        facts_map = dict(job_facts) if job_facts is not None else {}
+
         executions: dict[str, dict[str, Any]] = {}
         artifacts: dict[str, dict[str, Any]] = {}
         verifications: dict[str, dict[str, Any]] = {}
@@ -2372,11 +2681,9 @@ class CreativeGraph:
 
         for record in sorted(records, key=lambda item: item.seq):
             payload = record.payload
-            job_id = str(payload.get("job_id") or "")
-            if not job_id:
-                continue
+            job_id = str(payload["job_id"])
             attempt = payload.get("attempt")
-            kind = str(payload.get("kind") or "")
+            kind = str(payload["kind"])
             seq = int(record.seq)
             evidence_hash = (
                 f"sha256:{record.record_hash}"
@@ -2388,6 +2695,7 @@ class CreativeGraph:
                 "identity": {"job_id": job_id, "attempt": attempt},
                 "logical_entity_id": f"execution:{job_id}",
                 "revision_id": f"attempt:{attempt if attempt is not None else 0}:seq:{seq}",
+                "epistemic_status": EpistemicStatus.MEASURED_EVIDENCE,
                 "evidence_digest": evidence_hash,
                 "payload": {
                     "job_type": payload.get("job_type"),
@@ -2399,42 +2707,94 @@ class CreativeGraph:
                 "seq": seq,
             }
             order.append(exe_key)
-            if kind == "job_verification_started":
+            facts = facts_map.get(job_id)
+            ver_passed = facts is not None and self._is_verification_passed(facts.verification)
+            if kind == EventKind.JOB_VERIFICATION_STARTED.value:
+                # Verification initiation ONLY (PROCESSING -> VERIFYING), never a passed proof.
                 verifications[exe_key] = {
                     "identity": {"job_id": job_id, "attempt": attempt},
                     "logical_entity_id": f"verification:{job_id}",
                     "revision_id": f"seq:{seq}",
-                    "evidence_digest": evidence_hash,
-                    "payload": {"ledger_seq": seq, "ledger_record_hash": record.record_hash},
+                    "epistemic_status": EpistemicStatus.HYPOTHESIS,
+                    "evidence_digest": None,
+                    "verified": False,
+                    "payload": {
+                        "verification_state": "started",
+                        "verified": False,
+                        "ledger_seq": seq,
+                        "ledger_record_hash": record.record_hash,
+                    },
                     "seq": seq,
                 }
-            if kind == "job_completed" and payload.get("result_digest"):
+            if kind == EventKind.JOB_COMPLETED.value and payload.get("result_digest"):
                 digest = str(payload["result_digest"])
                 a_key = canonical_graph_json({"job_id": job_id, "result_digest": digest})
                 content_digest = digest if _SHA256_RE.match(digest) else None
+                passport_ok = self._is_passport_authoritative(facts)
+                if ver_passed and facts is not None and facts.verification is not None:
+                    ver_digest = canonical_graph_digest(facts.verification)
+                    verifications[exe_key] = {
+                        "identity": {"job_id": job_id, "attempt": attempt},
+                        "logical_entity_id": f"verification:{job_id}",
+                        "revision_id": f"verified:seq:{seq}",
+                        "content_digest": ver_digest,
+                        "epistemic_status": EpistemicStatus.MEASURED_EVIDENCE,
+                        "evidence_digest": ver_digest,
+                        "verified": True,
+                        "payload": {
+                            "verification_state": "verified",
+                            "verified": True,
+                            "verification": facts.verification,
+                            "ledger_seq": seq,
+                            "ledger_record_hash": record.record_hash,
+                        },
+                        "seq": seq,
+                    }
+                art_epistemic = (
+                    EpistemicStatus.MEASURED_EVIDENCE
+                    if (ver_passed or passport_ok)
+                    else EpistemicStatus.HYPOTHESIS
+                )
+                art_ver_state = (
+                    "verified"
+                    if ver_passed
+                    else ("passport_attested" if passport_ok else "unverified")
+                )
                 artifacts[a_key] = {
                     "identity": {"job_id": job_id, "result_digest": digest},
                     "logical_entity_id": f"artifact:{job_id}",
                     "revision_id": f"seq:{seq}",
                     "content_digest": content_digest,
-                    "evidence_digest": evidence_hash,
+                    "epistemic_status": art_epistemic,
+                    "evidence_digest": evidence_hash if (ver_passed or passport_ok) else None,
                     "payload": {
                         "result_digest": digest,
                         "job_type": payload.get("job_type"),
                         "ledger_seq": seq,
+                        "verification_state": art_ver_state,
+                        "passport_present": passport_ok,
                     },
                     "seq": seq,
                     "execution": exe_key,
-                    "verification": exe_key,
+                    "verification": exe_key if ver_passed else None,
+                    "edge_evidence_digest": evidence_hash,
                 }
-                passports[a_key] = {
-                    "identity": {"job_id": job_id, "result_digest": digest},
-                    "logical_entity_id": f"passport:{job_id}",
-                    "revision_id": f"seq:{seq}",
-                    "evidence_digest": evidence_hash,
-                    "payload": {"ledger_seq": seq, "ledger_record_hash": record.record_hash},
-                    "seq": seq,
-                }
+                if passport_ok and facts is not None and facts.artifact_passport is not None:
+                    passport_digest = canonical_graph_digest(facts.artifact_passport)
+                    passports[a_key] = {
+                        "identity": {"job_id": job_id, "result_digest": digest},
+                        "logical_entity_id": f"passport:{job_id}",
+                        "revision_id": f"seq:{seq}",
+                        "content_digest": passport_digest,
+                        "epistemic_status": EpistemicStatus.MEASURED_EVIDENCE,
+                        "evidence_digest": passport_digest,
+                        "payload": {
+                            "artifact_passport": facts.artifact_passport,
+                            "ledger_seq": seq,
+                            "ledger_record_hash": record.record_hash,
+                        },
+                        "seq": seq,
+                    }
 
         projected = {"EXECUTION": 0, "ARTIFACT": 0, "VERIFICATION": 0, "PASSPORT": 0}
         edges = 0
@@ -2463,8 +2823,8 @@ class CreativeGraph:
                     logical_entity_id=str(spec["logical_entity_id"]),
                     revision_id=str(spec["revision_id"]),
                     content_digest=spec.get("content_digest"),
-                    epistemic_status=EpistemicStatus.MEASURED_EVIDENCE,
-                    evidence_digest=str(spec["evidence_digest"]),
+                    epistemic_status=spec["epistemic_status"],
+                    evidence_digest=spec.get("evidence_digest"),
                     source="causal_journal",
                     source_seq=int(spec["seq"]),
                 )
@@ -2498,21 +2858,30 @@ class CreativeGraph:
                 execution_id = node_identity(
                     "EXECUTION", executions[artifact["execution"]]["identity"]
                 )
-                if self._put_edge_tx(
-                    connection,
-                    "EXECUTION_PRODUCED_ARTIFACT",
-                    execution_id,
-                    artifact_id,
-                    {"ledger_seq": artifact["seq"]},
-                    epistemic_status=EpistemicStatus.MEASURED_EVIDENCE,
-                    evidence_digest=str(artifact["evidence_digest"]),
-                    source="causal_journal",
-                    source_seq=int(artifact["seq"]),
-                ).created:
+                if (
+                    terminal(execution_id) is None
+                    and self._put_edge_tx(
+                        connection,
+                        "EXECUTION_PRODUCED_ARTIFACT",
+                        execution_id,
+                        artifact_id,
+                        {"ledger_seq": artifact["seq"]},
+                        epistemic_status=EpistemicStatus.MEASURED_EVIDENCE,
+                        evidence_digest=str(artifact["edge_evidence_digest"]),
+                        source="causal_journal",
+                        source_seq=int(artifact["seq"]),
+                    ).created
+                ):
                     edges += 1
-                if artifact["verification"] in verifications:
+                ver_key = artifact["verification"]
+                if (
+                    ver_key is not None
+                    and ver_key in verifications
+                    and verifications[ver_key]["verified"]
+                    and terminal(artifact_id) is None
+                ):
                     verification_id = node_identity(
-                        "VERIFICATION", verifications[artifact["verification"]]["identity"]
+                        "VERIFICATION", verifications[ver_key]["identity"]
                     )
                     if self._put_edge_tx(
                         connection,
@@ -2521,28 +2890,32 @@ class CreativeGraph:
                         verification_id,
                         {"ledger_seq": artifact["seq"]},
                         epistemic_status=EpistemicStatus.MEASURED_EVIDENCE,
-                        evidence_digest=str(artifact["evidence_digest"]),
+                        evidence_digest=str(verifications[ver_key]["evidence_digest"]),
                         source="causal_journal",
                         source_seq=int(artifact["seq"]),
                     ).created:
                         edges += 1
-                passport = passports[key]
-                passport_result = project("PASSPORT", passport)
-                if passport_result is not None and passport_result.created:
-                    projected["PASSPORT"] += 1
-                passport_id = node_identity("PASSPORT", passport["identity"])
-                if self._put_edge_tx(
-                    connection,
-                    "ARTIFACT_HAS_PASSPORT",
-                    artifact_id,
-                    passport_id,
-                    {"ledger_seq": passport["seq"]},
-                    epistemic_status=EpistemicStatus.MEASURED_EVIDENCE,
-                    evidence_digest=str(passport["evidence_digest"]),
-                    source="causal_journal",
-                    source_seq=int(passport["seq"]),
-                ).created:
-                    edges += 1
+                if key in passports:
+                    passport = passports[key]
+                    passport_result = project("PASSPORT", passport)
+                    if passport_result is not None and passport_result.created:
+                        projected["PASSPORT"] += 1
+                    passport_id = node_identity("PASSPORT", passport["identity"])
+                    if (
+                        terminal(artifact_id) is None
+                        and self._put_edge_tx(
+                            connection,
+                            "ARTIFACT_HAS_PASSPORT",
+                            artifact_id,
+                            passport_id,
+                            {"ledger_seq": passport["seq"]},
+                            epistemic_status=EpistemicStatus.MEASURED_EVIDENCE,
+                            evidence_digest=str(passport["evidence_digest"]),
+                            source="causal_journal",
+                            source_seq=int(passport["seq"]),
+                        ).created
+                    ):
+                        edges += 1
 
         return {
             "skipped_terminal": skipped_terminal,
@@ -2672,6 +3045,8 @@ class CreativeGraph:
 
 
 __all__ = [
+    "ALLOWED_NODE_STATUS_TRANSITIONS",
+    "CANONICAL_ENCODING_VERSION",
     "GRAPH_CHAIN_GENESIS",
     "GRAPH_TABLES",
     "LINEAGE_ATTACHMENTS",
@@ -2693,6 +3068,7 @@ __all__ = [
     "GraphIntegrityError",
     "GraphNode",
     "GraphStateError",
+    "GraphStateTransitionError",
     "IntegrityFinding",
     "IntegrityReport",
     "WriteResult",
@@ -2703,6 +3079,7 @@ __all__ = [
     "edge_identity",
     "node_identity",
     "normalize_canonical_value",
+    "validate_hmac_sha256_signature",
     "validate_sha256_digest",
     "verify_epistemic_proof",
 ]

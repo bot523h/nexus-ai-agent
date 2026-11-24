@@ -206,14 +206,16 @@ MUTATIONS: tuple[MutationSpec, ...] = (
         predicate=lambda n: _is_if_unparsing(
             n,
             "not verify_epistemic_proof("
-            "proof, subject_id=subject_id, subject_digest=subject_digest)",
+            "proof, subject_id=subject_id, subject_digest=subject_digest, "
+            "proof_verification_keys=proof_verification_keys, "
+            "revoked_proof_key_ids=revoked_proof_key_ids)",
         ),
         transform=_weaken_if_to_false,
     ),
     MutationSpec(
         mutant_id="M09_causal_impact_drop_transitive_frontier",
         invariant="Counterfactual causal impact propagates transitively across multi-hop DAG",
-        func_name="compute_causal_impact_set",
+        func_name="_compute_causal_impact_set_conn",
         test_selector="test_compute_causal_impact_set_diamond_and_atomic_propagation",
         predicate=_is_frontier_advance,
         transform=_halt_frontier_after_depth_one,

@@ -19,6 +19,8 @@ from nexus_ai_agent.provenance.canonicalization import (
     verify_canonical_digest,
 )
 from nexus_ai_agent.provenance.graph import (
+    ALLOWED_NODE_STATUS_TRANSITIONS,
+    CANONICAL_ENCODING_VERSION,
     GRAPH_CHAIN_GENESIS,
     GRAPH_TABLES,
     LINEAGE_ATTACHMENTS,
@@ -40,6 +42,7 @@ from nexus_ai_agent.provenance.graph import (
     GraphIntegrityError,
     GraphNode,
     GraphStateError,
+    GraphStateTransitionError,
     IntegrityFinding,
     IntegrityReport,
     WriteResult,
@@ -50,6 +53,7 @@ from nexus_ai_agent.provenance.graph import (
     edge_identity,
     node_identity,
     normalize_canonical_value,
+    validate_hmac_sha256_signature,
     validate_sha256_digest,
     verify_epistemic_proof,
 )
@@ -86,6 +90,8 @@ from nexus_ai_agent.provenance.passport import (
 )
 
 __all__ = [
+    "ALLOWED_NODE_STATUS_TRANSITIONS",
+    "CANONICAL_ENCODING_VERSION",
     "GENESIS_HASH",
     "GRAPH_CHAIN_GENESIS",
     "GRAPH_TABLES",
@@ -119,6 +125,7 @@ __all__ = [
     "GraphIntegrityError",
     "GraphNode",
     "GraphStateError",
+    "GraphStateTransitionError",
     "IntegrityFinding",
     "IntegrityReport",
     "JcsError",
@@ -142,6 +149,7 @@ __all__ = [
     "jcs_digest",
     "node_identity",
     "normalize_canonical_value",
+    "validate_hmac_sha256_signature",
     "validate_sha256_digest",
     "verify_canonical_digest",
     "verify_chain",
