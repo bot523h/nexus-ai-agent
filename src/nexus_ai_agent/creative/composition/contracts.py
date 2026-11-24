@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from types import MappingProxyType
 
 __all__ = [
@@ -119,7 +119,7 @@ class CapabilityContract:
     outputs: tuple[PortSpec, ...]
     budget_seconds: float
     budget_cost: float
-    parameters: Mapping[str, ConfigValue] = MappingProxyType({})
+    parameters: Mapping[str, ConfigValue] = field(default_factory=lambda: MappingProxyType({}))
 
     def __post_init__(self) -> None:
         if not isinstance(self.capability_id, str) or not self.capability_id:

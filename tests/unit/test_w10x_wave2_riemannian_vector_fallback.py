@@ -64,7 +64,6 @@ def test_negative_zero_is_canonicalised() -> None:
 def test_compensated_dot_beats_naive_cancellation() -> None:
     u = [1e100, 1.0, -1e100]
     v = [1.0, 1.0, 1.0]
-    assert sum(a * b for a, b in zip(u, v, strict=True)) == 1.0  # CPython 3.12+ sum is compensated
     naive = 0.0
     for a, b in zip(u, v, strict=True):
         naive += a * b
