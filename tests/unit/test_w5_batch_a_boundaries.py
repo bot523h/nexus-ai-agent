@@ -632,3 +632,29 @@ def test_drill_size_check_handles_file_growth_during_read(
     with pytest.raises(ValueError, match="size exceeds"):
         drill._read_regular(path, limit=3)
     assert path.read_bytes() == b"abcd"
+
+
+def test_retention_preserves_generation_if_reader_arrives_after_validation(
+    two_drill_generations, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A reader racing the prune lock leaves its authenticated generation intact."""
+    import fcntl
+
+    from nexus_ai_agent.storage import encrypted_backup_drill as drill
+
+    work, key, old, new = two_drill_generations
+    original = fcntl.flock
+    observed: list[int] = []
+
+    def reader_wins(fd: int, operation: int) -> None:
+        if operation == fcntl.LOCK_EX | fcntl.LOCK_NB:
+            observed.append(fd)
+            raise BlockingIOError("reader acquired lease after scan")
+        original(fd, operation)
+
+    monkeypatch.setattr(drill.fcntl, "flock", reader_wins)
+    receipt = drill.enforce_backup_retention(work, keep_generations=1, key_material=key)
+    assert observed
+    assert receipt.skipped_leased_ids == (old.archive_path.parent.name,)
+    assert not receipt.pruned_ids
+    assert old.archive_path.exists() and new.archive_path.exists()
