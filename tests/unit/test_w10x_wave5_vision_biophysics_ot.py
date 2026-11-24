@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib
 import math
 
 import pytest
@@ -124,8 +125,11 @@ def test_chromophore_validation() -> None:
 
 
 def test_degenerate_spectral_basis(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(portrait, "MELANIN_EXTINCTION", (1.0,) * 6)
-    monkeypatch.setattr(portrait, "HEMOGLOBIN_EXTINCTION", (1.0,) * 6)
+    implementation = importlib.import_module(
+        "nexus_ai_agent.creative.temporal.biophysical_portrait"
+    )
+    monkeypatch.setattr(implementation, "MELANIN_EXTINCTION", (1.0,) * 6)
+    monkeypatch.setattr(implementation, "HEMOGLOBIN_EXTINCTION", (1.0,) * 6)
     with pytest.raises(SkinModelError):
         estimate_chromophores([0.5] * 6, ridge=0.0)
 
