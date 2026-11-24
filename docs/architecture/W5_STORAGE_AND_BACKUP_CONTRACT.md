@@ -73,11 +73,11 @@ the marker still requires ingest-state recovery. Publication from the shared
 ingestion and recovery path uses worker threads; cancellation does not stop an
 already-running worker. A process-local registry defers reconciliation while a
 cancelled worker is still active, including across store instances sharing a root.
-Stage writes and running async publication workers now hold a shared POSIX
-admission lock. The worker owns it through completion even if its caller is
-cancelled. This is a partial fence: synchronous publication, the full ingest
-transaction, work queued before the worker takes its lock, and startup recovery
-are not yet covered. The sweeper is still disconnected from startup; do not
+Stage writes and async publications use a shared POSIX admission lock. Async
+publication acquires the lease before queueing its worker and retains it until
+worker completion even if its caller is cancelled. A cancelled lock acquisition
+is cleaned up after it completes. This is a partial fence: synchronous publication,
+the full ingest transaction, and startup recovery are not yet covered. The sweeper is still disconnected from startup; do not
 use this lock alone as authority to delete staging. It is cooperative and is
 not a boundary against a same-UID process replacing the lock inode. Recovery
 compares staged bytes against the durable Tx2 digest and length before

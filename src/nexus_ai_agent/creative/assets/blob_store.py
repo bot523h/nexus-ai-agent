@@ -261,8 +261,8 @@ class LocalContentAddressedBlobStore:
         return self.store(staging_key, blob_key)
 
     async def store_async(self, staging_key: str, blob_key: str) -> tuple[str, int, bool]:
-        """Publish in a worker thread without blocking the event loop."""
-        return await asyncio.to_thread(self.store, staging_key, blob_key)
+        """Publish through the tracked, admission-fenced async path."""
+        return await self.publish_from_staging_async(staging_key, blob_key)
 
     async def publish_from_staging_async(
         self, staging_key: str, blob_key: str
@@ -285,19 +285,52 @@ class LocalContentAddressedBlobStore:
                     del _IN_FLIGHT_PUBLICATIONS[identity]
                 completed.set()
 
-        def publish() -> tuple[str, int, bool]:
+        # Acquire before submitting the publication worker.  Otherwise an
+        # executor-queued worker can outlive a cancelled caller without owning
+        # a kernel lock, allowing another process to enter maintenance first.
+        lease = asset_admission_lock(
+            self._fs.root, exclusive=False, timeout_seconds=self._admission_timeout_seconds
+        )
+        loop = asyncio.get_running_loop()
+        try:
+            acquisition = loop.run_in_executor(None, lease.__enter__)
+        except BaseException:
+            finish()
+            raise
+
+        def abandon_acquisition(done: asyncio.Future[None]) -> None:
             try:
-                with asset_admission_lock(
-                    self._fs.root, exclusive=False, timeout_seconds=self._admission_timeout_seconds
-                ):
-                    return self.publish_from_staging(staging_key, blob_key)
+                if not done.cancelled() and done.exception() is None:
+                    lease.__exit__(None, None, None)
             finally:
                 finish()
 
         try:
-            future = asyncio.get_running_loop().run_in_executor(None, publish)
+            await asyncio.shield(acquisition)
+        except asyncio.CancelledError:
+            detached.set()
+            acquisition.add_done_callback(abandon_acquisition)
+            raise
         except BaseException:
             finish()
+            raise
+
+        def publish() -> tuple[str, int, bool]:
+            try:
+                return self.publish_from_staging(staging_key, blob_key)
+            finally:
+                try:
+                    lease.__exit__(None, None, None)
+                finally:
+                    finish()
+
+        try:
+            future = loop.run_in_executor(None, publish)
+        except BaseException:
+            try:
+                lease.__exit__(None, None, None)
+            finally:
+                finish()
             raise
 
         def consume_result(done: asyncio.Future[tuple[str, int, bool]]) -> None:

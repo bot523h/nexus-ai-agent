@@ -533,3 +533,100 @@ def test_admission_lock_refuses_symlink_and_invalid_timeout(tmp_path: Path) -> N
         with pytest.raises(ValueError):
             with asset_admission_lock(tmp_path, exclusive=True, timeout_seconds=value):
                 pass
+
+
+@pytest.mark.asyncio
+async def test_queued_publication_keeps_process_lock_after_cancellation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import asyncio
+    import subprocess
+    import sys
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    store = LocalContentAddressedBlobStore(tmp_path)
+    stage, digest, _ = store.stage(io.BytesIO(b"queued payload"), max_bytes=100)
+    loop = asyncio.get_running_loop()
+    executor = ThreadPoolExecutor(max_workers=1)
+    loop.set_default_executor(executor)
+    release = threading.Event()
+    entered = asyncio.Event()
+    original_submit = loop.run_in_executor
+
+    def occupy_executor() -> None:
+        loop.call_soon_threadsafe(entered.set)
+        if not release.wait(5):
+            raise TimeoutError("queue test was not released")
+
+    def intercept(pool: object, func: object, *args: object):
+        if getattr(func, "__name__", "") == "publish":
+            executor.submit(occupy_executor)
+        return original_submit(pool, func, *args)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(loop, "run_in_executor", intercept)
+    task = asyncio.create_task(store.publish_from_staging_async(stage, store.blob_key_for(digest)))
+    try:
+        await asyncio.wait_for(entered.wait(), 5)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        program = """
+import sys
+from pathlib import Path
+from nexus_ai_agent.creative.assets.admission import asset_admission_lock
+with asset_admission_lock(Path(sys.argv[1]), exclusive=True, timeout_seconds=0.1):
+    pass
+"""
+        blocked = subprocess.run(  # noqa: S603 - known interpreter and test source
+            [sys.executable, "-c", program, str(tmp_path)],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+        assert blocked.returncode != 0 and "TimeoutError" in blocked.stderr
+        assert stage in store.in_flight_staging_keys()
+        assert (tmp_path / stage).read_bytes() == b"queued payload"
+    finally:
+        release.set()
+        for _ in range(500):
+            if stage not in store.in_flight_staging_keys():
+                break
+            await asyncio.sleep(0.01)
+        executor.shutdown(wait=True)
+    assert stage not in store.in_flight_staging_keys()
+    assert store.verify(
+        store.blob_key_for(digest), sha256=digest, size_bytes=len(b"queued payload")
+    )
+
+
+@pytest.mark.asyncio
+async def test_cancellation_while_waiting_for_admission_releases_late_lease(tmp_path: Path) -> None:
+    import asyncio
+
+    from nexus_ai_agent.creative.assets.admission import asset_admission_lock
+
+    store = LocalContentAddressedBlobStore(tmp_path, lock_timeout_seconds=1)
+    stage, digest, _ = store.stage(io.BytesIO(b"waiting payload"), max_bytes=100)
+    with asset_admission_lock(tmp_path, exclusive=True):
+        task = asyncio.create_task(
+            store.publish_from_staging_async(stage, store.blob_key_for(digest))
+        )
+        for _ in range(100):
+            if stage in store.in_flight_staging_keys():
+                break
+            await asyncio.sleep(0.01)
+        assert stage in store.in_flight_staging_keys()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert stage in store.in_flight_staging_keys()
+    for _ in range(200):
+        if stage not in store.in_flight_staging_keys():
+            break
+        await asyncio.sleep(0.01)
+    assert stage not in store.in_flight_staging_keys()
+    assert (tmp_path / stage).read_bytes() == b"waiting payload"
+    with asset_admission_lock(tmp_path, exclusive=True, timeout_seconds=0.5):
+        pass
