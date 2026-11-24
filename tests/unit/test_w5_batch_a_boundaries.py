@@ -305,3 +305,330 @@ def test_source_identity_missing_is_rejected(tmp_path: Path) -> None:
     source.unlink()
     with pytest.raises(ValueError, match="inode changed"):
         drill._check_source_identity(source, info)
+
+
+@pytest.fixture
+def drill_artifact(tmp_path: Path):
+    import sqlite3
+
+    from nexus_ai_agent.storage import encrypted_backup_drill as drill
+
+    source = tmp_path / "source.sqlite"
+    with sqlite3.connect(source) as conn:
+        conn.execute("CREATE TABLE t (n INTEGER)")
+        conn.execute("INSERT INTO t VALUES (42)")
+    work = tmp_path / "work"
+    work.mkdir(mode=0o700)
+    key = drill.BackupKeyMaterial.generate()
+    evidence = drill.run_encrypted_sqlite_backup_restore_drill(source, work, key)
+    return source, work, key, evidence
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("schema_version", 7),
+        ("key_source", "invalid"),
+        ("schema_version", 1),
+        ("nonce_hex", "00"),
+        ("auth_tag_hex", "00"),
+        ("merkle_root", "a" * 64),
+    ],
+)
+def test_drill_manifest_validation_fails_closed_without_leaking_input(
+    drill_artifact, field: str, value: object
+) -> None:
+    import json
+    import traceback
+
+    from nexus_ai_agent.storage import encrypted_backup_drill as drill
+
+    _, _, key, evidence = drill_artifact
+    manifest = json.loads(evidence.manifest_path.read_text())
+    manifest[field] = value
+    evidence.manifest_path.write_text(json.dumps(manifest))
+    with pytest.raises(drill.BackupIntegrityTamperError) as caught:
+        drill.verify_encrypted_sqlite_backup(evidence.archive_path, evidence.manifest_path, key)
+    assert caught.value.__context__ is None
+    assert "invalid" not in "".join(traceback.format_exception(caught.value))
+    assert evidence.restored_path.exists()
+
+
+def test_authenticated_wrong_plaintext_digest_is_still_rejected(drill_artifact) -> None:
+    import hashlib
+    import json
+
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+    from nexus_ai_agent.storage import encrypted_backup_drill as drill
+
+    _, _, key, evidence = drill_artifact
+    manifest = json.loads(evidence.manifest_path.read_text())
+    plaintext = evidence.restored_path.read_bytes()
+    manifest["source_sha256"] = "f" * 64
+    aad = {
+        name: manifest[name]
+        for name in (
+            "schema_version",
+            "source_sha256",
+            "row_counts",
+            "nonce_hex",
+            "key_source",
+            "key_fingerprint",
+            "created_at_utc",
+        )
+    }
+    sealed = AESGCM(drill._key(key.key_bytes)).encrypt(
+        bytes.fromhex(manifest["nonce_hex"]), plaintext, drill._canonical(aad)
+    )
+    ciphertext, tag = sealed[:-16], sealed[-16:]
+    manifest["auth_tag_hex"] = tag.hex()
+    manifest["ciphertext_sha256"] = hashlib.sha256(ciphertext).hexdigest()
+    manifest["merkle_root"] = drill._merkle(ciphertext)
+    evidence.archive_path.write_bytes(ciphertext)
+    evidence.manifest_path.write_bytes(drill._canonical(manifest))
+    with pytest.raises(drill.BackupIntegrityTamperError):
+        drill.verify_encrypted_sqlite_backup(evidence.archive_path, evidence.manifest_path, key)
+    assert evidence.restored_path.read_bytes() == plaintext
+
+
+def test_reader_lease_rejects_non_directory_and_hardlinked_lock(tmp_path: Path) -> None:
+    import os
+
+    from nexus_ai_agent.storage import encrypted_backup_drill as drill
+
+    regular = tmp_path / "file"
+    regular.touch()
+    with pytest.raises(ValueError, match="not a directory"), drill.backup_reader_lease(regular):
+        pytest.fail("regular file accepted as generation")
+    generation = tmp_path / "generation"
+    generation.mkdir()
+    lock = generation / ".reader.lock"
+    lock.touch()
+    os.link(lock, tmp_path / "second-link")
+    with pytest.raises(PermissionError, match="unsafe"), drill.backup_reader_lease(generation):
+        pytest.fail("hardlinked lock accepted")
+    assert lock.exists()
+
+
+def test_reader_rejects_generation_replaced_before_admission(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import os
+
+    from nexus_ai_agent.storage import encrypted_backup_drill as drill
+
+    root = tmp_path / "generation"
+    root.mkdir()
+    original_stat = os.stat
+
+    def changed(path, *args, **kwargs):
+        info = original_stat(path, *args, **kwargs)
+        if path == root:
+            fields = list(info)
+            fields[1] += 1
+            return os.stat_result(fields)
+        return info
+
+    monkeypatch.setattr(drill.os, "stat", changed)
+    with pytest.raises(FileNotFoundError, match="replaced"), drill.backup_reader_lease(root):
+        pytest.fail("replaced generation accepted")
+
+
+def test_generation_rejects_symlink_entries_without_following(tmp_path: Path) -> None:
+    import os
+
+    from nexus_ai_agent.storage import encrypted_backup_drill as drill
+
+    (tmp_path / "backup.enc").symlink_to("missing")
+    fd = os.open(tmp_path, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        with pytest.raises(ValueError, match="unsafe generation"):
+            drill._validate_generation_entries(fd)
+    finally:
+        os.close(fd)
+    assert (tmp_path / "backup.enc").is_symlink()
+
+
+@pytest.mark.parametrize(
+    "setting,value,expected",
+    [
+        ("retain_generations", 0, "keep_generations"),
+        ("backup_timeout_seconds", float("nan"), "timeout"),
+        ("inject_tamper_byte", 1, "boolean"),
+    ],
+)
+def test_drill_rejects_invalid_options_before_publication(
+    drill_artifact, setting, value, expected
+) -> None:
+    from nexus_ai_agent.storage import encrypted_backup_drill as drill
+
+    source, work, key, _ = drill_artifact
+    before = set(work.iterdir())
+    with pytest.raises(ValueError, match=expected):
+        drill.run_encrypted_sqlite_backup_restore_drill(source, work, key, **{setting: value})
+    assert set(work.iterdir()) == before
+
+
+def test_drill_rejects_non_regular_source_before_publication(drill_artifact) -> None:
+    from nexus_ai_agent.storage import encrypted_backup_drill as drill
+
+    source, work, key, _ = drill_artifact
+    before = set(work.iterdir())
+    with pytest.raises(ValueError, match="source is not a regular file"):
+        drill.run_encrypted_sqlite_backup_restore_drill(source.parent, work, key)
+    assert set(work.iterdir()) == before
+
+
+def test_drill_refuses_retention_if_secure_rmtree_unavailable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from nexus_ai_agent.storage import encrypted_backup_drill as drill
+
+    key = drill.BackupKeyMaterial.generate()
+    monkeypatch.setattr(drill.shutil.rmtree, "avoids_symlink_attacks", False)
+    with pytest.raises(RuntimeError, match="descriptor-relative"):
+        drill.enforce_backup_retention(tmp_path, keep_generations=1, key_material=key)
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_drill_retention_rejects_hardlinked_lock(tmp_path: Path) -> None:
+    import os
+
+    from nexus_ai_agent.storage import encrypted_backup_drill as drill
+
+    lock = tmp_path / ".backup-retention.lock"
+    lock.touch()
+    os.link(lock, tmp_path / "extra")
+    with pytest.raises(PermissionError, match="unsafe backup retention lock"):
+        drill.enforce_backup_retention(
+            tmp_path, keep_generations=1, key_material=drill.BackupKeyMaterial.generate()
+        )
+    assert lock.exists()
+
+
+def test_retention_checks_archive_regular_after_verification(
+    drill_artifact, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import os
+    import stat
+
+    from nexus_ai_agent.storage import encrypted_backup_drill as drill
+
+    _, work, key, evidence = drill_artifact
+    real_stat = os.stat
+
+    def changed(path, *args, **kwargs):
+        info = real_stat(path, *args, **kwargs)
+        if path == "backup.enc" and kwargs.get("dir_fd") is not None:
+            fields = list(info)
+            fields[0] = stat.S_IFDIR | 0o700
+            return os.stat_result(fields)
+        return info
+
+    # Generation listing must see a regular archive; change only the later stat.
+    real_validate = drill._validate_generation_entries
+    monkeypatch.setattr(drill, "_validate_generation_entries", lambda fd: real_validate(fd))
+    calls = 0
+
+    def late_changed(path, *args, **kwargs):
+        nonlocal calls
+        if path == "backup.enc" and kwargs.get("dir_fd") is not None:
+            calls += 1
+            if calls == 2:
+                return changed(path, *args, **kwargs)
+        return real_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(drill.os, "stat", late_changed)
+    receipt = drill.enforce_backup_retention(work, keep_generations=1, key_material=key)
+    assert receipt.skipped_corrupt_ids == (evidence.archive_path.parent.name,)
+    assert evidence.archive_path.exists()
+
+
+@pytest.fixture
+def two_drill_generations(drill_artifact):
+    from nexus_ai_agent.storage import encrypted_backup_drill as drill
+
+    source, work, key, old = drill_artifact
+    new = drill.run_encrypted_sqlite_backup_restore_drill(source, work, key)
+    return work, key, old, new
+
+
+def test_retention_disk_pin_protects_old_generation(two_drill_generations) -> None:
+    from nexus_ai_agent.storage import encrypted_backup_drill as drill
+
+    work, key, old, new = two_drill_generations
+    (old.archive_path.parent / ".pin").touch()
+    receipt = drill.enforce_backup_retention(work, keep_generations=1, key_material=key)
+    assert receipt.retained_ids == (new.archive_path.parent.name,)
+    assert receipt.skipped_pinned_ids == (old.archive_path.parent.name,)
+    assert old.archive_path.exists()
+
+
+@pytest.mark.parametrize("after_move", [False, True])
+def test_retention_failure_never_silently_claims_pruning(
+    two_drill_generations, monkeypatch: pytest.MonkeyPatch, after_move: bool
+) -> None:
+    from nexus_ai_agent.storage import encrypted_backup_drill as drill
+
+    work, key, old, new = two_drill_generations
+    if after_move:
+        monkeypatch.setattr(drill.os, "fsync", Mock(side_effect=OSError("sync failed")))
+        with pytest.raises(OSError, match="sync failed"):
+            drill.enforce_backup_retention(work, keep_generations=1, key_material=key)
+        assert not old.archive_path.parent.exists()
+        assert len(list(work.glob(".pruned-*"))) == 1
+    else:
+        monkeypatch.setattr(drill.os, "rename", Mock(side_effect=OSError("rename failed")))
+        receipt = drill.enforce_backup_retention(work, keep_generations=1, key_material=key)
+        assert receipt.skipped_corrupt_ids == (old.archive_path.parent.name,)
+        assert not receipt.pruned_ids and old.archive_path.exists()
+    assert new.archive_path.exists()
+
+
+def test_drill_refuses_changed_restore_inventory_without_publishing(
+    drill_artifact, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from nexus_ai_agent.storage import encrypted_backup_drill as drill
+
+    source, work, key, _ = drill_artifact
+    previous = set(work.iterdir())
+    original = drill._inventory
+    calls = 0
+
+    def changed(conn):
+        nonlocal calls
+        calls += 1
+        result = original(conn)
+        return result if calls == 1 else {**result, "unexpected": 1}
+
+    monkeypatch.setattr(drill, "_inventory", changed)
+    with pytest.raises(drill.BackupIntegrityTamperError, match="inventory mismatch"):
+        drill.run_encrypted_sqlite_backup_restore_drill(source, work, key)
+    assert calls == 2
+    assert set(work.iterdir()) == previous
+
+
+def test_drill_size_check_handles_file_growth_during_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import os
+
+    from nexus_ai_agent.storage import encrypted_backup_drill as drill
+
+    path = tmp_path / "growing"
+    path.write_bytes(b"abcd")
+    original = os.fstat
+
+    def stale_stat(fd: int):
+        result = original(fd)
+        if os.readlink(f"/proc/self/fd/{fd}") == str(path):
+            fields = list(result)
+            fields[6] = 2
+            return os.stat_result(fields)
+        return result
+
+    monkeypatch.setattr(drill.os, "fstat", stale_stat)
+    with pytest.raises(ValueError, match="size exceeds"):
+        drill._read_regular(path, limit=3)
+    assert path.read_bytes() == b"abcd"
