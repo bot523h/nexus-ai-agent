@@ -579,6 +579,10 @@ class PlanTransaction:
         with bus._lock:
             if bus._executing:
                 raise CommandExecutionError("Re-entrant execution is forbidden")
+            if bus._durable_store is not None:
+                raise PlanTransactionError(
+                    "durable store configured; use bus.dispatch_plan with durable approvals"
+                )
             if self.state is not PlanTransactionState.PENDING:
                 raise PlanTransactionError("transaction already finished")
             self._preflight(bus)
@@ -953,10 +957,13 @@ class CommandBus:
         audio_engine: Any = None,
         engine_ports: Mapping[str, Any] | None = None,
         durable_store: DurablePlanDedupePort | None = None,
+        durable_dedupe_store: DurablePlanDedupePort | None = None,
         durable_verifiers: Mapping[str, Callable[[Project, TypedCommand, CommandResult, str], bool]]
         | None = None,
     ) -> None:
-        self._durable_store = durable_store
+        if durable_store is not None and durable_dedupe_store is not None:
+            raise ValueError("configure only one durable store")
+        self._durable_store = durable_store if durable_store is not None else durable_dedupe_store
         self._durable_verifiers = dict(durable_verifiers or {})
         if any(not callable(verifier) for verifier in self._durable_verifiers.values()):
             raise ValueError("durable verifiers must be callable")
@@ -1031,19 +1038,57 @@ class CommandBus:
                 raise CommandExecutionError("nested command dispatch during execution is forbidden")
             return self._dispatch_locked(parsed)
 
-    def dispatch_plan(self, plan: PlanTransaction) -> PlanTransaction | PlanResultSummary:
-        """Execute a :class:`PlanTransaction` atomically under the bus lock.
+    def dispatch_plan(
+        self,
+        plan: PlanTransaction,
+        *,
+        approval_attestations: tuple[ApprovalBinding, ...] | None = None,
+        policy_version: str | None = None,
+        authenticated_actor: ActorIdentity | None = None,
+        approval_verifier: ApprovalVerifier | None = None,
+        deadline_monotonic_ns: int | None = None,
+        lease_ttl_seconds: float = 30.0,
+    ) -> PlanTransaction | PlanResultSummary:
+        """Execute a plan, requiring the durable lifecycle when a store is configured.
 
-        Steps run in order; the first failure stops forward progress and every
-        previously succeeded step is compensated in exact LIFO order. The
-        transaction's state machine (``COMMITTED`` / ``ROLLED_BACK`` /
-        ``ROLLBACK_FAILED``) and its step/rollback records carry the outcome.
+        Durable approval scopes, identity, policy, verifier and monotonic deadline
+        must come from trusted request context. Without a store, the original
+        in-memory plan execution remains available without those arguments.
         """
         if not isinstance(plan, PlanTransaction):
             raise CommandValidationError("dispatch_plan requires a PlanTransaction")
         with self._lock:
             if self._executing:
                 raise CommandExecutionError("nested plan dispatch during execution is forbidden")
+            if self._durable_store is not None:
+                if (
+                    approval_attestations is None
+                    or policy_version is None
+                    or authenticated_actor is None
+                    or approval_verifier is None
+                    or deadline_monotonic_ns is None
+                ):
+                    raise PlanTransactionError("durable plan execution requires approval context")
+                return self.dispatch_durable_plan(
+                    plan,
+                    approval_attestations,
+                    policy_version=policy_version,
+                    authenticated_actor=authenticated_actor,
+                    approval_verifier=approval_verifier,
+                    deadline_monotonic_ns=deadline_monotonic_ns,
+                    lease_ttl_seconds=lease_ttl_seconds,
+                )
+            if lease_ttl_seconds != 30.0 or any(
+                value is not None
+                for value in (
+                    approval_attestations,
+                    policy_version,
+                    authenticated_actor,
+                    approval_verifier,
+                    deadline_monotonic_ns,
+                )
+            ):
+                raise PlanTransactionError("durable store is not configured")
             return self._dispatch_plan_locked(plan)
 
     def dispatch_durable_plan(
@@ -1253,6 +1298,7 @@ class CommandBus:
                         step_id=expected.step_id,
                         effect_key=effect_key,
                         verification_digest=digest,
+                        deadline_monotonic_ns=deadline_monotonic_ns,
                         **fence,
                     )
                     uncertain = False
@@ -1299,7 +1345,7 @@ class CommandBus:
             except BaseException as original:
                 self._durable_context = {}
                 errors: list[BaseException] = []
-                if not uncertain and completed:
+                if completed:
                     try:
                         store.mark_compensating(plan.plan_id, first.plan_hash, **fence)
                     except BaseException as exc:
@@ -1337,19 +1383,25 @@ class CommandBus:
                                 )
                             except BaseException as exc:
                                 errors.append(exc)
+                        if not uncertain:
+                            try:
+                                store.record_compensation(
+                                    plan.plan_id,
+                                    first.plan_hash,
+                                    succeeded=not errors,
+                                    evidence={"compensated": not errors},
+                                    **fence,
+                                )
+                            except BaseException as exc:
+                                errors.append(exc)
+                    if uncertain:
                         try:
-                            store.record_compensation(
-                                plan.plan_id,
-                                first.plan_hash,
-                                succeeded=not errors,
-                                evidence={"compensated": not errors},
-                                **fence,
-                            )
+                            store.quarantine(plan.plan_id, first.plan_hash, **fence)
                         except BaseException as exc:
                             errors.append(exc)
                     plan.state = (
                         PlanTransactionState.ROLLBACK_FAILED
-                        if errors
+                        if errors or uncertain
                         else PlanTransactionState.ROLLED_BACK
                     )
                 else:

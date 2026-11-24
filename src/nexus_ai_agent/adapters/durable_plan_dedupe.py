@@ -901,6 +901,7 @@ class DurablePlanDedupeStore:
         effect_key: str,
         verification_digest: str,
         project_id: str = "default",
+        deadline_monotonic_ns: int | None = None,
     ) -> None:
         """Persist an independently verified forward effect behind a live fence.
 
@@ -914,6 +915,10 @@ class DurablePlanDedupeStore:
             raise ValueError("effect_key must be lowercase SHA-256 hex")
         if not isinstance(verification_digest, str) or _HASH.fullmatch(verification_digest) is None:
             raise ValueError("verification_digest must be lowercase SHA-256 hex")
+        if deadline_monotonic_ns is not None and (
+            isinstance(deadline_monotonic_ns, bool) or not isinstance(deadline_monotonic_ns, int)
+        ):
+            raise ValueError("deadline_monotonic_ns must be an integer")
         body = _encode_evidence(
             {
                 "verification_digest": verification_digest,
@@ -921,6 +926,8 @@ class DurablePlanDedupeStore:
             }
         )
         with self._transaction() as conn:
+            if deadline_monotonic_ns is not None and time.monotonic_ns() >= deadline_monotonic_ns:
+                raise TimeoutError("durable plan deadline expired")
             changed = conn.execute(
                 "UPDATE compensation_journal SET status='VERIFIED', evidence_json=? "
                 "WHERE project_id=? AND plan_id=? AND plan_hash=? AND attempt=? "

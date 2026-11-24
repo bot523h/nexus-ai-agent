@@ -245,6 +245,7 @@ class DurablePlanDedupePort(Protocol):
         effect_key: str,
         verification_digest: str,
         project_id: str = "default",
+        deadline_monotonic_ns: int | None = None,
     ) -> None:
         """Record a separately verified forward effect under the current fence."""
         ...
