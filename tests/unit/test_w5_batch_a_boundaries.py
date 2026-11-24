@@ -213,3 +213,95 @@ def test_provider_unavailable_is_scrubbed_before_propagation(tmp_path: Path) -> 
         backup._upload_actionable(provider, local_path=tmp_path / "dump", key="object")
     assert caught.value is error
     assert "secret-canary" not in "".join(traceback.format_exception(error))
+
+
+def test_drill_key_material_refuses_bad_capabilities(monkeypatch: pytest.MonkeyPatch) -> None:
+    from nexus_ai_agent.storage import encrypted_backup_drill as drill
+
+    key = drill.BackupKeyMaterial.generate().key_bytes
+    with pytest.raises(ValueError, match="invalid encryption key"):
+        drill._key("not bytes")
+    with pytest.raises(ValueError, match="invalid key material"):
+        drill.BackupKeyMaterial(
+            key, "untrusted", drill._key_fingerprint(key), drill._KEY_PROVENANCE_SENTINEL
+        )
+    with pytest.raises(ValueError, match="fingerprint"):
+        drill.BackupKeyMaterial(key, "csprng", "incorrect", drill._KEY_PROVENANCE_SENTINEL)
+    with pytest.raises(ValueError, match="invalid backup key"):
+        drill.BackupKeyMaterial.from_secret_env(env={})
+    with pytest.raises(ValueError, match="boolean"):
+        drill._material(key, require_trusted=1)
+    monkeypatch.setattr(drill.secrets, "token_bytes", lambda _: b"\x00" * 32)
+    with pytest.raises(RuntimeError, match="could not generate"):
+        drill.generate_drill_encryption_key()
+
+
+def test_drill_merkle_empty_and_multichunk() -> None:
+    import hashlib
+
+    from nexus_ai_agent.storage import encrypted_backup_drill as drill
+
+    assert drill._merkle(b"") == hashlib.sha256(b"").hexdigest()
+    data = b"a" * 65536 + b"b"
+    left = hashlib.sha256(b"\x00" + data[:65536]).digest()
+    right = hashlib.sha256(b"\x00" + data[65536:]).digest()
+    assert drill._merkle(data) == hashlib.sha256(b"\x01" + left + right).hexdigest()
+
+
+@pytest.mark.parametrize("raw", [b'{"x":1,"x":2}', b"[]", b'{"schema_version":3}'])
+def test_drill_manifest_rejects_duplicate_nonobject_or_incomplete(raw: bytes) -> None:
+    from nexus_ai_agent.storage import encrypted_backup_drill as drill
+
+    with pytest.raises(ValueError):
+        drill._parse_manifest(raw)
+
+
+def test_drill_regular_file_check_and_limit(tmp_path: Path) -> None:
+    from nexus_ai_agent.storage import encrypted_backup_drill as drill
+
+    with pytest.raises(ValueError, match="regular"):
+        drill._read_regular(tmp_path)
+    path = tmp_path / "data"
+    path.write_bytes(b"1234")
+    with pytest.raises(ValueError, match="size"):
+        drill._read_regular(path, limit=3)
+    assert path.read_bytes() == b"1234"
+
+
+def test_drill_rejects_failed_integrity_check() -> None:
+    from nexus_ai_agent.storage import encrypted_backup_drill as drill
+
+    connection = Mock()
+    connection.execute.return_value.fetchall.return_value = [("corrupt",)]
+    with pytest.raises(ValueError, match="integrity"):
+        drill._inventory(connection)
+    connection.execute.assert_called_once_with("PRAGMA integrity_check")
+
+
+@pytest.mark.parametrize("pins,readers", [([], frozenset()), (frozenset({1}), frozenset())])
+def test_retention_rejects_invalid_pin_sets_without_filesystem_changes(
+    tmp_path: Path, pins: object, readers: object
+) -> None:
+    from nexus_ai_agent.storage import encrypted_backup_drill as drill
+
+    key = drill.BackupKeyMaterial.generate()
+    with pytest.raises(ValueError, match="pins and reader leases"):
+        drill.enforce_backup_retention(
+            tmp_path,
+            keep_generations=1,
+            key_material=key,
+            active_pins=pins,
+            active_reader_leases=readers,
+        )
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_source_identity_missing_is_rejected(tmp_path: Path) -> None:
+    from nexus_ai_agent.storage import encrypted_backup_drill as drill
+
+    source = tmp_path / "database"
+    source.touch()
+    info = source.stat()
+    source.unlink()
+    with pytest.raises(ValueError, match="inode changed"):
+        drill._check_source_identity(source, info)
