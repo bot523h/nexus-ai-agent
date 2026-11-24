@@ -267,3 +267,62 @@ def test_cleanup_marker_is_only_hint_and_invalid_markers_are_ignored(tmp_path: P
             == ()
         )
     assert len(list(staging.iterdir())) == 3
+
+
+def test_blob_rejects_out_of_namespace_and_oversize_stream(tmp_path: Path) -> None:
+    import io
+
+    from nexus_ai_agent.creative.assets.errors import ContentTooLarge
+
+    store = LocalContentAddressedBlobStore(tmp_path / "blob")
+    with pytest.raises(BlobStoreError, match="namespace"):
+        store.store("elsewhere/name", "irrelevant")
+    with pytest.raises(ContentTooLarge):
+        store.hash_stream(io.BytesIO(b"too long"), max_bytes=2)
+
+
+def test_cleanup_records_failure_when_marker_write_also_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    import io
+
+    store = LocalContentAddressedBlobStore(tmp_path / "blob")
+    staging, sha, size = store.stage(io.BytesIO(b"test bytes"), max_bytes=100)
+    monkeypatch.setattr(store._fs, "unlink", Mock(side_effect=OSError("failure")))
+    monkeypatch.setattr(store, "_record_cleanup_marker", Mock(side_effect=OSError("failure")))
+    assert store.store(staging, store.blob_key_for(sha)) == (sha, size, False)
+    assert staging in store._pending_staging_cleanups
+    assert "durable cleanup marker could not be recorded" in caplog.text
+    assert store.verify(store.blob_key_for(sha), sha256=sha, size_bytes=size)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("pinned", [False, True])
+async def test_executor_rejection_releases_publication_tracking(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pinned: bool
+) -> None:
+    import asyncio
+
+    from nexus_ai_agent.creative.assets.admission import asset_admission_lock
+
+    store = LocalContentAddressedBlobStore(tmp_path / "blob")
+    loop = asyncio.get_running_loop()
+    monkeypatch.setattr(loop, "run_in_executor", Mock(side_effect=RuntimeError("executor stopped")))
+    with asset_admission_lock(store._fs.root, exclusive=False) as lease:
+        with pytest.raises(RuntimeError, match="executor stopped"):
+            await store.publish_from_staging_async(
+                "staging/a", "blobs/b", admission_lease=lease if pinned else None
+            )
+        assert not store.in_flight_staging_keys()
+        lease.validate_for(store._fs.root)
+
+
+@pytest.mark.asyncio
+async def test_async_store_alias_publishes_real_bytes(tmp_path: Path) -> None:
+    import io
+
+    store = LocalContentAddressedBlobStore(tmp_path / "blob")
+    staging, sha, size = store.stage(io.BytesIO(b"content"), max_bytes=100)
+    key = store.blob_key_for(sha)
+    assert await store.store_async(staging, key) == (sha, size, False)
+    assert store.open(key) == b"content"
