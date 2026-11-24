@@ -1,6 +1,6 @@
 """Vision packs: biophysical portrait inversion and optimal-transport grading."""
 
-from nexus_ai_agent.creative.packs.vision.biophysical_portrait import (
+from nexus_ai_agent.creative.vision.biophysical_portrait import (
     HueProtectionResult,
     SkinChromophoreEstimate,
     SkinModelError,
@@ -8,7 +8,7 @@ from nexus_ai_agent.creative.packs.vision.biophysical_portrait import (
     estimate_chromophores,
     reflectance_from_chromophores,
 )
-from nexus_ai_agent.creative.packs.vision.scene_optimal_transport import (
+from nexus_ai_agent.creative.vision.scene_optimal_transport import (
     GaussianColorModel,
     OptimalTransportError,
     OptimalTransportResult,

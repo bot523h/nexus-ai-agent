@@ -7,9 +7,9 @@ import math
 
 import pytest
 
-from nexus_ai_agent.creative.packs.vision import biophysical_portrait as portrait
-from nexus_ai_agent.creative.packs.vision import scene_optimal_transport as transport
-from nexus_ai_agent.creative.packs.vision.biophysical_portrait import (
+from nexus_ai_agent.creative.vision import biophysical_portrait as portrait
+from nexus_ai_agent.creative.vision import scene_optimal_transport as transport
+from nexus_ai_agent.creative.vision.biophysical_portrait import (
     HueProtectionResult,
     Oklch,
     SkinChromophoreEstimate,
@@ -23,7 +23,7 @@ from nexus_ai_agent.creative.packs.vision.biophysical_portrait import (
     reflectance_from_chromophores,
     skin_luminance,
 )
-from nexus_ai_agent.creative.packs.vision.scene_optimal_transport import (
+from nexus_ai_agent.creative.vision.scene_optimal_transport import (
     GaussianColorModel,
     OptimalTransportError,
     OptimalTransportResult,
