@@ -80,7 +80,9 @@ def _valid_host(host: str | None) -> bool:
         )
 
 
-def _valid_url(value: str, schemes: frozenset[str], *, database: bool) -> bool:
+def _valid_url(
+    value: str, schemes: frozenset[str], *, database: bool, allow_verify_ca: bool = False
+) -> bool:
     try:
         parsed = urlsplit(value)
         # Accessing port validates both its syntax and range.
@@ -95,7 +97,7 @@ def _valid_url(value: str, schemes: frozenset[str], *, database: bool) -> bool:
             and (
                 not database
                 or parse_qs(parsed.query, keep_blank_values=True).get("sslmode")
-                in (["verify-full"], ["verify-ca"])
+                in ((["verify-full"], ["verify-ca"]) if allow_verify_ca else (["verify-full"],))
             )
             and (database or (not parsed.username and not parsed.password))
         )
@@ -155,6 +157,7 @@ def verify_production_backup_preflight(
     *,
     require_remote_tier: bool = True,
     allow_local_database: bool = False,
+    allow_verify_ca: bool = False,
 ) -> str:
     """Validate configuration only; never claim a remote backup took place.
 
@@ -162,7 +165,10 @@ def verify_production_backup_preflight(
     out. Partial configuration is always an error. Secrets are never included
     in errors, including when URL parsing fails.
     """
-    if not isinstance(require_remote_tier, bool) or not isinstance(allow_local_database, bool):
+    if any(
+        type(flag) is not bool
+        for flag in (require_remote_tier, allow_local_database, allow_verify_ca)
+    ):
         raise BackupPreflightError("FAILED_PREFLIGHT_REMOTE_MISSING")
     if isinstance(env_mapping, Settings):
         fields = {
@@ -206,6 +212,7 @@ def verify_production_backup_preflight(
                         {"postgres", "postgresql", "postgresql+asyncpg", "postgresql+psycopg"}
                     ),
                     database=True,
+                    allow_verify_ca=allow_verify_ca,
                 )
             )
         )
@@ -502,7 +509,7 @@ def verify_encrypted_sqlite_backup(
     key: BackupKeyMaterial | bytes | bytearray | memoryview,
     *,
     max_database_bytes: int = 64 * 1024 * 1024,
-    require_trusted_key_source: bool = False,
+    require_trusted_key_source: bool = True,
 ) -> bytes:
     """Authenticate an artifact before returning any plaintext; never restore on failure."""
     from cryptography.exceptions import InvalidTag
@@ -546,8 +553,10 @@ def verify_encrypted_sqlite_backup(
         ):
             raise ValueError("plaintext digest mismatch")
         return plaintext
-    except (ValueError, TypeError, OSError, InvalidTag, KeyError) as exc:
-        raise BackupIntegrityTamperError("encrypted backup authentication failed") from exc
+    except (ValueError, TypeError, OSError, InvalidTag, KeyError):
+        pass
+    # Raise outside the handler: even __context__ must not retain untrusted input.
+    raise BackupIntegrityTamperError("encrypted backup authentication failed")
 
 
 def _check_trusted_directory(path: Path, *, forbidden_mode: int) -> None:
@@ -586,7 +595,7 @@ def run_encrypted_sqlite_backup_restore_drill(
     backup_timeout_seconds: float = 10.0,
     allow_empty_database: bool = False,
     preflight_env: Mapping[str, str] | None = None,
-    require_trusted_key_source: bool = False,
+    require_trusted_key_source: bool = True,
 ) -> BackupDrillEvidence:
     """Execute a local SQLite backup and restore, never a production remote backup.
 

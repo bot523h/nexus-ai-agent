@@ -144,7 +144,10 @@ def test_real_disk_encrypted_round_trip(tmp_path: Path) -> None:
     work.mkdir()
     _source(source)
     result = run_encrypted_sqlite_backup_restore_drill(
-        source, work, hashlib.sha256(b"W5 independent fixed test key").digest()
+        source,
+        work,
+        hashlib.sha256(b"W5 independent fixed test key").digest(),
+        require_trusted_key_source=False,
     )
     assert result.status == "LOCAL_DRILL_VERIFIED_REMOTE_NOT_CHECKED"
     assert result.row_counts == {'strange"name': 2}
@@ -168,7 +171,9 @@ def test_drill_rejects_weak_key_without_side_effects(tmp_path: Path, key: bytes)
     )
 
     with pytest.raises(ValueError, match="invalid encryption key"):
-        run_encrypted_sqlite_backup_restore_drill(tmp_path / "missing", tmp_path, key)
+        run_encrypted_sqlite_backup_restore_drill(
+            tmp_path / "missing", tmp_path, key, require_trusted_key_source=False
+        )
     assert list(tmp_path.iterdir()) == []
 
 
@@ -187,7 +192,9 @@ def test_authentication_rejects_corruption(tmp_path: Path, kind: str) -> None:
     work.mkdir()
     _source(source)
     key = hashlib.sha256(b"W5 independent fixed test key").digest()
-    evidence = run_encrypted_sqlite_backup_restore_drill(source, work, key)
+    evidence = run_encrypted_sqlite_backup_restore_drill(
+        source, work, key, require_trusted_key_source=False
+    )
     ciphertext = evidence.archive_path.read_bytes()
     if kind == "ciphertext":
         evidence.archive_path.write_bytes(bytes([ciphertext[0] ^ 1]) + ciphertext[1:])
@@ -203,7 +210,9 @@ def test_authentication_rejects_corruption(tmp_path: Path, kind: str) -> None:
     elif kind == "key":
         key = hashlib.sha256(b"W5 wrong independent test key").digest()
     with pytest.raises(BackupIntegrityTamperError):
-        verify_encrypted_sqlite_backup(evidence.archive_path, evidence.manifest_path, key)
+        verify_encrypted_sqlite_backup(
+            evidence.archive_path, evidence.manifest_path, key, require_trusted_key_source=False
+        )
 
 
 def test_injected_tamper_never_creates_restore(tmp_path: Path) -> None:
@@ -222,6 +231,7 @@ def test_injected_tamper_never_creates_restore(tmp_path: Path) -> None:
             work,
             hashlib.sha256(b"W5 independent fixed test key").digest(),
             inject_tamper_byte=True,
+            require_trusted_key_source=False,
         )
     assert not (work / "restored.sqlite").exists()
     assert not list(work.glob(".nexus-drill-*"))
@@ -287,8 +297,12 @@ def test_size_cap_empty_database_and_immutable_receipt(tmp_path: Path) -> None:
     with sqlite3.connect(source) as db:
         db.execute("CREATE TABLE data (value INTEGER)")
     with pytest.raises(ValueError, match="database size exceeds drill limit"):
-        run_encrypted_sqlite_backup_restore_drill(source, work, key, max_database_bytes=1)
-    evidence = run_encrypted_sqlite_backup_restore_drill(source, work, key)
+        run_encrypted_sqlite_backup_restore_drill(
+            source, work, key, max_database_bytes=1, require_trusted_key_source=False
+        )
+    evidence = run_encrypted_sqlite_backup_restore_drill(
+        source, work, key, require_trusted_key_source=False
+    )
     with pytest.raises(TypeError):
         evidence.row_counts["data"] = 10  # type: ignore[index]
     empty_source = tmp_path / "empty.sqlite"
@@ -297,9 +311,11 @@ def test_size_cap_empty_database_and_immutable_receipt(tmp_path: Path) -> None:
     with sqlite3.connect(empty_source):
         pass
     with pytest.raises(ValueError, match="source database has no user tables"):
-        run_encrypted_sqlite_backup_restore_drill(empty_source, empty_work, key)
+        run_encrypted_sqlite_backup_restore_drill(
+            empty_source, empty_work, key, require_trusted_key_source=False
+        )
     evidence = run_encrypted_sqlite_backup_restore_drill(
-        empty_source, empty_work, key, allow_empty_database=True
+        empty_source, empty_work, key, allow_empty_database=True, require_trusted_key_source=False
     )
     assert not evidence.row_counts
 
@@ -315,10 +331,12 @@ def test_explicit_remote_preflight_changes_evidence_only_after_validation(tmp_pa
     _source(source)
     key = hashlib.sha256(b"test-only key material").digest()
     with pytest.raises(BackupPreflightError):
-        run_encrypted_sqlite_backup_restore_drill(source, work, key, preflight_env={})
+        run_encrypted_sqlite_backup_restore_drill(
+            source, work, key, preflight_env={}, require_trusted_key_source=False
+        )
     assert not list(work.iterdir())
     evidence = run_encrypted_sqlite_backup_restore_drill(
-        source, work, key, preflight_env=b2_config()
+        source, work, key, preflight_env=b2_config(), require_trusted_key_source=False
     )
     assert evidence.status == "LOCAL_DRILL_VERIFIED_REMOTE_PREFLIGHT_OK"
 
@@ -372,8 +390,12 @@ def test_repeat_drills_publish_distinct_complete_generations(tmp_path: Path) -> 
     work.mkdir()
     _source(source)
     key = hashlib.sha256(b"repeatable test key").digest()
-    first = run_encrypted_sqlite_backup_restore_drill(source, work, key)
-    second = run_encrypted_sqlite_backup_restore_drill(source, work, key)
+    first = run_encrypted_sqlite_backup_restore_drill(
+        source, work, key, require_trusted_key_source=False
+    )
+    second = run_encrypted_sqlite_backup_restore_drill(
+        source, work, key, require_trusted_key_source=False
+    )
     assert first.archive_path.parent != second.archive_path.parent
     assert first.source_sha256 == second.source_sha256
     for receipt in (first, second):
@@ -394,7 +416,9 @@ def test_authentication_failure_publishes_no_generation(tmp_path: Path) -> None:
     _source(source)
     key = hashlib.sha256(b"repeatable test key").digest()
     with pytest.raises(BackupIntegrityTamperError):
-        run_encrypted_sqlite_backup_restore_drill(source, work, key, inject_tamper_byte=True)
+        run_encrypted_sqlite_backup_restore_drill(
+            source, work, key, inject_tamper_byte=True, require_trusted_key_source=False
+        )
     assert not list(work.iterdir())
 
 
@@ -412,11 +436,19 @@ def test_generated_key_and_hard_limit_before_io(tmp_path: Path) -> None:
     for limit in (0, -1, ABSOLUTE_MAX_DRILL_DATABASE_BYTES + 1, True):
         with pytest.raises(ValueError, match="max_database_bytes must be within"):
             run_encrypted_sqlite_backup_restore_drill(
-                tmp_path / "missing", tmp_path, key, max_database_bytes=limit
+                tmp_path / "missing",
+                tmp_path,
+                key,
+                max_database_bytes=limit,
+                require_trusted_key_source=False,
             )
         with pytest.raises(ValueError, match="max_database_bytes must be within"):
             verify_encrypted_sqlite_backup(
-                tmp_path / "missing", tmp_path / "missing2", key, max_database_bytes=limit
+                tmp_path / "missing",
+                tmp_path / "missing2",
+                key,
+                max_database_bytes=limit,
+                require_trusted_key_source=False,
             )
     assert not list(tmp_path.iterdir())
 
@@ -463,7 +495,7 @@ def test_real_sqlite_busy_times_out_without_publication(tmp_path: Path) -> None:
         started = time.monotonic()
         with pytest.raises(TimeoutError, match="sqlite backup timed out"):
             run_encrypted_sqlite_backup_restore_drill(
-                source, work, key, backup_timeout_seconds=0.05
+                source, work, key, backup_timeout_seconds=0.05, require_trusted_key_source=False
             )
         assert time.monotonic() - started < 2.0
         locker.rollback()
@@ -480,7 +512,9 @@ def test_work_directory_rejects_group_writable_permissions(tmp_path: Path) -> No
     work.chmod(0o770)
     _source(source)
     with pytest.raises(PermissionError, match="untrusted drill directory"):
-        run_encrypted_sqlite_backup_restore_drill(source, work, hashlib.sha256(b"key").digest())
+        run_encrypted_sqlite_backup_restore_drill(
+            source, work, hashlib.sha256(b"key").digest(), require_trusted_key_source=False
+        )
 
 
 def test_source_inode_replacement_during_backup_is_rejected(
@@ -511,7 +545,7 @@ def test_source_inode_replacement_during_backup_is_rejected(
     monkeypatch.setattr(time, "monotonic", swap_during_progress)
     with pytest.raises(ValueError, match="source database inode changed during drill"):
         drill.run_encrypted_sqlite_backup_restore_drill(
-            source, work, hashlib.sha256(b"key").digest()
+            source, work, hashlib.sha256(b"key").digest(), require_trusted_key_source=False
         )
     assert not list(work.iterdir())
 
@@ -569,7 +603,9 @@ def test_drill_archive_decrypts_with_independently_constructed_aad(tmp_path: Pat
     work.mkdir()
     _source(source)
     raw_key = hashlib.sha256(b"independent drill test key").digest()
-    evidence = run_encrypted_sqlite_backup_restore_drill(source, work, raw_key)
+    evidence = run_encrypted_sqlite_backup_restore_drill(
+        source, work, raw_key, require_trusted_key_source=False
+    )
     manifest_bytes = evidence.manifest_path.read_bytes()
     manifest = json.loads(manifest_bytes)
     aad = {
@@ -612,7 +648,9 @@ def test_authentication_rejects_every_mutated_aad_field(tmp_path: Path, field: s
     work.mkdir()
     _source(source)
     key = hashlib.sha256(b"distinct aad regression test key").digest()
-    evidence = run_encrypted_sqlite_backup_restore_drill(source, work, key)
+    evidence = run_encrypted_sqlite_backup_restore_drill(
+        source, work, key, require_trusted_key_source=False
+    )
     manifest = json.loads(evidence.manifest_path.read_bytes())
     if field == "nonce_hex":
         nonce = bytearray.fromhex(manifest[field])
@@ -624,7 +662,9 @@ def test_authentication_rejects_every_mutated_aad_field(tmp_path: Path, field: s
         manifest[field] = {"forged": 10}
     evidence.manifest_path.write_text(json.dumps(manifest))
     with pytest.raises(BackupIntegrityTamperError):
-        verify_encrypted_sqlite_backup(evidence.archive_path, evidence.manifest_path, key)
+        verify_encrypted_sqlite_backup(
+            evidence.archive_path, evidence.manifest_path, key, require_trusted_key_source=False
+        )
 
 
 def test_key_capabilities_strict_drill_and_redacted_receipts(tmp_path: Path) -> None:
@@ -669,7 +709,9 @@ def test_key_capabilities_strict_drill_and_redacted_receipts(tmp_path: Path) -> 
         from nexus_ai_agent.storage.encrypted_backup_drill import BackupIntegrityTamperError
 
         with pytest.raises(BackupIntegrityTamperError):
-            verify_encrypted_sqlite_backup(receipt.archive_path, receipt.manifest_path, key)
+            verify_encrypted_sqlite_backup(
+                receipt.archive_path, receipt.manifest_path, key, require_trusted_key_source=False
+            )
 
     for rejected in (random_key, BackupKeyMaterial.from_raw_bytes(random_key)):
         with pytest.raises(ValueError, match="trusted key material required"):
@@ -698,7 +740,9 @@ def test_verify_legacy_v1_drill_artifact(tmp_path: Path) -> None:
     work.mkdir()
     _source(source)
     key = hashlib.sha256(b"legacy compatibility test").digest()
-    receipt = run_encrypted_sqlite_backup_restore_drill(source, work, key)
+    receipt = run_encrypted_sqlite_backup_restore_drill(
+        source, work, key, require_trusted_key_source=False
+    )
     manifest = json.loads(receipt.manifest_path.read_text())
     manifest.pop("key_source")
     manifest.pop("key_fingerprint")
@@ -719,7 +763,9 @@ def test_verify_legacy_v1_drill_artifact(tmp_path: Path) -> None:
     manifest["auth_tag_hex"] = encrypted[-16:].hex()
     receipt.manifest_path.write_text(json.dumps(manifest))
     assert (
-        verify_encrypted_sqlite_backup(receipt.archive_path, receipt.manifest_path, key)
+        verify_encrypted_sqlite_backup(
+            receipt.archive_path, receipt.manifest_path, key, require_trusted_key_source=False
+        )
         == receipt.restored_path.read_bytes()
     )
 
@@ -751,3 +797,121 @@ def test_unattested_capability_cannot_be_upgraded_by_dataclass_replace(tmp_path:
         run_encrypted_sqlite_backup_restore_drill(
             source, work, forged, require_trusted_key_source=True
         )
+
+
+def test_preflight_requires_hostname_verification_unless_explicitly_opted_out() -> None:
+    config = b2_config()
+    config["NEXUS_DATABASE_URL"] = config["NEXUS_DATABASE_URL"].replace("verify-full", "verify-ca")
+    with pytest.raises(BackupPreflightError):
+        verify_production_backup_preflight(config)
+    assert verify_production_backup_preflight(config, allow_verify_ca=True) == (
+        "REMOTE_CONFIGURATION_VALIDATED"
+    )
+    with pytest.raises(BackupPreflightError):
+        verify_production_backup_preflight(config, allow_verify_ca=1)  # type: ignore[arg-type]
+    config["NEXUS_DATABASE_URL"] += "&sslmode=verify-full"
+    with pytest.raises(BackupPreflightError):
+        verify_production_backup_preflight(config, allow_verify_ca=True)
+
+
+def test_raw_key_requires_explicit_legacy_opt_in(tmp_path: Path) -> None:
+    import secrets
+
+    from nexus_ai_agent.storage.encrypted_backup_drill import (
+        run_encrypted_sqlite_backup_restore_drill,
+        verify_encrypted_sqlite_backup,
+    )
+
+    source, work = tmp_path / "source.sqlite", tmp_path / "work"
+    work.mkdir()
+    _source(source)
+    key = secrets.token_bytes(32)
+    with pytest.raises(ValueError, match="trusted key material required"):
+        run_encrypted_sqlite_backup_restore_drill(source, work, key)
+    assert not list(work.iterdir())
+    receipt = run_encrypted_sqlite_backup_restore_drill(
+        source, work, key, require_trusted_key_source=False
+    )
+    with pytest.raises(ValueError, match="trusted key material required"):
+        verify_encrypted_sqlite_backup(receipt.archive_path, receipt.manifest_path, key)
+    assert (
+        verify_encrypted_sqlite_backup(
+            receipt.archive_path, receipt.manifest_path, key, require_trusted_key_source=False
+        )
+        == receipt.restored_path.read_bytes()
+    )
+
+
+def test_encryption_canaries_nondeterminism_and_authenticated_tamper(tmp_path: Path) -> None:
+    import json
+    import sqlite3
+    import traceback
+
+    from nexus_ai_agent.storage.encrypted_backup_drill import (
+        BackupIntegrityTamperError,
+        BackupKeyMaterial,
+        run_encrypted_sqlite_backup_restore_drill,
+        verify_encrypted_sqlite_backup,
+    )
+
+    source, work = tmp_path / "source.sqlite", tmp_path / "work"
+    work.mkdir()
+    canary = "کاناری-محرمانه-多字节-🔒"
+    with sqlite3.connect(source) as db:
+        db.execute('CREATE TABLE "confidential_canary_table" ("private_canary_column" TEXT)')
+        db.execute('INSERT INTO "confidential_canary_table" VALUES (?)', (canary,))
+    keys = (BackupKeyMaterial.generate(), BackupKeyMaterial.generate())
+    receipts = [run_encrypted_sqlite_backup_restore_drill(source, work, key) for key in keys]
+    archives = [receipt.archive_path.read_bytes() for receipt in receipts]
+    manifests = [json.loads(receipt.manifest_path.read_text()) for receipt in receipts]
+    for archive in archives:
+        for plaintext in (canary.encode(), b"confidential_canary_table", b"private_canary_column"):
+            assert plaintext not in archive
+    assert manifests[0]["nonce_hex"] != manifests[1]["nonce_hex"]
+    assert archives[0] != archives[1]
+    first = receipts[0]
+    assert verify_encrypted_sqlite_backup(first.archive_path, first.manifest_path, keys[0]) == (
+        first.restored_path.read_bytes()
+    )
+    first.archive_path.write_bytes(bytes([archives[0][0] ^ 1]) + archives[0][1:])
+    with pytest.raises(BackupIntegrityTamperError):
+        verify_encrypted_sqlite_backup(first.archive_path, first.manifest_path, keys[0])
+    first.archive_path.write_bytes(archives[0])
+    manifests[0]["source_sha256"] = "a" * 64
+    first.manifest_path.write_text(json.dumps(manifests[0]))
+    with pytest.raises(BackupIntegrityTamperError) as error:
+        verify_encrypted_sqlite_backup(first.archive_path, first.manifest_path, keys[0])
+    assert error.value.__cause__ is None and error.value.__context__ is None
+    assert canary not in "".join(traceback.format_exception(error.value))
+
+
+def test_decrypt_exception_chain_cannot_expose_sensitive_exception(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import traceback
+
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+    from nexus_ai_agent.storage.encrypted_backup_drill import (
+        BackupIntegrityTamperError,
+        BackupKeyMaterial,
+        run_encrypted_sqlite_backup_restore_drill,
+        verify_encrypted_sqlite_backup,
+    )
+
+    source, work = tmp_path / "source.sqlite", tmp_path / "work"
+    work.mkdir()
+    _source(source)
+    key = BackupKeyMaterial.generate()
+    receipt = run_encrypted_sqlite_backup_restore_drill(source, work, key)
+    sensitive = "do-not-leak-decrypt-plaintext-or-secret"
+
+    def fail(*_args: object, **_kwargs: object) -> bytes:
+        raise ValueError(sensitive)
+
+    monkeypatch.setattr(AESGCM, "decrypt", fail)
+    with pytest.raises(BackupIntegrityTamperError) as error:
+        verify_encrypted_sqlite_backup(receipt.archive_path, receipt.manifest_path, key)
+    assert error.value.__cause__ is None
+    assert error.value.__context__ is None
+    assert sensitive not in "".join(traceback.format_exception(error.value))

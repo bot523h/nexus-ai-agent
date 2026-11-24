@@ -837,3 +837,62 @@ def test_cancelled_publication_acquisition_cleans_up_after_event_loop_closes(
     assert (tmp_path / staging).read_bytes() == b"payload"
     with asset_admission_lock(tmp_path, exclusive=True, timeout_seconds=0.5):
         pass
+
+
+@pytest.mark.asyncio
+async def test_cancel_between_admission_and_worker_dispatch_is_fenced(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import asyncio
+    import threading
+
+    from nexus_ai_agent.creative.assets.admission import asset_admission_lock
+
+    store = LocalContentAddressedBlobStore(tmp_path)
+    staging, digest, size = store.stage(io.BytesIO(b"inverse cancellation"), max_bytes=100)
+    key = store.blob_key_for(digest)
+    started, release = threading.Event(), threading.Event()
+    original_store = store.store
+    loop = asyncio.get_running_loop()
+    original_dispatch = loop.run_in_executor
+
+    def paused_store(staging_key: str, blob_key: str) -> tuple[str, int, bool]:
+        started.set()
+        if not release.wait(5):
+            raise TimeoutError("test did not release worker")
+        return original_store(staging_key, blob_key)
+
+    def cancel_before_dispatch(pool: object, fn: object, *args: object):
+        if getattr(fn, "__name__", "") == "publish":
+            current = asyncio.current_task()
+            assert current is not None
+            current.cancel()
+        return original_dispatch(pool, fn, *args)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(store, "store", paused_store)
+    monkeypatch.setattr(loop, "run_in_executor", cancel_before_dispatch)
+    task = asyncio.create_task(store.publish_from_staging_async(staging, key))
+    try:
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert await asyncio.to_thread(started.wait, 5)
+        import nexus_ai_agent.creative.assets.blob_store as blob_module
+
+        with blob_module._IN_FLIGHT_LOCK:
+            finished = blob_module._IN_FLIGHT_PUBLICATIONS[(store._fs.root, staging)][0][0]
+
+        def attempt_exclusive() -> None:
+            with asset_admission_lock(tmp_path, exclusive=True, timeout_seconds=0.1):
+                pytest.fail("worker still holds shared admission")
+
+        with pytest.raises(TimeoutError):
+            await asyncio.to_thread(attempt_exclusive)
+        assert (tmp_path / staging).exists()
+    finally:
+        release.set()
+    assert await asyncio.to_thread(finished.wait, 5)
+    assert staging not in store.in_flight_staging_keys()
+    assert not (tmp_path / staging).exists()
+    assert store.verify(key, sha256=digest, size_bytes=size)
+    with asset_admission_lock(tmp_path, exclusive=True, timeout_seconds=0.5):
+        pass

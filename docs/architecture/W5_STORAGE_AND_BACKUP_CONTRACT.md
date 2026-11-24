@@ -35,8 +35,9 @@ not remote connectivity or a remote backup. With no preflight the receipt says
 
 The caller must supply an independently CSPRNG-generated 256-bit key. Simple
 pattern rejection is not an entropy estimator. A factory-issued key wrapper can
-label OS-CSPRNG or environment inputs; opt-in strict mode rejects raw or
-unattested keys. Environment provenance does not prove how a secret was generated.
+label OS-CSPRNG or environment inputs; strict mode is the default and rejects raw
+or unattested keys. Legacy callers must explicitly opt out. Environment provenance
+does not prove how a secret was generated.
 The wrapper binds the label and bytes with a process-local authenticator to reject
 accidental relabeling via dataclass replacement. Neither Python-private values nor
 that authenticator provide isolation against code in the same interpreter; key
@@ -58,8 +59,9 @@ The encrypted drill is not wired into the production maintenance scheduler.
 The separate structural preflight now gates non-dry-run remote backup and
 remote restore before provider construction and I/O. Local restore does not
 require cloud settings. SQLite source is accepted only when the canonical
-backend policy permits it; configured PostgreSQL URLs must pass TLS checks.
-A valid preflight is configuration evidence, not remote backup verification.
+backend policy permits it; configured PostgreSQL URLs must pass TLS checks. PostgreSQL defaults to
+`sslmode=verify-full`; `verify-ca` requires an explicit preflight opt-out and does
+not verify host identity. A valid preflight is configuration evidence, not remote backup verification.
 Checks of
 source-directory permissions and pre/post inode identity detect some path
 replacements, but a swap-and-restore between checks remains possible. The
