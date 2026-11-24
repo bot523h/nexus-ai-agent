@@ -315,14 +315,28 @@ def _upload_actionable(
         from dataclasses import replace
 
         failure = exc.failure
+        # The provider controls every field of its exception, including supposedly
+        # actionable text. Retain only a recognized category and a boolean flag.
+        categories = {
+            "credentials",
+            "bucket",
+            "key",
+            "permission",
+            "network",
+            "transient",
+            "integrity",
+            "config",
+            "unknown",
+        }
+        category = failure.category if failure.category in categories else "unknown"
         exc.failure = replace(
             failure,
-            why=f"storage provider reported a {failure.category} failure",
-            operator_action=(
-                "capture the job log and classify manually"
-                if failure.category == "unknown"
-                else failure.operator_action
-            ),
+            what="upload",
+            where=key,
+            category=category,
+            retryable=failure.retryable if type(failure.retryable) is bool else False,
+            why=f"storage provider reported a {category} failure",
+            operator_action="review storage configuration and classify the failure before retrying",
         )
         scrub_exception_chain(exc)
         exc.args = (exc.failure.render(),)
