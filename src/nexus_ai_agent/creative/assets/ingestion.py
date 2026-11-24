@@ -23,6 +23,7 @@ import uuid
 from dataclasses import dataclass
 from enum import Enum
 
+from nexus_ai_agent.creative.assets.admission import AdmissionLease
 from nexus_ai_agent.creative.assets.errors import (
     BlobStoreError,
     ContentIntegrityError,
@@ -68,6 +69,7 @@ async def publish_and_commit(
     media_kind: MediaKind,
     media_type: str,
     original_filename: str = "",
+    admission_lease: AdmissionLease | None = None,
 ) -> tuple[str, str, bool]:
     """Publish staged bytes, verify them, and write the metadata graph.
 
@@ -76,9 +78,14 @@ async def publish_and_commit(
     happens once, after it returns.
     """
     blob_key = blob_store.blob_key_for(content_sha256)
-    measured_sha, measured_size, deduplicated = await blob_store.publish_from_staging_async(
-        staging_key, blob_key
-    )
+    if admission_lease is None:
+        measured_sha, measured_size, deduplicated = await blob_store.publish_from_staging_async(
+            staging_key, blob_key
+        )
+    else:
+        measured_sha, measured_size, deduplicated = await blob_store.publish_from_staging_async(
+            staging_key, blob_key, admission_lease=admission_lease
+        )
     if (measured_sha, measured_size) != (content_sha256, size_bytes):
         raise ContentIntegrityError("published bytes do not match the staged identity")
     if not await asyncio.to_thread(
@@ -123,6 +130,8 @@ async def reconcile_ingest(
     repo: AssetRepository,
     blob_store: BlobStore,
     ingest: IngestRecord,
+    *,
+    admission_lease: AdmissionLease | None = None,
 ) -> IngestRecoveryReport:
     """Complete or fail exactly one interrupted ingest.  Never invents success."""
     if ingest.state is IngestState.READY:
@@ -218,6 +227,7 @@ async def reconcile_ingest(
                 media_kind=media_kind,
                 media_type=media_type,
                 original_filename=ingest.original_filename,
+                admission_lease=admission_lease,
             )
             return IngestRecoveryReport(
                 ingest.ingest_id, IngestState.READY, RecoveryOutcome.COMPLETED

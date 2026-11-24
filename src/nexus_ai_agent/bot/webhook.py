@@ -164,7 +164,22 @@ async def _serve_webhook(
         initialization_attempted = True
         await application.initialize()
         initialized = True
-        job_queue = getattr(application, "bot_data", {}).get("job_queue")
+        bot_data = getattr(application, "bot_data", {})
+        asset_service = bot_data.get("asset_library_service")
+        settings = get_settings()
+        asset_root = bot_data.get("asset_library_root")
+        asset_db = bot_data.get("asset_library_db_path")
+        if asset_root is None:
+            asset_root = settings.asset_library_root
+        if asset_db is None:
+            asset_db = settings.asset_library_db_path
+        if asset_service is not None or asset_root is not None or asset_db is not None:
+            from nexus_ai_agent.creative.assets.service import reconcile_configured_asset_library
+
+            bot_data["asset_library_startup_report"] = await reconcile_configured_asset_library(
+                service=asset_service, root=asset_root, db_path=asset_db
+            )
+        job_queue = bot_data.get("job_queue")
         if job_queue is not None:
             # task-283: webhook mode must obey the same ownership contract as
             # polling mode.  ``post_init`` normally already acquired the lock

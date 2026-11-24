@@ -30,11 +30,14 @@ import uuid
 import weakref
 from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager
+from dataclasses import dataclass
+from pathlib import Path
 from typing import BinaryIO
 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from nexus_ai_agent.creative.assets.admission import AdmissionLease, async_asset_admission_lock
 from nexus_ai_agent.creative.assets.blob_store import LocalContentAddressedBlobStore
 from nexus_ai_agent.creative.assets.errors import (
     AssetNotFound,
@@ -465,17 +468,21 @@ class AssetLibraryService:
         return self._blob_store.open(version.blob_key)
 
     # -- recovery ------------------------------------------------------- #
-    async def recover_ingest(self, ingest_id: str) -> IngestRecoveryReport:
-        async with self._blob_store.admission():
-            return await self._recover_ingest_admitted(ingest_id)
+    async def recover_ingest(
+        self, ingest_id: str, *, lease: AdmissionLease | None = None
+    ) -> IngestRecoveryReport:
+        async with self._blob_store.admission(admission_lease=lease):
+            return await self._recover_ingest_admitted(ingest_id, lease=lease)
 
-    async def _recover_ingest_admitted(self, ingest_id: str) -> IngestRecoveryReport:
+    async def _recover_ingest_admitted(
+        self, ingest_id: str, *, lease: AdmissionLease | None = None
+    ) -> IngestRecoveryReport:
         async with self._session_factory() as session:
             repo = SqlAssetRepository(session)
             record = await repo.get_ingest(ingest_id)
             if record is None:
                 raise IngestNotFound(ingest_id)
-            return await self._reconcile_committing(session, repo, record)
+            return await self._reconcile_committing(session, repo, record, lease=lease)
 
     async def _reconcile_committing(
         self,
@@ -484,6 +491,7 @@ class AssetLibraryService:
         record: IngestRecord,
         *,
         owned_staging_key: str | None = None,
+        lease: AdmissionLease | None = None,
     ) -> IngestRecoveryReport:
         """Reconcile one ingest and commit; if a concurrent actor won, report theirs.
 
@@ -493,7 +501,7 @@ class AssetLibraryService:
         a loser can neither duplicate the asset nor downgrade a READY ingest.
         """
         try:
-            report = await reconcile_ingest(repo, self._blob_store, record)
+            report = await reconcile_ingest(repo, self._blob_store, record, admission_lease=lease)
             await session.commit()
             return report
         except (IngestAlreadyResolved, BlobStoreError) as exc:
@@ -508,7 +516,7 @@ class AssetLibraryService:
             if owned_staging_key is not None:
                 # This call adopted its own replay as the staged original, then lost
                 # the race: that file is referenced by no row any more.
-                self._blob_store.remove_staging(owned_staging_key)
+                self._blob_store.remove_staging(owned_staging_key, admission_lease=lease)
             assert winner is not None
             if winner.state is IngestState.READY:
                 return IngestRecoveryReport(
@@ -518,12 +526,16 @@ class AssetLibraryService:
                 winner.ingest_id, winner.state, RecoveryOutcome.FAILED, "resolved concurrently"
             )
 
-    async def recover_all(self) -> list[IngestRecoveryReport]:
+    async def recover_all(
+        self, *, lease: AdmissionLease | None = None
+    ) -> list[IngestRecoveryReport]:
         """Reconcile every durable STAGING ingest; never invents success."""
-        async with self._blob_store.admission():
-            return await self._recover_all_admitted()
+        async with self._blob_store.admission(admission_lease=lease):
+            return await self._recover_all_admitted(lease=lease)
 
-    async def _recover_all_admitted(self) -> list[IngestRecoveryReport]:
+    async def _recover_all_admitted(
+        self, *, lease: AdmissionLease | None = None
+    ) -> list[IngestRecoveryReport]:
         async with self._session_factory() as session:
             repo = SqlAssetRepository(session)
             pending = await repo.list_pending_ingests()
@@ -531,12 +543,99 @@ class AssetLibraryService:
             for record in pending:
                 # One commit per ingest: a lost race on one record must not roll
                 # back the progress already made on the others.
-                reports.append(await self._reconcile_committing(session, repo, record))
+                reports.append(await self._reconcile_committing(session, repo, record, lease=lease))
             return reports
+
+
+@dataclass(frozen=True)
+class StartupReconciliationReport:
+    recovered_asset_ids: tuple[str, ...]
+    swept_staging_keys: tuple[str, ...]
+    active_staging_keys_count: int
+
+
+async def async_reconcile_asset_library_startup(
+    service: AssetLibraryService, *, max_sweep_items: int = 100
+) -> StartupReconciliationReport:
+    """Recover, snapshot and sweep under one cooperative exclusive lock."""
+    if type(max_sweep_items) is not int or max_sweep_items < 1:
+        raise ValueError("max_sweep_items must be a positive integer")
+    store = service._blob_store
+    if not isinstance(store, LocalContentAddressedBlobStore):
+        raise TypeError("startup reconciliation requires a local blob store")
+    async with async_asset_admission_lock(store._fs.root, exclusive=True) as lease:
+        reports = await service.recover_all(lease=lease)
+        async with service._session_factory() as session:
+            repo = SqlAssetRepository(session)
+            pending = await repo.list_pending_ingests()
+            active = frozenset(row.staging_key for row in pending if row.staging_key is not None)
+            recovered_ids: list[str] = []
+            for report in reports:
+                if report.outcome is RecoveryOutcome.COMPLETED:
+                    record = await repo.get_ingest(report.ingest_id)
+                    if record is None or record.asset_id is None:
+                        raise RecoveryError("recovered ingest is missing its asset identity")
+                    recovered_ids.append(record.asset_id)
+        swept = store.cleanup_orphaned_staging_keys(
+            active_staging_keys=active, admission_lease=lease, max_entries=max_sweep_items
+        )
+        return StartupReconciliationReport(tuple(recovered_ids), swept, len(active))
+
+
+async def reconcile_configured_asset_library(
+    *,
+    service: AssetLibraryService | None = None,
+    root: str | Path | None = None,
+    db_path: str | Path | None = None,
+) -> StartupReconciliationReport | None:
+    """Reconcile an explicitly configured library, or no-op if unconfigured.
+
+    A partial path configuration fails closed. The database must already exist:
+    silently creating an empty replacement could make active staging look orphaned.
+    """
+    if service is None:
+        if root is None and db_path is None:
+            return None
+        if root is None or db_path is None or not str(root).strip() or not str(db_path).strip():
+            raise ValueError("asset library root and database path must both be configured")
+        database = Path(db_path).expanduser().absolute()
+
+        from nexus_ai_agent.storage.asset_startup import check_asset_database
+
+        await asyncio.to_thread(check_asset_database, database)
+
+        class RecoveryOnlyAuthorizer:
+            def require(
+                self, actor_kind: str, actor_id: str, project_id: str, permission: str
+            ) -> None:
+                raise PermissionError("recovery-only asset service")
+
+        service = AssetLibraryService(
+            blob_store=LocalContentAddressedBlobStore(root),
+            authorizer=RecoveryOnlyAuthorizer(),
+            session_factory=lambda: get_session(str(database)),
+        )
+    return await async_reconcile_asset_library_startup(service)
+
+
+def reconcile_asset_library_startup(
+    service: AssetLibraryService, *, max_sweep_items: int = 100
+) -> StartupReconciliationReport:
+    """Synchronous entry point; async callers use the async variant."""
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(
+            async_reconcile_asset_library_startup(service, max_sweep_items=max_sweep_items)
+        )
+    raise RuntimeError("use async_reconcile_asset_library_startup in an event loop")
 
 
 __all__ = [
     "AssetLibraryService",
+    "StartupReconciliationReport",
+    "async_reconcile_asset_library_startup",
+    "reconcile_asset_library_startup",
     "LocalContentAddressedBlobStore",
     "PERMISSION_READ",
     "PERMISSION_WRITE",

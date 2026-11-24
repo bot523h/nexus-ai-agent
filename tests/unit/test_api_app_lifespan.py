@@ -163,3 +163,26 @@ async def test_app_is_built_with_the_owning_lifespan(
         assert queue.calls == ["acquire", "resume"]
 
     assert queue.calls == ["acquire", "resume", "shutdown"]
+
+
+async def test_lifespan_runs_configured_asset_reconciliation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from nexus_ai_agent.creative.assets import service as assets
+
+    queue = _RecordingQueue()
+    _use_queue(monkeypatch, queue)
+    service = object()
+    report = object()
+    seen: list[object] = []
+
+    async def reconcile(value: object) -> object:
+        assert queue.calls == ["acquire"]
+        seen.append(value)
+        return report
+
+    monkeypatch.setattr(assets, "async_reconcile_asset_library_startup", reconcile)
+    monkeypatch.setattr(api_app_module.app.state, "asset_library_service", service, raising=False)
+    async with api_app_module._api_lifespan(api_app_module.app):
+        assert seen == [service]
+        assert api_app_module.app.state.asset_library_startup_report is report

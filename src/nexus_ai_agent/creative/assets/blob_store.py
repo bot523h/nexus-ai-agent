@@ -78,10 +78,15 @@ class LocalContentAddressedBlobStore:
         finally:
             os.close(stage_fd)
 
-    def admission(self) -> AbstractAsyncContextManager[AdmissionLease]:
+    def admission(
+        self, *, admission_lease: AdmissionLease | None = None
+    ) -> AbstractAsyncContextManager[AdmissionLease]:
         """Hold shared admission for the surrounding async transaction."""
         return async_asset_admission_lock(
-            self._fs.root, exclusive=False, timeout_seconds=self._admission_timeout_seconds
+            self._fs.root,
+            exclusive=False,
+            timeout_seconds=self._admission_timeout_seconds,
+            admission_lease=admission_lease,
         )
 
     @staticmethod
@@ -205,6 +210,21 @@ class LocalContentAddressedBlobStore:
         admission_lease: AdmissionLease,
         max_entries: int = 100,
     ) -> int:
+        return len(
+            self.cleanup_orphaned_staging_keys(
+                active_staging_keys=active_staging_keys,
+                admission_lease=admission_lease,
+                max_entries=max_entries,
+            )
+        )
+
+    def cleanup_orphaned_staging_keys(
+        self,
+        *,
+        active_staging_keys: set[str] | frozenset[str],
+        admission_lease: AdmissionLease,
+        max_entries: int = 100,
+    ) -> tuple[str, ...]:
         """Retry marked removals using a caller-supplied, authoritative active set.
 
         Caller must fence new ingest/recovery work while collecting and using the
@@ -216,10 +236,10 @@ class LocalContentAddressedBlobStore:
         if type(max_entries) is not int or max_entries < 1:
             raise ValueError("max_entries must be a positive integer")
         parent = self._fs._open_dir((_STAGING_PREFIX,))
-        removed = 0
+        removed: list[str] = []
         try:
             for marker in sorted(os.listdir(parent)):
-                if removed >= max_entries:
+                if len(removed) >= max_entries:
                     break
                 if not marker.startswith(".cleanup-") or len(marker) != 73:
                     continue
@@ -258,10 +278,10 @@ class LocalContentAddressedBlobStore:
                     os.fsync(parent)
                     with self._cleanup_lock:
                         self._pending_staging_cleanups.discard(key)
-                    removed += 1
+                    removed.append(key)
                 except (OSError, FilesystemBoundaryError, UnicodeError):
                     continue
-            return removed
+            return tuple(removed)
         finally:
             os.close(parent)
 
@@ -306,7 +326,7 @@ class LocalContentAddressedBlobStore:
         return await self.publish_from_staging_async(staging_key, blob_key)
 
     async def publish_from_staging_async(
-        self, staging_key: str, blob_key: str
+        self, staging_key: str, blob_key: str, *, admission_lease: AdmissionLease | None = None
     ) -> tuple[str, int, bool]:
         """Track the worker until it actually finishes, including after cancellation.
 
@@ -325,6 +345,46 @@ class LocalContentAddressedBlobStore:
                 if not entries:
                     del _IN_FLIGHT_PUBLICATIONS[identity]
                 completed.set()
+
+        if admission_lease is not None:
+            try:
+                if type(admission_lease) is not AdmissionLease:
+                    raise PermissionError("invalid asset admission lease")
+                admission_lease.validate_for(self._fs.root)
+                pinned_scope = admission_lease.pin_for_worker()
+                pinned = pinned_scope.__enter__()
+            except BaseException:
+                finish()
+                raise
+
+            def publish_pinned() -> tuple[str, int, bool]:
+                try:
+                    return self.store(staging_key, blob_key, admission_lease=pinned)
+                finally:
+                    try:
+                        pinned_scope.__exit__(None, None, None)
+                    finally:
+                        finish()
+
+            try:
+                future = asyncio.get_running_loop().run_in_executor(None, publish_pinned)
+            except BaseException:
+                try:
+                    pinned_scope.__exit__(None, None, None)
+                finally:
+                    finish()
+                raise
+
+            def consume_pinned(done: asyncio.Future[tuple[str, int, bool]]) -> None:
+                if not done.cancelled():
+                    done.exception()
+
+            future.add_done_callback(consume_pinned)
+            try:
+                return await asyncio.shield(future)
+            except asyncio.CancelledError:
+                detached.set()
+                raise
 
         # Acquire before submitting the publication worker.  Otherwise an
         # executor-queued worker can outlive a cancelled caller without owning

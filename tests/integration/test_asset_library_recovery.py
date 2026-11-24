@@ -11,19 +11,25 @@ and recovery never invents success.
 from __future__ import annotations
 
 import io
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from collections.abc import AsyncIterator, Callable, Coroutine
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import Table, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nexus_ai_agent.creative.assets.authz import GrantTableAuthorizer, StudioAuthorizationSeam
 from nexus_ai_agent.creative.assets.blob_store import LocalContentAddressedBlobStore
 from nexus_ai_agent.creative.assets.errors import IngestNotFound
 from nexus_ai_agent.creative.assets.ingestion import RecoveryOutcome
-from nexus_ai_agent.creative.assets.models import IngestRequest, IngestState
+from nexus_ai_agent.creative.assets.models import (
+    IngestRecord,
+    IngestRequest,
+    IngestResult,
+    IngestState,
+)
 from nexus_ai_agent.creative.assets.service import AssetLibraryService
 from nexus_ai_agent.storage import models as orm
 from nexus_ai_agent.storage.db import get_session
@@ -39,7 +45,7 @@ def _authorizer() -> StudioAuthorizationSeam:
     )
 
 
-def _session_factory(db_path: Path):
+def _session_factory(db_path: Path) -> Callable[[], AbstractAsyncContextManager[AsyncSession]]:
     @asynccontextmanager
     async def factory() -> AsyncIterator[AsyncSession]:
         async with get_session(str(db_path)) as session:
@@ -63,12 +69,13 @@ def _service(tmp_path: Path, *, fault: str | None = None) -> AssetLibraryService
 
 async def _only_ingest(tmp_path: Path) -> orm.AssetIngest:
     async with get_session(str(tmp_path / "library.sqlite")) as session:
+        table = cast(Table, orm.AssetIngest.__table__)  # type: ignore[attr-defined]
         row = (
-            (await session.execute(select(orm.AssetIngest).order_by(orm.AssetIngest.created_at)))
+            (await session.execute(select(orm.AssetIngest).order_by(table.c.created_at)))
             .scalars()
             .one()
         )
-        return row
+        return cast(orm.AssetIngest, row)
 
 
 async def _counts(tmp_path: Path) -> tuple[int, int, int]:
@@ -83,7 +90,7 @@ async def _counts(tmp_path: Path) -> tuple[int, int, int]:
         return assets, versions, links
 
 
-def _ingest(service: AssetLibraryService, key: str = "k"):
+def _ingest(service: AssetLibraryService, key: str = "k") -> Coroutine[Any, Any, IngestResult]:
     return service.ingest(
         actor_kind="user",
         actor_id=ACTOR,
@@ -265,7 +272,7 @@ async def test_cancelled_worker_finishes_then_restart_recovers_without_false_rea
         release.set()
         assert await asyncio.to_thread(finished.wait, 5)
 
-    assert row.content_sha256 is not None
+    assert row.content_sha256 is not None and row.size_bytes is not None
     assert store.verify(
         store.blob_key_for(row.content_sha256),
         sha256=row.content_sha256,
@@ -380,8 +387,9 @@ async def test_ingest_transaction_fences_other_process_until_sigkill(tmp_path: P
 
     program = r"""
 import asyncio, io, sys
-from contextlib import asynccontextmanager
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from pathlib import Path
+from typing import Any, cast
 from nexus_ai_agent.creative.assets.authz import GrantTableAuthorizer, StudioAuthorizationSeam
 from nexus_ai_agent.creative.assets.blob_store import LocalContentAddressedBlobStore
 from nexus_ai_agent.creative.assets.models import IngestRequest
@@ -442,3 +450,230 @@ asyncio.run(service.ingest(
         if process.poll() is None:
             process.kill()
         await asyncio.to_thread(process.communicate, timeout=5)
+
+
+@pytest.mark.asyncio
+async def test_recover_all_reuses_exclusive_lease_without_deadlock(tmp_path: Path) -> None:
+    import asyncio
+
+    from nexus_ai_agent.creative.assets.admission import async_asset_admission_lock
+
+    with pytest.raises(RuntimeError, match="injected crash"):
+        await _ingest(_service(tmp_path, fault="after_stage"))
+    restarted = _service(tmp_path)
+    async with async_asset_admission_lock(tmp_path / "blobs", exclusive=True) as lease:
+        reports = await asyncio.wait_for(restarted.recover_all(lease=lease), timeout=5)
+        assert [report.outcome for report in reports] == [RecoveryOutcome.COMPLETED]
+        assert lease.is_active
+        assert await _counts(tmp_path) == (1, 1, 1)
+    assert not lease.is_active
+
+
+@pytest.mark.asyncio
+async def test_cancelled_exclusive_recovery_keeps_kernel_lock_until_worker_finishes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import asyncio
+    import threading
+
+    from nexus_ai_agent.creative.assets.admission import (
+        asset_admission_lock,
+        async_asset_admission_lock,
+    )
+
+    interrupted = _service(tmp_path)
+
+    async def crash_after_tx2(staging_key: str, blob_key: str) -> tuple[str, int, bool]:
+        raise RuntimeError("injected crash after tx2")
+
+    monkeypatch.setattr(interrupted._blob_store, "publish_from_staging_async", crash_after_tx2)
+    with pytest.raises(RuntimeError, match="injected crash"):
+        await _ingest(interrupted)
+    row = await _only_ingest(tmp_path)
+    assert row.staging_key and row.content_sha256
+    restarted = _service(tmp_path)
+    store = restarted._blob_store
+    assert isinstance(store, LocalContentAddressedBlobStore)
+    original = store._store_admitted
+    started, release = threading.Event(), threading.Event()
+
+    def slow(staging_key: str, blob_key: str) -> tuple[str, int, bool]:
+        started.set()
+        if not release.wait(5):
+            raise TimeoutError("recovery worker not released")
+        return original(staging_key, blob_key)
+
+    monkeypatch.setattr(store, "_store_admitted", slow)
+
+    async def recover() -> None:
+        async with async_asset_admission_lock(tmp_path / "blobs", exclusive=True) as lease:
+            await restarted.recover_all(lease=lease)
+
+    task = asyncio.create_task(recover())
+    try:
+        assert await asyncio.to_thread(started.wait, 5)
+        import nexus_ai_agent.creative.assets.blob_store as blob_module
+
+        with blob_module._IN_FLIGHT_LOCK:
+            finished = blob_module._IN_FLIGHT_PUBLICATIONS[(store._fs.root, row.staging_key)][0][0]
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        def attempt_exclusive() -> None:
+            with asset_admission_lock(tmp_path / "blobs", exclusive=True, timeout_seconds=0.1):
+                pytest.fail("cancelled worker still owns the lock")
+
+        with pytest.raises(TimeoutError):
+            await asyncio.to_thread(attempt_exclusive)
+        assert (tmp_path / "blobs" / row.staging_key).exists()
+    finally:
+        release.set()
+    assert await asyncio.to_thread(finished.wait, 5)
+    with asset_admission_lock(tmp_path / "blobs", exclusive=True, timeout_seconds=1):
+        pass
+    report = await _service(tmp_path).recover_ingest(row.ingest_id)
+    assert report.outcome is RecoveryOutcome.COMPLETED
+    assert await _counts(tmp_path) == (1, 1, 1)
+
+
+@pytest.mark.asyncio
+async def test_startup_recovers_tx2_and_sweeps_marked_orphan(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import asyncio
+
+    from nexus_ai_agent.creative.assets.service import async_reconcile_asset_library_startup
+
+    interrupted = _service(tmp_path)
+
+    async def crash(staging_key: str, blob_key: str) -> tuple[str, int, bool]:
+        raise RuntimeError("injected crash")
+
+    monkeypatch.setattr(interrupted._blob_store, "publish_from_staging_async", crash)
+    with pytest.raises(RuntimeError, match="injected crash"):
+        await _ingest(interrupted)
+    restarted = _service(tmp_path)
+    store = restarted._blob_store
+    assert isinstance(store, LocalContentAddressedBlobStore)
+    orphan = store.new_staging_key()
+    store.stage_to(orphan, io.BytesIO(PNG), max_bytes=1024)
+    store._record_cleanup_marker(orphan)
+    report = await asyncio.wait_for(async_reconcile_asset_library_startup(restarted), 5)
+    assert len(report.recovered_asset_ids) == 1
+    assert report.swept_staging_keys == (orphan,)
+    assert report.active_staging_keys_count == 0
+    assert not (tmp_path / "blobs" / orphan).exists()
+    assert await _counts(tmp_path) == (1, 1, 1)
+
+
+@pytest.mark.asyncio
+async def test_startup_snapshot_failure_never_sweeps(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from nexus_ai_agent.creative.assets.repository import SqlAssetRepository
+    from nexus_ai_agent.creative.assets.service import async_reconcile_asset_library_startup
+
+    service = _service(tmp_path)
+    store = service._blob_store
+    assert isinstance(store, LocalContentAddressedBlobStore)
+    orphan = store.new_staging_key()
+    store.stage_to(orphan, io.BytesIO(PNG), max_bytes=1024)
+    store._record_cleanup_marker(orphan)
+    original = SqlAssetRepository.list_pending_ingests
+    calls = 0
+
+    async def fail_snapshot(repo: SqlAssetRepository) -> list[IngestRecord]:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise RuntimeError("snapshot failure")
+        return await original(repo)
+
+    monkeypatch.setattr(SqlAssetRepository, "list_pending_ingests", fail_snapshot)
+    with pytest.raises(RuntimeError, match="snapshot failure"):
+        await async_reconcile_asset_library_startup(service)
+    assert (tmp_path / "blobs" / orphan).exists()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("configuration", ["service", "paths"])
+async def test_api_lifespan_reconciles_real_library(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, configuration: str
+) -> None:
+    from types import SimpleNamespace
+
+    from fastapi import FastAPI
+
+    import nexus_ai_agent.api.app as api_module
+
+    interrupted = _service(tmp_path)
+
+    async def crash(staging_key: str, blob_key: str) -> tuple[str, int, bool]:
+        raise RuntimeError("crash at tx2")
+
+    monkeypatch.setattr(interrupted._blob_store, "publish_from_staging_async", crash)
+    with pytest.raises(RuntimeError, match="crash at tx2"):
+        await _ingest(interrupted)
+    restarted = _service(tmp_path)
+    store = restarted._blob_store
+    assert isinstance(store, LocalContentAddressedBlobStore)
+    orphan = store.new_staging_key()
+    store.stage_to(orphan, io.BytesIO(PNG), max_bytes=1024)
+    store._record_cleanup_marker(orphan)
+
+    class Queue:
+        async def acquire_ownership(self) -> None:
+            pass
+
+        async def resume_pending(self) -> None:
+            pass
+
+        async def shutdown(self) -> None:
+            pass
+
+    monkeypatch.setattr(api_module, "get_creative_registry", lambda: SimpleNamespace(queue=Queue()))
+    app = FastAPI()
+    if configuration == "service":
+        app.state.asset_library_service = restarted
+    else:
+        app.state.asset_library_root = tmp_path / "blobs"
+        app.state.asset_library_db_path = tmp_path / "library.sqlite"
+    async with api_module._api_lifespan(app):
+        report = app.state.asset_library_startup_report
+        assert len(report.recovered_asset_ids) == 1
+        assert report.swept_staging_keys == (orphan,)
+        assert report.active_staging_keys_count == 0
+    assert await _counts(tmp_path) == (1, 1, 1)
+    assert not (tmp_path / "blobs" / orphan).exists()
+
+
+@pytest.mark.asyncio
+async def test_path_configuration_rejects_missing_or_wrong_database_before_sweep(
+    tmp_path: Path,
+) -> None:
+    import sqlite3
+
+    from nexus_ai_agent.creative.assets.service import reconcile_configured_asset_library
+
+    store = LocalContentAddressedBlobStore(tmp_path / "blobs")
+    orphan = store.new_staging_key()
+    store.stage_to(orphan, io.BytesIO(PNG), max_bytes=1024)
+    store._record_cleanup_marker(orphan)
+    with pytest.raises(ValueError, match="both be configured"):
+        await reconcile_configured_asset_library(root=tmp_path / "blobs")
+    with pytest.raises(OSError):
+        await reconcile_configured_asset_library(
+            root=tmp_path / "blobs", db_path=tmp_path / "missing"
+        )
+    database = tmp_path / "wrong.sqlite"
+    with sqlite3.connect(database) as connection:
+        connection.execute("CREATE TABLE unrelated (id INTEGER)")
+    with pytest.raises(ValueError, match="ingest authority"):
+        await reconcile_configured_asset_library(root=tmp_path / "blobs", db_path=database)
+    assert (tmp_path / "blobs" / orphan).exists()
+    with sqlite3.connect(database) as connection:
+        assert (
+            connection.execute("SELECT name FROM sqlite_master WHERE name='assetingest'").fetchone()
+            is None
+        )

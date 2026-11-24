@@ -915,3 +915,14 @@ def test_decrypt_exception_chain_cannot_expose_sensitive_exception(
     assert error.value.__cause__ is None
     assert error.value.__context__ is None
     assert sensitive not in "".join(traceback.format_exception(error.value))
+
+
+def test_invalid_secret_env_decoder_does_not_attach_context() -> None:
+    from nexus_ai_agent.storage.encrypted_backup_drill import BackupKeyMaterial
+
+    secret = "super-secret-key-value!"
+    with pytest.raises(ValueError) as caught:
+        BackupKeyMaterial.from_secret_env(env={"NEXUS_BACKUP_ENCRYPTION_KEY": secret})
+    assert caught.value.__cause__ is None
+    assert caught.value.__context__ is None
+    assert secret not in str(caught.value.args)

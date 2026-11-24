@@ -332,7 +332,11 @@ class BackupKeyMaterial:
             else:
                 raw = base64.b64decode(value, validate=True)
         except (ValueError, binascii.Error):
-            raise ValueError("missing or invalid backup key") from None
+            raw = None
+        if raw is None:
+            # Raising after the handler prevents untrusted decoder inputs from
+            # being retained in the new exception's implicit context.
+            raise ValueError("missing or invalid backup key")
         return cls(
             raw,
             "secret_env",

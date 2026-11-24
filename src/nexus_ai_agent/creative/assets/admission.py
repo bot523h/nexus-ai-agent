@@ -41,6 +41,7 @@ class AdmissionLease:
         self._root_fd = root_fd
         self._fd = fd
         self._active = True
+        self._guard = threading.Lock()
 
     @property
     def root_path(self) -> Path:
@@ -80,8 +81,44 @@ class AdmissionLease:
         ):
             raise PermissionError("asset admission lease inode changed")
 
+    @contextmanager
+    def pin_for_worker(self) -> Iterator[AdmissionLease]:
+        """Duplicate the locked open-file description for a bounded worker.
+
+        On POSIX flock attaches to the open-file description: closing the owner
+        does not release the lock while the duplicate remains open. The pinned
+        lease is independent and must be closed in the worker's finally block.
+        """
+        with self._guard:
+            self.validate_for(self.root_path)
+            fd = os.dup(self._fd)
+            try:
+                root_fd = os.dup(self._root_fd)
+            except BaseException:
+                os.close(fd)
+                raise
+            try:
+                pinned = AdmissionLease(
+                    self.root_path,
+                    root_fd,
+                    fd,
+                    exclusive=self.mode == "exclusive",
+                    issuer=_LEASE_ISSUER,
+                )
+            except BaseException:
+                os.close(root_fd)
+                os.close(fd)
+                raise
+        try:
+            yield pinned
+        finally:
+            pinned._invalidate()
+            os.close(fd)
+            os.close(root_fd)
+
     def _invalidate(self) -> None:
-        self._active = False
+        with self._guard:
+            self._active = False
 
 
 @contextmanager

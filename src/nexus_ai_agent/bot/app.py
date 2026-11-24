@@ -323,7 +323,7 @@ def build_application(
     *,
     presence: PresenceStore | None = None,
     session_factory: Callable[[], Any] | None = None,
-) -> Application:
+) -> Application[Any, Any, Any, Any, Any, Any]:
     token = os.environ.get("TELEGRAM_BOT_TOKEN", settings.telegram_bot_token)
     if not token or token == "CHANGE_ME":
         raise ValueError("TELEGRAM_BOT_TOKEN must be provided via environment/settings")
@@ -338,6 +338,21 @@ def build_application(
 
     async def _post_init(application: Any) -> None:
         application.bot_data["startup_status"] = {"state": "starting", "degraded": False}
+        asset_service = application.bot_data.get("asset_library_service")
+        asset_root = application.bot_data.get("asset_library_root")
+        asset_db = application.bot_data.get("asset_library_db_path")
+        if asset_root is None:
+            asset_root = getattr(settings, "asset_library_root", None)
+        if asset_db is None:
+            asset_db = getattr(settings, "asset_library_db_path", None)
+        if asset_service is not None or asset_root is not None or asset_db is not None:
+            from nexus_ai_agent.creative.assets.service import reconcile_configured_asset_library
+
+            application.bot_data[
+                "asset_library_startup_report"
+            ] = await reconcile_configured_asset_library(
+                service=asset_service, root=asset_root, db_path=asset_db
+            )
         # ── Startup step 0 (task-283, P0): exclusive process ownership ───────
         # Every startup action below — journal backfill, ``resume_pending``,
         # and eventually job execution — mutates the *same* SQLite sidecar.
@@ -457,6 +472,10 @@ def build_application(
         .build()
     )
     application.bot_data["startup_status"] = {"state": "not_started", "degraded": False}
+    if getattr(settings, "asset_library_root", None) is not None:
+        application.bot_data["asset_library_root"] = settings.asset_library_root
+    if getattr(settings, "asset_library_db_path", None) is not None:
+        application.bot_data["asset_library_db_path"] = settings.asset_library_db_path
     # Readiness must observe the same lifecycle for polling and webhook mode;
     # the latter also publishes this object under webhook_application.
     try:

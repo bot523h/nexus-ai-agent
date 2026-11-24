@@ -67,32 +67,32 @@ source-directory permissions and pre/post inode identity detect some path
 replacements, but a swap-and-restore between checks remains possible. The
 64 MiB absolute read cap is not a bound on total process RSS: encryption and
 verification require multiple in-memory copies. A failed staging unlink records a durable cleanup hint when the marker write
-succeeds. An explicit sweeper handles marked files after restart and never
-guesses that unmarked staging is orphaned. Callers must fence concurrent ingest
-and provide an authoritative active-key set; this sweeper is not wired to
-startup reconciliation, and marker-write failure or a crash before recording
-the marker still requires ingest-state recovery. Publication from the shared
-ingestion and recovery path uses worker threads; cancellation does not stop an
-already-running worker. A process-local registry defers reconciliation while a
-cancelled worker is still active, including across store instances sharing a root.
-Stage writes and async publications use a shared POSIX admission lock. Async
-publication acquires the lease before queueing its worker and retains it until
-worker completion even if its caller is cancelled. A cancelled lock acquisition
-is cleaned up after it completes. Service ingest and individual recovery now hold
-shared admission across their database transactions; synchronous publication and
-controlled staging removal also acquire shared admission. This remains a partial
-fence: startup recovery is not wired, direct sweeper callers are responsible for
-exclusive admission, and non-cooperating access is not protected. The sweeper is
-still disconnected from startup; do not use this lock alone as authority to delete staging.
-An admission lease can be reused without nested flock while its owning scope is
-live; it validates root, mode, active status and lock inode. Synchronous publication
-and controlled staging removal can reuse it, and both cleanup APIs now require a
-live exclusive lease and an explicit active-key snapshot. Callers must obtain that
-snapshot while holding the lease and keep the owning scope alive during cleanup;
-this contract is not enforced by the type system. Recovery and the startup
-coordinator do not yet consume this capability, so it does not by itself solve startup.
-It is cooperative and is not a boundary against a same-UID process replacing
-the lock inode. Recovery
+succeeds. The startup coordinator acquires one exclusive POSIX admission lease,
+commits recovery, snapshots all remaining STAGING keys from the database, then
+sweeps at most the configured number of marked orphans under the same lease.
+Snapshot errors propagate before the sweep. It never guesses that unmarked
+staging is orphaned; marker-write failure or a crash before recording the marker
+still requires ingest-state recovery. Direct sweeper callers must provide their
+own authoritative snapshot under a live exclusive lease.
+
+Stage writes and publication use shared admission. Recovery can borrow an outer
+exclusive lease without reacquiring flock. For a threaded publication, a dup of
+the same locked open-file description holds the kernel lock until the worker
+actually finishes even if its coroutine and outer owner have exited. Cancelled
+lock acquisition is cleaned up after it completes. This is cooperative: it is
+not a boundary against non-cooperating processes or same-UID replacement of the
+lock inode, and SQLite path checks do not prevent a trusted directory from being
+swapped while SQLite opens it.
+
+API, polling bot and webhook startup opt in with `asset_library_service` on the
+corresponding state/bot_data, or the pair `asset_library_root` and
+`asset_library_db_path` on state/bot_data (settings: `NEXUS_ASSET_LIBRARY_ROOT`
+and `NEXUS_ASSET_LIBRARY_DB_PATH`). The fallback requires an existing SQLite
+file containing the ingest table and uses a recovery-only deny-all authorizer.
+A partial configuration fails startup; no configuration is a no-op. The
+result is stored as `asset_library_startup_report`. The configured database and
+root must refer to the same library and their parent directories must be trusted.
+Recovery
 compares staged bytes against the durable Tx2 digest and length before
 publishing; a mismatch fails the ingest without deleting the staged bytes. A
 crash before Tx2 has no durable measured identity to compare against, so this

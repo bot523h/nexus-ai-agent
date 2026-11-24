@@ -25,7 +25,9 @@ from nexus_ai_agent.creative.assets.models import (
 class BlobStore(Protocol):
     """Content-addressed storage of immutable bytes (synchronous, local I/O)."""
 
-    def admission(self) -> AbstractAsyncContextManager[AdmissionLease]:
+    def admission(
+        self, *, admission_lease: AdmissionLease | None = None
+    ) -> AbstractAsyncContextManager[AdmissionLease]:
         """Fence an ingest or recovery transaction against maintenance."""
         ...
 
@@ -52,7 +54,7 @@ class BlobStore(Protocol):
         ...
 
     async def publish_from_staging_async(
-        self, staging_key: str, blob_key: str
+        self, staging_key: str, blob_key: str, *, admission_lease: AdmissionLease | None = None
     ) -> tuple[str, int, bool]:
         """Publish without blocking the event loop."""
         ...

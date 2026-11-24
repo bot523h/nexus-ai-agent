@@ -134,6 +134,20 @@ async def _api_lifespan(_app: FastAPI) -> AsyncIterator[None]:
             "queue ownership could not be acquired; refusing to start the API"
         ) from exc
     try:
+        settings = get_settings()
+        asset_service = getattr(_app.state, "asset_library_service", None)
+        asset_root = getattr(_app.state, "asset_library_root", None)
+        asset_db = getattr(_app.state, "asset_library_db_path", None)
+        if asset_root is None:
+            asset_root = getattr(settings, "asset_library_root", None)
+        if asset_db is None:
+            asset_db = getattr(settings, "asset_library_db_path", None)
+        if asset_service is not None or asset_root is not None or asset_db is not None:
+            from nexus_ai_agent.creative.assets.service import reconcile_configured_asset_library
+
+            _app.state.asset_library_startup_report = await reconcile_configured_asset_library(
+                service=asset_service, root=asset_root, db_path=asset_db
+            )
         try:
             await queue.resume_pending()
         except Exception as exc:  # noqa: BLE001 — mandatory queue recovery
