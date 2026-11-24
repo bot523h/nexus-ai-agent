@@ -710,11 +710,20 @@ def test_epistemic_proof_gates_on_nodes_and_edges(tmp_path: Path) -> None:
     )
     assert verified.epistemic_status is EpistemicStatus.VERIFIED_COMMIT
 
-    # Reopening without trusted keys or with revoked key fails integrity_check
-    assert CreativeGraph(db_path).integrity_check().ok is False
+    # Reopening without trusted keys or with revoked key fails on open by default (F10)
+    with pytest.raises(GraphIntegrityError, match="failed integrity verification on open"):
+        CreativeGraph(db_path)
+    with pytest.raises(GraphIntegrityError, match="failed integrity verification on open"):
+        CreativeGraph(
+            db_path,
+            proof_verification_keys=_TEST_KEY_RING,
+            revoked_proof_key_ids={_TEST_KEY_ID},
+        )
+    assert CreativeGraph(db_path, verify_on_open=False).integrity_check().ok is False
     assert (
         CreativeGraph(
             db_path,
+            verify_on_open=False,
             proof_verification_keys=_TEST_KEY_RING,
             revoked_proof_key_ids={_TEST_KEY_ID},
         )
@@ -909,9 +918,20 @@ def test_restart_persistence_in_fresh_subprocess_and_sealed_snapshot(tmp_path: P
 
     verified_snap = CreativeGraph.verify_sealed_snapshot(snap_path)
     assert verified_snap["graph_digest"] == expected_digest
+    assert verified_snap["canonical_version"] == CANONICAL_ENCODING_VERSION
+
+    raw = snap_path.read_text(encoding="utf-8")
+
+    # Unsupported canonical_version in snapshot envelope is rejected fail-closed (F07)
+    bad_ver_snap = tmp_path / "bad_ver_snap.json"
+    bad_ver_snap.write_text(
+        raw.replace(CANONICAL_ENCODING_VERSION, "NEXUS_GRAPH_CANONICAL_V999"),
+        encoding="utf-8",
+    )
+    with pytest.raises(GraphIntegrityError, match="unsupported snapshot canonical_version"):
+        CreativeGraph.verify_sealed_snapshot(bad_ver_snap)
 
     # Tamper a single byte in the sealed snapshot -> detected fail-closed
-    raw = snap_path.read_text(encoding="utf-8")
     tampered_snap = tmp_path / "tampered.json"
     tampered_snap.write_text(raw.replace("Alpha Cinema", "Alpha Cinemb"), encoding="utf-8")
     with pytest.raises(GraphIntegrityError, match="seal mismatch"):
@@ -962,6 +982,7 @@ def test_integrity_detects_all_disk_tampering_classes_and_fails_on_reopen(tmp_pa
     graph = CreativeGraph(db_path, proof_verification_keys=_TEST_KEY_RING)
     ids = _build_vertical_slice(graph)
     assert graph.integrity_check().ok
+    assert graph.verify_chain() == []
     assert graph.integrity_check().to_dict()["ok"] is True
 
     # 1. Tamper node payload digest + bad kind + bad status + bad ontology + bad epistemic
@@ -978,7 +999,8 @@ def test_integrity_detects_all_disk_tampering_classes_and_fails_on_reopen(tmp_pa
             (ids["INTENT"],),
         )
         conn.execute(
-            'UPDATE nexus_graph_node SET proof_json = \'{"verifier_id":"v"}\' WHERE node_id = ?',
+            "UPDATE nexus_graph_node SET kind = 'BOGUS', proof_json = '{\"verifier_id\":\"v\"}'"
+            " WHERE node_id = ?",
             (ids["REVISION"],),
         )
         conn.execute(
@@ -1024,7 +1046,13 @@ def test_integrity_detects_all_disk_tampering_classes_and_fails_on_reopen(tmp_pa
         )
         conn.commit()
 
-    reopened = CreativeGraph(db_path)
+    # Default verify_on_open=True immediately rejects tampered DB on open (F10)
+    with pytest.raises(GraphIntegrityError, match="failed integrity verification on open"):
+        CreativeGraph(db_path, proof_verification_keys=_TEST_KEY_RING)
+
+    # Explicit verify_on_open=False permits forensic inspection of every finding code
+    reopened = CreativeGraph(db_path, verify_on_open=False, proof_verification_keys=_TEST_KEY_RING)
+    assert len(reopened.verify_chain()) >= 2
     report = reopened.integrity_check()
     assert not report.ok
     codes = {f.code for f in report.findings}
@@ -1035,10 +1063,12 @@ def test_integrity_detects_all_disk_tampering_classes_and_fails_on_reopen(tmp_pa
         "GRAPH013",
         "GRAPH014",
         "GRAPH015",
+        "GRAPH016",
         "GRAPH020",
         "GRAPH021",
         "GRAPH022",
         "GRAPH023",
+        "GRAPH024",
         "GRAPH030",
         "GRAPH040",
         "GRAPH050",
@@ -1058,9 +1088,116 @@ def test_integrity_detects_all_disk_tampering_classes_and_fails_on_reopen(tmp_pa
     )
 
     with pytest.raises(GraphIntegrityError, match="failed integrity verification on open"):
-        CreativeGraph(db_path, verify_on_open=True)
+        CreativeGraph(db_path, verify_on_open=True, proof_verification_keys=_TEST_KEY_RING)
     with pytest.raises(GraphIntegrityError, match="unhealthy graph"):
         reopened.export_sealed_snapshot(tmp_path / "should_fail.json")
+
+
+def test_integrity_full_history_row_and_canonical_id_derivation_audit(tmp_path: Path) -> None:
+    """F09: Every historical row digest, continuity, chain link, and canonical ID is audited."""
+    db_path = tmp_path / "hist_audit.sqlite"
+    graph = CreativeGraph(db_path)
+    p = graph.put_node("PROJECT", {"id": "p1"}, {"v": 1}).node
+    c = graph.put_node("INTENT", {"id": "i1"}, {"v": 1}).node
+    assert p is not None and c is not None
+    graph.put_node("PROJECT", {"id": "p1"}, {"v": 2})
+    edge = graph.put_edge("PROJECT_HAS_INTENT", p.node_id, c.node_id, {"w": 1}).edge
+    assert edge is not None
+    assert graph.integrity_check().ok
+
+    # 1. Tamper historical payload_json on row 1 (leaving live node untouched) -> GRAPH031
+    h1_path = tmp_path / "h1.sqlite"
+    graph.backup(h1_path)
+    with sqlite3.connect(str(h1_path)) as conn:
+        conn.execute(
+            "UPDATE nexus_graph_node_history SET payload_json = '{\"v\":999}'"
+            " WHERE node_id = ? AND history_seq = (SELECT MIN(history_seq)"
+            " FROM nexus_graph_node_history WHERE node_id = ?)",
+            (p.node_id, p.node_id),
+        )
+        conn.commit()
+    with pytest.raises(GraphIntegrityError, match="GRAPH031"):
+        CreativeGraph(h1_path)
+    r_h1 = CreativeGraph(h1_path, verify_on_open=False).integrity_check()
+    assert "GRAPH031" in {f.code for f in r_h1.findings}
+
+    # 2. Tamper historical metadata (bad epistemic + terminal resurrection in history) -> GRAPH032
+    #    and inject extra rogue history row without chain entry -> GRAPH033
+    h2_path = tmp_path / "h2.sqlite"
+    graph.backup(h2_path)
+    with sqlite3.connect(str(h2_path)) as conn:
+        conn.execute(
+            "UPDATE nexus_graph_node_history SET epistemic_status = 'BOGUS', status = 'revoked'"
+            " WHERE node_id = ? AND history_seq = (SELECT MIN(history_seq)"
+            " FROM nexus_graph_node_history WHERE node_id = ?)",
+            (p.node_id, p.node_id),
+        )
+        conn.execute(
+            "INSERT INTO nexus_graph_node_history (node_id, revision_id, content_digest,"
+            " payload_json, payload_digest, epistemic_status, proof_json, status, recorded_at)"
+            " VALUES (?, 'rev:rogue', ?, '{\"v\":2}', ?, 'HYPOTHESIS', NULL, 'active',"
+            " '2026-11-24T00:00:00Z')",
+            (p.node_id, p.content_digest, canonical_graph_digest({"v": 2})),
+        )
+        conn.commit()
+    r_h2 = CreativeGraph(h2_path, verify_on_open=False).integrity_check()
+    h2_codes = {f.code for f in r_h2.findings}
+    assert {"GRAPH032", "GRAPH033"}.issubset(h2_codes)
+
+    # 3. Direct-SQL tamper of canonical node_id and edge_id columns -> GRAPH016 & GRAPH024
+    h3_path = tmp_path / "h3.sqlite"
+    graph.backup(h3_path)
+    with sqlite3.connect(str(h3_path)) as conn:
+        conn.execute(
+            "UPDATE nexus_graph_node SET node_id = 'PROJECT:sha256:" + "f" * 64 + "'"
+            " WHERE node_id = ?",
+            (p.node_id,),
+        )
+        conn.execute(
+            "UPDATE nexus_graph_edge SET edge_id = 'PROJECT_HAS_INTENT:forged->id'"
+            " WHERE edge_id = ?",
+            (edge.edge_id,),
+        )
+        conn.commit()
+    r_h3 = CreativeGraph(h3_path, verify_on_open=False).integrity_check()
+    h3_codes = {f.code for f in r_h3.findings}
+    assert {"GRAPH016", "GRAPH024"}.issubset(h3_codes)
+
+
+def test_canonical_versioned_contract_and_golden_vectors(tmp_path: Path) -> None:
+    """F07: Golden vectors for Layer-1 NEXUS_GRAPH_CANONICAL_V1 + Layer-2 JCS_RFC8785_V2."""
+    assert CANONICAL_ENCODING_VERSION == "NEXUS_GRAPH_CANONICAL_V1"
+
+    # Layer-1 reduced rational canonical forms (den > 0, gcd(num, den) == 1)
+    assert normalize_canonical_value(Fraction(6, -9)) == {"__rational__": [-2, 3]}
+    assert normalize_canonical_value(Fraction(0, 5)) == {"__rational__": [0, 1]}
+    assert normalize_canonical_value(Fraction(4, 2)) == {"__rational__": [2, 1]}
+
+    # Golden vector: Layer-1 JSON + Layer-2 RFC 8785 JCS SHA-256 digest
+    sample = {
+        "z": Fraction(24000, 1001),
+        "a": [1, Fraction(-6, 9), True, None],
+        "m": {"nested": Fraction(16, 9)},
+    }
+    expected_json = (
+        '{"a":[1,{"__rational__":[-2,3]},true,null],'
+        '"m":{"nested":{"__rational__":[16,9]}},'
+        '"z":{"__rational__":[24000,1001]}}'
+    )
+    assert canonical_graph_json(sample) == expected_json
+    expected_digest = _sha256(expected_json.encode("utf-8"))
+    assert canonical_graph_digest(sample) == expected_digest
+
+    # Graph digest, lineage digest, impact digest & snapshot all bind canonical_version
+    g = CreativeGraph(tmp_path / "golden.sqlite")
+    p = g.put_node("PROJECT", {"id": "p"}, {"fps": Fraction(24000, 1001)}).node
+    i = g.put_node("INTENT", {"id": "i"}, {"gain": Fraction(3, 2)}).node
+    assert p is not None and i is not None
+    g.put_edge("PROJECT_HAS_INTENT", p.node_id, i.node_id)
+    snap = g.export_sealed_snapshot(tmp_path / "golden_snap.json")
+    body = CreativeGraph.verify_sealed_snapshot(snap)
+    assert body["canonical_version"] == CANONICAL_ENCODING_VERSION
+    assert body["graph_digest"] == g.graph_digest()
 
 
 def test_backup_restore_scope_guard_and_memory_rollback(tmp_path: Path) -> None:
@@ -1092,14 +1229,14 @@ def test_backup_restore_scope_guard_and_memory_rollback(tmp_path: Path) -> None:
             occurred_at="2026-11-24T00:00:00Z",
         )
     )
-    shared_graph = CreativeGraph(shared_path)
+    shared_graph = CreativeGraph(shared_path, proof_verification_keys=_TEST_KEY_RING)
     with pytest.raises(GraphStateError, match="whole_database=True"):
         shared_graph.restore(backup_path)
     shared_graph.restore(backup_path, whole_database=True)
     assert shared_graph.counts() == expected_counts
 
     # Restore scope guard & write path for :memory:
-    mem_graph = CreativeGraph(":memory:")
+    mem_graph = CreativeGraph(":memory:", proof_verification_keys=_TEST_KEY_RING)
     mem_node = mem_graph.put_node("PROJECT", {"id": "mem-p"}).node
     assert mem_node is not None
     with mem_graph._connection() as conn:
@@ -1108,6 +1245,39 @@ def test_backup_restore_scope_guard_and_memory_rollback(tmp_path: Path) -> None:
         mem_graph.restore(backup_path)
     mem_graph.restore(backup_path, whole_database=True)
     assert mem_graph.counts() == expected_counts
+
+    # F05: Physically valid SQLite backup (PRAGMA integrity_check == ok) with logical
+    # payload tampering or broken hash chain is rejected BEFORE modifying live target!
+    live_target = CreativeGraph(
+        tmp_path / "live_target.sqlite", proof_verification_keys=_TEST_KEY_RING
+    )
+    live_node = live_target.put_node("PROJECT", {"id": "untouched-live"}).node
+    assert live_node is not None
+    live_digest_before = live_target.graph_digest()
+    live_counts_before = live_target.counts()
+
+    tampered_payload_bak = tmp_path / "logical_tamper_payload.sqlite"
+    tampered_payload_bak.write_bytes(backup_path.read_bytes())
+    with sqlite3.connect(str(tampered_payload_bak)) as conn:
+        conn.execute(
+            'UPDATE nexus_graph_node SET payload_json = \'{"title":"Tampered"}\' WHERE node_id = ?',
+            (ids["PROJECT"],),
+        )
+        conn.commit()
+    with pytest.raises(GraphIntegrityError, match="failed logical integrity check"):
+        live_target.restore(tampered_payload_bak)
+    assert live_target.counts() == live_counts_before
+    assert live_target.graph_digest() == live_digest_before
+
+    tampered_chain_bak = tmp_path / "logical_tamper_chain.sqlite"
+    tampered_chain_bak.write_bytes(backup_path.read_bytes())
+    with sqlite3.connect(str(tampered_chain_bak)) as conn:
+        conn.execute("UPDATE nexus_graph_chain SET entry_hash = ? WHERE seq = 1", (_sha256(b"x"),))
+        conn.commit()
+    with pytest.raises(GraphIntegrityError, match="failed logical integrity check"):
+        live_target.restore(tampered_chain_bak)
+    assert live_target.counts() == live_counts_before
+    assert live_target.graph_digest() == live_digest_before
 
     # Rollback on failure in :memory:
     before_mem = mem_graph.counts()
@@ -1661,11 +1831,29 @@ def test_rebuild_from_journal_honest_verification_and_passport_semantics(tmp_pat
     po_art = g_pass_only.get_node(art_id)
     assert po_art is not None and po_art.payload["verification_state"] == "passport_attested"
 
-    # Empty journal rebuild succeeds cleanly
+    # Status-only verification ({"status": "verified"} without "passed" boolean) + unknown passport
+    status_only_facts = {
+        "job-42": _sample_job_facts(
+            "job-42",
+            result_digest=art_digest_c,
+            verification={"status": "verified"},
+            artifact_passport={"status": "verified"},
+            artifact_passport_known=False,
+        )
+    }
+    g_status_only = CreativeGraph(tmp_path / "status_only.sqlite")
+    res_so = g_status_only.rebuild_from_journal_store(j_full, job_facts=status_only_facts)
+    assert res_so["projected_nodes"]["PASSPORT"] == 0
+    assert res_so["projected_edges"] == 2  # EXECUTION_PRODUCED_ARTIFACT + ARTIFACT_VERIFIED_BY
+
+    # Empty journal rebuild + nonexistent journal file path succeed cleanly
     empty_graph = CreativeGraph(tmp_path / "empty_rebuild.sqlite")
     empty_res = empty_graph.rebuild_from_journal([])
     assert empty_res["records_read"] == 0
     assert empty_res["projected_edges"] == 0
+    uncreated_journal = CausalJournal(tmp_path / "unlinked_journal.sqlite")
+    uncreated_journal.db_path.unlink()
+    CreativeGraph._validate_journal_store_columns(uncreated_journal)
 
 
 def test_concurrent_writers_preserve_chain_and_dag_integrity(tmp_path: Path) -> None:

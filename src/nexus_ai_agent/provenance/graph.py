@@ -43,6 +43,7 @@ import hashlib
 import heapq
 import hmac
 import json
+import math
 import os
 import re
 import sqlite3
@@ -357,7 +358,13 @@ def _validate_non_empty(value: str, *, field_name: str) -> str:
 
 
 # --------------------------------------------------------------------------- #
-# Deterministic RFC 8785 JCS Canonicalization (zero float ambiguity)
+# Two-Layer Versioned Canonicalization Contract (F07):
+#   Layer 1 (NEXUS_GRAPH_CANONICAL_V1): Domain-to-JSON AST normalization that
+#     rejects IEEE-754 float (including NaN/Inf) fail-closed and maps exact
+#     fractions.Fraction(p, q) to reduced {"__rational__": [num, den]} with
+#     den > 0 and math.gcd(num, den) == 1.
+#   Layer 2 (CanonicalizationScheme.JCS_RFC8785_V2): Strict RFC 8785 JCS
+#     byte serialization and SHA-256 digest over the Layer-1 JSON tree.
 # --------------------------------------------------------------------------- #
 def _normalize_recursive(value: Any, seen: set[int], path: str) -> Any:
     if value is None or type(value) is bool or type(value) is int or type(value) is str:
@@ -365,10 +372,13 @@ def _normalize_recursive(value: Any, seen: set[int], path: str) -> Any:
     if type(value) is float:
         raise CanonicalValueError(
             f"floating-point value rejected at {path}: use int or fractions.Fraction "
-            "for exact canonical graph serialization"
+            f"under {CANONICAL_ENCODING_VERSION}"
         )
     if isinstance(value, Fraction):
-        return {_RATIONAL_KEY: [value.numerator, value.denominator]}
+        num = value.numerator
+        den = value.denominator
+        assert den > 0 and math.gcd(num, den) == 1  # pragma: no cover
+        return {_RATIONAL_KEY: [num, den]}
     if type(value) in (list, tuple):
         ident = id(value)
         if ident in seen:
@@ -933,7 +943,7 @@ class CreativeGraph:
         db_path: Path | str,
         *,
         connect_timeout: float = 30.0,
-        verify_on_open: bool = False,
+        verify_on_open: bool = True,
         proof_verification_keys: (
             Mapping[str, bytes] | Callable[[str], bytes | None] | None
         ) = None,
@@ -1789,65 +1799,74 @@ class CreativeGraph:
             return False
         return True
 
+    def _graph_digest_conn(
+        self, connection: sqlite3.Connection, *, include_inactive: bool = False
+    ) -> str:
+        node_ids, adjacency = self._load_active_topology(
+            connection, include_inactive=include_inactive
+        )
+        ordered_ids = self._lexicographic_kahn(node_ids, adjacency)
+        node_rows = connection.execute(
+            "SELECT node_id, kind, identity_json, logical_entity_id, revision_id,"
+            " content_digest, payload_json, payload_digest, epistemic_status,"
+            " evidence_digest, proof_json, status, superseded_by, source,"
+            " source_seq, revision_count, created_at, updated_at"
+            " FROM nexus_graph_node"
+        ).fetchall()
+        nodes_by_id = {str(row[0]): self._node_from_row(row) for row in node_rows}
+        nodes_repr: list[dict[str, Any]] = []
+        for nid in ordered_ids:
+            node = nodes_by_id[nid]
+            nodes_repr.append(
+                {
+                    "node_id": node.node_id,
+                    "kind": node.kind,
+                    "logical_entity_id": node.logical_entity_id,
+                    "revision_id": node.revision_id,
+                    "content_digest": node.content_digest,
+                    "payload_digest": node.payload_digest,
+                    "epistemic_status": node.epistemic_status.value,
+                    "evidence_digest": node.evidence_digest,
+                    "proof_signature": (None if node.proof is None else node.proof.chain_signature),
+                    "status": node.status,
+                }
+            )
+        edge_rows = connection.execute(
+            "SELECT edge_id, relation, src, dst, payload_json, payload_digest,"
+            " epistemic_status, evidence_digest, proof_json, status, source,"
+            " source_seq, created_at FROM nexus_graph_edge WHERE status = 'active'"
+            " ORDER BY src, dst, relation, edge_id"
+        ).fetchall()
+        edges_repr: list[dict[str, Any]] = []
+        for row in edge_rows:
+            edge = self._edge_from_row(row)
+            if edge.src in node_ids and edge.dst in node_ids:
+                edges_repr.append(
+                    {
+                        "edge_id": edge.edge_id,
+                        "relation": edge.relation,
+                        "src": edge.src,
+                        "dst": edge.dst,
+                        "payload_digest": edge.payload_digest,
+                        "epistemic_status": edge.epistemic_status.value,
+                        "evidence_digest": edge.evidence_digest,
+                        "proof_signature": (
+                            None if edge.proof is None else edge.proof.chain_signature
+                        ),
+                    }
+                )
+        return canonical_graph_digest(
+            {
+                "canonical_version": CANONICAL_ENCODING_VERSION,
+                "nodes": nodes_repr,
+                "edges": edges_repr,
+            }
+        )
+
     def graph_digest(self, *, include_inactive: bool = False) -> str:
         """Compute an insertion-order-independent RFC 8785 JCS digest of the graph."""
         with self._lock, self._connection() as connection:
-            node_ids, adjacency = self._load_active_topology(
-                connection, include_inactive=include_inactive
-            )
-            ordered_ids = self._lexicographic_kahn(node_ids, adjacency)
-            node_rows = connection.execute(
-                "SELECT node_id, kind, identity_json, logical_entity_id, revision_id,"
-                " content_digest, payload_json, payload_digest, epistemic_status,"
-                " evidence_digest, proof_json, status, superseded_by, source,"
-                " source_seq, revision_count, created_at, updated_at"
-                " FROM nexus_graph_node"
-            ).fetchall()
-            nodes_by_id = {str(row[0]): self._node_from_row(row) for row in node_rows}
-            nodes_repr: list[dict[str, Any]] = []
-            for nid in ordered_ids:
-                node = nodes_by_id[nid]
-                nodes_repr.append(
-                    {
-                        "node_id": node.node_id,
-                        "kind": node.kind,
-                        "logical_entity_id": node.logical_entity_id,
-                        "revision_id": node.revision_id,
-                        "content_digest": node.content_digest,
-                        "payload_digest": node.payload_digest,
-                        "epistemic_status": node.epistemic_status.value,
-                        "evidence_digest": node.evidence_digest,
-                        "proof_signature": (
-                            None if node.proof is None else node.proof.chain_signature
-                        ),
-                        "status": node.status,
-                    }
-                )
-            edge_rows = connection.execute(
-                "SELECT edge_id, relation, src, dst, payload_json, payload_digest,"
-                " epistemic_status, evidence_digest, proof_json, status, source,"
-                " source_seq, created_at FROM nexus_graph_edge WHERE status = 'active'"
-                " ORDER BY src, dst, relation, edge_id"
-            ).fetchall()
-            edges_repr: list[dict[str, Any]] = []
-            for row in edge_rows:
-                edge = self._edge_from_row(row)
-                if edge.src in node_ids and edge.dst in node_ids:
-                    edges_repr.append(
-                        {
-                            "edge_id": edge.edge_id,
-                            "relation": edge.relation,
-                            "src": edge.src,
-                            "dst": edge.dst,
-                            "payload_digest": edge.payload_digest,
-                            "epistemic_status": edge.epistemic_status.value,
-                            "evidence_digest": edge.evidence_digest,
-                            "proof_signature": (
-                                None if edge.proof is None else edge.proof.chain_signature
-                            ),
-                        }
-                    )
-        return canonical_graph_digest({"nodes": nodes_repr, "edges": edges_repr})
+            return self._graph_digest_conn(connection, include_inactive=include_inactive)
 
     def traverse(
         self,
@@ -2009,7 +2028,12 @@ class CreativeGraph:
                     if str(r[0]) in sub_active and str(r[1]) in sub_active
                 ]
         return canonical_graph_digest(
-            {"target_node_id": node_id, "nodes": chain_nodes, "edges": chain_edges}
+            {
+                "canonical_version": CANONICAL_ENCODING_VERSION,
+                "target_node_id": node_id,
+                "nodes": chain_nodes,
+                "edges": chain_edges,
+            }
         )
 
     def _compute_causal_impact_set_conn(
@@ -2172,12 +2196,11 @@ class CreativeGraph:
     def artifact_history(self, artifact_node_id: str) -> list[dict[str, Any]]:
         return self.descendants(artifact_node_id)
 
-    def chain_entries(self) -> list[ChainEntry]:
-        with self._lock, self._connection() as connection:
-            rows = connection.execute(
-                "SELECT seq, prev_hash, entry_hash, operation, target_id,"
-                " entry_digest, recorded_at FROM nexus_graph_chain ORDER BY seq"
-            ).fetchall()
+    def _chain_entries_conn(self, connection: sqlite3.Connection) -> list[ChainEntry]:
+        rows = connection.execute(
+            "SELECT seq, prev_hash, entry_hash, operation, target_id,"
+            " entry_digest, recorded_at FROM nexus_graph_chain ORDER BY seq"
+        ).fetchall()
         return [
             ChainEntry(
                 seq=int(r[0]),
@@ -2191,6 +2214,10 @@ class CreativeGraph:
             for r in rows
         ]
 
+    def chain_entries(self) -> list[ChainEntry]:
+        with self._lock, self._connection() as connection:
+            return self._chain_entries_conn(connection)
+
     # ------------------------------------------------------------------ #
     # Integrity, Tamper Detection, Atomic Snapshots, Backup & Restore
     # ------------------------------------------------------------------ #
@@ -2202,10 +2229,9 @@ class CreativeGraph:
             return None
         return value if isinstance(value, dict) else None
 
-    def verify_chain(self) -> list[IntegrityFinding]:
-        """Verify continuity and cryptographic hash of every chain record."""
+    def _verify_chain_conn(self, connection: sqlite3.Connection) -> list[IntegrityFinding]:
         findings: list[IntegrityFinding] = []
-        entries = self.chain_entries()
+        entries = self._chain_entries_conn(connection)
         expected_prev = GRAPH_CHAIN_GENESIS
         for entry in entries:
             if not hmac.compare_digest(entry.prev_hash, expected_prev):
@@ -2236,34 +2262,46 @@ class CreativeGraph:
             expected_prev = entry.entry_hash
         return findings
 
-    def integrity_check(self) -> IntegrityReport:
-        """Full forensic audit of nodes, ontology, proofs, edges, DAG & chain."""
-        report = IntegrityReport()
+    def verify_chain(self) -> list[IntegrityFinding]:
+        """Verify continuity and cryptographic hash of every chain record."""
         with self._lock, self._connection() as connection:
-            nodes = connection.execute(
-                "SELECT node_id, kind, payload_json, payload_digest, status, identity_json,"
-                " identity_digest, logical_entity_id, revision_id, content_digest,"
-                " epistemic_status, evidence_digest, proof_json FROM nexus_graph_node"
-            ).fetchall()
-            edges = connection.execute(
-                "SELECT edge_id, relation, src, dst, payload_json, payload_digest,"
-                " epistemic_status, evidence_digest, proof_json FROM nexus_graph_edge"
-            ).fetchall()
-            history = connection.execute("SELECT node_id FROM nexus_graph_node_history").fetchall()
-            chain = connection.execute(
-                "SELECT seq, entry_hash FROM nexus_graph_chain ORDER BY seq"
-            ).fetchall()
+            return self._verify_chain_conn(connection)
+
+    def _integrity_check_conn(
+        self, connection: sqlite3.Connection, *, target_label: str
+    ) -> IntegrityReport:
+        """Full forensic audit on an open connection (nodes, edges, history, DAG & chain)."""
+        report = IntegrityReport()
+        nodes = connection.execute(
+            "SELECT node_id, kind, payload_json, payload_digest, status, identity_json,"
+            " identity_digest, logical_entity_id, revision_id, content_digest,"
+            " epistemic_status, evidence_digest, proof_json FROM nexus_graph_node"
+        ).fetchall()
+        edges = connection.execute(
+            "SELECT edge_id, relation, src, dst, payload_json, payload_digest,"
+            " epistemic_status, evidence_digest, proof_json FROM nexus_graph_edge"
+        ).fetchall()
+        history = connection.execute(
+            "SELECT history_seq, node_id, revision_id, content_digest, payload_json,"
+            " payload_digest, epistemic_status, proof_json, status, recorded_at"
+            " FROM nexus_graph_node_history ORDER BY history_seq ASC"
+        ).fetchall()
+        chain = connection.execute(
+            "SELECT seq, operation, target_id, entry_hash FROM nexus_graph_chain ORDER BY seq"
+        ).fetchall()
 
         report.node_count = len(nodes)
         report.edge_count = len(edges)
         report.history_count = len(history)
         report.chain_length = len(chain)
-        report.chain_head = str(chain[-1][1]) if chain else GRAPH_CHAIN_GENESIS
+        report.chain_head = str(chain[-1][3]) if chain else GRAPH_CHAIN_GENESIS
 
         known = {str(row[0]) for row in nodes}
+        node_live_state: dict[str, tuple[str, str, str, str]] = {}
         for row in nodes:
             node_id = str(row[0])
             kind = str(row[1])
+            node_live_state[node_id] = (str(row[8]), str(row[9]), str(row[3]), str(row[4]))
             if kind not in NODE_KINDS:
                 report.findings.append(
                     IntegrityFinding("GRAPH010", "error", "unknown node kind", node_id)
@@ -2290,10 +2328,23 @@ class CreativeGraph:
                         "GRAPH013", "error", "identity_json is not a JSON object", node_id
                     )
                 )
-            elif _digest_stored_normalized(identity) != str(row[6]):
-                report.findings.append(
-                    IntegrityFinding("GRAPH013", "error", "identity digest mismatch", node_id)
-                )
+            else:
+                computed_identity_digest = _digest_stored_normalized(identity)
+                if computed_identity_digest != str(row[6]):
+                    report.findings.append(
+                        IntegrityFinding("GRAPH013", "error", "identity digest mismatch", node_id)
+                    )
+                if kind in NODE_KINDS:
+                    expected_nid = f"{kind}:{computed_identity_digest}"
+                    if not hmac.compare_digest(node_id, expected_nid):
+                        report.findings.append(
+                            IntegrityFinding(
+                                "GRAPH016",
+                                "error",
+                                "node_id does not match canonical kind/identity derivation",
+                                node_id,
+                            )
+                        )
             try:
                 EntityIdentityTriple(
                     logical_entity_id=str(row[7]),
@@ -2323,6 +2374,17 @@ class CreativeGraph:
                 report.findings.append(
                     IntegrityFinding("GRAPH020", "error", "unknown relation", edge_id)
                 )
+            else:
+                expected_eid = edge_identity(relation, src, dst)
+                if not hmac.compare_digest(edge_id, expected_eid):
+                    report.findings.append(
+                        IntegrityFinding(
+                            "GRAPH024",
+                            "error",
+                            "edge_id does not match canonical relation/src/dst derivation",
+                            edge_id,
+                        )
+                    )
             for endpoint in (src, dst):
                 if endpoint not in known:
                     report.findings.append(
@@ -2354,24 +2416,112 @@ class CreativeGraph:
                 code="GRAPH023",
             )
 
-        nodes_with_history = {str(row[0]) for row in history}
+        # Full historical row audit (F09): payload digest, ontology/status continuity & chain link
+        history_by_node: dict[str, list[tuple[int, str, str, str, str]]] = {}
+        node_chain_ops = frozenset(
+            {"node_create", "node_advance", "node_status", "node_epistemic_promote"}
+        )
+        chain_count_by_node: dict[str, int] = {}
+        for chain_row in chain:
+            if str(chain_row[1]) in node_chain_ops:
+                tid = str(chain_row[2])
+                chain_count_by_node[tid] = chain_count_by_node.get(tid, 0) + 1
+
+        for hrow in history:
+            h_seq = int(hrow[0])
+            h_node_id = str(hrow[1])
+            h_rev = str(hrow[2])
+            h_content = str(hrow[3])
+            h_payload = self._safe_json(hrow[4])
+            h_payload_digest = str(hrow[5])
+            h_epistemic = str(hrow[6])
+            h_status = str(hrow[8])
+            h_label = f"history_seq={h_seq}:{h_node_id}"
+            history_by_node.setdefault(h_node_id, []).append(
+                (h_seq, h_rev, h_content, h_payload_digest, h_status)
+            )
+            if h_payload is None or _digest_stored_normalized(h_payload) != h_payload_digest:
+                report.findings.append(
+                    IntegrityFinding(
+                        "GRAPH031", "error", "history payload digest mismatch", h_label
+                    )
+                )
+            valid_h_meta = (
+                h_node_id in known
+                and h_status in STATUSES
+                and bool(h_rev.strip())
+                and bool(_SHA256_RE.match(h_content))
+            )
+            try:
+                _coerce_epistemic_status(h_epistemic)
+            except EpistemicProofError:
+                valid_h_meta = False
+            if not valid_h_meta:
+                report.findings.append(
+                    IntegrityFinding(
+                        "GRAPH032", "error", "history metadata or ontology invalid", h_label
+                    )
+                )
+
         for node_id in sorted(known):
-            if node_id not in nodes_with_history:
+            node_hist = history_by_node.get(node_id)
+            if not node_hist:
                 report.findings.append(
                     IntegrityFinding("GRAPH030", "error", "node has no history row", node_id)
                 )
+                continue
+            prev_status: str | None = None
+            for h_seq, _h_rev, _h_content, _h_pdig, h_status in node_hist:
+                if prev_status is not None and h_status not in ALLOWED_NODE_STATUS_TRANSITIONS.get(
+                    prev_status, frozenset()
+                ):
+                    report.findings.append(
+                        IntegrityFinding(
+                            "GRAPH032",
+                            "error",
+                            f"non-monotonic terminal history transition {prev_status}->{h_status}",
+                            f"history_seq={h_seq}:{node_id}",
+                        )
+                    )
+                prev_status = h_status
+            _, last_rev, last_content, last_pdig, last_status = node_hist[-1]
+            if (last_rev, last_content, last_pdig, last_status) != node_live_state[node_id]:
+                report.findings.append(
+                    IntegrityFinding(
+                        "GRAPH032",
+                        "error",
+                        "latest history row disagrees with live node state",
+                        node_id,
+                    )
+                )
+            if chain_count_by_node.get(node_id, 0) < len(node_hist):
+                report.findings.append(
+                    IntegrityFinding(
+                        "GRAPH033",
+                        "error",
+                        "history rows lack corresponding hash-chain linkage",
+                        node_id,
+                    )
+                )
 
+        node_ids_all, adj_all = self._load_active_topology(connection, include_inactive=True)
         try:
-            self.topological_sort(include_inactive=True)
+            self._lexicographic_kahn(node_ids_all, adj_all)
         except GraphCycleError:
             report.findings.append(
-                IntegrityFinding("GRAPH040", "error", "graph contains a cycle", self._sqlite_path)
+                IntegrityFinding("GRAPH040", "error", "graph contains a cycle", target_label)
             )
         else:
-            report.graph_digest = self.graph_digest()
+            if not report.findings:
+                report.graph_digest = self._graph_digest_conn(connection, include_inactive=False)
 
-        report.findings.extend(self.verify_chain())
+        report.findings.extend(self._verify_chain_conn(connection))
         return report
+
+    def integrity_check(self) -> IntegrityReport:
+        """Full forensic audit of nodes, ontology, proofs, edges, history, DAG & chain."""
+        with self._lock, self._connection() as connection:
+            return self._integrity_check_conn(connection, target_label=self._sqlite_path)
 
     def _audit_epistemic_row(
         self,
@@ -2442,6 +2592,7 @@ class CreativeGraph:
                 ]
             body = {
                 "schema_version": "creative_graph_snapshot.v2",
+                "canonical_version": CANONICAL_ENCODING_VERSION,
                 "graph_digest": report.graph_digest,
                 "chain_head": report.chain_head,
                 "chain_length": report.chain_length,
@@ -2484,6 +2635,11 @@ class CreativeGraph:
         seal = str(parsed["snapshot_seal"])
         if not isinstance(body, dict):
             raise GraphIntegrityError(f"malformed snapshot body in {path}")
+        if body.get("canonical_version") != CANONICAL_ENCODING_VERSION:
+            raise GraphIntegrityError(
+                f"unsupported snapshot canonical_version in {path}: "
+                f"{body.get('canonical_version')!r}"
+            )
         actual = _digest_stored_normalized(body)
         if not hmac.compare_digest(actual, seal):
             raise GraphIntegrityError(
@@ -2505,8 +2661,10 @@ class CreativeGraph:
         return destination
 
     def restore(self, source: Path | str, *, whole_database: bool = False) -> None:
-        """Whole-file restore guarded against overwriting foreign tables."""
-        origin = sqlite3.connect(str(Path(source)))
+        """Whole-file restore with pre-restore logical integrity & rollback safety (F05)."""
+        source_path = Path(source)
+        origin = sqlite3.connect(str(source_path))
+        origin.row_factory = sqlite3.Row
         try:
             try:
                 missing = GRAPH_TABLES - _tables(origin)
@@ -2522,6 +2680,15 @@ class CreativeGraph:
                 )
             if check is None or str(check[0]) != "ok":
                 raise GraphStateError(f"restore source {source} failed PRAGMA integrity_check")
+
+            # F05: Verify full logical graph & hash-chain integrity BEFORE modifying target.
+            source_report = self._integrity_check_conn(origin, target_label=str(source_path))
+            if not source_report.ok:
+                codes = ", ".join(f.code for f in source_report.findings)
+                raise GraphIntegrityError(
+                    f"restore source {source} failed logical integrity check: {codes}"
+                )
+
             with self._lock:
                 if self._memory_connection is not None:
                     foreign = _tables(self._memory_connection) - GRAPH_TABLES
@@ -2531,22 +2698,67 @@ class CreativeGraph:
                             f"non-graph table(s) {sorted(foreign)}; pass whole_database=True "
                             "only if you own the entire file"
                         )
-                    origin.backup(self._memory_connection)
-                    return
-                connection = sqlite3.connect(self._sqlite_path, timeout=self._connect_timeout)
-                try:
-                    foreign = _tables(connection) - GRAPH_TABLES
-                    if foreign and not whole_database:
-                        raise GraphStateError(
-                            f"restore would replace the WHOLE database {self._sqlite_path} "
-                            f"holding non-graph table(s) {sorted(foreign)}; pass "
-                            "whole_database=True only if you own the entire file"
+                    rollback_mem = sqlite3.connect(":memory:")
+                    try:
+                        self._memory_connection.backup(rollback_mem)
+                        origin.backup(self._memory_connection)
+                        post_mem = self._integrity_check_conn(
+                            self._memory_connection, target_label=self._sqlite_path
                         )
-                    origin.backup(connection)
-                    connection.commit()
+                        if not post_mem.ok:  # pragma: no cover
+                            rollback_mem.backup(self._memory_connection)
+                            codes = ", ".join(f.code for f in post_mem.findings)
+                            raise GraphIntegrityError(
+                                f"post-restore integrity check failed: {codes}"
+                            )
+                    finally:
+                        rollback_mem.close()
+                    return
+
+                pre_restore_fd, pre_restore_name = tempfile.mkstemp(
+                    prefix=".graph_pre_restore_",
+                    suffix=".sqlite",
+                    dir=str(self.db_path.parent),
+                )
+                os.close(pre_restore_fd)
+                pre_restore_path = Path(pre_restore_name)
+                try:
+                    connection = sqlite3.connect(self._sqlite_path, timeout=self._connect_timeout)
+                    try:
+                        foreign = _tables(connection) - GRAPH_TABLES
+                        if foreign and not whole_database:
+                            raise GraphStateError(
+                                f"restore would replace the WHOLE database {self._sqlite_path} "
+                                f"holding non-graph table(s) {sorted(foreign)}; pass "
+                                "whole_database=True only if you own the entire file"
+                            )
+                        staging = sqlite3.connect(str(pre_restore_path))
+                        try:
+                            connection.backup(staging)
+                        finally:
+                            staging.close()
+                        origin.backup(connection)
+                        connection.commit()
+                    finally:
+                        connection.close()
+                    _fsync_path(self.db_path)
+                    post_report = self.integrity_check()
+                    if not post_report.ok:  # pragma: no cover
+                        rollback_src = sqlite3.connect(str(pre_restore_path))
+                        rollback_dst = sqlite3.connect(
+                            self._sqlite_path, timeout=self._connect_timeout
+                        )
+                        try:
+                            rollback_src.backup(rollback_dst)
+                            rollback_dst.commit()
+                        finally:
+                            rollback_dst.close()
+                            rollback_src.close()
+                        _fsync_path(self.db_path)
+                        codes = ", ".join(f.code for f in post_report.findings)
+                        raise GraphIntegrityError(f"post-restore integrity check failed: {codes}")
                 finally:
-                    connection.close()
-                _fsync_path(self.db_path)
+                    pre_restore_path.unlink(missing_ok=True)
         finally:
             origin.close()
 
@@ -2614,40 +2826,11 @@ class CreativeGraph:
 
     @staticmethod
     def _validate_journal_store_columns(journal: CausalJournal) -> None:
-        """Verify indexed columns in ``nexus_causal_journal`` match ``record_json`` (F03)."""
-        if not journal.db_path.exists():
-            return
-        conn = sqlite3.connect(str(journal.db_path))
+        """Delegate indexed-column vs ``record_json`` check to :class:`CausalJournal` (F03)."""
         try:
-            rows = conn.execute(
-                "SELECT seq, record_hash, prev_hash, kind, job_id, attempt, dedupe_key,"
-                " record_json FROM nexus_causal_journal ORDER BY seq ASC"
-            ).fetchall()
-        except sqlite3.DatabaseError as exc:
-            raise GraphIntegrityError(f"unreadable causal journal store: {exc}") from exc
-        finally:
-            conn.close()
-        for row in rows:
-            seq, rec_hash, prev_hash, col_kind, col_job_id, col_attempt, col_dedupe, raw_json = row
-            try:
-                parsed = json.loads(str(raw_json))
-            except json.JSONDecodeError as exc:
-                raise GraphIntegrityError(
-                    f"causal journal seq={seq} has corrupt record_json: {exc}"
-                ) from exc
-            if not isinstance(parsed, dict):
-                raise GraphIntegrityError(f"causal journal seq={seq} record_json is not an object")
-            if (
-                str(parsed.get("kind", "")) != str(col_kind)
-                or str(parsed.get("job_id", "")) != str(col_job_id)
-                or parsed.get("attempt") != col_attempt
-                or str(parsed.get("prev_hash", "")) != str(prev_hash)
-                or int(parsed.get("seq", -1)) != int(seq)
-            ):
-                raise GraphIntegrityError(
-                    f"causal journal seq={seq} indexed columns disagree with record_json "
-                    f"(record_hash={rec_hash}, dedupe_key={col_dedupe!r})"
-                )
+            journal.verify_column_integrity()
+        except ValueError as exc:
+            raise GraphIntegrityError(str(exc)) from exc
 
     def rebuild_from_journal_store(
         self,
