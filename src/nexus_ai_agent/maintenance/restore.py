@@ -220,10 +220,9 @@ def _detect_engine(artifact: Path, filename_hint: str) -> str:
 
 
 def _fetch_r2_artifact(
-    provider: BlobProvider, key: str, report: DrillReport
+    provider: BlobProvider, key: str, report: DrillReport, *, temp_dir: Path
 ) -> tuple[Path, Path | None]:
-    """Download the artifact (+sidecar when present) with a bounded timeout."""
-    temp_dir = Path(tempfile.mkdtemp(prefix="nexus_restore_fetch_"))
+    """Download into caller-owned scratch space with a bounded timeout."""
     artifact = temp_dir / Path(key).name
     try:
 
@@ -941,7 +940,7 @@ def _run_drill(
             report.record("LATEST_RESOLVED", True, key)
         assert key is not None
         filename_hint = Path(key).name
-        artifact, sidecar = _fetch_r2_artifact(provider, key, report)
+        artifact, sidecar = _fetch_r2_artifact(provider, key, report, temp_dir=staged)
         report.record("FETCHED", True, f"r2:{key}")
 
     # ── ENGINE + SIZE + CHECKSUM ────────────────────────────────────
