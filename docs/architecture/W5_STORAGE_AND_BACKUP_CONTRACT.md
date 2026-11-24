@@ -81,8 +81,12 @@ shared admission across their database transactions; synchronous publication and
 controlled staging removal also acquire shared admission. This remains a partial
 fence: startup recovery is not wired, direct sweeper callers are responsible for
 exclusive admission, and non-cooperating access is not protected. The sweeper is
-still disconnected from startup; do not use this lock alone as authority to delete staging. It is cooperative and is
-not a boundary against a same-UID process replacing the lock inode. Recovery
+still disconnected from startup; do not use this lock alone as authority to delete staging.
+An admission lease can be reused without nested flock while its owning scope is
+live; it validates root, mode, active status and lock inode. Recovery and sweeper
+do not yet consume this capability, so it does not by itself solve startup.
+It is cooperative and is not a boundary against a same-UID process replacing
+the lock inode. Recovery
 compares staged bytes against the durable Tx2 digest and length before
 publishing; a mismatch fails the ingest without deleting the staged bytes. A
 crash before Tx2 has no durable measured identity to compare against, so this

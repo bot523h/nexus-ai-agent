@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import BinaryIO
 
 from nexus_ai_agent.creative.assets.admission import (
+    AdmissionLease,
     asset_admission_lock,
     async_asset_admission_lock,
 )
@@ -77,7 +78,7 @@ class LocalContentAddressedBlobStore:
         finally:
             os.close(stage_fd)
 
-    def admission(self) -> AbstractAsyncContextManager[None]:
+    def admission(self) -> AbstractAsyncContextManager[AdmissionLease]:
         """Hold shared admission for the surrounding async transaction."""
         return async_asset_admission_lock(
             self._fs.root, exclusive=False, timeout_seconds=self._admission_timeout_seconds
@@ -314,7 +315,7 @@ class LocalContentAddressedBlobStore:
             finish()
             raise
 
-        def abandon_acquisition(done: asyncio.Future[None]) -> None:
+        def abandon_acquisition(done: asyncio.Future[AdmissionLease]) -> None:
             try:
                 if not done.cancelled() and done.exception() is None:
                     lease.__exit__(None, None, None)

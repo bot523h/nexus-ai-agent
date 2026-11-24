@@ -12,6 +12,7 @@ from __future__ import annotations
 from contextlib import AbstractAsyncContextManager
 from typing import BinaryIO, Protocol
 
+from nexus_ai_agent.creative.assets.admission import AdmissionLease
 from nexus_ai_agent.creative.assets.models import (
     AssetIdentity,
     AssetVersion,
@@ -24,7 +25,7 @@ from nexus_ai_agent.creative.assets.models import (
 class BlobStore(Protocol):
     """Content-addressed storage of immutable bytes (synchronous, local I/O)."""
 
-    def admission(self) -> AbstractAsyncContextManager[None]:
+    def admission(self) -> AbstractAsyncContextManager[AdmissionLease]:
         """Fence an ingest or recovery transaction against maintenance."""
         ...
 

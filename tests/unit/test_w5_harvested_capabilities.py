@@ -658,3 +658,63 @@ async def test_async_transaction_admission_cancelled_wait_has_no_late_lease(tmp_
             pass
 
     await asyncio.to_thread(take_exclusive)
+
+
+def test_admission_lease_reuse_requires_active_same_root_and_mode(tmp_path: Path) -> None:
+    from nexus_ai_agent.creative.assets.admission import AdmissionLease, asset_admission_lock
+
+    other = tmp_path / "other"
+    other.mkdir()
+    with asset_admission_lock(tmp_path, exclusive=True) as exclusive:
+        assert exclusive.is_active and exclusive.mode == "exclusive"
+        assert exclusive.root_path == tmp_path
+        with asset_admission_lock(tmp_path, exclusive=False, admission_lease=exclusive) as nested:
+            assert nested is exclusive
+        assert exclusive.is_active
+        with asset_admission_lock(tmp_path, exclusive=True, admission_lease=exclusive) as nested:
+            assert nested is exclusive
+        with pytest.raises(PermissionError):
+            with asset_admission_lock(other, exclusive=True, admission_lease=exclusive):
+                pass
+        with pytest.raises(AttributeError):
+            exclusive.mode = "shared"  # type: ignore[misc]
+        with pytest.raises(PermissionError):
+            AdmissionLease(tmp_path, -1, -1, exclusive=True, issuer=object())
+    assert not exclusive.is_active
+    with pytest.raises(PermissionError):
+        with asset_admission_lock(tmp_path, exclusive=True, admission_lease=exclusive):
+            pass
+    with asset_admission_lock(tmp_path, exclusive=False) as shared:
+        with pytest.raises(PermissionError):
+            with asset_admission_lock(tmp_path, exclusive=True, admission_lease=shared):
+                pass
+
+
+def test_admission_lease_detects_replaced_lock_inode(tmp_path: Path) -> None:
+    from nexus_ai_agent.creative.assets.admission import asset_admission_lock
+
+    with asset_admission_lock(tmp_path, exclusive=True) as lease:
+        replacement = tmp_path / "replacement"
+        replacement.write_bytes(b"")
+        replacement.chmod(0o600)
+        os.replace(replacement, tmp_path / ".asset-library-maintenance.lock")
+        with pytest.raises(PermissionError, match="inode changed"):
+            lease.validate_for(tmp_path, require_exclusive=True)
+
+
+@pytest.mark.asyncio
+async def test_async_admission_lease_reuses_exclusive_without_deadlock(tmp_path: Path) -> None:
+    import asyncio
+
+    from nexus_ai_agent.creative.assets.admission import async_asset_admission_lock
+
+    async def operation() -> None:
+        async with async_asset_admission_lock(tmp_path, exclusive=True) as owner:
+            async with async_asset_admission_lock(
+                tmp_path, exclusive=False, admission_lease=owner
+            ) as nested:
+                assert nested is owner and nested.is_active
+            assert owner.is_active
+        assert not owner.is_active
+
+    await asyncio.wait_for(operation(), timeout=1)
