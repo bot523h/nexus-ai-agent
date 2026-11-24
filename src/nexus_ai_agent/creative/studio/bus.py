@@ -65,7 +65,7 @@ from collections import OrderedDict
 from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass, field
 from enum import Enum
-from typing import Any, TypedDict, cast
+from typing import Any, Protocol, TypedDict, cast
 from uuid import uuid4
 
 from pydantic import ValidationError
@@ -953,6 +953,61 @@ class PlanTransaction:
         return errors
 
 
+class StudioExecutionPort(Protocol):
+    """Public durable execution boundary consumed by ingress facades."""
+
+    def uses_durable_store(self, store: DurablePlanDedupePort) -> bool: ...
+
+    def durable_approval_requirements(
+        self, plan: PlanTransaction, *, policy_version: str, authenticated_actor: ActorIdentity
+    ) -> tuple[PlanApprovalRequirement, ...]: ...
+
+    def dispatch_plan(
+        self,
+        plan: PlanTransaction,
+        *,
+        approval_attestations: tuple[ApprovalBinding, ...] | None = None,
+        policy_version: str | None = None,
+        authenticated_actor: ActorIdentity | None = None,
+        approval_verifier: ApprovalVerifier | None = None,
+        deadline_monotonic_ns: int | None = None,
+        lease_ttl_seconds: float = 30.0,
+    ) -> PlanTransaction | PlanResultSummary: ...
+
+    def inspect_durable_recovery(
+        self,
+        plan_id: str,
+        plan_hash: str,
+        *,
+        authenticated_operator: ActorIdentity,
+        expected_status: str,
+        expected_attempt: int,
+    ) -> RecoveryEvidence[Any]: ...
+
+    def recover_durable_plan(
+        self,
+        plan_id: str,
+        plan_hash: str,
+        *,
+        authenticated_operator: ActorIdentity,
+        expected_status: str,
+        expected_attempt: int,
+        resolution_action: str,
+        reason: str,
+        recovery_evidence: RecoveryEvidence[Any] | None = None,
+    ) -> None: ...
+
+
+def parse_command(command: TypedCommand | dict[str, Any] | str | bytes) -> TypedCommand:
+    """Public canonical envelope parsing seam; revalidates typed inputs."""
+    return _parse(command)
+
+
+def command_fingerprint(command: TypedCommand) -> str:
+    """Public semantic command identity, excluding transport-only fields."""
+    return _fingerprint(_parse(command))
+
+
 class CommandBus:
     """Validates typed commands and applies them atomically to central state."""
 
@@ -1014,6 +1069,10 @@ class CommandBus:
         self._plan_commit_epoch = 0
         self._plan_cache: OrderedDict[str, tuple[str, PlanTransaction]] = OrderedDict()
         self._plan_summaries: OrderedDict[str, tuple[str, PlanResultSummary]] = OrderedDict()
+
+    def uses_durable_store(self, store: DurablePlanDedupePort) -> bool:
+        """Read-only wiring check without exposing the store to callers."""
+        return store is not None and self._durable_store is store
 
     def _require_project(self) -> None:
         if self._project is None:

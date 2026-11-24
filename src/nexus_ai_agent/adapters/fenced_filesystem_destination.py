@@ -256,3 +256,20 @@ class FilesystemObservationVerifier:
             return observation == reader._observation(
                 observation.effect_key, observation.fencing_epoch, observation.status, data
             )
+
+    def verify_payload(self, observation: ExternalEffectObservation, expected_digest: str) -> bool:
+        """Verify command postcondition against actual bytes, not handler output."""
+        if (
+            not isinstance(observation, ExternalEffectObservation)
+            or observation.status != "PRESENT"
+        ):
+            return False
+        reader = self._reader
+        reader._validate(observation.effect_key, observation.fencing_epoch)
+        with reader._locked(observation.effect_key):
+            data = reader._metadata(observation.effect_key)
+            return reader._published_digest(
+                observation.effect_key, data
+            ) == expected_digest and observation == reader._observation(
+                observation.effect_key, observation.fencing_epoch, "PRESENT", data
+            )

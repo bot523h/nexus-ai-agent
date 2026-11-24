@@ -7,22 +7,28 @@ external effects must be composed separately; this compiler accepts commands.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
+from typing import Any
 
 from nexus_ai_agent.creative.studio.bus import (
-    CommandBus,
     PlanResultSummary,
     PlanStep,
     PlanTransaction,
-    _fingerprint,
-    _parse,
+    StudioExecutionPort,
+    command_fingerprint,
+    parse_command,
 )
 from nexus_ai_agent.creative.studio.durable_dedupe import ApprovalBinding, ApprovalVerifier
 from nexus_ai_agent.creative.studio.models import ActorIdentity, TypedCommand
 from nexus_ai_agent.creative.studio.plan_ir import PlanIR
 
 
-def compile_plan(ir: PlanIR, commands: Mapping[str, TypedCommand]) -> PlanTransaction:
+def compile_plan(
+    ir: PlanIR,
+    commands: Mapping[str, TypedCommand],
+    *,
+    compensations: Mapping[str, Callable[[Any], Any]] | None = None,
+) -> PlanTransaction:
     """Revalidate owned command copies and reject any changed or extra binding."""
     if not isinstance(ir, PlanIR):
         raise ValueError("typed PlanIR is required")
@@ -31,17 +37,26 @@ def compile_plan(ir: PlanIR, commands: Mapping[str, TypedCommand]) -> PlanTransa
         raise ValueError("commands must exactly cover the DAG")
     steps: list[PlanStep] = []
     for node in ordered:
-        command = _parse(commands[node.node_id])
-        if command.operation != node.operation or _fingerprint(command) != node.command_digest:
+        command = parse_command(commands[node.node_id])
+        if (
+            command.operation != node.operation
+            or command_fingerprint(command) != node.command_digest
+        ):
             raise ValueError("command differs from approved DAG node")
         if command.target.project_id != ir.project_id:
             raise ValueError("command project differs from DAG")
-        steps.append(PlanStep(operation=node.operation, command=command))
+        steps.append(
+            PlanStep(
+                operation=node.operation,
+                command=command,
+                compensate=(compensations or {}).get(node.operation),
+            )
+        )
     return PlanTransaction(plan_id=ir.plan_id, steps=tuple(steps), admitted_ir_hash=ir.plan_hash)
 
 
 def execute_durable_ir(
-    bus: CommandBus,
+    bus: StudioExecutionPort,
     ir: PlanIR,
     commands: Mapping[str, TypedCommand],
     *,

@@ -166,6 +166,8 @@ class OperationSpec:
     #: Trusted registration guarantees that the destination enforces the
     #: supplied effect key and fencing epoch; the bus itself cannot do so.
     durable_effects: bool = False
+    precondition_contract: str = ""
+    postcondition_contract: str = ""
 
     @property
     def effective_permissions(self) -> tuple[str, ...]:
@@ -331,6 +333,15 @@ class CapabilityRegistry:
                 "input_model": f"{spec.input_model.__module__}.{spec.input_model.__qualname__}",
                 "handler": spec.handler.__name__,
             }
+            if spec.external_effects:
+                if not spec.precondition_contract or not spec.postcondition_contract:
+                    raise ValueError(
+                        f"{operation}: external operation lacks verification contracts"
+                    )
+                expected.update(
+                    precondition_contract=spec.precondition_contract,
+                    postcondition_contract=spec.postcondition_contract,
+                )
             if contract is None or any(
                 contract.get(key) != value for key, value in expected.items()
             ):

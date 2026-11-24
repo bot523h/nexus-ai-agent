@@ -1197,6 +1197,19 @@ class DurablePlanDedupeStore:
         self._validate_identity(plan_id, plan_hash, project_id)
         validate_plan_identity(operator_id, name="operator_id")
         self._authorize_recovery(project_id, operator_id, expected_status, expected_attempt)
+        if expected_status not in ("IN_DOUBT", "ROLLBACK_FAILED"):
+            raise ValueError("unsupported expected status")
+        if type(expected_attempt) is not int or not 0 <= expected_attempt <= 2**63 - 1:
+            raise ValueError("expected_attempt must be a nonnegative bounded integer")
+        # A dead worker cannot quarantine itself. Authenticated inspection may
+        # quarantine only its matching expired lease, never a live worker.
+        with self._transaction() as conn:
+            conn.execute(
+                "UPDATE plans SET status='IN_DOUBT' WHERE project_id=? AND plan_id=? "
+                "AND plan_hash=? AND attempt=? AND status IN ('EXECUTING','COMPENSATING') "
+                "AND lease_expires_at<=? AND ?='IN_DOUBT'",
+                (project_id, plan_id, plan_hash, expected_attempt, self._now(), expected_status),
+            )
         journal = self.quarantined_journal(
             plan_id,
             plan_hash,

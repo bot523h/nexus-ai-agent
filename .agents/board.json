@@ -8796,7 +8796,12 @@
       "generation": 2,
       "ttl_hours": 24,
       "gates_owner": false,
-      "delivered": [],
+      "delivered": [
+        "Wave 2: StudioExecutionPort and public command parse/fingerprint boundary; runtime has no concrete bus or private-store dependency.",
+        "Wave 2: explicit fenced UTF-8 artifact operation with declared pre/postcondition contracts, independent byte-level verification, durable ingress and unchanged-file cold replay.",
+        "Wave 2: credential-authenticated project:repair scope, one-use recovery evidence, PRESENT acknowledgement/compensation and ABSENT takeover after real subprocess os._exit(73).",
+        "Wave 2: PR #355 GraphQL review audit: all seven Sourcery threads already resolved; no duplicate replies or resolution calls."
+      ],
       "note": "",
       "previous_release_reason": "auto-released by gc at 2026-11-24T09:08:55Z (stale active lease)"
     }
