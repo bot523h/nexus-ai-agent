@@ -568,3 +568,180 @@ def test_remove_staging_is_best_effort_on_io_failure(
     store = LocalContentAddressedBlobStore(tmp_path / "blob")
     monkeypatch.setattr(store._fs, "unlink", Mock(side_effect=OSError("io failure")))
     assert store.remove_staging("staging/missing") is None
+
+
+@pytest.mark.parametrize("bad_call", [1, 2, 3])
+def test_blob_root_and_staging_permissions_fail_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, bad_call: int
+) -> None:
+    import os
+    import stat
+
+    from nexus_ai_agent.creative.assets import blob_store as module
+
+    real_fstat = os.fstat
+    calls = 0
+    chmod_calls = 0
+    real_fchmod = os.fchmod
+
+    def track_fchmod(fd: int, mode: int) -> None:
+        nonlocal chmod_calls
+        chmod_calls += 1
+        real_fchmod(fd, mode)
+
+    def bad_fstat(fd: int) -> os.stat_result:
+        nonlocal calls
+        calls += 1
+        info = real_fstat(fd)
+        if (bad_call < 3 and calls == bad_call) or (bad_call == 3 and chmod_calls == 2):
+            fields = list(info)
+            fields[0] = (stat.S_IFREG | 0o600) if bad_call == 1 else (stat.S_IFDIR | 0o755)
+            return os.stat_result(fields)
+        return info
+
+    monkeypatch.setattr(module.os, "fstat", bad_fstat)
+    monkeypatch.setattr(module.os, "fchmod", track_fchmod)
+    with pytest.raises(BlobStoreError, match="not a directory|permissions are unsafe"):
+        LocalContentAddressedBlobStore(tmp_path / "blob")
+
+
+@pytest.mark.asyncio
+async def test_unpinned_acquisition_failure_is_not_leaked(tmp_path: Path) -> None:
+    from nexus_ai_agent.creative.assets.admission import asset_admission_lock
+
+    store = LocalContentAddressedBlobStore(tmp_path / "blob", lock_timeout_seconds=0.01)
+    with asset_admission_lock(store._fs.root, exclusive=True):
+        with pytest.raises(TimeoutError):
+            await store.publish_from_staging_async("staging/a", "blobs/b")
+    assert not store.in_flight_staging_keys()
+    with asset_admission_lock(store._fs.root, exclusive=True, timeout_seconds=0.1):
+        pass
+
+
+@pytest.mark.asyncio
+async def test_worker_submission_failure_releases_acquired_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import asyncio
+
+    from nexus_ai_agent.creative.assets.admission import asset_admission_lock
+
+    store = LocalContentAddressedBlobStore(tmp_path / "blob")
+    loop = asyncio.get_running_loop()
+    run = loop.run_in_executor
+    calls = 0
+
+    def submit(*args: object):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise RuntimeError("worker rejected")
+        return run(*args)
+
+    monkeypatch.setattr(loop, "run_in_executor", submit)
+    with pytest.raises(RuntimeError, match="worker rejected"):
+        await store.publish_from_staging_async("staging/a", "blobs/b")
+    assert not store.in_flight_staging_keys()
+    with asset_admission_lock(store._fs.root, exclusive=True, timeout_seconds=0.1):
+        pass
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("acquisition_fails", [False, True])
+async def test_cancellation_after_acquisition_settles_releases_tracking(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, acquisition_fails: bool
+) -> None:
+    import asyncio
+
+    from nexus_ai_agent.creative.assets import blob_store as module
+    from nexus_ai_agent.creative.assets.admission import asset_admission_lock
+
+    store = LocalContentAddressedBlobStore(tmp_path / "blob", lock_timeout_seconds=0.01)
+    real_shield = asyncio.shield
+
+    async def cancel_after_settlement(future):
+        try:
+            await real_shield(future)
+        except TimeoutError:
+            pass
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(module.asyncio, "shield", cancel_after_settlement)
+    if acquisition_fails:
+        with asset_admission_lock(store._fs.root, exclusive=True):
+            with pytest.raises(asyncio.CancelledError):
+                await store.publish_from_staging_async("staging/a", "blobs/b")
+    else:
+        with pytest.raises(asyncio.CancelledError):
+            await store.publish_from_staging_async("staging/a", "blobs/b")
+    assert not store.in_flight_staging_keys()
+    with asset_admission_lock(store._fs.root, exclusive=True, timeout_seconds=0.1):
+        pass
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["pinned", "unpinned", "acquisition"])
+async def test_cancelled_completion_callbacks_are_safe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode: str
+) -> None:
+    import asyncio
+    import io
+
+    from nexus_ai_agent.creative.assets import blob_store as module
+    from nexus_ai_agent.creative.assets.admission import asset_admission_lock
+
+    store = LocalContentAddressedBlobStore(tmp_path / "blob")
+    staging, sha, size = store.stage(io.BytesIO(b"data"), max_bytes=100)
+    loop = asyncio.get_running_loop()
+    original_submit = loop.run_in_executor
+    callback_names: list[str] = []
+
+    def submit(*args: object):
+        future = original_submit(*args)
+        original_add = future.add_done_callback
+
+        def add(callback, *cb_args, **cb_kwargs):
+            original_add(callback, *cb_args, **cb_kwargs)
+            if callback.__name__.startswith("consume_"):
+                callback_names.append(callback.__name__)
+                cancelled = loop.create_future()
+                cancelled.cancel()
+                loop.call_soon(callback, cancelled)
+
+        future.add_done_callback = add
+        return future
+
+    monkeypatch.setattr(loop, "run_in_executor", submit)
+    if mode == "acquisition":
+        shield = asyncio.shield
+
+        async def cancel_after_settlement(future):
+            await shield(future)
+            raise asyncio.CancelledError
+
+        monkeypatch.setattr(module.asyncio, "shield", cancel_after_settlement)
+        with pytest.raises(asyncio.CancelledError):
+            await store.publish_from_staging_async(staging, store.blob_key_for(sha))
+        assert (tmp_path / "blob" / staging).read_bytes() == b"data"
+    elif mode == "pinned":
+        with asset_admission_lock(store._fs.root, exclusive=False) as lease:
+            assert await store.publish_from_staging_async(
+                staging, store.blob_key_for(sha), admission_lease=lease
+            ) == (sha, size, False)
+    else:
+        assert await store.publish_from_staging_async(staging, store.blob_key_for(sha)) == (
+            sha,
+            size,
+            False,
+        )
+    await asyncio.sleep(0)
+    assert callback_names == [
+        {
+            "pinned": "consume_pinned",
+            "unpinned": "consume_result",
+            "acquisition": "consume_acquisition",
+        }[mode]
+    ]
+    assert not store.in_flight_staging_keys()
+    with asset_admission_lock(store._fs.root, exclusive=True, timeout_seconds=0.1):
+        pass
