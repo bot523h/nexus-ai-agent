@@ -653,3 +653,115 @@ def test_cold_bus_cannot_execute_new_plan_without_a_project(tmp_path: Path) -> N
     with sqlite3.connect(tmp_path / "plans.db") as conn:
         assert conn.execute("SELECT count(*) FROM plans").fetchone() == (0,)
         assert conn.execute("SELECT count(*) FROM consumed_nonces").fetchone() == (0,)
+
+
+def test_ibpc_mac_verifier_binds_entire_approval_and_bus_execution(tmp_path: Path) -> None:
+    """Real IBPC MAC and disk, with a test issuer and a synthetic project grant."""
+    from datetime import datetime, timezone
+
+    from nexus_ai_agent.adapters.ibpc_plan_approval import IBPCPlanApprovalVerifier
+    from nexus_ai_agent.nagar.ibpc.approval_mac import StaticKeyRing, issue_envelope
+
+    bus, actor = make_bus(tmp_path)
+    plan = make_plan(tmp_path, actor)
+    binding = approvals(bus, plan, actor, "signed")[0]
+    keys = StaticKeyRing({"active": b"k" * 32}, active_key_id="active")
+    issue = datetime.fromtimestamp(binding.issued_at, timezone.utc).isoformat()
+    expires = datetime.fromtimestamp(binding.expires_at, timezone.utc).isoformat()
+    envelope = issue_envelope(
+        keys,
+        approval_id=binding.approval_id,
+        payload=asdict(binding),
+        issued_at=issue,
+        expires_at=expires,
+    )
+    verifier = IBPCPlanApprovalVerifier(keys, {binding.approval_id: envelope})
+    assert verifier.verify(binding)
+    # A change to any field invalidates the actual MAC, not only bus preflight.
+    for altered in (
+        replace(binding, project_id="other"),
+        replace(binding, plan_id="other"),
+        replace(binding, actor_id="mallory"),
+        replace(binding, plan_hash="f" * 64),
+        replace(binding, step_id="step-9"),
+        replace(binding, capability_version="other"),
+        replace(binding, normalized_params_hash="e" * 64),
+        replace(binding, policy_version="other"),
+        replace(binding, nonce="other"),
+        replace(binding, issued_at=binding.issued_at - 1),
+        replace(binding, expires_at=binding.expires_at + 1),
+    ):
+        assert not verifier.verify(altered)
+    assert not IBPCPlanApprovalVerifier(
+        StaticKeyRing({"active": b"x" * 32}, active_key_id="active"),
+        {binding.approval_id: envelope},
+    ).verify(binding)
+    assert not IBPCPlanApprovalVerifier(keys, {}).verify(binding)
+    assert not IBPCPlanApprovalVerifier(
+        keys,
+        {binding.approval_id: envelope},
+        now=lambda: datetime.fromtimestamp(binding.expires_at, timezone.utc),
+    ).verify(binding)
+    assert not IBPCPlanApprovalVerifier(
+        keys,
+        {binding.approval_id: envelope},
+        now=lambda: datetime.fromtimestamp(binding.issued_at - 1, timezone.utc),
+    ).verify(binding)
+    assert not IBPCPlanApprovalVerifier(
+        keys,
+        {binding.approval_id: envelope},
+        now=lambda: datetime(2026, 1, 1),
+    ).verify(binding)
+    forged = replace(binding, normalized_params_hash="e" * 64)
+    with pytest.raises(ApprovalBindingError):
+        bus.dispatch_plan(
+            plan,
+            approval_attestations=(forged,),
+            policy_version="v1",
+            authenticated_actor=actor,
+            approval_verifier=verifier,
+            deadline_monotonic_ns=time.monotonic_ns() + 10**10,
+        )
+    with pytest.raises(ApprovalBindingError):
+        bus.dispatch_plan(
+            plan,
+            approval_attestations=(binding,),
+            policy_version="v1",
+            authenticated_actor=ActorIdentity(kind="user", actor_id="mallory"),
+            approval_verifier=verifier,
+            deadline_monotonic_ns=time.monotonic_ns() + 10**10,
+        )
+    from nexus_ai_agent.creative.studio.models import AuthorizationError
+
+    foreign_bus = CommandBus(
+        bus.project,
+        registry=bus.registry,
+        authorizer=ProjectAccess(actor, "other-project", frozenset({"project:read"})),
+        durable_store=DurablePlanDedupeStore(tmp_path / "plans.db"),
+        durable_verifiers=bus._durable_verifiers,
+    )
+    with pytest.raises(AuthorizationError):
+        foreign_bus.dispatch_plan(
+            plan,
+            approval_attestations=(binding,),
+            policy_version="v1",
+            authenticated_actor=actor,
+            approval_verifier=verifier,
+            deadline_monotonic_ns=time.monotonic_ns() + 10**10,
+        )
+    with sqlite3.connect(tmp_path / "plans.db") as conn:
+        assert conn.execute("SELECT count(*) FROM consumed_nonces").fetchone() == (0,)
+        assert conn.execute("SELECT count(*) FROM plans").fetchone() == (0,)
+    result = bus.dispatch_plan(
+        plan,
+        approval_attestations=(binding,),
+        policy_version="v1",
+        authenticated_actor=actor,
+        approval_verifier=verifier,
+        deadline_monotonic_ns=time.monotonic_ns() + 10**10,
+    )
+    assert isinstance(result, PlanResultSummary)
+    assert bus.project.name == "after"
+    with sqlite3.connect(tmp_path / "plans.db") as conn:
+        assert conn.execute("SELECT status FROM plans").fetchone() == ("COMMITTED",)
+        assert conn.execute("SELECT status FROM compensation_journal").fetchone() == ("VERIFIED",)
