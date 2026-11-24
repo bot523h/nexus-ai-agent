@@ -419,7 +419,7 @@ def test_compensation_rechecks_lease_after_fence_read(tmp_path: Path, succeeded:
     lease = store.reserve_and_start(
         "p", HASH, external_effects=True, nonce="n", lease_ttl_seconds=1
     )
-    args = {"attempt": lease.attempt, "owner_token": lease.owner_token}
+    args: dict[str, Any] = {"attempt": lease.attempt, "owner_token": lease.owner_token}
     store.mark_compensating("p", HASH, **args)
     values = iter((10.0, 11.0))
     store._clock = lambda: next(values)
@@ -527,5 +527,109 @@ def test_intent_can_be_recorded_before_external_effect(tmp_path: Path) -> None:
     with pytest.raises(PlanInDoubtQuarantineError):
         DurablePlanDedupeStore(path, clock=lambda: now[0]).reserve_and_start(
             "p", HASH, external_effects=True, nonce="another"
+        )
+    assert store.compensation_journal("p", HASH)[0].status == "PENDING"
+
+
+def test_verified_forward_intent_is_fenced_and_committable(tmp_path: Path) -> None:
+    """A verified intent and its receipt survive a SQLite reopen."""
+    path = tmp_path / "db"
+    now = [10.0]
+    store = DurablePlanDedupeStore(path, clock=lambda: now[0])
+    lease = store.reserve_and_start(
+        "p", HASH, external_effects=True, nonce="n", lease_ttl_seconds=2
+    )
+    fence: dict[str, Any] = {"attempt": lease.attempt, "owner_token": lease.owner_token}
+    store.record_compensation_intent("p", HASH, step_id="one", effect_key=KEY1, **fence)
+    with pytest.raises(PlanFencingTokenMismatchError):
+        store.verify_effect_intent(
+            "p",
+            HASH,
+            step_id="one",
+            effect_key=KEY1,
+            verification_digest=KEY2,
+            **{**fence, "owner_token": "d" * 64},
+        )
+    with pytest.raises(ValueError, match="verification_digest"):
+        store.verify_effect_intent(
+            "p", HASH, step_id="one", effect_key=KEY1, verification_digest="bad", **fence
+        )
+    store.verify_effect_intent(
+        "p", HASH, step_id="one", effect_key=KEY1, verification_digest=KEY2, **fence
+    )
+    entry = store.compensation_journal("p", HASH)[0]
+    assert (
+        entry.status == "VERIFIED"
+        and json.loads(entry.evidence_json or "")["verification_digest"] == KEY2
+    )
+    with pytest.raises(PlanFencingTokenMismatchError):
+        store.verify_effect_intent(
+            "p", HASH, step_id="one", effect_key=KEY1, verification_digest=KEY2, **fence
+        )
+    store.finish("p", HASH, evidence={"receipt": "ok"}, **fence)
+    record = DurablePlanDedupeStore(path, clock=lambda: now[0]).reserve(
+        "p", HASH, external_effects=True
+    )
+    assert record.status == "COMMITTED" and json.loads(record.evidence_json or "") == {
+        "receipt": "ok"
+    }
+
+
+def test_verified_old_attempt_cannot_be_committed_by_takeover(tmp_path: Path) -> None:
+    # MOCK: a permissive repair callback models a trusted operator authority.
+    store = DurablePlanDedupeStore(
+        tmp_path / "db", clock=lambda: 1.0, repair_authorizer=lambda _p, _o, _s, _a: True
+    )
+    first = store.reserve_and_start("p", HASH, external_effects=True, nonce="n1")
+    fence: dict[str, Any] = {"attempt": first.attempt, "owner_token": first.owner_token}
+    store.record_compensation_intent("p", HASH, step_id="one", effect_key=KEY1, **fence)
+    store.verify_effect_intent(
+        "p", HASH, step_id="one", effect_key=KEY1, verification_digest=KEY2, **fence
+    )
+    store.quarantine("p", HASH, **fence)
+    store.repair_in_doubt(
+        "default",
+        "p",
+        HASH,
+        expected_status="IN_DOUBT",
+        expected_attempt=1,
+        operator_id="admin",
+        resolution_action="authorize_takeover",
+        reason="investigated",
+    )
+    second = store.reserve_and_start("p", HASH, external_effects=True, nonce="n2")
+    with pytest.raises(PlanInDoubtQuarantineError):
+        store.finish("p", HASH, attempt=second.attempt, owner_token=second.owner_token, evidence={})
+
+
+def test_verified_and_pending_intents_cannot_publish_receipt(tmp_path: Path) -> None:
+    store = DurablePlanDedupeStore(tmp_path / "db", clock=lambda: 1.0)
+    lease = store.reserve_and_start("p", HASH, external_effects=True, nonce="n")
+    fence: dict[str, Any] = {"attempt": lease.attempt, "owner_token": lease.owner_token}
+    store.record_compensation_intent("p", HASH, step_id="one", effect_key=KEY1, **fence)
+    store.record_compensation_intent("p", HASH, step_id="two", effect_key=KEY2, **fence)
+    store.verify_effect_intent(
+        "p", HASH, step_id="one", effect_key=KEY1, verification_digest=HASH, **fence
+    )
+    with pytest.raises(PlanInDoubtQuarantineError):
+        store.finish("p", HASH, evidence={}, **fence)
+    assert [entry.status for entry in store.compensation_journal("p", HASH)] == [
+        "VERIFIED",
+        "PENDING",
+    ]
+
+
+def test_expired_fence_cannot_verify_intent(tmp_path: Path) -> None:
+    now = [1.0]
+    store = DurablePlanDedupeStore(tmp_path / "db", clock=lambda: now[0])
+    lease = store.reserve_and_start(
+        "p", HASH, external_effects=True, nonce="n", lease_ttl_seconds=1
+    )
+    fence: dict[str, Any] = {"attempt": lease.attempt, "owner_token": lease.owner_token}
+    store.record_compensation_intent("p", HASH, step_id="one", effect_key=KEY1, **fence)
+    now[0] = 2.0
+    with pytest.raises(PlanFencingTokenMismatchError):
+        store.verify_effect_intent(
+            "p", HASH, step_id="one", effect_key=KEY1, verification_digest=KEY2, **fence
         )
     assert store.compensation_journal("p", HASH)[0].status == "PENDING"

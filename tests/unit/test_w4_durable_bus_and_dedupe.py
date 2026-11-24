@@ -1092,3 +1092,901 @@ def test_repair_requires_valid_expected_status_and_bounded_audit(
     with sqlite3.connect(path) as conn:
         assert conn.execute("SELECT status FROM plans").fetchone()[0] == "IN_DOUBT"
         assert conn.execute("SELECT count(*) FROM plan_repair_events").fetchone()[0] == 0
+
+
+def _integrated_bus(path: Path, calls: list[str], *, fail: bool = False) -> tuple[Any, Any]:
+    """SQLite is real; identity and effect authorities are test doubles."""
+    from nexus_ai_agent.creative.studio.authorization import ProjectAccess
+    from nexus_ai_agent.creative.studio.bus import CommandBus
+    from nexus_ai_agent.creative.studio.capabilities import (
+        CapabilityRegistry,
+        OperationContext,
+        OperationOutcome,
+        OperationSpec,
+        PlayCommandInput,
+    )
+    from nexus_ai_agent.creative.studio.models import (
+        ActorIdentity,
+        PermissionLevel,
+        Project,
+        Timeline,
+        new_project,
+    )
+
+    actor = ActorIdentity(kind="user", actor_id="alice")
+    project = new_project("project", "demo", Timeline(timeline_id="timeline", duration_us=0))
+    registry = CapabilityRegistry()
+
+    def handler(state: Project, context: OperationContext) -> OperationOutcome:
+        assert context.effect_key is not None and context.fencing_epoch is not None
+        assert context.durable_heartbeat is not None
+        context.durable_heartbeat()
+        calls.append(context.effect_key)
+        if fail:
+            raise RuntimeError("effect failed")
+        state.name = "changed"
+        return OperationOutcome(state, context.history, {"ok": True})
+
+    registry.register_operation(
+        "example",
+        "playback",
+        OperationSpec("example.play", "test", PermissionLevel.IMMEDIATE, PlayCommandInput, handler),
+    )
+    access = ProjectAccess(actor, "project", frozenset({"project:read"}))
+    return CommandBus(
+        project,
+        registry=registry,
+        authorizer=access,
+        durable_store=DurablePlanDedupeStore(path),
+        durable_verifiers={"example.play": lambda _project, _command, _result, _key: True},
+    ), actor
+
+
+def _integrated_plan(bus: Any, actor: Any, nonce: str, *, plan_id: str = "plan") -> tuple[Any, Any]:
+    from dataclasses import asdict
+    from datetime import datetime, timezone
+
+    from nexus_ai_agent.creative.studio.bus import PlanStep, PlanTransaction
+    from nexus_ai_agent.creative.studio.durable_dedupe import ApprovalBinding
+    from nexus_ai_agent.creative.studio.models import TypedCommand
+
+    command = TypedCommand(
+        command_id="cmd", operation="example.play", actor=actor, idempotency_key="key"
+    )
+    plan = PlanTransaction(plan_id=plan_id, steps=(PlanStep("example.play", command=command),))
+    (scope,) = bus.durable_approval_requirements(
+        plan, policy_version="v1", authenticated_actor=actor
+    )
+    now = datetime.now(timezone.utc).timestamp()
+    approval = ApprovalBinding(
+        **asdict(scope),
+        approval_id="approval",
+        nonce=nonce,
+        issued_at=now - 10,
+        expires_at=now + 300,
+    )
+    return plan, approval
+
+
+class _MockApproval:
+    def verify(self, binding: Any) -> bool:
+        return True
+
+
+def _run_integrated(bus: Any, plan: Any, actor: Any, approval: Any) -> Any:
+    import time
+
+    return bus.dispatch_durable_plan(
+        plan,
+        (approval,),
+        policy_version="v1",
+        authenticated_actor=actor,
+        approval_verifier=_MockApproval(),
+        deadline_monotonic_ns=time.monotonic_ns() + 10**10,
+    )
+
+
+def test_bus_durable_verified_commit_and_rehydrate_on_restart(tmp_path: Path) -> None:
+    path = tmp_path / "db"
+    calls: list[str] = []
+    first, actor = _integrated_bus(path, calls)
+    plan, approval = _integrated_plan(first, actor, "nonce-1")
+    summary = _run_integrated(first, plan, actor, approval)
+    assert first.project.name == "changed" and first.state_revision == 1
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("SELECT status FROM plans").fetchone() == ("COMMITTED",)
+        assert conn.execute("SELECT status, effect_key FROM compensation_journal").fetchone() == (
+            "VERIFIED",
+            calls[0],
+        )
+    second, actor2 = _integrated_bus(path, calls)
+    same, approval2 = _integrated_plan(second, actor2, "nonce-2")
+    replay = _run_integrated(second, same, actor2, approval2)
+    assert replay == summary and len(calls) == 1
+    assert second.project == first.project and second.history == first.history
+
+
+def test_bus_durable_pending_failure_is_quarantined(tmp_path: Path) -> None:
+    path = tmp_path / "db"
+    calls: list[str] = []
+    bus, actor = _integrated_bus(path, calls, fail=True)
+    plan, approval = _integrated_plan(bus, actor, "nonce-1")
+    with pytest.raises(Exception, match="effect failed"):
+        _run_integrated(bus, plan, actor, approval)
+    assert bus.project.name == "demo" and bus.state_revision == 0
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("SELECT status, evidence_json FROM plans").fetchone() == (
+            "IN_DOUBT",
+            None,
+        )
+        assert conn.execute("SELECT status FROM compensation_journal").fetchone() == ("PENDING",)
+    second, actor2 = _integrated_bus(path, calls)
+    same, approval2 = _integrated_plan(second, actor2, "nonce-2")
+    with pytest.raises(PlanInDoubtQuarantineError):
+        _run_integrated(second, same, actor2, approval2)
+    assert len(calls) == 1
+
+
+def test_bus_durable_rejects_nonce_reuse_for_other_plan(tmp_path: Path) -> None:
+    path = tmp_path / "db"
+    calls: list[str] = []
+    first, actor = _integrated_bus(path, calls)
+    plan, approval = _integrated_plan(first, actor, "nonce")
+    _run_integrated(first, plan, actor, approval)
+    second, actor2 = _integrated_bus(path, calls)
+    other, reused = _integrated_plan(second, actor2, "nonce", plan_id="other")
+    with pytest.raises(PlanStoreStateError, match="nonce already consumed"):
+        _run_integrated(second, other, actor2, reused)
+    assert len(calls) == 1
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("SELECT count(*) FROM plans WHERE plan_id='other'").fetchone() == (0,)
+
+
+def test_bus_durable_receipt_survives_process_restart(tmp_path: Path) -> None:
+    import subprocess
+
+    path = tmp_path / "db"
+    child = """
+import json, runpy, sys
+m = runpy.run_path("tests/unit/test_w4_durable_bus_and_dedupe.py")
+from pathlib import Path
+calls = []
+bus, actor = m["_integrated_bus"](Path(sys.argv[1]), calls)
+plan, approval = m["_integrated_plan"](bus, actor, "child-nonce")
+m["_run_integrated"](bus, plan, actor, approval)
+print(json.dumps(bus.project.model_dump(mode="json")))
+"""
+    proc = subprocess.run(
+        [sys.executable, "-c", child, str(path)], check=True, capture_output=True, text=True
+    )
+    expected_project = json.loads(proc.stdout)
+    calls: list[str] = []
+    bus, actor = _integrated_bus(path, calls)
+    plan, approval = _integrated_plan(bus, actor, "parent-nonce")
+    _run_integrated(bus, plan, actor, approval)
+    assert bus.project.model_dump(mode="json") == expected_project
+    assert not calls and bus.history[-1].operation == "example.play"
+
+
+def test_bus_durable_crash_with_pending_intent_is_not_reexecuted(tmp_path: Path) -> None:
+    import subprocess
+    import time
+
+    path = tmp_path / "db"
+    child = """
+import os, runpy, sys
+m = runpy.run_path("tests/unit/test_w4_durable_bus_and_dedupe.py")
+from pathlib import Path
+bus, actor = m["_integrated_bus"](Path(sys.argv[1]), [])
+bus._durable_store.verify_effect_intent = lambda *a, **k: os._exit(23)
+plan, approval = m["_integrated_plan"](bus, actor, "crash-nonce")
+m["_run_integrated"](bus, plan, actor, approval)
+"""
+    proc = subprocess.run([sys.executable, "-c", child, str(path)], check=False)
+    assert proc.returncode == 23
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("SELECT status FROM compensation_journal").fetchone() == ("PENDING",)
+        assert conn.execute("SELECT status FROM plans").fetchone() == ("EXECUTING",)
+    calls: list[str] = []
+    bus, actor = _integrated_bus(path, calls)
+    bus._durable_store._clock = lambda: time.monotonic_ns() / 1e9 + 60
+    plan, approval = _integrated_plan(bus, actor, "fresh-nonce")
+    with pytest.raises(PlanInDoubtQuarantineError):
+        _run_integrated(bus, plan, actor, approval)
+    assert not calls
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("SELECT status FROM plans").fetchone() == ("IN_DOUBT",)
+
+
+def test_bus_durable_replay_rejects_corrupted_project_snapshot(tmp_path: Path) -> None:
+    from nexus_ai_agent.creative.studio.bus import _canonical_hash
+
+    path = tmp_path / "db"
+    calls: list[str] = []
+    first, actor = _integrated_bus(path, calls)
+    plan, approval = _integrated_plan(first, actor, "nonce-1")
+    _run_integrated(first, plan, actor, approval)
+    with sqlite3.connect(path) as conn:
+        raw = conn.execute("SELECT evidence_json FROM plans").fetchone()[0]
+        receipt = json.loads(raw)
+        receipt["payload"]["project"]["name"] = "tampered"
+        receipt["digest"] = _canonical_hash(receipt["payload"])
+        conn.execute("UPDATE plans SET evidence_json=?", (json.dumps(receipt),))
+    second, actor2 = _integrated_bus(path, calls)
+    same, approval2 = _integrated_plan(second, actor2, "nonce-2")
+    with pytest.raises(PlanStoreStateError, match="invalid durable receipt"):
+        _run_integrated(second, same, actor2, approval2)
+    assert second.state_revision == 0 and second.project.name == "demo" and len(calls) == 1
+
+
+def test_bus_durable_compensates_verified_steps_in_reverse_order(tmp_path: Path) -> None:
+    import time
+    from dataclasses import asdict
+    from datetime import datetime, timezone
+
+    from nexus_ai_agent.creative.studio.bus import PlanStep, PlanTransaction, PlanTransactionState
+    from nexus_ai_agent.creative.studio.durable_dedupe import ApprovalBinding, ApprovalBindingError
+    from nexus_ai_agent.creative.studio.models import TypedCommand
+
+    class RejectThirdStep:
+        calls = 0
+
+        def verify(self, _binding: Any) -> bool:
+            self.calls += 1
+            # Three preflight approvals, then two boundary approvals succeed.
+            return self.calls != 6
+
+    effects: list[str] = []
+    compensations: list[list[int]] = [[], [], []]
+    bus, actor = _integrated_bus(tmp_path / "db", effects)
+    order: list[str] = []
+    original_record = bus._durable_store.record_compensation_step
+
+    def record(*args: Any, **kwargs: Any) -> None:
+        order.append(kwargs["step_id"])
+        original_record(*args, **kwargs)
+
+    bus._durable_store.record_compensation_step = record
+
+    def make_compensator(target: list[int]) -> Any:
+        def compensate(result: Any) -> None:
+            target.append(result.state_revision)
+
+        return compensate
+
+    steps = tuple(
+        PlanStep(
+            "example.play",
+            command=TypedCommand(
+                command_id=f"cmd-{i}",
+                operation="example.play",
+                actor=actor,
+                idempotency_key=f"key-{i}",
+            ),
+            compensate=make_compensator(compensations[i]),
+        )
+        for i in range(3)
+    )
+    plan = PlanTransaction(plan_id="multi", steps=steps)
+    scopes = bus.durable_approval_requirements(plan, policy_version="v1", authenticated_actor=actor)
+    now = datetime.now(timezone.utc).timestamp()
+    bindings = tuple(
+        ApprovalBinding(
+            **asdict(scope),
+            approval_id=f"a-{i}",
+            nonce=f"n-{i}",
+            issued_at=now - 10,
+            expires_at=now + 300,
+        )
+        for i, scope in enumerate(scopes)
+    )
+    with pytest.raises(ApprovalBindingError):
+        bus.dispatch_durable_plan(
+            plan,
+            bindings,
+            policy_version="v1",
+            authenticated_actor=actor,
+            approval_verifier=RejectThirdStep(),
+            deadline_monotonic_ns=time.monotonic_ns() + 10**10,
+        )
+    assert compensations == [[1], [2], []] and order == ["step-1", "step-0"] and len(effects) == 2
+    assert bus.state_revision == 0 and plan.state is PlanTransactionState.ROLLED_BACK
+    with sqlite3.connect(tmp_path / "db") as conn:
+        assert conn.execute("SELECT status FROM plans").fetchone() == ("ROLLED_BACK",)
+        assert conn.execute(
+            "SELECT status FROM compensation_journal ORDER BY entry_id"
+        ).fetchall() == [("COMPENSATED",), ("COMPENSATED",)]
+
+
+def test_bus_durable_operator_repair_requires_permissions_and_attempt(tmp_path: Path) -> None:
+    from nexus_ai_agent.creative.studio.authorization import ProjectAccess
+    from nexus_ai_agent.creative.studio.models import AuthorizationError
+
+    path = tmp_path / "db"
+    bus, actor = _integrated_bus(path, [], fail=True)
+    plan, approval = _integrated_plan(bus, actor, "nonce")
+    with pytest.raises(Exception, match="effect failed"):
+        _run_integrated(bus, plan, actor, approval)
+    plan_hash = approval.plan_hash
+    kwargs = dict(
+        authenticated_operator=actor,
+        expected_status="IN_DOUBT",
+        expected_attempt=1,
+        resolution_action="authorize_takeover",
+        reason="worker stopped",
+    )
+    with pytest.raises(AuthorizationError):
+        bus.recover_durable_plan("plan", plan_hash, **kwargs)
+    bus._authorizer = ProjectAccess(actor, "project", frozenset({"project:read", "project:repair"}))
+    # MOCK: the store repair authorizer stands in for independent operator authentication.
+    bus._durable_store._repair_authorizer = lambda _p, _o, _s, _a: True
+    with pytest.raises(PlanStoreStateError, match="expected status/attempt"):
+        bus.recover_durable_plan("plan", plan_hash, **{**kwargs, "expected_attempt": 2})
+    bus.recover_durable_plan("plan", plan_hash, **kwargs)
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("SELECT status, attempt, takeover_ready FROM plans").fetchone() == (
+            "RESERVED",
+            1,
+            1,
+        )
+
+
+def test_bus_external_effect_is_independently_checked_from_disk(tmp_path: Path) -> None:
+    """Real file I/O; the destination's fencing capability is simulated, not production proof."""
+    import hashlib
+    import time
+    from dataclasses import asdict
+    from datetime import datetime, timezone
+
+    from nexus_ai_agent.creative.studio.authorization import ProjectAccess
+    from nexus_ai_agent.creative.studio.bus import CommandBus, PlanStep, PlanTransaction
+    from nexus_ai_agent.creative.studio.capabilities import (
+        CapabilityRegistry,
+        OperationContext,
+        OperationOutcome,
+        OperationSpec,
+        PlayCommandInput,
+    )
+    from nexus_ai_agent.creative.studio.durable_dedupe import ApprovalBinding
+    from nexus_ai_agent.creative.studio.models import (
+        ActorIdentity,
+        PermissionLevel,
+        Project,
+        Timeline,
+        TypedCommand,
+        new_project,
+    )
+
+    path = tmp_path / "db"
+    actor = ActorIdentity(kind="user", actor_id="alice")
+    access = ProjectAccess(actor, "project", frozenset({"project:read"}))
+    registry = CapabilityRegistry()
+    calls: list[str] = []
+
+    def handler(state: Project, context: OperationContext) -> OperationOutcome:
+        assert context.effect_key is not None and context.durable_heartbeat is not None
+        context.durable_heartbeat()
+        target = tmp_path / context.effect_key
+        fd = os.open(
+            target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600
+        )
+        try:
+            os.write(fd, b"verified file effect")
+        finally:
+            os.close(fd)
+        calls.append(context.effect_key)
+        return OperationOutcome(
+            state, context.history, {"digest": hashlib.sha256(b"verified file effect").hexdigest()}
+        )
+
+    def independent(_project: Any, _command: Any, result: Any, key: str) -> bool:
+        fd = os.open(tmp_path / key, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        try:
+            return (
+                stat.S_ISREG(os.fstat(fd).st_mode)
+                and hashlib.sha256(os.read(fd, 1024)).hexdigest() == result.output["digest"]
+            )
+        finally:
+            os.close(fd)
+
+    def compensate(result: Any, root: str = str(tmp_path)) -> None:
+        __import__("os").unlink(f"{root}/{result.diagnostics['durable_effect_key']}")
+
+    registry.register_operation(
+        "example",
+        "playback",
+        OperationSpec(
+            "example.play",
+            "test",
+            PermissionLevel.IMMEDIATE,
+            PlayCommandInput,
+            handler,
+            external_effects=True,
+            durable_effects=True,
+        ),
+    )
+
+    def create(nonce: str) -> tuple[Any, Any, Any]:
+        project = new_project("project", "demo", Timeline(timeline_id="timeline", duration_us=0))
+        bus = CommandBus(
+            project,
+            registry=registry,
+            authorizer=access,
+            durable_store=DurablePlanDedupeStore(path),
+            durable_verifiers={"example.play": independent},
+        )
+        command = TypedCommand(
+            command_id="cmd", operation="example.play", actor=actor, idempotency_key="key"
+        )
+        plan = PlanTransaction(
+            plan_id="external",
+            steps=(PlanStep("example.play", command=command, compensate=compensate),),
+        )
+        (scope,) = bus.durable_approval_requirements(
+            plan, policy_version="v1", authenticated_actor=actor
+        )
+        now = datetime.now(timezone.utc).timestamp()
+        approval = ApprovalBinding(
+            **asdict(scope), approval_id="a", nonce=nonce, issued_at=now - 1, expires_at=now + 60
+        )
+        return bus, plan, approval
+
+    first, plan, approval = create("n1")
+    summary = first.dispatch_durable_plan(
+        plan,
+        (approval,),
+        policy_version="v1",
+        authenticated_actor=actor,
+        approval_verifier=_MockApproval(),
+        deadline_monotonic_ns=time.monotonic_ns() + 10**10,
+    )
+    assert len(calls) == 1 and (tmp_path / calls[0]).read_bytes() == b"verified file effect"
+    second, plan2, approval2 = create("n2")
+    replay = second.dispatch_durable_plan(
+        plan2,
+        (approval2,),
+        policy_version="v1",
+        authenticated_actor=actor,
+        approval_verifier=_MockApproval(),
+        deadline_monotonic_ns=time.monotonic_ns() + 10**10,
+    )
+    assert summary == replay and second.project == first.project and len(calls) == 1
+
+
+def test_bus_durable_rejects_verifier_failure_without_committing(tmp_path: Path) -> None:
+    path = tmp_path / "db"
+    calls: list[str] = []
+    bus, actor = _integrated_bus(path, calls)
+    bus._durable_verifiers["example.play"] = lambda *_args: False
+    plan, approval = _integrated_plan(bus, actor, "nonce")
+    with pytest.raises(Exception, match="independent effect verification failed"):
+        _run_integrated(bus, plan, actor, approval)
+    assert calls and bus.state_revision == 0
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("SELECT status FROM plans").fetchone() == ("IN_DOUBT",)
+        assert conn.execute("SELECT status FROM compensation_journal").fetchone() == ("PENDING",)
+
+
+def test_bus_durable_control_exception_cleans_up_and_reraises(tmp_path: Path) -> None:
+    path = tmp_path / "db"
+    bus, actor = _integrated_bus(path, [])
+
+    def interrupted(*_args: Any) -> bool:
+        raise KeyboardInterrupt()
+
+    bus._durable_verifiers["example.play"] = interrupted
+    plan, approval = _integrated_plan(bus, actor, "nonce")
+    with pytest.raises(KeyboardInterrupt):
+        _run_integrated(bus, plan, actor, approval)
+    assert bus.state_revision == 0 and not bus._executing and bus._durable_context == {}
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("SELECT status FROM plans").fetchone() == ("IN_DOUBT",)
+
+
+@pytest.mark.parametrize("deadline", [True, 0, -1, "invalid"])
+def test_bus_durable_invalid_deadline_never_reserves(tmp_path: Path, deadline: Any) -> None:
+    bus, actor = _integrated_bus(tmp_path / "db", [])
+    plan, approval = _integrated_plan(bus, actor, "nonce")
+    with pytest.raises((ValueError, TimeoutError)):
+        bus.dispatch_durable_plan(
+            plan,
+            (approval,),
+            policy_version="v1",
+            authenticated_actor=actor,
+            approval_verifier=_MockApproval(),
+            deadline_monotonic_ns=deadline,
+        )
+    with sqlite3.connect(tmp_path / "db") as conn:
+        assert conn.execute("SELECT count(*) FROM plans").fetchone() == (0,)
+
+
+def test_bus_durable_requires_independent_effect_verifier(tmp_path: Path) -> None:
+    bus, actor = _integrated_bus(tmp_path / "db", [])
+    plan, approval = _integrated_plan(bus, actor, "nonce")
+    bus._durable_verifiers.clear()
+    with pytest.raises(Exception, match="no independent durable verifier"):
+        _run_integrated(bus, plan, actor, approval)
+    with sqlite3.connect(tmp_path / "db") as conn:
+        assert conn.execute("SELECT count(*) FROM plans").fetchone() == (0,)
+
+
+def test_clock_domain_migration_quarantines_old_leases_and_fences_old_store(tmp_path: Path) -> None:
+    path = tmp_path / "db"
+    old = DurablePlanDedupeStore(path, clock=lambda: 100.0)
+    lease = old.reserve_and_start("p", HASH, external_effects=True, nonce="n")
+    with sqlite3.connect(path) as conn:
+        conn.execute("DROP TABLE plan_clock_domain")
+    DurablePlanDedupeStore(path)
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("SELECT status FROM plans").fetchone() == ("IN_DOUBT",)
+    with pytest.raises(PlanStoreStateError, match="clock domain changed"):
+        old.finish("p", HASH, attempt=lease.attempt, owner_token=lease.owner_token, evidence={})
+
+
+def test_default_lease_clock_is_monotonic_and_explicit_deadline_is_fenced(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import time
+
+    path = tmp_path / "db"
+    store = DurablePlanDedupeStore(path)
+    monkeypatch.setattr(time, "time", lambda: 10**12)
+    lease = store.reserve_and_start("p", HASH, external_effects=False, nonce="n")
+    assert lease.lease_expires_at < 10**12
+    with pytest.raises(TimeoutError):
+        store.finish(
+            "p",
+            HASH,
+            attempt=lease.attempt,
+            owner_token=lease.owner_token,
+            evidence={},
+            deadline_monotonic_ns=time.monotonic_ns() - 1,
+        )
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("SELECT status, evidence_json FROM plans").fetchone() == (
+            "EXECUTING",
+            None,
+        )
+    with pytest.raises(ValueError, match="integer"):
+        store.finish(
+            "p",
+            HASH,
+            attempt=lease.attempt,
+            owner_token=lease.owner_token,
+            evidence={},
+            deadline_monotonic_ns=True,
+        )
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "digest",
+        "version",
+        "plan_id",
+        "before_revision",
+        "project_id",
+        "project_hash",
+        "project_revision",
+        "history_count",
+        "history_operation",
+        "history_previous_hash",
+        "history_new_hash",
+        "step_count",
+        "step_status",
+        "step_input",
+        "reservation_count",
+        "reservation_key",
+        "reservation_fingerprint",
+        "reservation_result",
+        "invalid_json",
+        "nonfinite",
+        "duplicate_keys",
+        "oversized",
+    ],
+)
+def test_bus_durable_receipt_validation_fails_closed(tmp_path: Path, mutation: str) -> None:
+    from nexus_ai_agent.creative.studio.bus import _durable_hash
+
+    path = tmp_path / "db"
+    calls: list[str] = []
+    first, actor = _integrated_bus(path, calls)
+    plan, approval = _integrated_plan(first, actor, "nonce-1")
+    _run_integrated(first, plan, actor, approval)
+    with sqlite3.connect(path) as conn:
+        receipt = json.loads(conn.execute("SELECT evidence_json FROM plans").fetchone()[0])
+        payload = receipt["payload"]
+        if mutation == "version":
+            payload["version"] = True
+        elif mutation == "plan_id":
+            payload["plan_id"] = "different"
+        elif mutation == "before_revision":
+            payload["before_revision"] = True
+        elif mutation == "project_id":
+            payload["project"]["project_id"] = "different"
+        elif mutation == "project_hash":
+            payload["project"]["state_hash"] = "invalid"
+        elif mutation == "project_revision":
+            payload["project"]["state_revision"] = True
+        elif mutation == "history_count":
+            payload["history"] = []
+        elif mutation == "history_operation":
+            payload["history"][0]["operation"] = "different"
+        elif mutation == "history_previous_hash":
+            payload["history"][0]["previous_state_hash"] = "invalid"
+        elif mutation == "history_new_hash":
+            payload["history"][0]["new_state_hash"] = "invalid"
+        elif mutation == "step_count":
+            payload["steps"] = []
+        elif mutation == "step_status":
+            payload["steps"][0]["status"] = "failed"
+        elif mutation == "step_input":
+            payload["steps"][0]["input_hash"] = "invalid"
+        elif mutation == "reservation_count":
+            payload["idempotency"] = []
+        elif mutation == "reservation_key":
+            payload["idempotency"][0]["key"] = ["different", "x", "y"]
+        elif mutation == "reservation_fingerprint":
+            payload["idempotency"][0]["fingerprint"] = "invalid"
+        elif mutation == "reservation_result":
+            payload["idempotency"][0]["result"]["transaction_id"] = "invalid"
+        receipt["digest"] = _durable_hash(payload)
+        if mutation == "digest":
+            receipt["digest"] = "invalid"
+        raw = json.dumps(receipt)
+        if mutation == "invalid_json":
+            raw = "{"
+        elif mutation == "nonfinite":
+            raw = '{"payload":NaN,"digest":"invalid"}'
+        elif mutation == "duplicate_keys":
+            raw = '{"payload":{},"payload":{},"digest":"invalid"}'
+        elif mutation == "oversized":
+            raw = " " * 65537
+        conn.execute("UPDATE plans SET evidence_json=?", (raw,))
+    second, actor2 = _integrated_bus(path, calls)
+    same, approval2 = _integrated_plan(second, actor2, "nonce-2")
+    with pytest.raises(PlanStoreStateError, match="invalid durable receipt"):
+        _run_integrated(second, same, actor2, approval2)
+    assert second.state_revision == 0 and second.project.name == "demo" and len(calls) == 1
+
+
+def test_bus_durable_multi_nonce_conflict_rolls_back_reservation(tmp_path: Path) -> None:
+    import time
+    from dataclasses import asdict
+    from datetime import datetime, timezone
+
+    from nexus_ai_agent.creative.studio.bus import PlanStep, PlanTransaction
+    from nexus_ai_agent.creative.studio.durable_dedupe import ApprovalBinding
+    from nexus_ai_agent.creative.studio.models import TypedCommand
+
+    path = tmp_path / "db"
+    calls: list[str] = []
+    first, actor = _integrated_bus(path, calls)
+    plan, approval = _integrated_plan(first, actor, "used")
+    _run_integrated(first, plan, actor, approval)
+    bus, actor = _integrated_bus(path, calls)
+    steps = tuple(
+        PlanStep(
+            "example.play",
+            command=TypedCommand(
+                command_id=f"c{i}", operation="example.play", actor=actor, idempotency_key=f"k{i}"
+            ),
+        )
+        for i in range(2)
+    )
+    other = PlanTransaction(plan_id="other", steps=steps)
+    scopes = bus.durable_approval_requirements(
+        other, policy_version="v1", authenticated_actor=actor
+    )
+    now = datetime.now(timezone.utc).timestamp()
+    approvals = tuple(
+        ApprovalBinding(
+            **asdict(scope),
+            approval_id=f"a{i}",
+            nonce=nonce,
+            issued_at=now - 1,
+            expires_at=now + 60,
+        )
+        for i, (scope, nonce) in enumerate(zip(scopes, ("fresh", "used"), strict=True))
+    )
+    with pytest.raises(PlanStoreStateError, match="nonce already consumed"):
+        bus.dispatch_durable_plan(
+            other,
+            approvals,
+            policy_version="v1",
+            authenticated_actor=actor,
+            approval_verifier=_MockApproval(),
+            deadline_monotonic_ns=time.monotonic_ns() + 10**10,
+        )
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("SELECT count(*) FROM plans WHERE plan_id='other'").fetchone() == (0,)
+        assert conn.execute("SELECT nonce FROM consumed_nonces").fetchall() == [("used",)]
+    assert len(calls) == 1
+
+
+def test_bus_durable_two_steps_rehydrate_history_and_reservations(tmp_path: Path) -> None:
+    import time
+    from dataclasses import asdict
+    from datetime import datetime, timezone
+
+    from nexus_ai_agent.creative.studio.bus import PlanStep, PlanTransaction
+    from nexus_ai_agent.creative.studio.durable_dedupe import ApprovalBinding
+    from nexus_ai_agent.creative.studio.models import TypedCommand
+
+    path = tmp_path / "db"
+    calls: list[str] = []
+
+    def prepare(nonce_prefix: str) -> tuple[Any, Any, Any, Any]:
+        bus, actor = _integrated_bus(path, calls)
+        steps = tuple(
+            PlanStep(
+                "example.play",
+                command=TypedCommand(
+                    command_id=f"command-{i}",
+                    operation="example.play",
+                    actor=actor,
+                    idempotency_key=f"key-{i}",
+                ),
+            )
+            for i in range(2)
+        )
+        plan = PlanTransaction(plan_id="multi-success", steps=steps)
+        scopes = bus.durable_approval_requirements(
+            plan, policy_version="v1", authenticated_actor=actor
+        )
+        now = datetime.now(timezone.utc).timestamp()
+        approvals = tuple(
+            ApprovalBinding(
+                **asdict(scope),
+                approval_id=f"a{i}",
+                nonce=f"{nonce_prefix}-{i}",
+                issued_at=now - 1,
+                expires_at=now + 60,
+            )
+            for i, scope in enumerate(scopes)
+        )
+        return bus, actor, plan, approvals
+
+    first, actor, plan, approvals = prepare("n1")
+    result = first.dispatch_durable_plan(
+        plan,
+        approvals,
+        policy_version="v1",
+        authenticated_actor=actor,
+        approval_verifier=_MockApproval(),
+        deadline_monotonic_ns=time.monotonic_ns() + 10**10,
+    )
+    second, actor2, plan2, approvals2 = prepare("n2")
+    replay = second.dispatch_durable_plan(
+        plan2,
+        approvals2,
+        policy_version="v1",
+        authenticated_actor=actor2,
+        approval_verifier=_MockApproval(),
+        deadline_monotonic_ns=time.monotonic_ns() + 10**10,
+    )
+    assert result == replay and first.project == second.project and first.history == second.history
+    assert (
+        first.state_revision == 2 and len(calls) == 2 and first._idempotency == second._idempotency
+    )
+
+
+def test_clock_domain_switch_fences_old_live_instances(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "db"
+    monkeypatch.setattr(store_module, "_monotonic_clock_domain", lambda: "boot-a")
+    old = DurablePlanDedupeStore(path)
+    lease = old.reserve_and_start("p", HASH, external_effects=True, nonce="n")
+    monkeypatch.setattr(store_module, "_monotonic_clock_domain", lambda: "boot-b")
+    new = DurablePlanDedupeStore(path)
+    with pytest.raises(PlanStoreStateError, match="clock domain changed"):
+        old.finish("p", HASH, attempt=lease.attempt, owner_token=lease.owner_token, evidence={})
+    with pytest.raises(PlanInDoubtQuarantineError):
+        new.reserve("p", HASH, external_effects=True)
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("SELECT status FROM plans").fetchone() == ("IN_DOUBT",)
+
+
+def test_clock_domain_metadata_rejects_duplicates(tmp_path: Path) -> None:
+    path = tmp_path / "db"
+    DurablePlanDedupeStore(path)
+    with sqlite3.connect(path) as conn:
+        conn.execute("INSERT INTO plan_clock_domain VALUES ('duplicate')")
+    with pytest.raises(PlanStoreStateError, match="invalid lease clock domain metadata"):
+        DurablePlanDedupeStore(path)
+
+
+@pytest.mark.parametrize("payload", [b"bad-id", b"\xff"])
+def test_boot_identity_is_checked_before_use(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, payload: bytes
+) -> None:
+    target = tmp_path / "boot-id"
+    target.write_bytes(payload)
+    original_open = os.open
+
+    def fake_open(path: Any, flags: int, *args: Any) -> int:
+        if path == "/proc/sys/kernel/random/boot_id":
+            return original_open(target, flags)
+        return original_open(path, flags, *args)
+
+    monkeypatch.setattr(os, "open", fake_open)
+    with pytest.raises(PlanStoreStateError, match="kernel boot identity"):
+        store_module._monotonic_clock_domain()
+
+
+def test_missing_proc_uses_process_scoped_clock_domain(monkeypatch: pytest.MonkeyPatch) -> None:
+    def missing(_path: Any, _flags: int, *_args: Any) -> int:
+        raise FileNotFoundError()
+
+    monkeypatch.setattr(os, "open", missing)
+    assert store_module._monotonic_clock_domain().startswith("process-")
+
+
+@pytest.mark.parametrize(
+    "scenario", ["missing_store", "missing_key", "duplicate_key", "unfenced_external"]
+)
+def test_bus_durable_preflight_refuses_unsafe_execution(tmp_path: Path, scenario: str) -> None:
+    import time
+    from dataclasses import asdict, replace
+    from datetime import datetime, timezone
+
+    from nexus_ai_agent.creative.studio.bus import PlanStep, PlanTransaction, PlanTransactionError
+    from nexus_ai_agent.creative.studio.durable_dedupe import ApprovalBinding
+    from nexus_ai_agent.creative.studio.models import CommandValidationError, TypedCommand
+
+    path = tmp_path / "db"
+    calls: list[str] = []
+    bus, actor = _integrated_bus(path, calls)
+    approvals: tuple[Any, ...]
+    if scenario == "missing_store":
+        plan, binding = _integrated_plan(bus, actor, "nonce")
+        bus._durable_store = None
+        approvals = (binding,)
+    else:
+        if scenario == "unfenced_external":
+            spec = bus.registry.get_spec("example.play")
+            bus.registry._index["example.play"] = replace(
+                spec, external_effects=True, durable_effects=False
+            )
+        count = 2 if scenario == "duplicate_key" else 1
+        steps = tuple(
+            PlanStep(
+                "example.play",
+                command=TypedCommand(
+                    command_id=f"c{i}",
+                    operation="example.play",
+                    actor=actor,
+                    idempotency_key=None if scenario == "missing_key" else "same",
+                ),
+                compensate=(lambda _result: None) if scenario == "unfenced_external" else None,
+            )
+            for i in range(count)
+        )
+        plan = PlanTransaction(plan_id="preflight", steps=steps)
+        scopes = bus.durable_approval_requirements(
+            plan, policy_version="v1", authenticated_actor=actor
+        )
+        now = datetime.now(timezone.utc).timestamp()
+        approvals = tuple(
+            ApprovalBinding(
+                **asdict(scope),
+                approval_id=f"a{i}",
+                nonce=f"n{i}",
+                issued_at=now - 1,
+                expires_at=now + 60,
+            )
+            for i, scope in enumerate(scopes)
+        )
+    with pytest.raises((PlanTransactionError, CommandValidationError)):
+        bus.dispatch_durable_plan(
+            plan,
+            approvals,
+            policy_version="v1",
+            authenticated_actor=actor,
+            approval_verifier=_MockApproval(),
+            deadline_monotonic_ns=time.monotonic_ns() + 10**10,
+        )
+    assert calls == []
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("SELECT count(*) FROM plans").fetchone() == (0,)

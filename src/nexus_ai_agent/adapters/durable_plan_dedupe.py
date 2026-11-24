@@ -21,6 +21,7 @@ import stat
 import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -43,6 +44,29 @@ MAX_COMPENSATION_ENTRIES = 131072
 MAX_APPROVAL_NONCES = 128
 MAX_CONSUMED_NONCES = MAX_RECORDS * MAX_APPROVAL_NONCES
 _HASH = re.compile(r"[0-9a-f]{64}\Z")
+_PROCESS_CLOCK_DOMAIN = "process-" + secrets.token_hex(16)
+
+
+def _monotonic_clock_domain() -> str:
+    """Bind leases to the kernel boot, or conservatively to this process."""
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+    try:
+        fd = os.open("/proc/sys/kernel/random/boot_id", flags)
+        try:
+            if not stat.S_ISREG(os.fstat(fd).st_mode):
+                raise PlanStoreStateError("invalid kernel boot identity")
+            boot_id = os.read(fd, 65).decode("ascii").strip()
+        finally:
+            os.close(fd)
+    except FileNotFoundError:
+        # On systems without /proc, a restart quarantines active leases rather
+        # than comparing incompatible monotonic clocks across processes.
+        return _PROCESS_CLOCK_DOMAIN
+    except (OSError, UnicodeError) as exc:
+        raise PlanStoreStateError("kernel boot identity is unavailable") from exc
+    if re.fullmatch(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", boot_id) is None:
+        raise PlanStoreStateError("invalid kernel boot identity")
+    return "monotonic-ns-v1:" + boot_id
 
 
 def _precheck_evidence_bounds(
@@ -129,20 +153,27 @@ class DurablePlanDedupeStore:
     Live leases refuse duplicates without mutating the owner. Expired or legacy
     executions are quarantined. Fencing protects database transitions only; it
     cannot fence arbitrary external effects, which need their own authority.
+    Injected clocks are for controlled environments: every instance sharing a
+    database must use the same monotonic clock domain. Without a Linux boot ID,
+    separate processes use different domains and quarantine each other's leases;
+    sharing active work across those processes is therefore unsupported.
     """
 
     def __init__(
         self,
         path: str | Path,
         *,
-        clock: Callable[[], float] = time.time,
+        clock: Callable[[], float] | None = None,
         repair_authorizer: Callable[[str, str, str, int], bool] | None = None,
     ) -> None:
-        if not callable(clock):
+        if clock is not None and not callable(clock):
             raise ValueError("clock must be callable")
         if repair_authorizer is not None and not callable(repair_authorizer):
             raise ValueError("repair_authorizer must be callable")
-        self._clock = clock
+        self._clock: Callable[[], float] = (
+            clock if clock is not None else lambda: time.monotonic_ns() / 1e9
+        )
+        self._initialized = False
         self._repair_authorizer = repair_authorizer
         if str(path) == ":memory:":
             raise ValueError("a persistent SQLite path is required")
@@ -166,8 +197,26 @@ class DurablePlanDedupeStore:
             os.fchmod(fd, 0o600)
         finally:
             os.close(fd)
+        self._clock_domain = "injected" if clock is not None else _monotonic_clock_domain()
         with self._transaction() as conn:
             self._ensure_schema(conn)
+            self._ensure_clock_domain(conn)
+        self._initialized = True
+
+    def _ensure_clock_domain(self, conn: sqlite3.Connection) -> None:
+        """Never interpret an active lease from an incompatible clock domain."""
+        conn.execute("CREATE TABLE IF NOT EXISTS plan_clock_domain (domain TEXT NOT NULL)")
+        domains = conn.execute("SELECT domain FROM plan_clock_domain").fetchall()
+        if len(domains) > 1:
+            raise PlanStoreStateError("invalid lease clock domain metadata")
+        if not domains or domains[0][0] != self._clock_domain:
+            # Includes databases created by older versions using epoch clocks.
+            conn.execute(
+                "UPDATE plans SET status='IN_DOUBT' WHERE status IN ('EXECUTING','COMPENSATING') "
+                "AND lease_expires_at IS NOT NULL"
+            )
+            conn.execute("DELETE FROM plan_clock_domain")
+            conn.execute("INSERT INTO plan_clock_domain(domain) VALUES (?)", (self._clock_domain,))
 
     @staticmethod
     def _check_ancestors(parent: Path) -> None:
@@ -311,6 +360,10 @@ class DurablePlanDedupeStore:
             try:
                 try:
                     self._protect_sidecars()
+                    if self._initialized:
+                        domains = conn.execute("SELECT domain FROM plan_clock_domain").fetchall()
+                        if domains != [(self._clock_domain,)]:
+                            raise PlanStoreStateError("lease clock domain changed")
                     yield conn
                     self._protect_sidecars()
                     conn.execute("COMMIT")
@@ -320,6 +373,16 @@ class DurablePlanDedupeStore:
                     raise
             finally:
                 conn.close()
+
+    @staticmethod
+    def monotonic_ns() -> int:
+        """Return a monotonic deadline sample in nanoseconds."""
+        return time.monotonic_ns()
+
+    @staticmethod
+    def utc_timestamp() -> float:
+        """Return a UTC epoch sample for independently verified approvals."""
+        return datetime.now(timezone.utc).timestamp()
 
     @staticmethod
     def _validate_identity(plan_id: str, plan_hash: str, project_id: str) -> None:
@@ -668,10 +731,15 @@ class DurablePlanDedupeStore:
         owner_token: str,
         evidence: Any,
         project_id: str = "default",
+        deadline_monotonic_ns: int | None = None,
     ) -> None:
         """Record bounded evidence only for the current, unexpired owner."""
         self._validate_identity(plan_id, plan_hash, project_id)
         self._validate_fence(attempt, owner_token)
+        if deadline_monotonic_ns is not None and (
+            isinstance(deadline_monotonic_ns, bool) or not isinstance(deadline_monotonic_ns, int)
+        ):
+            raise ValueError("deadline_monotonic_ns must be an integer")
         body = _encode_evidence(evidence)
         unresolved = False
         with self._transaction() as conn:
@@ -690,11 +758,14 @@ class DurablePlanDedupeStore:
             unresolved = (
                 conn.execute(
                     "SELECT 1 FROM compensation_journal WHERE project_id=? AND plan_id=? "
-                    "AND plan_hash=? AND status!='COMPENSATED' LIMIT 1",
-                    (project_id, plan_id, plan_hash),
+                    "AND plan_hash=? AND ((attempt=? AND status!='VERIFIED') "
+                    "OR (attempt!=? AND status!='COMPENSATED')) LIMIT 1",
+                    (project_id, plan_id, plan_hash, attempt, attempt),
                 ).fetchone()
                 is not None
             )
+            if deadline_monotonic_ns is not None and time.monotonic_ns() >= deadline_monotonic_ns:
+                raise TimeoutError("durable plan deadline expired")
             changed = conn.execute(
                 "UPDATE plans SET status=?, evidence_json=? "
                 "WHERE project_id=? AND plan_id=? AND plan_hash=? AND status='EXECUTING' "
@@ -819,6 +890,61 @@ class DurablePlanDedupeStore:
                     "compensation is stale or its owner does not match"
                 )
 
+    def verify_effect_intent(
+        self,
+        plan_id: str,
+        plan_hash: str,
+        *,
+        attempt: int,
+        owner_token: str,
+        step_id: str,
+        effect_key: str,
+        verification_digest: str,
+        project_id: str = "default",
+    ) -> None:
+        """Persist an independently verified forward effect behind a live fence.
+
+        The caller must actually verify the effect; the digest by itself is not
+        proof of verification. A pending intent is never retried automatically.
+        """
+        self._validate_identity(plan_id, plan_hash, project_id)
+        self._validate_fence(attempt, owner_token)
+        validate_plan_identity(step_id, name="step_id")
+        if not isinstance(effect_key, str) or _HASH.fullmatch(effect_key) is None:
+            raise ValueError("effect_key must be lowercase SHA-256 hex")
+        if not isinstance(verification_digest, str) or _HASH.fullmatch(verification_digest) is None:
+            raise ValueError("verification_digest must be lowercase SHA-256 hex")
+        body = _encode_evidence(
+            {
+                "verification_digest": verification_digest,
+                "verified_at": datetime.now(timezone.utc).isoformat(),
+            }
+        )
+        with self._transaction() as conn:
+            changed = conn.execute(
+                "UPDATE compensation_journal SET status='VERIFIED', evidence_json=? "
+                "WHERE project_id=? AND plan_id=? AND plan_hash=? AND attempt=? "
+                "AND step_id=? AND effect_key=? AND status='PENDING' AND EXISTS ("
+                "SELECT 1 FROM plans WHERE plans.project_id=compensation_journal.project_id "
+                "AND plans.plan_id=compensation_journal.plan_id "
+                "AND plans.plan_hash=compensation_journal.plan_hash AND plans.status='EXECUTING' "
+                "AND plans.attempt=? AND plans.owner_token=? AND plans.lease_expires_at>?)",
+                (
+                    body,
+                    project_id,
+                    plan_id,
+                    plan_hash,
+                    attempt,
+                    step_id,
+                    effect_key,
+                    attempt,
+                    owner_token,
+                    self._now(),
+                ),
+            ).rowcount
+            if changed != 1:
+                raise PlanFencingTokenMismatchError("pending intent or live fence does not match")
+
     def record_compensation_step(
         self,
         plan_id: str,
@@ -846,7 +972,7 @@ class DurablePlanDedupeStore:
             changed = conn.execute(
                 "UPDATE compensation_journal SET status=?, evidence_json=? "
                 "WHERE project_id=? AND plan_id=? AND plan_hash=? AND attempt=? "
-                "AND step_id=? AND effect_key=? AND status='PENDING' AND EXISTS ("
+                "AND step_id=? AND effect_key=? AND status IN ('PENDING','VERIFIED') AND EXISTS ("
                 "SELECT 1 FROM plans WHERE plans.project_id=compensation_journal.project_id "
                 "AND plans.plan_id=compensation_journal.plan_id "
                 "AND plans.plan_hash=compensation_journal.plan_hash "

@@ -148,6 +148,10 @@ class ApprovalVerifier(Protocol):
 class DurablePlanDedupePort(Protocol):
     """Persistence seam; its fence protects store transitions, not side effects."""
 
+    def monotonic_ns(self) -> int: ...
+
+    def utc_timestamp(self) -> float: ...
+
     def reserve(
         self, plan_id: str, plan_hash: str, *, external_effects: bool, project_id: str = "default"
     ) -> DurablePlanRecord: ...
@@ -205,6 +209,7 @@ class DurablePlanDedupePort(Protocol):
         owner_token: str,
         evidence: Any,
         project_id: str = "default",
+        deadline_monotonic_ns: int | None = None,
     ) -> None: ...
 
     def mark_compensating(
@@ -228,6 +233,21 @@ class DurablePlanDedupePort(Protocol):
         effect_key: str,
         project_id: str = "default",
     ) -> None: ...
+
+    def verify_effect_intent(
+        self,
+        plan_id: str,
+        plan_hash: str,
+        *,
+        attempt: int,
+        owner_token: str,
+        step_id: str,
+        effect_key: str,
+        verification_digest: str,
+        project_id: str = "default",
+    ) -> None:
+        """Record a separately verified forward effect under the current fence."""
+        ...
 
     def record_compensation_step(
         self,
@@ -261,6 +281,19 @@ class DurablePlanDedupePort(Protocol):
         succeeded: bool,
         evidence: Any,
         project_id: str = "default",
+    ) -> None: ...
+
+    def repair_in_doubt(
+        self,
+        project_id: str,
+        plan_id: str,
+        plan_hash: str,
+        *,
+        expected_status: str,
+        expected_attempt: int,
+        operator_id: str,
+        resolution_action: str,
+        reason: str,
     ) -> None: ...
 
     def quarantine(

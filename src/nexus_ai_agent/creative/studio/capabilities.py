@@ -106,6 +106,10 @@ class OperationContext:
     atlas_engine: Any = None
     morpheus_engine: Any = None
     hyperion_engine: Any = None
+    effect_key: str | None = None
+    deadline_monotonic_ns: int | None = None
+    fencing_epoch: int | None = None
+    durable_heartbeat: Callable[[], None] | None = None
 
 
 OperationHandler = Callable[[Project, OperationContext], OperationOutcome]
@@ -153,6 +157,9 @@ class OperationSpec:
     #: Handler writes outside the bus snapshot: plans must supply compensation.
     #: This registry declaration is authoritative even when PlanStep omits it.
     external_effects: bool = False
+    #: Trusted registration guarantees that the destination enforces the
+    #: supplied effect key and fencing epoch; the bus itself cannot do so.
+    durable_effects: bool = False
 
     @property
     def effective_permissions(self) -> tuple[str, ...]:
