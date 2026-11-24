@@ -781,3 +781,59 @@ def test_publication_and_cleanup_can_reuse_exclusive_lease(tmp_path: Path) -> No
         assert not (tmp_path / extra).exists()
         assert lease.is_active
     assert not lease.is_active
+
+
+@pytest.mark.parametrize("fail_acquire", [False, True])
+def test_cancelled_publication_acquisition_cleans_up_after_event_loop_closes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fail_acquire: bool
+) -> None:
+    import asyncio
+    import threading
+    from contextlib import contextmanager
+
+    import nexus_ai_agent.creative.assets.blob_store as blob_module
+    from nexus_ai_agent.creative.assets.admission import asset_admission_lock
+
+    store = LocalContentAddressedBlobStore(tmp_path)
+    staging, digest, _ = store.stage(io.BytesIO(b"payload"), max_bytes=100)
+    started, release, exited = threading.Event(), threading.Event(), threading.Event()
+    original = blob_module.asset_admission_lock
+
+    @contextmanager
+    def controlled_lock(*args: object, **kwargs: object):
+        started.set()
+        if not release.wait(5):
+            raise TimeoutError("test did not release acquisition")
+        try:
+            if fail_acquire:
+                raise TimeoutError("simulated acquisition failure")
+            with original(*args, **kwargs) as lease:  # type: ignore[arg-type]
+                yield lease
+        finally:
+            exited.set()
+
+    monkeypatch.setattr(blob_module, "asset_admission_lock", controlled_lock)
+    loop = asyncio.new_event_loop()
+
+    async def cancel() -> None:
+        task = asyncio.create_task(
+            store.publish_from_staging_async(staging, store.blob_key_for(digest))
+        )
+        assert await asyncio.to_thread(started.wait, 3)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    try:
+        loop.run_until_complete(cancel())
+        with blob_module._IN_FLIGHT_LOCK:
+            completed = blob_module._IN_FLIGHT_PUBLICATIONS[(store._fs.root, staging)][0][0]
+    finally:
+        loop.close()
+        release.set()
+    assert exited.wait(3), "late acquisition did not finish after loop shutdown"
+    assert completed.wait(3), "in-flight registration was not released"
+    assert staging not in store.in_flight_staging_keys()
+    assert (tmp_path / staging).read_bytes() == b"payload"
+    with asset_admission_lock(tmp_path, exclusive=True, timeout_seconds=0.5):
+        pass

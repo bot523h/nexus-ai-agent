@@ -333,24 +333,55 @@ class LocalContentAddressedBlobStore:
             self._fs.root, exclusive=False, timeout_seconds=self._admission_timeout_seconds
         )
         loop = asyncio.get_running_loop()
+        transfer_lock = threading.Lock()
+        abandoned = False
+        settled = False
+        acquired = False
+
+        def acquire() -> None:
+            nonlocal settled, acquired
+            try:
+                lease.__enter__()
+            except BaseException:
+                with transfer_lock:
+                    settled = True
+                    if abandoned:
+                        finish()
+                raise
+            with transfer_lock:
+                settled = True
+                if abandoned:
+                    try:
+                        lease.__exit__(None, None, None)
+                    finally:
+                        finish()
+                else:
+                    acquired = True
+
         try:
-            acquisition = loop.run_in_executor(None, lease.__enter__)
+            acquisition = loop.run_in_executor(None, acquire)
         except BaseException:
             finish()
             raise
-
-        def abandon_acquisition(done: asyncio.Future[AdmissionLease]) -> None:
-            try:
-                if not done.cancelled() and done.exception() is None:
-                    lease.__exit__(None, None, None)
-            finally:
-                finish()
 
         try:
             await asyncio.shield(acquisition)
         except asyncio.CancelledError:
             detached.set()
-            acquisition.add_done_callback(abandon_acquisition)
+            with transfer_lock:
+                abandoned = True
+                if settled:
+                    try:
+                        if acquired:
+                            lease.__exit__(None, None, None)
+                    finally:
+                        finish()
+
+            def consume_acquisition(done: asyncio.Future[None]) -> None:
+                if not done.cancelled():
+                    done.exception()
+
+            acquisition.add_done_callback(consume_acquisition)
             raise
         except BaseException:
             finish()
