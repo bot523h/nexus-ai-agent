@@ -79,7 +79,11 @@ cancelled. This is a partial fence: synchronous publication, the full ingest
 transaction, work queued before the worker takes its lock, and startup recovery
 are not yet covered. The sweeper is still disconnected from startup; do not
 use this lock alone as authority to delete staging. It is cooperative and is
-not a boundary against a same-UID process replacing the lock inode.
+not a boundary against a same-UID process replacing the lock inode. Recovery
+compares staged bytes against the durable Tx2 digest and length before
+publishing; a mismatch fails the ingest without deleting the staged bytes. A
+crash before Tx2 has no durable measured identity to compare against, so this
+check cannot establish authenticity of staging data in that earlier window.
 
 ## Cryptographic evidence
 

@@ -327,3 +327,42 @@ async def test_recovery_defers_cancelled_inflight_worker_across_store_instances(
     assert report.outcome is RecoveryOutcome.COMPLETED
     assert await _counts(tmp_path) == (1, 1, 1)
     assert (await restarted.recover_ingest(row.ingest_id)).outcome is RecoveryOutcome.ALREADY_READY
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mutation", ["same_size", "different_size", "partial_identity"])
+async def test_recovery_refuses_changed_staging_after_tx2(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mutation: str
+) -> None:
+    """A durable measured identity must not be replaced by altered disk bytes."""
+    service = _service(tmp_path)
+
+    async def crash_before_publish(staging_key: str, blob_key: str) -> tuple[str, int, bool]:
+        raise RuntimeError("injected crash after tx2")
+
+    monkeypatch.setattr(service._blob_store, "publish_from_staging_async", crash_before_publish)
+    with pytest.raises(RuntimeError, match="after tx2"):
+        await _ingest(service)
+    row = await _only_ingest(tmp_path)
+    assert row.state == IngestState.STAGING.value
+    assert row.staging_key and row.content_sha256 and row.size_bytes == len(PNG)
+    stage = tmp_path / "blobs" / row.staging_key
+    if mutation == "same_size":
+        stage.write_bytes(PNG[:-1] + bytes([PNG[-1] ^ 1]))
+    elif mutation == "different_size":
+        stage.write_bytes(PNG + b"extra")
+    else:
+        async with get_session(str(tmp_path / "library.sqlite")) as session:
+            stored = await session.get(orm.AssetIngest, row.ingest_id)
+            assert stored is not None
+            stored.size_bytes = None
+            await session.commit()
+    expected = stage.read_bytes()
+    restarted = _service(tmp_path)
+    report = await restarted.recover_ingest(row.ingest_id)
+    assert report.state is IngestState.FAILED
+    assert report.outcome is RecoveryOutcome.FAILED
+    assert (await _only_ingest(tmp_path)).error_code == "staging_integrity_mismatch"
+    assert await _counts(tmp_path) == (0, 0, 0)
+    assert stage.read_bytes() == expected  # kept for inspection, not silently deleted
+    assert not any((tmp_path / "blobs" / "blobs").rglob("*"))

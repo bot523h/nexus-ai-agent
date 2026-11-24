@@ -175,6 +175,21 @@ async def reconcile_ingest(
             staging_sha = None
             staging_size = None
         if staging_sha is not None and staging_size is not None:
+            # Tx2 records the identity before publication.  Once present it is
+            # authoritative: re-hashing altered staging bytes must not silently
+            # turn an interrupted upload into a different successful asset.
+            recorded = (ingest.content_sha256, ingest.size_bytes)
+            if recorded != (None, None) and recorded != (staging_sha, staging_size):
+                if not await repo.mark_failed(
+                    ingest.ingest_id, error_code="staging_integrity_mismatch"
+                ):
+                    raise IngestAlreadyResolved(ingest.ingest_id)
+                return IngestRecoveryReport(
+                    ingest.ingest_id,
+                    IngestState.FAILED,
+                    RecoveryOutcome.FAILED,
+                    "staged content does not match its recorded identity",
+                )
             media_type = ingest.media_type
             media_kind = ingest.media_kind
             if media_type is None or media_kind is None:
