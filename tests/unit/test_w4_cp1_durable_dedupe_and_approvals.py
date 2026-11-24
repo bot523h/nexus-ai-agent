@@ -447,23 +447,27 @@ def test_nonce_binding_requires_matching_committed_plan_and_legacy_unknown_fails
 
 
 def test_cooperative_file_destination_fences_expired_owner_after_takeover(tmp_path: Path) -> None:
-    """Real SQLite and filesystem; repair authority is a test double.
+    """An actual SQLite writer lock overlaps an attempted takeover.
 
-    Every cooperating writer holds SQLite's write transaction across its final
-    lease check and file replacement, so takeover cannot race that replacement.
-    This is a test destination, not fencing for arbitrary filesystem writers.
+    The clock and repair authority are test doubles. SQLite locking, threads,
+    file creation, fsync and publication are real; this says nothing about a
+    non-cooperating writer or an arbitrary external destination.
     """
     from concurrent.futures import ThreadPoolExecutor
+    from concurrent.futures import TimeoutError as FutureTimeoutError
     from threading import Event
 
     from nexus_ai_agent.creative.studio.durable_dedupe import PlanFencingTokenMismatchError
 
+    clock = [100.0]
+    path = tmp_path / "plans.db"
     store = DurablePlanDedupeStore(
-        tmp_path / "plans.db", repair_authorizer=lambda _p, _o, _s, _a: True
+        path, clock=lambda: clock[0], repair_authorizer=lambda _p, _o, _s, _a: True
     )
+    rival = DurablePlanDedupeStore(path, clock=lambda: clock[0])
     h = "a" * 64
     old = store.reserve_and_start(
-        "plan", h, external_effects=True, nonce="old", lease_ttl_seconds=0.05
+        "plan", h, external_effects=True, nonce="old", lease_ttl_seconds=1
     )
     store.record_compensation_intent(
         "plan",
@@ -473,71 +477,88 @@ def test_cooperative_file_destination_fences_expired_owner_after_takeover(tmp_pa
         step_id="old",
         effect_key="b" * 64,
     )
-    ready = Event()
+    checked, takeover_started, release_writer = Event(), Event(), Event()
+    destination = tmp_path / "destination"
+    staging = tmp_path / "old-staging"
 
-    def writer(attempt: int, token: str, key: str, data: bytes) -> None:
-        # Lock out every database-mediated takeover during check and replacement.
-        with store._transaction() as conn:
-            row = conn.execute(
-                "SELECT 1 FROM plans p JOIN compensation_journal j "
-                "ON p.project_id=j.project_id AND p.plan_id=j.plan_id AND p.plan_hash=j.plan_hash "
-                "WHERE p.project_id=? AND p.plan_id=? AND p.plan_hash=? AND p.status='EXECUTING' "
-                "AND p.attempt=? AND p.owner_token=? AND p.lease_expires_at>? "
-                "AND j.attempt=p.attempt AND j.effect_key=? AND j.status='PENDING'",
-                ("default", "plan", h, attempt, token, store._now(), key),
-            ).fetchone()
-            if row is None:
-                raise PlanFencingTokenMismatchError("file writer fenced")
-            target = tmp_path / "destination"
-            temp = tmp_path / ("staged-" + key)
-            fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
-            try:
-                os.write(fd, data)
-                os.fsync(fd)
-            finally:
-                os.close(fd)
-            # Deadline is sampled again immediately before publishing.
-            row = conn.execute(
-                "SELECT lease_expires_at FROM plans WHERE project_id='default' AND plan_id='plan'"
-            ).fetchone()
-            if row is None or store._now() >= row[0]:
-                raise PlanFencingTokenMismatchError("file writer lease expired")
-            os.replace(temp, target)
+    def old_writer() -> None:
+        try:
+            # BEGIN IMMEDIATE is held across both fence checks and publication.
+            with store._transaction() as conn:
+                valid = conn.execute(
+                    "SELECT 1 FROM plans p JOIN compensation_journal j "
+                    "ON p.project_id=j.project_id AND p.plan_id=j.plan_id "
+                    "AND p.plan_hash=j.plan_hash WHERE p.project_id=? AND p.plan_id=? "
+                    "AND p.plan_hash=? AND p.status='EXECUTING' AND p.attempt=? "
+                    "AND p.owner_token=? AND p.lease_expires_at>? AND j.attempt=p.attempt "
+                    "AND j.effect_key=? AND j.status='PENDING'",
+                    ("default", "plan", h, old.attempt, old.owner_token, store._now(), "b" * 64),
+                ).fetchone()
+                assert valid is not None
+                with staging.open("xb") as file:
+                    file.write(b"stale")
+                    file.flush()
+                    os.fsync(file.fileno())
+                checked.set()
+                assert release_writer.wait(timeout=5)
+                expiry = conn.execute(
+                    "SELECT lease_expires_at FROM plans WHERE project_id=? AND plan_id=? "
+                    "AND status='EXECUTING' AND attempt=? AND owner_token=?",
+                    ("default", "plan", old.attempt, old.owner_token),
+                ).fetchone()
+                if expiry is None or store._now() >= expiry[0]:
+                    raise PlanFencingTokenMismatchError("file writer lease expired")
+                os.replace(staging, destination)
+        finally:
+            staging.unlink(missing_ok=True)
 
-    def stale_worker() -> None:
-        assert ready.wait(timeout=10)
-        writer(old.attempt, old.owner_token, "b" * 64, b"stale")
+    def take_over() -> None:
+        # The contender itself has tried SQLite's write lock before signalling.
+        with sqlite3.connect(path, timeout=0, isolation_level=None) as conn:
+            with pytest.raises(sqlite3.OperationalError, match="locked"):
+                conn.execute("BEGIN IMMEDIATE")
+        takeover_started.set()
+        rival.reserve_and_start("plan", h, external_effects=True, nonce="new")
 
     with ThreadPoolExecutor(max_workers=2) as pool:
-        task = pool.submit(stale_worker)
-        time.sleep(0.08)
+        old_task = pool.submit(old_writer)
+        try:
+            assert checked.wait(timeout=5)
+            assert staging.read_bytes() == b"stale"
+            takeover = pool.submit(take_over)
+            assert takeover_started.wait(timeout=5)
+            # A third real SQLite connection confirms the old worker owns the
+            # write lock, independent of thread scheduling or a fake store.
+            with sqlite3.connect(path, timeout=0, isolation_level=None) as observer:
+                with pytest.raises(sqlite3.OperationalError, match="locked"):
+                    observer.execute("BEGIN IMMEDIATE")
+            with pytest.raises(FutureTimeoutError):
+                takeover.result(timeout=0.2)
+            clock[0] = 102.0
+        finally:
+            release_writer.set()
+        with pytest.raises(PlanFencingTokenMismatchError, match="expired"):
+            old_task.result(timeout=5)
         with pytest.raises(PlanInDoubtQuarantineError):
-            store.reserve_and_start("plan", h, external_effects=True, nonce="new")
-        store.repair_in_doubt(
-            "default",
-            "plan",
-            h,
-            expected_status="IN_DOUBT",
-            expected_attempt=old.attempt,
-            operator_id="operator",
-            resolution_action="authorize_takeover",
-            reason="investigated",
-        )
-        new = store.reserve_and_start("plan", h, external_effects=True, nonce="new")
-        store.record_compensation_intent(
-            "plan",
-            h,
-            attempt=new.attempt,
-            owner_token=new.owner_token,
-            step_id="new",
-            effect_key="c" * 64,
-        )
-        writer(new.attempt, new.owner_token, "c" * 64, b"current")
-        ready.set()
-        with pytest.raises(PlanFencingTokenMismatchError):
-            task.result(timeout=10)
-    assert (tmp_path / "destination").read_bytes() == b"current"
-    assert not (tmp_path / ("staged-" + "b" * 64)).exists()
+            takeover.result(timeout=5)
+
+    assert not staging.exists() and not destination.exists()
+    store.repair_in_doubt(
+        "default",
+        "plan",
+        h,
+        expected_status="IN_DOUBT",
+        expected_attempt=old.attempt,
+        operator_id="operator",
+        resolution_action="authorize_takeover",
+        reason="investigated",
+    )
+    new = store.reserve_and_start("plan", h, external_effects=True, nonce="new")
+    assert new.attempt == old.attempt + 1 and new.owner_token != old.owner_token
+    # The old writer published nothing, including while the takeover waited.
+    assert not destination.exists()
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("SELECT status FROM compensation_journal").fetchone() == ("PENDING",)
 
 
 def test_same_approval_cold_replay_survives_process_restart(tmp_path: Path) -> None:
