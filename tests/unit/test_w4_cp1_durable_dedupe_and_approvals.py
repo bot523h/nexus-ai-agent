@@ -765,3 +765,152 @@ def test_ibpc_mac_verifier_binds_entire_approval_and_bus_execution(tmp_path: Pat
     with sqlite3.connect(tmp_path / "plans.db") as conn:
         assert conn.execute("SELECT status FROM plans").fetchone() == ("COMMITTED",)
         assert conn.execute("SELECT status FROM compensation_journal").fetchone() == ("VERIFIED",)
+
+
+@pytest.mark.parametrize(
+    ("effect_key", "epoch", "status", "digest"),
+    [
+        ("bad", 1, "ABSENT", "c" * 64),
+        ("a" * 64, True, "ABSENT", "c" * 64),
+        ("a" * 64, 0, "ABSENT", "c" * 64),
+        ("a" * 64, 1, "INVALID", "c" * 64),
+        ("a" * 64, 1, "UNKNOWN", "c" * 64),
+        ("a" * 64, 1, "ABSENT", "not-a-digest"),
+    ],
+)
+def test_effect_observation_rejects_malformed_evidence(
+    effect_key: str, epoch: object, status: object, digest: str
+) -> None:
+    from typing import Any, cast
+
+    from nexus_ai_agent.creative.studio.durable_dedupe import ExternalEffectObservation
+
+    with pytest.raises(ValueError):
+        ExternalEffectObservation(effect_key, cast(Any, epoch), cast(Any, status), digest)
+
+
+def test_effect_observation_is_only_a_claim_not_verification() -> None:
+    from nexus_ai_agent.creative.studio.durable_dedupe import ExternalEffectObservation
+
+    observed = ExternalEffectObservation("a" * 64, 3, "PRESENT", "b" * 64)
+    assert observed.status == "PRESENT" and observed.fencing_epoch == 3
+    assert ExternalEffectObservation("a" * 64, 3, "UNKNOWN", "").evidence_digest == ""
+
+
+def test_recovery_inspects_real_pending_effect_without_executing_or_repairing(
+    tmp_path: Path,
+) -> None:
+    """Disk inspection is real; operator and destination authorities are test doubles."""
+    from nexus_ai_agent.creative.studio.durable_dedupe import (
+        ExternalEffectObservation,
+    )
+    from nexus_ai_agent.creative.studio.models import AuthorizationError
+
+    bus, actor = make_bus(tmp_path, fail_at="cmd-0")
+    plan = make_plan(tmp_path, actor)
+    binding = approvals(bus, plan, actor, "initial")
+    with pytest.raises(CommandExecutionError, match="unknown external effect"):
+        dispatch(bus, plan, actor, binding)
+    with sqlite3.connect(tmp_path / "plans.db") as conn:
+        (key,) = conn.execute("SELECT effect_key FROM compensation_journal").fetchone()
+    assert (tmp_path / key).read_bytes() == b"cmd-0"
+
+    class FileInspector:
+        def apply(
+            self, *, effect_key: str, fencing_epoch: int, payload: bytes
+        ) -> ExternalEffectObservation:
+            raise AssertionError("inspection must never execute an effect")
+
+        def inspect(self, *, effect_key: str, fencing_epoch: int) -> ExternalEffectObservation:
+            data = (tmp_path / effect_key).read_bytes()
+            return ExternalEffectObservation(
+                effect_key, fencing_epoch, "PRESENT", hashlib.sha256(data).hexdigest()
+            )
+
+    class IndependentFileVerifier:
+        def verify(self, observation: ExternalEffectObservation) -> bool:
+            return (
+                hashlib.sha256((tmp_path / observation.effect_key).read_bytes()).hexdigest()
+                == observation.evidence_digest
+            )
+
+    inspector = FileInspector()
+    verifier = IndependentFileVerifier()
+    bus._authorizer = ProjectAccess(actor, "project", frozenset({"project:repair"}))
+    with pytest.raises(AuthorizationError):
+        bus.inspect_durable_recovery(
+            plan.plan_id,
+            binding[0].plan_hash,
+            authenticated_operator=ActorIdentity(kind="user", actor_id="mallory"),
+            expected_status="IN_DOUBT",
+            expected_attempt=1,
+            destinations={"step-0": inspector},
+            verifier=verifier,
+        )
+    with pytest.raises(PlanStoreStateError, match="expected status/attempt"):
+        bus.inspect_durable_recovery(
+            plan.plan_id,
+            binding[0].plan_hash,
+            authenticated_operator=actor,
+            expected_status="IN_DOUBT",
+            expected_attempt=2,
+            destinations={"step-0": inspector},
+            verifier=verifier,
+        )
+    with pytest.raises(PlanStoreStateError, match="destination is unavailable"):
+        bus.inspect_durable_recovery(
+            plan.plan_id,
+            binding[0].plan_hash,
+            authenticated_operator=actor,
+            expected_status="IN_DOUBT",
+            expected_attempt=1,
+            destinations={},
+            verifier=verifier,
+        )
+
+    class RefusingVerifier:
+        def verify(self, _observation: ExternalEffectObservation) -> bool:
+            return False
+
+    class MismatchedInspector(FileInspector):
+        def inspect(self, *, effect_key: str, fencing_epoch: int) -> ExternalEffectObservation:
+            return ExternalEffectObservation("f" * 64, fencing_epoch, "UNKNOWN", "")
+
+    with pytest.raises(PlanStoreStateError, match="does not match intent"):
+        bus.inspect_durable_recovery(
+            plan.plan_id,
+            binding[0].plan_hash,
+            authenticated_operator=actor,
+            expected_status="IN_DOUBT",
+            expected_attempt=1,
+            destinations={"step-0": MismatchedInspector()},
+            verifier=verifier,
+        )
+    with pytest.raises(PlanStoreStateError, match="not independently verified"):
+        bus.inspect_durable_recovery(
+            plan.plan_id,
+            binding[0].plan_hash,
+            authenticated_operator=actor,
+            expected_status="IN_DOUBT",
+            expected_attempt=1,
+            destinations={"step-0": inspector},
+            verifier=RefusingVerifier(),
+        )
+    observed = bus.inspect_durable_recovery(
+        plan.plan_id,
+        binding[0].plan_hash,
+        authenticated_operator=actor,
+        expected_status="IN_DOUBT",
+        expected_attempt=1,
+        destinations={"step-0": inspector},
+        verifier=verifier,
+    )
+    assert len(observed) == 1 and observed[0].status == "PRESENT"
+    assert observed[0].effect_key == key
+    with sqlite3.connect(tmp_path / "plans.db") as conn:
+        assert conn.execute("SELECT status, evidence_json FROM plans").fetchone() == (
+            "IN_DOUBT",
+            None,
+        )
+        assert conn.execute("SELECT status FROM compensation_journal").fetchone() == ("PENDING",)
+    assert (tmp_path / key).read_bytes() == b"cmd-0"

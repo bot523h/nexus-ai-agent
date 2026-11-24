@@ -1067,6 +1067,41 @@ class DurablePlanDedupeStore:
             ).fetchall()
         return tuple(CompensationJournalEntry(*row) for row in rows)
 
+    def quarantined_journal(
+        self,
+        plan_id: str,
+        plan_hash: str,
+        *,
+        expected_status: str,
+        expected_attempt: int,
+        project_id: str = "default",
+    ) -> tuple[CompensationJournalEntry, ...]:
+        """Read effects only for the expected quarantined execution epoch."""
+        self._validate_identity(plan_id, plan_hash, project_id)
+        if expected_status not in ("IN_DOUBT", "ROLLBACK_FAILED"):
+            raise ValueError("unsupported expected status")
+        if (
+            isinstance(expected_attempt, bool)
+            or not isinstance(expected_attempt, int)
+            or not 0 <= expected_attempt <= 2**63 - 1
+        ):
+            raise ValueError("expected_attempt must be a nonnegative bounded integer")
+        with self._transaction() as conn:
+            row = conn.execute(
+                "SELECT status, attempt FROM plans WHERE project_id=? AND plan_id=? "
+                "AND plan_hash=?",
+                (project_id, plan_id, plan_hash),
+            ).fetchone()
+            if row != (expected_status, expected_attempt):
+                raise PlanStoreStateError("plan is not quarantined at expected status/attempt")
+            rows = conn.execute(
+                "SELECT step_id, effect_key, attempt, status, evidence_json "
+                "FROM compensation_journal WHERE project_id=? AND plan_id=? AND plan_hash=? "
+                "ORDER BY entry_id",
+                (project_id, plan_id, plan_hash),
+            ).fetchall()
+            return tuple(CompensationJournalEntry(*entry) for entry in rows)
+
     def record_compensation(
         self,
         plan_id: str,

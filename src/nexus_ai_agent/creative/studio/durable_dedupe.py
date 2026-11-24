@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 from nexus_ai_agent.creative.studio.plan_identifiers import validate_plan_identity
 
@@ -71,6 +71,64 @@ class CompensationJournalEntry:
     attempt: int
     status: str
     evidence_json: str | None
+
+
+@dataclass(frozen=True)
+class ExternalEffectObservation:
+    """Destination's observation, never an authorization or proof by itself."""
+
+    effect_key: str
+    fencing_epoch: int
+    status: Literal["ABSENT", "PRESENT", "UNKNOWN"]
+    evidence_digest: str
+
+    def __post_init__(self) -> None:
+        if (
+            not isinstance(self.effect_key, str)
+            or re.fullmatch(r"[0-9a-f]{64}", self.effect_key) is None
+        ):
+            raise ValueError("effect_key must be lowercase SHA-256 hex")
+        if (
+            isinstance(self.fencing_epoch, bool)
+            or not isinstance(self.fencing_epoch, int)
+            or self.fencing_epoch < 1
+        ):
+            raise ValueError("fencing_epoch must be a positive integer")
+        if self.status not in ("ABSENT", "PRESENT", "UNKNOWN"):
+            raise ValueError("invalid effect observation status")
+        if self.status == "UNKNOWN":
+            if self.evidence_digest != "":
+                raise ValueError("unknown observations cannot claim evidence")
+        elif (
+            not isinstance(self.evidence_digest, str)
+            or re.fullmatch(r"[0-9a-f]{64}", self.evidence_digest) is None
+        ):
+            raise ValueError("observed effects require a lowercase SHA-256 evidence digest")
+
+
+class DurableEffectDestination(Protocol):
+    """Trusted external destination contract; the bus cannot enforce its internals.
+
+    Implementations must atomically reject stale epochs, bind each effect key
+    to one payload, deduplicate redelivery, and expose crash-persistent
+    observations. An ABSENT observation used in recovery must also ensure the
+    observed effect cannot subsequently be published at or below that epoch. Only
+    a separate verifier may authenticate an observation; a destination
+    assertion alone is not proof. Structural conformance cannot prove these
+    properties and registering this port never makes an arbitrary handler safe.
+    """
+
+    def apply(
+        self, *, effect_key: str, fencing_epoch: int, payload: bytes
+    ) -> ExternalEffectObservation: ...
+
+    def inspect(self, *, effect_key: str, fencing_epoch: int) -> ExternalEffectObservation: ...
+
+
+class EffectObservationVerifier(Protocol):
+    """Independent, trusted verifier of a destination's observed effect."""
+
+    def verify(self, observation: ExternalEffectObservation) -> bool: ...
 
 
 @dataclass(frozen=True)
@@ -275,6 +333,16 @@ class DurablePlanDedupePort(Protocol):
         plan_id: str,
         plan_hash: str,
         *,
+        project_id: str = "default",
+    ) -> tuple[CompensationJournalEntry, ...]: ...
+
+    def quarantined_journal(
+        self,
+        plan_id: str,
+        plan_hash: str,
+        *,
+        expected_status: str,
+        expected_attempt: int,
         project_id: str = "default",
     ) -> tuple[CompensationJournalEntry, ...]: ...
 

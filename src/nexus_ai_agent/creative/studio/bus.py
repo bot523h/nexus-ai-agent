@@ -82,7 +82,10 @@ from nexus_ai_agent.creative.studio.durable_dedupe import (
     ApprovalBinding,
     ApprovalBindingError,
     ApprovalVerifier,
+    DurableEffectDestination,
     DurablePlanDedupePort,
+    EffectObservationVerifier,
+    ExternalEffectObservation,
     PlanApprovalRequirement,
     PlanInDoubtQuarantineError,
     PlanStoreStateError,
@@ -1455,6 +1458,70 @@ class CommandBus:
             finally:
                 self._durable_context = {}
                 self._executing = False
+
+    def inspect_durable_recovery(
+        self,
+        plan_id: str,
+        plan_hash: str,
+        *,
+        authenticated_operator: ActorIdentity,
+        expected_status: str,
+        expected_attempt: int,
+        destinations: Mapping[str, DurableEffectDestination],
+        verifier: EffectObservationVerifier,
+    ) -> tuple[ExternalEffectObservation, ...]:
+        """Inspect journaled effects without executing, repairing, or publishing.
+
+        Destinations and the verifier must be independently trusted composition
+        components. A stable ABSENT result requires destination-side fencing;
+        even independently verified observations do not authorize repair. The
+        quarantine snapshot can become stale immediately after it is read; any
+        later repair must independently compare status and attempt atomically.
+        """
+        with self._lock:
+            if self._executing or self._durable_store is None or self._authorizer is None:
+                raise AuthorizationError("durable recovery authority is not available")
+            self._require_project()
+            if not isinstance(authenticated_operator, ActorIdentity):
+                raise AuthorizationError("authenticated operator is required")
+            access = self._authorizer.authorize(authenticated_operator, self._project.project_id)
+            if (
+                access.actor != authenticated_operator
+                or access.project_id != self._project.project_id
+            ):
+                raise AuthorizationError("authorizer returned a mismatched operator or project")
+            access.require_permissions(("project:repair",))
+            journal = self._durable_store.quarantined_journal(
+                plan_id,
+                plan_hash,
+                project_id=self._project.project_id,
+                expected_status=expected_status,
+                expected_attempt=expected_attempt,
+            )
+            if not journal:
+                raise PlanStoreStateError("durable recovery has no effect journal")
+            observations: list[ExternalEffectObservation] = []
+            for entry in journal:
+                destination = destinations.get(entry.step_id)
+                if destination is None:
+                    raise PlanStoreStateError("durable recovery destination is unavailable")
+                if cast(object, destination) is cast(object, verifier):
+                    raise PlanStoreStateError("durable recovery verifier must be independent")
+                observation = destination.inspect(
+                    effect_key=entry.effect_key, fencing_epoch=entry.attempt
+                )
+                if (
+                    not isinstance(observation, ExternalEffectObservation)
+                    or observation.effect_key != entry.effect_key
+                    or observation.fencing_epoch != entry.attempt
+                ):
+                    raise PlanStoreStateError("durable recovery observation does not match intent")
+                if observation.status != "UNKNOWN" and verifier.verify(observation) is not True:
+                    raise PlanStoreStateError(
+                        "durable recovery evidence was not independently verified"
+                    )
+                observations.append(observation)
+            return tuple(observations)
 
     def recover_durable_plan(
         self,
