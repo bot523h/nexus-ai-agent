@@ -1293,7 +1293,8 @@
         "tests/integration/test_w4_fenced_filesystem_destination.py",
         "tests/unit/test_w4_cp1_durable_dedupe_and_approvals.py",
         "src/nexus_ai_agent/creative/studio/runtime.py",
-        "src/nexus_ai_agent/adapters/durable_studio_runtime.py"
+        "src/nexus_ai_agent/adapters/durable_studio_runtime.py",
+        "tests/unit/test_w4_cp4_coverage.py"
       ]
     }
   ],
@@ -8788,7 +8789,8 @@
         "tests/integration/test_w4_e2e.py",
         "tests/integration/test_w4_ingress_e2e.py",
         "src/nexus_ai_agent/creative/studio/runtime.py",
-        "src/nexus_ai_agent/adapters/durable_studio_runtime.py"
+        "src/nexus_ai_agent/adapters/durable_studio_runtime.py",
+        "tests/unit/test_w4_cp4_coverage.py"
       ],
       "owner_hint": "arena/f3f2c5f9-nexus-ai-agent; PR #355",
       "agent_branch": "arena/f3f2c5f9-nexus-ai-agent",
