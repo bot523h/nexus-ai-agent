@@ -264,6 +264,29 @@ def test_graph_validation_and_structure() -> None:
     )
     assert graph.topological_order() == ("src", "gain")
     assert graph.incoming("gain") == {"audio": ("src", "audio")}
+    assert graph.incoming("src") == {}
+    left = CapabilityContract("left", "1.0", (), (AUDIO_OUT,), 1.0, 0.0)
+    right = CapabilityContract("right", "1.0", (), (AUDIO_OUT,), 1.0, 0.0)
+    mix = CapabilityContract(
+        "mix",
+        "1.0",
+        (PortSpec("left", AUDIO), PortSpec("right", AUDIO)),
+        (AUDIO_OUT,),
+        1.0,
+        0.0,
+    )
+    multi_parent = CompositionGraph(
+        (left, right, mix),
+        (
+            ("left", "audio", "mix", "left"),
+            ("right", "audio", "mix", "right"),
+        ),
+    )
+    assert multi_parent.topological_order() == ("left", "right", "mix")
+    assert multi_parent.incoming("mix") == {
+        "left": ("left", "audio"),
+        "right": ("right", "audio"),
+    }
     assert graph.contract("src").capability_id == "src"
     with pytest.raises(CompositionCompileError):
         graph.contract("missing")
