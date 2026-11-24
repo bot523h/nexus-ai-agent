@@ -221,3 +221,70 @@ __all__ = [
     "psnr",
     "ssim",
 ]
+
+# --- W10X composition runtime (typed contracts, licenses, verifier, engine) ---
+from .compiler import (
+    CompositionCompiler,
+    CompositionCompileError,
+    CompositionGraph,
+    CompositionPlan,
+    canonical_json,
+    sha256_digest,
+)
+from .contracts import (
+    CapabilityContract,
+    CompositionContractError,
+    PortSpec,
+    PortType,
+)
+from .engine import (
+    CapabilityRunner,
+    CompositionEngine,
+    CompositionExecution,
+    CompositionExecutionError,
+)
+from .license_lattice import (
+    LicenseCombination,
+    LicenseError,
+    LicenseRegime,
+    combine_licenses,
+    join,
+)
+from .verifier import (
+    CompositionExecutionReceipt,
+    CompositionProof,
+    CompositionVerificationError,
+    CompositionVerifier,
+    NodeOutput,
+    float_digest,
+)
+
+__all__.extend(
+    [
+        "CapabilityContract",
+        "CapabilityRunner",
+        "CompositionCompileError",
+        "CompositionCompiler",
+        "CompositionContractError",
+        "CompositionEngine",
+        "CompositionExecution",
+        "CompositionExecutionError",
+        "CompositionExecutionReceipt",
+        "CompositionGraph",
+        "CompositionPlan",
+        "CompositionProof",
+        "CompositionVerificationError",
+        "CompositionVerifier",
+        "LicenseCombination",
+        "LicenseError",
+        "LicenseRegime",
+        "NodeOutput",
+        "PortSpec",
+        "PortType",
+        "canonical_json",
+        "combine_licenses",
+        "float_digest",
+        "join",
+        "sha256_digest",
+    ]
+)
