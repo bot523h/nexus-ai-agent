@@ -37,8 +37,10 @@ The caller must supply an independently CSPRNG-generated 256-bit key. Simple
 pattern rejection is not an entropy estimator. A factory-issued key wrapper can
 label OS-CSPRNG or environment inputs; opt-in strict mode rejects raw or
 unattested keys. Environment provenance does not prove how a secret was generated.
-Python private sentinels are an accidental-misuse guard, not an isolation boundary
-against code in the same interpreter. Version 2 manifests authenticate the key
+The wrapper binds the label and bytes with a process-local authenticator to reject
+accidental relabeling via dataclass replacement. Neither Python-private values nor
+that authenticator provide isolation against code in the same interpreter; key
+wrappers must be reissued after a process restart. Version 2 manifests authenticate the key
 source and a domain-separated key fingerprint as AAD; version 1 remains readable.
 The drill uses AES-GCM with manifest metadata authenticated as AAD, limits
 whole-file reads, checks SQLite

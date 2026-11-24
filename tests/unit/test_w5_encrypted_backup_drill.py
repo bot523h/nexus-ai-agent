@@ -722,3 +722,32 @@ def test_verify_legacy_v1_drill_artifact(tmp_path: Path) -> None:
         verify_encrypted_sqlite_backup(receipt.archive_path, receipt.manifest_path, key)
         == receipt.restored_path.read_bytes()
     )
+
+
+def test_unattested_capability_cannot_be_upgraded_by_dataclass_replace(tmp_path: Path) -> None:
+    import dataclasses
+
+    from nexus_ai_agent.storage.encrypted_backup_drill import (
+        BackupKeyMaterial,
+        run_encrypted_sqlite_backup_restore_drill,
+    )
+
+    raw = BackupKeyMaterial.from_raw_bytes(hashlib.sha256(b"predictable key").digest())
+    with pytest.raises(ValueError, match="provenance"):
+        dataclasses.replace(raw, source="csprng")
+    trusted = BackupKeyMaterial.generate()
+    with pytest.raises(ValueError, match="provenance"):
+        dataclasses.replace(trusted, source="secret_env")
+
+    class PretendTrusted(BackupKeyMaterial):
+        def __post_init__(self) -> None:
+            pass
+
+    forged = PretendTrusted(raw.key_bytes, "csprng", raw.fingerprint_sha256, object())
+    source, work = tmp_path / "source.sqlite", tmp_path / "work"
+    work.mkdir()
+    _source(source)
+    with pytest.raises(ValueError, match="trusted key material required"):
+        run_encrypted_sqlite_backup_restore_drill(
+            source, work, forged, require_trusted_key_source=True
+        )

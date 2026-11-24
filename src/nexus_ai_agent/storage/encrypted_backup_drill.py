@@ -265,6 +265,7 @@ def _key(key: bytes | bytearray | memoryview) -> bytes:
 
 
 _KEY_PROVENANCE_SENTINEL = object()
+_KEY_CAPABILITY_AUTHORITY = secrets.token_bytes(32)
 _KEY_FINGERPRINT_DOMAIN = b"nexus-drill-key-fingerprint-v1\x00"
 
 
@@ -280,6 +281,7 @@ class BackupKeyMaterial:
     source: str
     fingerprint_sha256: str
     _sentinel: object = field(repr=False, compare=False)
+    _attestation: bytes = field(default=b"", repr=False, compare=False)
 
     def __post_init__(self) -> None:
         if self._sentinel is not _KEY_PROVENANCE_SENTINEL:
@@ -293,11 +295,22 @@ class BackupKeyMaterial:
         _key(self.key_bytes)
         if not hmac.compare_digest(self.fingerprint_sha256, _key_fingerprint(self.key_bytes)):
             raise ValueError("invalid key fingerprint")
+        expected = _key_attestation(self.key_bytes, self.source)
+        if not isinstance(self._attestation, bytes) or not hmac.compare_digest(
+            self._attestation, expected
+        ):
+            raise ValueError("invalid key provenance capability")
 
     @classmethod
     def generate(cls) -> BackupKeyMaterial:
         key = generate_drill_encryption_key()
-        return cls(key, "csprng", _key_fingerprint(key), _KEY_PROVENANCE_SENTINEL)
+        return cls(
+            key,
+            "csprng",
+            _key_fingerprint(key),
+            _KEY_PROVENANCE_SENTINEL,
+            _key_attestation(key, "csprng"),
+        )
 
     @classmethod
     def from_secret_env(
@@ -313,13 +326,32 @@ class BackupKeyMaterial:
                 raw = base64.b64decode(value, validate=True)
         except (ValueError, binascii.Error):
             raise ValueError("missing or invalid backup key") from None
-        return cls(raw, "secret_env", _key_fingerprint(raw), _KEY_PROVENANCE_SENTINEL)
+        return cls(
+            raw,
+            "secret_env",
+            _key_fingerprint(raw),
+            _KEY_PROVENANCE_SENTINEL,
+            _key_attestation(raw, "secret_env"),
+        )
 
     @classmethod
     def from_raw_bytes(cls, raw_key: bytes, *, source: str = "raw_unattested") -> BackupKeyMaterial:
         if source != "raw_unattested" or type(raw_key) is not bytes:
             raise ValueError("invalid raw key source")
-        return cls(raw_key, source, _key_fingerprint(raw_key), _KEY_PROVENANCE_SENTINEL)
+        return cls(
+            raw_key,
+            source,
+            _key_fingerprint(raw_key),
+            _KEY_PROVENANCE_SENTINEL,
+            _key_attestation(raw_key, source),
+        )
+
+
+def _key_attestation(raw: bytes, source: str) -> bytes:
+    """Bind factory labels to key bytes within this interpreter process."""
+    return hmac.new(
+        _KEY_CAPABILITY_AUTHORITY, source.encode("ascii") + b"\x00" + raw, hashlib.sha256
+    ).digest()
 
 
 def _key_fingerprint(raw: bytes) -> str:
@@ -331,8 +363,8 @@ def _material(
 ) -> BackupKeyMaterial:
     if type(require_trusted) is not bool:
         raise ValueError("require_trusted_key_source must be boolean")
-    if isinstance(key, BackupKeyMaterial):
-        key.__post_init__()
+    if type(key) is BackupKeyMaterial:
+        BackupKeyMaterial.__post_init__(key)
         result = key
     else:
         if require_trusted or not isinstance(key, (bytes, bytearray, memoryview)):
