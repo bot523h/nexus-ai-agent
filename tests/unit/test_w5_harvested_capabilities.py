@@ -201,6 +201,20 @@ def test_async_publication_and_directory_sync(
     assert directories
 
 
+def _retry_cleanups(store: LocalContentAddressedBlobStore) -> tuple[str, ...]:
+    from nexus_ai_agent.creative.assets.admission import asset_admission_lock
+
+    with asset_admission_lock(store._fs.root, exclusive=True) as lease:
+        return store.reconcile_staging_cleanups(active_staging_keys=set(), admission_lease=lease)
+
+
+def _sweep(store: LocalContentAddressedBlobStore, keys: set[str]) -> int:
+    from nexus_ai_agent.creative.assets.admission import asset_admission_lock
+
+    with asset_admission_lock(store._fs.root, exclusive=True) as lease:
+        return store.cleanup_orphaned_staging(active_staging_keys=keys, admission_lease=lease)
+
+
 def test_successful_publication_survives_cleanup_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -215,9 +229,9 @@ def test_successful_publication_survives_cleanup_failure(
     monkeypatch.setattr(store._fs, "unlink", fail)
     assert store.store(staging, key) == (digest, size, False)
     assert store.open(key) == b"payload"
-    assert store.reconcile_staging_cleanups() == (staging,)
+    assert _retry_cleanups(store) == (staging,)
     monkeypatch.setattr(store._fs, "unlink", unlink)
-    assert store.reconcile_staging_cleanups() == ()
+    assert _retry_cleanups(store) == ()
     assert not (tmp_path / staging).exists()
 
 
@@ -352,12 +366,12 @@ def test_cleanup_marker_survives_restart_and_protects_active_ingest(
     assert store.store(staging, key) == (digest, size, False)
     assert len(list((tmp_path / "staging").glob(".cleanup-*"))) == 1
     restarted = LocalContentAddressedBlobStore(tmp_path)
-    assert restarted.cleanup_orphaned_staging(active_staging_keys={staging}) == 0
+    assert _sweep(restarted, {staging}) == 0
     assert (tmp_path / staging).exists()
-    assert restarted.cleanup_orphaned_staging(active_staging_keys=set()) == 1
+    assert _sweep(restarted, set()) == 1
     assert not (tmp_path / staging).exists()
     assert not list((tmp_path / "staging").glob(".cleanup-*"))
-    assert restarted.cleanup_orphaned_staging(active_staging_keys=set()) == 0
+    assert _sweep(restarted, set()) == 0
     assert restarted.verify(key, sha256=digest, size_bytes=size)
 
 
@@ -374,7 +388,7 @@ def test_cleanup_marker_never_follows_staging_symlink(
     path.unlink()
     path.symlink_to(target)
     restarted = LocalContentAddressedBlobStore(tmp_path / "root")
-    assert restarted.cleanup_orphaned_staging(active_staging_keys=set()) == 0
+    assert _sweep(restarted, set()) == 0
     assert target.read_bytes() == b"outside"
     assert path.is_symlink()
 
@@ -389,7 +403,7 @@ def test_cleanup_marker_repairs_incomplete_prior_marker(tmp_path: Path) -> None:
     store._record_cleanup_marker(staging)
     assert marker.read_bytes() == staging.encode()
     restarted = LocalContentAddressedBlobStore(tmp_path)
-    assert restarted.cleanup_orphaned_staging(active_staging_keys={staging}) == 0
+    assert _sweep(restarted, {staging}) == 0
     assert (tmp_path / staging).exists()
 
 
@@ -718,3 +732,52 @@ async def test_async_admission_lease_reuses_exclusive_without_deadlock(tmp_path:
         assert not owner.is_active
 
     await asyncio.wait_for(operation(), timeout=1)
+
+
+def test_cleanup_requires_live_exclusive_lease_and_explicit_active_set(tmp_path: Path) -> None:
+    from nexus_ai_agent.creative.assets.admission import asset_admission_lock
+
+    store = LocalContentAddressedBlobStore(tmp_path)
+    staging, _, _ = store.stage(io.BytesIO(b"active data"), max_bytes=100)
+    store._record_cleanup_marker(staging)
+    path = tmp_path / staging
+    with pytest.raises(TypeError):
+        store.cleanup_orphaned_staging(active_staging_keys=set())  # type: ignore[call-arg]
+    with asset_admission_lock(tmp_path, exclusive=False) as shared:
+        with pytest.raises(PermissionError):
+            store.cleanup_orphaned_staging(active_staging_keys=set(), admission_lease=shared)
+        with pytest.raises(PermissionError):
+            store.reconcile_staging_cleanups(active_staging_keys=set(), admission_lease=shared)
+    assert path.read_bytes() == b"active data"
+    with asset_admission_lock(tmp_path, exclusive=True) as lease:
+        with pytest.raises(ValueError):
+            store.cleanup_orphaned_staging(
+                active_staging_keys=None,
+                admission_lease=lease,  # type: ignore[arg-type]
+            )
+        assert (
+            store.cleanup_orphaned_staging(active_staging_keys={staging}, admission_lease=lease)
+            == 0
+        )
+        assert path.is_file()
+        assert store.cleanup_orphaned_staging(active_staging_keys=set(), admission_lease=lease) == 1
+    with pytest.raises(PermissionError):
+        store.cleanup_orphaned_staging(active_staging_keys=set(), admission_lease=lease)
+
+
+def test_publication_and_cleanup_can_reuse_exclusive_lease(tmp_path: Path) -> None:
+    from nexus_ai_agent.creative.assets.admission import asset_admission_lock
+
+    store = LocalContentAddressedBlobStore(tmp_path, lock_timeout_seconds=0.2)
+    stage, digest, size = store.stage(io.BytesIO(b"payload"), max_bytes=100)
+    extra, _, _ = store.stage(io.BytesIO(b"extra"), max_bytes=100)
+    with asset_admission_lock(tmp_path, exclusive=True) as lease:
+        assert store.store(stage, store.blob_key_for(digest), admission_lease=lease) == (
+            digest,
+            size,
+            False,
+        )
+        store.remove_staging(extra, admission_lease=lease)
+        assert not (tmp_path / extra).exists()
+        assert lease.is_active
+    assert not lease.is_active

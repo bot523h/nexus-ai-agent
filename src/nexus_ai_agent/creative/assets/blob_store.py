@@ -138,7 +138,9 @@ class LocalContentAddressedBlobStore:
             digest.update(chunk)
         return digest.hexdigest(), size
 
-    def store(self, staging_key: str, blob_key: str) -> tuple[str, int, bool]:
+    def store(
+        self, staging_key: str, blob_key: str, *, admission_lease: AdmissionLease | None = None
+    ) -> tuple[str, int, bool]:
         """Publish staged bytes to ``blob_key``; return ``(sha256, size, dedup)``.
 
         The staged digest is re-measured, the key is proven to match it, and an
@@ -146,7 +148,10 @@ class LocalContentAddressedBlobStore:
         mismatched bytes). Publication is an atomic no-overwrite hard link.
         """
         with asset_admission_lock(
-            self._fs.root, exclusive=False, timeout_seconds=self._admission_timeout_seconds
+            self._fs.root,
+            exclusive=False,
+            timeout_seconds=self._admission_timeout_seconds,
+            admission_lease=admission_lease,
         ):
             return self._store_admitted(staging_key, blob_key)
 
@@ -194,7 +199,11 @@ class LocalContentAddressedBlobStore:
         self._fs.write_stream(f"{_STAGING_PREFIX}/{marker}", io.BytesIO(payload), max_bytes=4096)
 
     def cleanup_orphaned_staging(
-        self, *, active_staging_keys: set[str], max_entries: int = 100
+        self,
+        *,
+        active_staging_keys: set[str] | frozenset[str],
+        admission_lease: AdmissionLease,
+        max_entries: int = 100,
     ) -> int:
         """Retry marked removals using a caller-supplied, authoritative active set.
 
@@ -202,6 +211,8 @@ class LocalContentAddressedBlobStore:
         active set. Unmarked files are never guessed to be orphans. Advisory
         coordination does not protect against a non-cooperating same-UID writer.
         """
+        self._validate_cleanup_admission(active_staging_keys, admission_lease)
+        active_staging_keys = frozenset(active_staging_keys)
         if type(max_entries) is not int or max_entries < 1:
             raise ValueError("max_entries must be a positive integer")
         parent = self._fs._open_dir((_STAGING_PREFIX,))
@@ -254,14 +265,27 @@ class LocalContentAddressedBlobStore:
         finally:
             os.close(parent)
 
+    def _validate_cleanup_admission(
+        self, active_staging_keys: set[str] | frozenset[str], admission_lease: AdmissionLease
+    ) -> None:
+        if type(active_staging_keys) not in (set, frozenset) or any(
+            type(key) is not str for key in active_staging_keys
+        ):
+            raise ValueError("active staging keys must be an explicit set of strings")
+        if type(admission_lease) is not AdmissionLease:
+            raise PermissionError("exclusive admission lease required")
+        admission_lease.validate_for(self._fs.root, require_exclusive=True)
+
     def reconcile_staging_cleanups(
-        self, *, active_staging_keys: frozenset[str] = frozenset()
+        self, *, active_staging_keys: set[str] | frozenset[str], admission_lease: AdmissionLease
     ) -> tuple[str, ...]:
         """Retry this process's deferred cleanups; return keys still pending.
 
         This in-memory queue does not survive process restart; durable ingest
         recovery remains responsible for crash reconciliation.
         """
+        self._validate_cleanup_admission(active_staging_keys, admission_lease)
+        active_staging_keys = frozenset(active_staging_keys)
         with self._cleanup_lock:
             for key in tuple(self._pending_staging_cleanups):
                 if key in active_staging_keys or key in self.in_flight_staging_keys():
@@ -404,10 +428,15 @@ class LocalContentAddressedBlobStore:
             raise ContentIntegrityError("stored content does not match its content key")
         return data
 
-    def remove_staging(self, staging_key: str) -> None:
+    def remove_staging(
+        self, staging_key: str, *, admission_lease: AdmissionLease | None = None
+    ) -> None:
         """Best-effort removal of a staging file (cleanup on controlled failure)."""
         with asset_admission_lock(
-            self._fs.root, exclusive=False, timeout_seconds=self._admission_timeout_seconds
+            self._fs.root,
+            exclusive=False,
+            timeout_seconds=self._admission_timeout_seconds,
+            admission_lease=admission_lease,
         ):
             try:
                 self._fs.unlink(staging_key)

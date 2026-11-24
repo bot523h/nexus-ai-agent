@@ -45,7 +45,9 @@ class BlobStore(Protocol):
         """Measure ``(sha256, size)`` of a stream with no filesystem effect."""
         ...
 
-    def store(self, staging_key: str, blob_key: str) -> tuple[str, int, bool]:
+    def store(
+        self, staging_key: str, blob_key: str, *, admission_lease: AdmissionLease | None = None
+    ) -> tuple[str, int, bool]:
         """Atomically publish staged bytes; return ``(sha256, size, deduplicated)``."""
         ...
 
@@ -77,7 +79,9 @@ class BlobStore(Protocol):
         """Read only the leading bytes of a staged file for classification."""
         ...
 
-    def remove_staging(self, staging_key: str) -> None:
+    def remove_staging(
+        self, staging_key: str, *, admission_lease: AdmissionLease | None = None
+    ) -> None:
         """Best-effort removal of a staging file."""
         ...
 

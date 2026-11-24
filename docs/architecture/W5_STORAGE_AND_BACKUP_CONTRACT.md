@@ -83,8 +83,12 @@ fence: startup recovery is not wired, direct sweeper callers are responsible for
 exclusive admission, and non-cooperating access is not protected. The sweeper is
 still disconnected from startup; do not use this lock alone as authority to delete staging.
 An admission lease can be reused without nested flock while its owning scope is
-live; it validates root, mode, active status and lock inode. Recovery and sweeper
-do not yet consume this capability, so it does not by itself solve startup.
+live; it validates root, mode, active status and lock inode. Synchronous publication
+and controlled staging removal can reuse it, and both cleanup APIs now require a
+live exclusive lease and an explicit active-key snapshot. Callers must obtain that
+snapshot while holding the lease and keep the owning scope alive during cleanup;
+this contract is not enforced by the type system. Recovery and the startup
+coordinator do not yet consume this capability, so it does not by itself solve startup.
 It is cooperative and is not a boundary against a same-UID process replacing
 the lock inode. Recovery
 compares staged bytes against the durable Tx2 digest and length before
