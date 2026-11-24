@@ -677,6 +677,13 @@ def test_ibpc_mac_verifier_binds_entire_approval_and_bus_execution(tmp_path: Pat
     )
     verifier = IBPCPlanApprovalVerifier(keys, {binding.approval_id: envelope})
     assert verifier.verify(binding)
+    assert not verifier.verify(object())
+    assert not IBPCPlanApprovalVerifier(
+        keys, {binding.approval_id: replace(envelope, issued_at="not-a-timestamp")}
+    ).verify(binding)
+    assert not IBPCPlanApprovalVerifier(
+        keys, {binding.approval_id: replace(envelope, approval_id="different")}
+    ).verify(binding)
     # A change to any field invalidates the actual MAC, not only bus preflight.
     for altered in (
         replace(binding, project_id="other"),
@@ -989,4 +996,88 @@ def test_bus_inspects_real_fenced_destination_without_repair(
     with sqlite3.connect(tmp_path / "plans.db") as conn:
         assert conn.execute("SELECT status, attempt FROM plans").fetchone() == ("IN_DOUBT", 1)
         assert conn.execute("SELECT status FROM compensation_journal").fetchone() == ("PENDING",)
+        assert conn.execute("SELECT count(*) FROM plan_repair_events").fetchone() == (0,)
+
+
+def test_store_rejects_invalid_inspection_and_corrupt_committed_receipts(tmp_path: Path) -> None:
+    from nexus_ai_agent.creative.studio.durable_dedupe import PlanReplayConflictError
+
+    store = DurablePlanDedupeStore(tmp_path / "plans.db")
+    for status, attempt in (("EXECUTING", 1), ("IN_DOUBT", True), ("IN_DOUBT", -1)):
+        with pytest.raises(ValueError):
+            store.quarantined_journal(
+                "p", "a" * 64, expected_status=status, expected_attempt=attempt
+            )
+    lease = store.reserve_and_start("p", "a" * 64, external_effects=True, nonce="n")
+    with pytest.raises(ValueError, match="effect_key"):
+        store.verify_effect_intent(
+            "p",
+            "a" * 64,
+            attempt=lease.attempt,
+            owner_token=lease.owner_token,
+            step_id="step",
+            effect_key="bad",
+            verification_digest="b" * 64,
+        )
+    store.finish("p", "a" * 64, attempt=lease.attempt, owner_token=lease.owner_token, evidence={})
+    with pytest.raises(PlanReplayConflictError):
+        store.find_committed("p", "b" * 64, project_id="default")
+    with sqlite3.connect(tmp_path / "plans.db") as conn:
+        conn.execute("UPDATE plans SET evidence_json=NULL")
+    with pytest.raises(PlanStoreStateError, match="receipt is missing"):
+        store.find_committed("p", "a" * 64, project_id="default")
+
+
+def test_store_rolls_back_when_takeover_cas_is_suppressed_by_database_trigger(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "plans.db"
+    store = DurablePlanDedupeStore(path, repair_authorizer=lambda *_args: True)
+    lease = store.reserve_and_start("p", "a" * 64, external_effects=True, nonce="first")
+    store.quarantine("p", "a" * 64, attempt=lease.attempt, owner_token=lease.owner_token)
+    store.repair_in_doubt(
+        "default",
+        "p",
+        "a" * 64,
+        expected_status="IN_DOUBT",
+        expected_attempt=1,
+        operator_id="operator",
+        resolution_action="authorize_takeover",
+        reason="test authority",
+    )
+    with sqlite3.connect(path) as conn:
+        conn.execute(
+            "CREATE TRIGGER stop_start BEFORE UPDATE OF status ON plans "
+            "WHEN NEW.status='EXECUTING' BEGIN SELECT RAISE(IGNORE); END"
+        )
+    with pytest.raises(PlanStoreStateError, match="takeover changed"):
+        store.reserve_and_start("p", "a" * 64, external_effects=True, nonce="second")
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("SELECT status, attempt FROM plans").fetchone() == ("RESERVED", 1)
+        assert conn.execute("SELECT nonce FROM consumed_nonces").fetchall() == [("first",)]
+
+
+def test_store_rolls_back_when_repair_cas_is_suppressed_by_database_trigger(tmp_path: Path) -> None:
+    path = tmp_path / "plans.db"
+    store = DurablePlanDedupeStore(path, repair_authorizer=lambda *_args: True)
+    lease = store.reserve_and_start("p", "a" * 64, external_effects=True, nonce="first")
+    store.quarantine("p", "a" * 64, attempt=lease.attempt, owner_token=lease.owner_token)
+    with sqlite3.connect(path) as conn:
+        conn.execute(
+            "CREATE TRIGGER stop_repair BEFORE UPDATE OF status ON plans "
+            "WHEN NEW.status='RESERVED' BEGIN SELECT RAISE(IGNORE); END"
+        )
+    with pytest.raises(PlanStoreStateError, match="plan changed while repairing"):
+        store.repair_in_doubt(
+            "default",
+            "p",
+            "a" * 64,
+            expected_status="IN_DOUBT",
+            expected_attempt=1,
+            operator_id="operator",
+            resolution_action="authorize_takeover",
+            reason="test authority",
+        )
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("SELECT status, attempt FROM plans").fetchone() == ("IN_DOUBT", 1)
         assert conn.execute("SELECT count(*) FROM plan_repair_events").fetchone() == (0,)
