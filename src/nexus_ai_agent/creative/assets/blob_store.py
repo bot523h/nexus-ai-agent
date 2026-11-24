@@ -23,6 +23,7 @@ import threading
 from pathlib import Path
 from typing import BinaryIO
 
+from nexus_ai_agent.creative.assets.admission import asset_admission_lock
 from nexus_ai_agent.creative.assets.errors import (
     BlobStoreError,
     ContentIntegrityError,
@@ -59,6 +60,7 @@ class LocalContentAddressedBlobStore:
         finally:
             os.close(fd)
         self._fs = WorkspaceFilesystem(root, lock_timeout_seconds=lock_timeout_seconds)
+        self._admission_timeout_seconds = lock_timeout_seconds
         self._pending_staging_cleanups: set[str] = set()
         self._cleanup_lock = threading.Lock()
         self._fs.ensure_directory(_STAGING_PREFIX)
@@ -91,7 +93,10 @@ class LocalContentAddressedBlobStore:
         leaves no staging residue.
         """
         try:
-            _, sha256, size = self._fs.write_stream(staging_key, source, max_bytes=max_bytes)
+            with asset_admission_lock(
+                self._fs.root, exclusive=False, timeout_seconds=self._admission_timeout_seconds
+            ):
+                _, sha256, size = self._fs.write_stream(staging_key, source, max_bytes=max_bytes)
         except ContentLimitExceeded as exc:
             raise ContentTooLarge(str(exc)) from exc
         except (FilesystemBoundaryError, OSError) as exc:
@@ -282,7 +287,10 @@ class LocalContentAddressedBlobStore:
 
         def publish() -> tuple[str, int, bool]:
             try:
-                return self.publish_from_staging(staging_key, blob_key)
+                with asset_admission_lock(
+                    self._fs.root, exclusive=False, timeout_seconds=self._admission_timeout_seconds
+                ):
+                    return self.publish_from_staging(staging_key, blob_key)
             finally:
                 finish()
 

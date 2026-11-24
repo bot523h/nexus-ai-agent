@@ -71,8 +71,13 @@ the marker still requires ingest-state recovery. Publication from the shared
 ingestion and recovery path uses worker threads; cancellation does not stop an
 already-running worker. A process-local registry defers reconciliation while a
 cancelled worker is still active, including across store instances sharing a root.
-It does not fence other processes, concurrent fresh publications, or a crash;
-startup admission and cross-process recovery fencing remain necessary.
+Stage writes and running async publication workers now hold a shared POSIX
+admission lock. The worker owns it through completion even if its caller is
+cancelled. This is a partial fence: synchronous publication, the full ingest
+transaction, work queued before the worker takes its lock, and startup recovery
+are not yet covered. The sweeper is still disconnected from startup; do not
+use this lock alone as authority to delete staging. It is cooperative and is
+not a boundary against a same-UID process replacing the lock inode.
 
 ## Cryptographic evidence
 

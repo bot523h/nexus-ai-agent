@@ -29,14 +29,17 @@ ALLOWED_TOP_LEVEL = {
     "dataclasses",
     "datetime",
     "enum",
+    "fcntl",  # Cooperative POSIX process admission fencing.
     "hashlib",
     "io",  # In-memory marker payload for the safe filesystem writer.
     "logging",  # Operational warnings when staging cleanup is deferred.
+    "math",
     "os",
     "pathlib",
     "secrets",
     "stat",
     "threading",  # Synchronizes the in-process cleanup queue.
+    "time",
     "typing",
     "uuid",
     "weakref",

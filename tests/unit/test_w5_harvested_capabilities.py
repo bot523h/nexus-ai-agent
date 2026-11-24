@@ -412,3 +412,124 @@ def test_cleanup_marker_refuses_symlink_target(tmp_path: Path) -> None:
     with pytest.raises(FilesystemBoundaryError):
         store._record_cleanup_marker(staging)
     assert outside.read_bytes() == b"untouched"
+
+
+def test_admission_lock_blocks_other_process_and_recovers_after_sigkill(tmp_path: Path) -> None:
+    import signal
+    import subprocess
+    import sys
+
+    from nexus_ai_agent.creative.assets.admission import asset_admission_lock
+
+    program = """
+import sys, time
+from pathlib import Path
+from nexus_ai_agent.creative.assets.admission import asset_admission_lock
+with asset_admission_lock(Path(sys.argv[1]), exclusive=False):
+    print('locked', flush=True)
+    time.sleep(30)
+"""
+    process = subprocess.Popen(  # noqa: S603 - known interpreter and local test source
+        [sys.executable, "-c", program, str(tmp_path)],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        assert process.stdout is not None
+        assert process.stdout.readline().strip() == "locked"
+        with pytest.raises(TimeoutError):
+            with asset_admission_lock(tmp_path, exclusive=True, timeout_seconds=0.1):
+                pytest.fail("exclusive lock entered while child was holding shared lock")
+        os.kill(process.pid, signal.SIGKILL)
+        assert process.wait(timeout=5) == -signal.SIGKILL
+        with asset_admission_lock(tmp_path, exclusive=True, timeout_seconds=1):
+            assert (tmp_path / ".asset-library-maintenance.lock").is_file()
+    finally:
+        if process.poll() is None:
+            process.kill()
+        process.communicate(timeout=5)
+
+
+@pytest.mark.asyncio
+async def test_cancelled_publication_retains_kernel_lock_until_worker_finishes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import asyncio
+    import subprocess
+    import sys
+    import threading
+
+    store = LocalContentAddressedBlobStore(tmp_path)
+    staging, digest, _ = store.stage(io.BytesIO(b"payload"), max_bytes=100)
+    key = store.blob_key_for(digest)
+    start = asyncio.Event()
+    release = threading.Event()
+    finished = threading.Event()
+    original = store.store
+    loop = asyncio.get_running_loop()
+
+    def slow(stage: str, blob: str) -> tuple[str, int, bool]:
+        loop.call_soon_threadsafe(start.set)
+        try:
+            if not release.wait(5):
+                raise TimeoutError("test worker was not released")
+            return original(stage, blob)
+        finally:
+            finished.set()
+
+    monkeypatch.setattr(store, "store", slow)
+    task = asyncio.create_task(store.publish_from_staging_async(staging, key))
+    program = """
+import sys
+from pathlib import Path
+from nexus_ai_agent.creative.assets.admission import asset_admission_lock
+with asset_admission_lock(Path(sys.argv[1]), exclusive=True, timeout_seconds=0.1):
+    pass
+"""
+    try:
+        await asyncio.wait_for(start.wait(), timeout=5)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        blocked = await asyncio.to_thread(
+            subprocess.run,
+            [sys.executable, "-c", program, str(tmp_path)],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+        assert blocked.returncode != 0
+        assert "TimeoutError" in blocked.stderr
+        assert (tmp_path / staging).read_bytes() == b"payload"
+        assert staging in store.in_flight_staging_keys()
+    finally:
+        release.set()
+        assert await asyncio.to_thread(finished.wait, 5)
+    acquired = await asyncio.to_thread(
+        subprocess.run,
+        [sys.executable, "-c", program, str(tmp_path)],
+        capture_output=True,
+        text=True,
+        timeout=5,
+        check=False,
+    )
+    assert acquired.returncode == 0, acquired.stderr
+    assert store.verify(key, sha256=digest, size_bytes=len(b"payload"))
+
+
+def test_admission_lock_refuses_symlink_and_invalid_timeout(tmp_path: Path) -> None:
+    from nexus_ai_agent.creative.assets.admission import asset_admission_lock
+
+    target = tmp_path / "outside"
+    target.write_text("untouched")
+    (tmp_path / ".asset-library-maintenance.lock").symlink_to(target)
+    with pytest.raises(OSError):
+        with asset_admission_lock(tmp_path, exclusive=True):
+            pass
+    assert target.read_text() == "untouched"
+    for value in (0, -1, True, float("nan"), float("inf")):
+        with pytest.raises(ValueError):
+            with asset_admission_lock(tmp_path, exclusive=True, timeout_seconds=value):
+                pass
