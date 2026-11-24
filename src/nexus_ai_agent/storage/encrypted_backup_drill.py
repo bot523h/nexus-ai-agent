@@ -6,6 +6,8 @@ be trusted against pathname replacement while the SQLite library opens files.
 
 from __future__ import annotations
 
+import base64
+import binascii
 import hashlib
 import hmac
 import ipaddress
@@ -20,7 +22,7 @@ import tempfile
 import time
 from collections.abc import Mapping
 from contextlib import closing
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
 from urllib.parse import parse_qs, urlsplit
@@ -240,6 +242,8 @@ class BackupDrillEvidence:
     archive_path: Path
     manifest_path: Path
     restored_path: Path
+    key_source: str
+    key_fingerprint: str
 
 
 def _key(key: bytes | bytearray | memoryview) -> bytes:
@@ -258,6 +262,85 @@ def _key(key: bytes | bytearray | memoryview) -> bytes:
     ):
         raise ValueError("invalid encryption key")
     return hashlib.sha256(b"nexus-local-drill-aesgcm-v1\x00" + raw).digest()
+
+
+_KEY_PROVENANCE_SENTINEL = object()
+_KEY_FINGERPRINT_DOMAIN = b"nexus-drill-key-fingerprint-v1\x00"
+
+
+@dataclass(frozen=True)
+class BackupKeyMaterial:
+    """A factory-issued key label, not a security boundary against Python code.
+
+    Environment provenance attests only to where the value was read, not its
+    entropy or the trustworthiness of the environment provider.
+    """
+
+    key_bytes: bytes = field(repr=False)
+    source: str
+    fingerprint_sha256: str
+    _sentinel: object = field(repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        if self._sentinel is not _KEY_PROVENANCE_SENTINEL:
+            raise ValueError("invalid key provenance capability")
+        if type(self.key_bytes) is not bytes or self.source not in (
+            "csprng",
+            "secret_env",
+            "raw_unattested",
+        ):
+            raise ValueError("invalid key material")
+        _key(self.key_bytes)
+        if not hmac.compare_digest(self.fingerprint_sha256, _key_fingerprint(self.key_bytes)):
+            raise ValueError("invalid key fingerprint")
+
+    @classmethod
+    def generate(cls) -> BackupKeyMaterial:
+        key = generate_drill_encryption_key()
+        return cls(key, "csprng", _key_fingerprint(key), _KEY_PROVENANCE_SENTINEL)
+
+    @classmethod
+    def from_secret_env(
+        cls, env_var: str = "NEXUS_BACKUP_ENCRYPTION_KEY", env: Mapping[str, str] | None = None
+    ) -> BackupKeyMaterial:
+        value = (os.environ if env is None else env).get(env_var)
+        if not isinstance(value, str):
+            raise ValueError("missing or invalid backup key")
+        try:
+            if len(value) == 64 and all(c in "0123456789abcdefABCDEF" for c in value):
+                raw = bytes.fromhex(value)
+            else:
+                raw = base64.b64decode(value, validate=True)
+        except (ValueError, binascii.Error):
+            raise ValueError("missing or invalid backup key") from None
+        return cls(raw, "secret_env", _key_fingerprint(raw), _KEY_PROVENANCE_SENTINEL)
+
+    @classmethod
+    def from_raw_bytes(cls, raw_key: bytes, *, source: str = "raw_unattested") -> BackupKeyMaterial:
+        if source != "raw_unattested" or type(raw_key) is not bytes:
+            raise ValueError("invalid raw key source")
+        return cls(raw_key, source, _key_fingerprint(raw_key), _KEY_PROVENANCE_SENTINEL)
+
+
+def _key_fingerprint(raw: bytes) -> str:
+    return hashlib.sha256(_KEY_FINGERPRINT_DOMAIN + raw).hexdigest()
+
+
+def _material(
+    key: BackupKeyMaterial | bytes | bytearray | memoryview, *, require_trusted: bool
+) -> BackupKeyMaterial:
+    if type(require_trusted) is not bool:
+        raise ValueError("require_trusted_key_source must be boolean")
+    if isinstance(key, BackupKeyMaterial):
+        key.__post_init__()
+        result = key
+    else:
+        if require_trusted or not isinstance(key, (bytes, bytearray, memoryview)):
+            raise ValueError("trusted key material required")
+        result = BackupKeyMaterial.from_raw_bytes(bytes(key))
+    if require_trusted and result.source not in ("csprng", "secret_env"):
+        raise ValueError("trusted key material required")
+    return result
 
 
 def generate_drill_encryption_key() -> bytes:
@@ -365,7 +448,9 @@ def _parse_manifest(raw: bytes) -> dict[str, object]:
         return result
 
     obj = json.loads(raw, object_pairs_hook=pairs)
-    if not isinstance(obj, dict) or set(obj) != {
+    if not isinstance(obj, dict):
+        raise ValueError("invalid manifest")
+    fields = {
         "schema_version",
         "source_sha256",
         "row_counts",
@@ -373,7 +458,8 @@ def _parse_manifest(raw: bytes) -> dict[str, object]:
         "ciphertext_sha256",
         "merkle_root",
         "auth_tag_hex",
-    }:
+    }
+    if set(obj) not in (fields, fields | {"key_source", "key_fingerprint"}):
         raise ValueError("invalid manifest")
     return obj
 
@@ -381,24 +467,37 @@ def _parse_manifest(raw: bytes) -> dict[str, object]:
 def verify_encrypted_sqlite_backup(
     archive_path: Path,
     manifest_path: Path,
-    key: bytes | bytearray | memoryview,
+    key: BackupKeyMaterial | bytes | bytearray | memoryview,
     *,
     max_database_bytes: int = 64 * 1024 * 1024,
+    require_trusted_key_source: bool = False,
 ) -> bytes:
     """Authenticate an artifact before returning any plaintext; never restore on failure."""
     from cryptography.exceptions import InvalidTag
     from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
     _validate_size_limit(max_database_bytes)
-    aes_key = _key(key)
+    material = _material(key, require_trusted=require_trusted_key_source)
+    aes_key = _key(material.key_bytes)
     try:
         manifest = _parse_manifest(_read_regular(manifest_path, 1024 * 1024))
         ciphertext = _read_regular(archive_path, max_database_bytes)
         aad = {
             k: manifest[k] for k in ("schema_version", "source_sha256", "row_counts", "nonce_hex")
         }
-        if manifest["schema_version"] != 1 or type(manifest["schema_version"]) is not int:
+        version = manifest["schema_version"]
+        if type(version) is not int or version not in (1, 2):
             raise ValueError("invalid version")
+        if version == 2:
+            aad.update({k: manifest[k] for k in ("key_source", "key_fingerprint")})
+            if manifest["key_source"] not in ("csprng", "secret_env", "raw_unattested"):
+                raise ValueError("invalid key source")
+            if not hmac.compare_digest(
+                str(manifest["key_fingerprint"]), material.fingerprint_sha256
+            ):
+                raise ValueError("key fingerprint mismatch")
+        elif "key_source" in manifest or "key_fingerprint" in manifest:
+            raise ValueError("invalid legacy manifest")
         nonce = bytes.fromhex(str(manifest["nonce_hex"]))
         tag = bytes.fromhex(str(manifest["auth_tag_hex"]))
         if len(nonce) != 12 or len(tag) != 16:
@@ -448,13 +547,14 @@ def _check_source_identity(source: Path, info: os.stat_result) -> None:
 def run_encrypted_sqlite_backup_restore_drill(
     source_db_path: Path,
     drill_workdir: Path,
-    encryption_key: bytes | bytearray | memoryview,
+    encryption_key: BackupKeyMaterial | bytes | bytearray | memoryview,
     *,
     inject_tamper_byte: bool = False,
     max_database_bytes: int = 64 * 1024 * 1024,
     backup_timeout_seconds: float = 10.0,
     allow_empty_database: bool = False,
     preflight_env: Mapping[str, str] | None = None,
+    require_trusted_key_source: bool = False,
 ) -> BackupDrillEvidence:
     """Execute a local SQLite backup and restore, never a production remote backup.
 
@@ -464,7 +564,8 @@ def run_encrypted_sqlite_backup_restore_drill(
     from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
     _validate_size_limit(max_database_bytes)
-    aes_key = _key(encryption_key)
+    material = _material(encryption_key, require_trusted=require_trusted_key_source)
+    aes_key = _key(material.key_bytes)
     if (
         isinstance(backup_timeout_seconds, bool)
         or not isinstance(backup_timeout_seconds, (int, float))
@@ -514,7 +615,9 @@ def run_encrypted_sqlite_backup_restore_drill(
             source_hash = hashlib.sha256(plaintext).hexdigest()
             nonce = os.urandom(12)
             aad = {
-                "schema_version": 1,
+                "schema_version": 2,
+                "key_source": material.source,
+                "key_fingerprint": material.fingerprint_sha256,
                 "source_sha256": source_hash,
                 "row_counts": counts,
                 "nonce_hex": nonce.hex(),
@@ -544,7 +647,11 @@ def run_encrypted_sqlite_backup_restore_drill(
                 finally:
                     os.close(fd)
             verified = verify_encrypted_sqlite_backup(
-                archive, manifest_path, encryption_key, max_database_bytes=max_database_bytes
+                archive,
+                manifest_path,
+                material,
+                max_database_bytes=max_database_bytes,
+                require_trusted_key_source=require_trusted_key_source,
             )
             _exclusive_write(restored, verified)
             with closing(sqlite3.connect(restored.as_uri() + "?mode=ro", uri=True)) as connection:
@@ -574,6 +681,8 @@ def run_encrypted_sqlite_backup_restore_drill(
                 final / archive.name,
                 final / manifest_path.name,
                 final / restored.name,
+                material.source,
+                material.fingerprint_sha256,
             )
     finally:
         os.close(source_fd)

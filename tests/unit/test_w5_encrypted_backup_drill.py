@@ -574,7 +574,14 @@ def test_drill_archive_decrypts_with_independently_constructed_aad(tmp_path: Pat
     manifest = json.loads(manifest_bytes)
     aad = {
         name: manifest[name]
-        for name in ("schema_version", "source_sha256", "row_counts", "nonce_hex")
+        for name in (
+            "schema_version",
+            "source_sha256",
+            "row_counts",
+            "nonce_hex",
+            "key_source",
+            "key_fingerprint",
+        )
     }
     serialized = json.dumps(aad, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode(
         "ascii"
@@ -618,3 +625,100 @@ def test_authentication_rejects_every_mutated_aad_field(tmp_path: Path, field: s
     evidence.manifest_path.write_text(json.dumps(manifest))
     with pytest.raises(BackupIntegrityTamperError):
         verify_encrypted_sqlite_backup(evidence.archive_path, evidence.manifest_path, key)
+
+
+def test_key_capabilities_strict_drill_and_redacted_receipts(tmp_path: Path) -> None:
+    import base64
+    import json
+    import secrets
+
+    from nexus_ai_agent.storage.encrypted_backup_drill import (
+        BackupKeyMaterial,
+        run_encrypted_sqlite_backup_restore_drill,
+        verify_encrypted_sqlite_backup,
+    )
+
+    source, work = tmp_path / "source.sqlite", tmp_path / "work"
+    work.mkdir()
+    _source(source)
+    random_key = secrets.token_bytes(32)
+    for key in (
+        BackupKeyMaterial.generate(),
+        BackupKeyMaterial.from_secret_env(env={"NEXUS_BACKUP_ENCRYPTION_KEY": random_key.hex()}),
+        BackupKeyMaterial.from_secret_env(
+            env={"NEXUS_BACKUP_ENCRYPTION_KEY": base64.b64encode(random_key).decode()}
+        ),
+    ):
+        receipt = run_encrypted_sqlite_backup_restore_drill(
+            source, work, key, require_trusted_key_source=True
+        )
+        assert receipt.key_source == key.source
+        assert receipt.key_fingerprint == key.fingerprint_sha256
+        manifest = json.loads(receipt.manifest_path.read_text())
+        assert manifest["key_source"] == key.source
+        assert manifest["key_fingerprint"] == key.fingerprint_sha256
+        assert key.key_bytes.hex() not in repr(key)
+        assert (
+            verify_encrypted_sqlite_backup(
+                receipt.archive_path, receipt.manifest_path, key, require_trusted_key_source=True
+            )
+            == receipt.restored_path.read_bytes()
+        )
+        manifest["key_source"] = "raw_unattested"
+        receipt.manifest_path.write_text(json.dumps(manifest))
+        from nexus_ai_agent.storage.encrypted_backup_drill import BackupIntegrityTamperError
+
+        with pytest.raises(BackupIntegrityTamperError):
+            verify_encrypted_sqlite_backup(receipt.archive_path, receipt.manifest_path, key)
+
+    for rejected in (random_key, BackupKeyMaterial.from_raw_bytes(random_key)):
+        with pytest.raises(ValueError, match="trusted key material required"):
+            run_encrypted_sqlite_backup_restore_drill(
+                source, work, rejected, require_trusted_key_source=True
+            )
+    with pytest.raises(ValueError, match="provenance"):
+        BackupKeyMaterial(random_key, "csprng", "fake", object())
+    with pytest.raises(ValueError):
+        BackupKeyMaterial.from_raw_bytes(random_key, source="csprng")
+    with pytest.raises(ValueError):
+        BackupKeyMaterial.from_secret_env(env={"NEXUS_BACKUP_ENCRYPTION_KEY": "not-a-key"})
+
+
+def test_verify_legacy_v1_drill_artifact(tmp_path: Path) -> None:
+    import json
+
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+    from nexus_ai_agent.storage.encrypted_backup_drill import (
+        run_encrypted_sqlite_backup_restore_drill,
+        verify_encrypted_sqlite_backup,
+    )
+
+    source, work = tmp_path / "source.sqlite", tmp_path / "work"
+    work.mkdir()
+    _source(source)
+    key = hashlib.sha256(b"legacy compatibility test").digest()
+    receipt = run_encrypted_sqlite_backup_restore_drill(source, work, key)
+    manifest = json.loads(receipt.manifest_path.read_text())
+    manifest.pop("key_source")
+    manifest.pop("key_fingerprint")
+    manifest["schema_version"] = 1
+    aad = {
+        name: manifest[name]
+        for name in ("schema_version", "source_sha256", "row_counts", "nonce_hex")
+    }
+    serialized = json.dumps(aad, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode(
+        "ascii"
+    )
+    derived = hashlib.sha256(b"nexus-local-drill-aesgcm-v1\x00" + key).digest()
+    encrypted = AESGCM(derived).encrypt(
+        bytes.fromhex(manifest["nonce_hex"]), receipt.restored_path.read_bytes(), serialized
+    )
+    # GCM ciphertext is independent of AAD, so only the authentication tag changes.
+    assert encrypted[:-16] == receipt.archive_path.read_bytes()
+    manifest["auth_tag_hex"] = encrypted[-16:].hex()
+    receipt.manifest_path.write_text(json.dumps(manifest))
+    assert (
+        verify_encrypted_sqlite_backup(receipt.archive_path, receipt.manifest_path, key)
+        == receipt.restored_path.read_bytes()
+    )
