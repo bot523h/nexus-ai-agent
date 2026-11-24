@@ -52,7 +52,7 @@ import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 
 from nexus_ai_agent.config.settings import Settings
 from nexus_ai_agent.maintenance.backup import (
@@ -68,9 +68,14 @@ from nexus_ai_agent.maintenance.dump_sql import copy_row_counts, expected_dump_t
 from nexus_ai_agent.maintenance.failures import (
     MaintenanceOperationError,
     classify_storage_failure,
+    safe_storage_failure,
 )
 from nexus_ai_agent.maintenance.housekeeping import _parse_backup_stamp
-from nexus_ai_agent.maintenance.redact import redact_text, split_dsn_password, target_identity
+from nexus_ai_agent.maintenance.redact import (
+    scrub_exception_chain,
+    split_dsn_password,
+    target_identity,
+)
 from nexus_ai_agent.observability.logging import get_logger
 from nexus_ai_agent.storage.db import enforce_postgres_policy
 from nexus_ai_agent.storage.encrypted_backup_drill import verify_production_backup_preflight
@@ -146,6 +151,7 @@ class DrillReport:
 
 
 def _fail(report: DrillReport, state: str, exc: Exception) -> None:
+    scrub_exception_chain(exc)
     report.record(state, False, str(exc))
     raise exc
 
@@ -157,11 +163,12 @@ def resolve_latest_r2_key(provider: BlobProvider) -> str:
     """Discover the newest well-formed backup object in the bucket."""
     try:
         keys = asyncio.run(provider.list_files(prefix="backups/db/"))
-    except ProviderUnavailable:
+    except ProviderUnavailable as exc:
+        scrub_exception_chain(exc)
         raise
     except StorageError as exc:
         raise MaintenanceOperationError(
-            classify_storage_failure(
+            safe_storage_failure(
                 operation="list",
                 where="backups/db/",
                 exc=exc,
@@ -200,6 +207,7 @@ def _detect_engine(artifact: Path, filename_hint: str) -> str:
         with artifact.open("rb") as handle:
             head = handle.read(100)
     except OSError as exc:
+        scrub_exception_chain(exc)
         raise RestorePlanError(f"artifact is not readable: {artifact} ({exc})") from exc
     if head.startswith(b"SQLite format 3"):
         return "sqlite"
@@ -226,7 +234,8 @@ def _fetch_r2_artifact(
             )
 
         asyncio.run(_download())
-    except TimeoutError:
+    except TimeoutError as exc:
+        scrub_exception_chain(exc)
         raise MaintenanceOperationError(
             classify_storage_failure(
                 operation="download",
@@ -238,11 +247,12 @@ def _fetch_r2_artifact(
                 bucket=getattr(provider, "_bucket", None),
             )
         ) from None
-    except ProviderUnavailable:
+    except ProviderUnavailable as exc:
+        scrub_exception_chain(exc)
         raise
     except StorageError as exc:
         raise MaintenanceOperationError(
-            classify_storage_failure(
+            safe_storage_failure(
                 operation="download",
                 where=key,
                 exc=exc,
@@ -300,6 +310,7 @@ def _verify_checksum(
         try:
             manifest = json.loads(sidecar.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
+            scrub_exception_chain(exc)
             raise RestoreVerificationError(
                 f"sidecar manifest exists but is unparseable ({exc}) — "
                 "refusing to treat the artifact as checksum-verified; "
@@ -436,6 +447,7 @@ def _apply_sqlite_restore(
     try:
         verification = _verify_sqlite_dump(target)
     except RuntimeError as exc:
+        scrub_exception_chain(exc)
         raise RestoreVerificationError(
             f"restored target failed verification: {exc}. The pre-restore "
             f"safety copy is at {safety} — inspect, then decide (a bad "
@@ -483,27 +495,34 @@ def _list_postgres_tables(
     exit code of the apply. This is the PostgreSQL analogue of reopening the
     restored SQLite file.
     """
-    proc = subprocess.run(  # noqa: S603 - operator-run drill, args are explicit
-        [
-            psql,
-            "-v",
-            "ON_ERROR_STOP=1",
-            "-tAc",
-            "SELECT table_name FROM information_schema.tables "
-            "WHERE table_schema = 'public' AND table_type = 'BASE TABLE'",
-            "--dbname",
-            target_url,
-        ],
-        capture_output=True,
-        text=True,
-        timeout=120,
-        check=False,
-        env=env,
-    )
+    proc = None
+    failed_to_run = False
+    try:
+        proc = subprocess.run(  # noqa: S603 - operator-run drill, args are explicit
+            [
+                psql,
+                "-v",
+                "ON_ERROR_STOP=1",
+                "-tAc",
+                "SELECT table_name FROM information_schema.tables "
+                "WHERE table_schema = 'public' AND table_type = 'BASE TABLE'",
+                "--dbname",
+                target_url,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
+            env=env,
+        )
+    except (OSError, subprocess.SubprocessError):
+        failed_to_run = True
+    if failed_to_run or proc is None:
+        raise RestoreVerificationError("postgres subprocess failed or timed out")
     if proc.returncode != 0:
         raise RestoreVerificationError(
-            f"post-restore table read failed on the live target: "
-            f"{redact_text(proc.stderr).strip()[:400]} — the apply reported "
+            "post-restore table read failed on the live target: "
+            "subprocess reported an error — the apply reported "
             "success but the target could not be re-read; classify "
             "CLUSTER-SIDE before claiming the restore is proven"
         )
@@ -531,18 +550,25 @@ def _list_postgres_row_counts(
         quoted = name.replace('"', '""')
         parts.append(f"SELECT '{label}' AS t, count(*) FROM \"{quoted}\"")
     query = " UNION ALL ".join(parts)
-    proc = subprocess.run(  # noqa: S603 - operator-run drill, args are explicit
-        [psql, "-v", "ON_ERROR_STOP=1", "-tAF", "\t", "-c", query, "--dbname", target_url],
-        capture_output=True,
-        text=True,
-        timeout=600,
-        check=False,
-        env=env,
-    )
+    proc = None
+    failed_to_run = False
+    try:
+        proc = subprocess.run(  # noqa: S603 - operator-run drill, args are explicit
+            [psql, "-v", "ON_ERROR_STOP=1", "-tAF", "\t", "-c", query, "--dbname", target_url],
+            capture_output=True,
+            text=True,
+            timeout=600,
+            check=False,
+            env=env,
+        )
+    except (OSError, subprocess.SubprocessError):
+        failed_to_run = True
+    if failed_to_run or proc is None:
+        raise RestoreVerificationError("postgres subprocess failed or timed out")
     if proc.returncode != 0:
         raise RestoreVerificationError(
             "post-restore row-count read failed on the live target: "
-            f"{redact_text(proc.stderr).strip()[:400]} — the apply reported "
+            "subprocess reported an error — the apply reported "
             "success but the data could not be re-read; classify CLUSTER-SIDE "
             "before claiming the restore is proven"
         )
@@ -582,11 +608,21 @@ def _pg_psql_env(target_url: str, scratch: Path) -> tuple[str, dict[str, str]]:
     env = dict(os.environ)
     if password is not None:
         parts = urlsplit(target_url)
+
+        def pgpass_field(value: str) -> str:
+            if "\n" in value or "\r" in value:
+                raise RestorePlanError("invalid PostgreSQL credential")
+            return value.replace("\\", "\\\\").replace(":", "\\:")
+
+        host = pgpass_field(parts.hostname or "*")
+        user = pgpass_field(unquote(parts.username) if parts.username else "*")
+        escaped_password = pgpass_field(password)
         passfile = scratch / ".pgpass"
-        passfile.write_text(
-            f"{parts.hostname or '*'}:{parts.port or 5432}:*:{parts.username or '*'}:{password}\n"
+        fd = os.open(
+            passfile, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600
         )
-        passfile.chmod(0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            stream.write(f"{host}:{parts.port or 5432}:*:{user}:{escaped_password}\n")
         env["PGPASSFILE"] = str(passfile)
     return stripped, env
 
@@ -640,29 +676,36 @@ def _apply_postgres_restore(
     target_label = target_identity(target_url) or "target"
     safe_url, pg_env = _pg_psql_env(target_url, scratch)
     expected = _expected_dump_tables(artifact)
-    proc = subprocess.run(  # noqa: S603 - operator-run drill, args are explicit
-        [
-            psql,
-            "-v",
-            "ON_ERROR_STOP=1",
-            "--single-transaction",
-            "--dbname",
-            safe_url,
-            "--file",
-            str(artifact),
-        ],
-        capture_output=True,
-        text=True,
-        timeout=1800,
-        check=False,
-        env=pg_env,
-    )
+    proc = None
+    failed_to_run = False
+    try:
+        proc = subprocess.run(  # noqa: S603 - operator-run drill, args are explicit
+            [
+                psql,
+                "-v",
+                "ON_ERROR_STOP=1",
+                "--single-transaction",
+                "--dbname",
+                safe_url,
+                "--file",
+                str(artifact),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=1800,
+            check=False,
+            env=pg_env,
+        )
+    except (OSError, subprocess.SubprocessError):
+        failed_to_run = True
+    if failed_to_run or proc is None:
+        raise RestoreVerificationError("postgres subprocess failed or timed out")
     if proc.returncode != 0:
         # F-003: the driver echoes the DSN back in its stderr; scrub it before
         # it becomes evidence.
         raise RestoreVerificationError(
             f"psql restore failed on {target_label} (rolled back — the target "
-            f"is unchanged): {redact_text(proc.stderr).strip()[:400]} — "
+            "is unchanged): subprocess reported an error — "
             "classify CLUSTER-SIDE before retrying (roles? occupied "
             "connections? version match?)"
         )
@@ -912,6 +955,7 @@ def _run_drill(
         try:
             verification = _verify_sqlite_dump(artifact)
         except RuntimeError as exc:
+            scrub_exception_chain(exc)
             raise RestoreVerificationError(
                 f"artifact integrity failed: {exc}. This backup cannot be "
                 "restored — do not point the application at it; drill an "
@@ -923,6 +967,7 @@ def _run_drill(
         try:
             verification = _verify_postgres_dump(artifact)
         except RuntimeError as exc:
+            scrub_exception_chain(exc)
             raise RestoreVerificationError(
                 f"artifact integrity failed: {exc}. The dump is truncated or "
                 "corrupt — do not feed it to pg_restore; drill an older backup"

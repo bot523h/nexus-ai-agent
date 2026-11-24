@@ -54,8 +54,19 @@ Files are staged and verified in a private generation directory, then that
 one directory is renamed into the work directory and the directory is fsynced.
 Independent three-file replacements are not an atomic transaction. Reruns
 create distinct generations, rather than a byte-identical idempotent result;
-retention and recovery after process or power failure remain unverified.
-The encrypted drill is not wired into the production maintenance scheduler.
+recovery after process or power failure remains unverified.
+
+Optional local drill retention authenticates each candidate before counting it,
+keeps corrupt or incomplete generations, and uses cooperative shared reader
+leases and exclusive pruning locks. It only considers `drill-` generations and
+uses an archive mtime plus name tie-break for ordering: this timestamp is not
+authenticated and requires a trusted root. Pins and reader-lease snapshots must
+be provided by a cooperating caller; an on-disk `.pin` also protects a generation.
+Readers using other paths or not taking the reader lease are not protected.
+Pruning renames to a private quarantine before descriptor-relative removal; a
+crash during removal can leave that quarantine for operator review. Retention
+never operates on remote production backups. The encrypted drill is not wired
+into the production maintenance scheduler.
 The separate structural preflight now gates non-dry-run remote backup and
 remote restore before provider construction and I/O. Local restore does not
 require cloud settings. SQLite source is accepted only when the canonical

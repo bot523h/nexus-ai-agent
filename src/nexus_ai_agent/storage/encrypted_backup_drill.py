@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import fcntl
 import hashlib
 import hmac
 import ipaddress
@@ -16,12 +17,13 @@ import math
 import os
 import re
 import secrets
+import shutil
 import sqlite3
 import stat
 import tempfile
 import time
-from collections.abc import Mapping
-from contextlib import closing
+from collections.abc import Iterator, Mapping, Set
+from contextlib import closing, contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
@@ -251,6 +253,7 @@ class BackupDrillEvidence:
     restored_path: Path
     key_source: str
     key_fingerprint: str
+    retention_receipt: BackupRetentionReceipt | None = None
 
 
 def _key(key: bytes | bytearray | memoryview) -> bytes:
@@ -507,7 +510,7 @@ def _parse_manifest(raw: bytes) -> dict[str, object]:
     return obj
 
 
-def verify_encrypted_sqlite_backup(
+def _verify_encrypted_sqlite_backup(
     archive_path: Path,
     manifest_path: Path,
     key: BackupKeyMaterial | bytes | bytearray | memoryview,
@@ -563,6 +566,235 @@ def verify_encrypted_sqlite_backup(
     raise BackupIntegrityTamperError("encrypted backup authentication failed")
 
 
+@contextmanager
+def backup_reader_lease(generation_path: Path, *, nonblocking: bool = False) -> Iterator[None]:
+    """Hold a cooperative reader lock; recheck that the generation was not pruned.
+
+    All readers and pruners must cooperate, and the root must be trusted against
+    non-cooperating pathname replacement. The lock is held until the reader exits.
+    """
+    generation = Path(generation_path).absolute()
+    directory = os.open(generation, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK)
+    try:
+        info = os.fstat(directory)
+        if not stat.S_ISDIR(info.st_mode):
+            raise ValueError("backup generation is not a directory")
+        fd = os.open(
+            ".reader.lock",
+            os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC,
+            0o600,
+            dir_fd=directory,
+        )
+        try:
+            lock_info = os.fstat(fd)
+            if not stat.S_ISREG(lock_info.st_mode) or lock_info.st_nlink != 1:
+                raise PermissionError("unsafe backup reader lock")
+            fcntl.flock(fd, fcntl.LOCK_SH | (fcntl.LOCK_NB if nonblocking else 0))
+            current = os.stat(generation, follow_symlinks=False)
+            if (current.st_dev, current.st_ino) != (info.st_dev, info.st_ino):
+                raise FileNotFoundError("backup generation was replaced")
+            yield
+        finally:
+            os.close(fd)
+    finally:
+        os.close(directory)
+
+
+def verify_encrypted_sqlite_backup(
+    archive_path: Path,
+    manifest_path: Path,
+    key: BackupKeyMaterial | bytes | bytearray | memoryview,
+    *,
+    max_database_bytes: int = 64 * 1024 * 1024,
+    require_trusted_key_source: bool = True,
+) -> bytes:
+    """Verify a generation while participating in its cooperative reader lease."""
+    archive, manifest = Path(archive_path), Path(manifest_path)
+    if archive.parent == manifest.parent and archive.parent.name.startswith("drill-"):
+        with backup_reader_lease(archive.parent):
+            return _verify_encrypted_sqlite_backup(
+                archive,
+                manifest,
+                key,
+                max_database_bytes=max_database_bytes,
+                require_trusted_key_source=require_trusted_key_source,
+            )
+    return _verify_encrypted_sqlite_backup(
+        archive,
+        manifest,
+        key,
+        max_database_bytes=max_database_bytes,
+        require_trusted_key_source=require_trusted_key_source,
+    )
+
+
+@dataclass(frozen=True)
+class BackupRetentionReceipt:
+    retained_ids: tuple[str, ...]
+    pruned_ids: tuple[str, ...]
+    skipped_corrupt_ids: tuple[str, ...]
+    skipped_pinned_ids: tuple[str, ...]
+    skipped_leased_ids: tuple[str, ...] = ()
+
+
+def _validate_generation_entries(directory_fd: int) -> None:
+    allowed = {"backup.enc", "manifest.json", "restored.sqlite", ".reader.lock", ".pin"}
+    entries = set(os.listdir(directory_fd))
+    if not entries <= allowed:
+        raise ValueError("unexpected generation contents")
+    for entry in entries:
+        if not stat.S_ISREG(os.stat(entry, dir_fd=directory_fd, follow_symlinks=False).st_mode):
+            raise ValueError("unsafe generation contents")
+
+
+def enforce_backup_retention(
+    backup_root: Path,
+    *,
+    keep_generations: int,
+    key_material: BackupKeyMaterial | bytes,
+    active_pins: Set[str] = frozenset(),
+    active_reader_leases: Set[str] = frozenset(),
+    require_trusted_key_source: bool = True,
+) -> BackupRetentionReceipt:
+    """Authenticate first, then prune superseded cooperating local generations.
+
+    Generation age uses archive mtime with a name tie-break; these filesystem
+    timestamps are not authenticated. Roots must be trusted against path swaps.
+    Readers not using the lease and changing external pin sets cannot be fenced.
+    """
+    if type(keep_generations) is not int or keep_generations < 1:
+        raise ValueError("keep_generations must be >= 1")
+    material = _material(key_material, require_trusted=require_trusted_key_source)
+    if not isinstance(active_pins, Set) or not isinstance(active_reader_leases, Set):
+        raise ValueError("pins and reader leases must be sets")
+    pins, readers = frozenset(active_pins), frozenset(active_reader_leases)
+    if any(type(item) is not str for item in pins | readers):
+        raise ValueError("pins and reader leases must contain strings")
+    if not shutil.rmtree.avoids_symlink_attacks:
+        raise RuntimeError("safe descriptor-relative retention is unavailable")
+    root = Path(backup_root).absolute()
+    _check_trusted_directory(root, forbidden_mode=stat.S_IWGRP | stat.S_IWOTH)
+    root_fd = os.open(root, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK)
+    try:
+        lock_fd = os.open(
+            ".backup-retention.lock",
+            os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC,
+            0o600,
+            dir_fd=root_fd,
+        )
+        try:
+            lock_info = os.fstat(lock_fd)
+            if not stat.S_ISREG(lock_info.st_mode) or lock_info.st_nlink != 1:
+                raise PermissionError("unsafe backup retention lock")
+            fcntl.flock(lock_fd, fcntl.LOCK_EX)
+            valid: list[tuple[int, str]] = []
+            corrupt: list[str] = []
+            leased: list[str] = []
+            for name in sorted(os.listdir(root_fd)):
+                if not name.startswith("drill-"):
+                    continue
+                generation = root / name
+                try:
+                    info = os.stat(name, dir_fd=root_fd, follow_symlinks=False)
+                    if not stat.S_ISDIR(info.st_mode):
+                        raise ValueError("invalid generation")
+                    with backup_reader_lease(generation, nonblocking=True):
+                        gen_fd = os.open(
+                            name,
+                            os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK,
+                            dir_fd=root_fd,
+                        )
+                        try:
+                            _validate_generation_entries(gen_fd)
+                            _verify_encrypted_sqlite_backup(
+                                generation / "backup.enc",
+                                generation / "manifest.json",
+                                material,
+                                require_trusted_key_source=require_trusted_key_source,
+                            )
+                            archive_info = os.stat(
+                                "backup.enc", dir_fd=gen_fd, follow_symlinks=False
+                            )
+                        finally:
+                            os.close(gen_fd)
+                    if not stat.S_ISREG(archive_info.st_mode):
+                        raise ValueError("invalid archive")
+                    valid.append((archive_info.st_mtime_ns, name))
+                except BlockingIOError:
+                    leased.append(name)
+                except (OSError, ValueError):
+                    corrupt.append(name)
+            valid.sort(reverse=True)
+            retained = [name for _, name in valid[:keep_generations]]
+            pruned: list[str] = []
+            pinned: list[str] = []
+            for _, name in valid[keep_generations:]:
+                if name in pins:
+                    pinned.append(name)
+                    continue
+                if name in readers:
+                    leased.append(name)
+                    continue
+                generation = root / name
+                moved = False
+                try:
+                    gen_fd = os.open(
+                        name,
+                        os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK,
+                        dir_fd=root_fd,
+                    )
+                    try:
+                        info = os.fstat(gen_fd)
+                        try:
+                            os.stat(".pin", dir_fd=gen_fd, follow_symlinks=False)
+                        except FileNotFoundError:
+                            pass
+                        else:
+                            pinned.append(name)
+                            continue
+                        reader_fd = os.open(
+                            ".reader.lock", os.O_RDWR | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=gen_fd
+                        )
+                        try:
+                            try:
+                                fcntl.flock(reader_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                            except BlockingIOError:
+                                leased.append(name)
+                                continue
+                            current = os.stat(name, dir_fd=root_fd, follow_symlinks=False)
+                            if (current.st_dev, current.st_ino) != (info.st_dev, info.st_ino):
+                                raise ValueError("generation changed")
+                            _validate_generation_entries(gen_fd)
+                            _verify_encrypted_sqlite_backup(
+                                generation / "backup.enc",
+                                generation / "manifest.json",
+                                material,
+                                require_trusted_key_source=require_trusted_key_source,
+                            )
+                            quarantine = ".pruned-" + secrets.token_hex(16)
+                            os.rename(name, quarantine, src_dir_fd=root_fd, dst_dir_fd=root_fd)
+                            moved = True
+                            os.fsync(root_fd)
+                            shutil.rmtree(quarantine, dir_fd=root_fd)
+                            os.fsync(root_fd)
+                            pruned.append(name)
+                        finally:
+                            os.close(reader_fd)
+                    finally:
+                        os.close(gen_fd)
+                except (OSError, ValueError):
+                    if moved:
+                        raise
+                    corrupt.append(name)
+            return BackupRetentionReceipt(
+                tuple(retained), tuple(pruned), tuple(corrupt), tuple(pinned), tuple(leased)
+            )
+        finally:
+            os.close(lock_fd)
+    finally:
+        os.close(root_fd)
+
+
 def _check_trusted_directory(path: Path, *, forbidden_mode: int) -> None:
     fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK)
     try:
@@ -600,6 +832,7 @@ def run_encrypted_sqlite_backup_restore_drill(
     allow_empty_database: bool = False,
     preflight_env: Mapping[str, str] | None = None,
     require_trusted_key_source: bool = True,
+    retain_generations: int | None = None,
 ) -> BackupDrillEvidence:
     """Execute a local SQLite backup and restore, never a production remote backup.
 
@@ -609,6 +842,10 @@ def run_encrypted_sqlite_backup_restore_drill(
     from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
     _validate_size_limit(max_database_bytes)
+    if retain_generations is not None and (
+        type(retain_generations) is not int or retain_generations < 1
+    ):
+        raise ValueError("keep_generations must be >= 1")
     material = _material(encryption_key, require_trusted=require_trusted_key_source)
     aes_key = _key(material.key_bytes)
     if (
@@ -717,6 +954,17 @@ def run_encrypted_sqlite_backup_restore_drill(
                 os.fsync(work_fd)
             finally:
                 os.close(work_fd)
+            retention_receipt = (
+                enforce_backup_retention(
+                    work,
+                    keep_generations=retain_generations,
+                    key_material=material,
+                    active_pins=frozenset({final.name}),
+                    require_trusted_key_source=require_trusted_key_source,
+                )
+                if retain_generations is not None
+                else None
+            )
             return BackupDrillEvidence(
                 status,
                 source_hash,
@@ -728,6 +976,7 @@ def run_encrypted_sqlite_backup_restore_drill(
                 final / restored.name,
                 material.source,
                 material.fingerprint_sha256,
+                retention_receipt,
             )
     finally:
         os.close(source_fd)

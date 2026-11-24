@@ -152,7 +152,9 @@ def test_real_disk_encrypted_round_trip(tmp_path: Path) -> None:
     assert result.status == "LOCAL_DRILL_VERIFIED_REMOTE_NOT_CHECKED"
     assert result.row_counts == {'strange"name': 2}
     assert hashlib.sha256(result.restored_path.read_bytes()).hexdigest() == result.source_sha256
-    assert b"abc" not in result.archive_path.read_bytes()
+    # Three-byte substrings can occur randomly in valid ciphertext. A full
+    # SQLite header is a meaningful canary with negligible collision risk.
+    assert b"SQLite format 3\x00" not in result.archive_path.read_bytes()
     assert result.archive_path.stat().st_mode & 0o777 == 0o600
     with sqlite3.connect(result.restored_path) as restored:
         assert restored.execute('SELECT * FROM "strange""name" ORDER BY id').fetchall() == [
@@ -926,3 +928,145 @@ def test_invalid_secret_env_decoder_does_not_attach_context() -> None:
     assert caught.value.__cause__ is None
     assert caught.value.__context__ is None
     assert secret not in str(caught.value.args)
+
+
+@pytest.mark.parametrize("field", ["NEXUS_DATABASE_URL", "NEXUS_B2_ENDPOINT"])
+def test_preflight_malformed_url_traceback_does_not_expose_canary(field: str) -> None:
+    import traceback
+
+    secret = "CANARY_SECRET_KEY_99887766554433221100"
+    config = b2_config()
+    config[field] = f"https://user:{secret}@[broken"
+    with pytest.raises(BackupPreflightError) as caught:
+        verify_production_backup_preflight(config)
+    error = caught.value
+    assert secret not in str(error)
+    assert secret not in repr(error)
+    assert secret not in repr(error.args)
+    assert error.__cause__ is None
+    assert error.__context__ is None
+    assert secret not in "".join(traceback.format_exception(error))
+
+
+def _retention_generations(tmp_path: Path, count: int):
+    import os
+
+    from nexus_ai_agent.storage.encrypted_backup_drill import (
+        BackupKeyMaterial,
+        run_encrypted_sqlite_backup_restore_drill,
+    )
+
+    source, work = tmp_path / "retention.sqlite", tmp_path / "generations"
+    work.mkdir()
+    _source(source)
+    key = BackupKeyMaterial.generate()
+    generations = []
+    for i in range(count):
+        evidence = run_encrypted_sqlite_backup_restore_drill(source, work, key)
+        os.utime(evidence.archive_path, ns=(1_000_000_000 + i, 1_000_000_000 + i))
+        generations.append(evidence.archive_path.parent)
+    return work, key, generations
+
+
+def test_retention_prunes_only_verified_old_generations(tmp_path: Path) -> None:
+    from nexus_ai_agent.storage.encrypted_backup_drill import enforce_backup_retention
+
+    root, key, generations = _retention_generations(tmp_path, 5)
+    receipt = enforce_backup_retention(root, keep_generations=2, key_material=key)
+    assert receipt.retained_ids == tuple(p.name for p in reversed(generations[3:]))
+    assert receipt.pruned_ids == tuple(p.name for p in reversed(generations[:3]))
+    assert receipt.skipped_corrupt_ids == ()
+    assert all(not p.exists() for p in generations[:3])
+    assert all(p.exists() for p in generations[3:])
+
+
+def test_retention_corrupt_newer_cannot_displace_valid_old(tmp_path: Path) -> None:
+    from nexus_ai_agent.storage.encrypted_backup_drill import enforce_backup_retention
+
+    root, key, generations = _retention_generations(tmp_path, 3)
+    (generations[1] / "backup.enc").write_bytes(b"corrupted")
+    (generations[2] / "manifest.json").unlink()
+    receipt = enforce_backup_retention(root, keep_generations=1, key_material=key)
+    assert receipt.retained_ids == (generations[0].name,)
+    assert set(receipt.skipped_corrupt_ids) == {p.name for p in generations[1:]}
+    assert receipt.pruned_ids == ()
+    assert all(p.exists() for p in generations)
+
+
+def test_retention_respects_pins_and_reader_leases(tmp_path: Path) -> None:
+    from nexus_ai_agent.storage.encrypted_backup_drill import (
+        backup_reader_lease,
+        enforce_backup_retention,
+    )
+
+    root, key, generations = _retention_generations(tmp_path, 4)
+    with backup_reader_lease(generations[1]):
+        receipt = enforce_backup_retention(
+            root,
+            keep_generations=1,
+            key_material=key,
+            active_pins=frozenset({generations[0].name}),
+            active_reader_leases=frozenset({generations[2].name}),
+        )
+    assert receipt.retained_ids == (generations[3].name,)
+    assert receipt.skipped_pinned_ids == (generations[0].name,)
+    assert set(receipt.skipped_leased_ids) == {generations[1].name, generations[2].name}
+    assert receipt.pruned_ids == ()
+    assert all(p.exists() for p in generations)
+
+
+@pytest.mark.parametrize("count", [0, -1, True])
+def test_retention_rejects_invalid_count(tmp_path: Path, count: int) -> None:
+    from nexus_ai_agent.storage.encrypted_backup_drill import enforce_backup_retention
+
+    with pytest.raises(ValueError, match="keep_generations must be >= 1"):
+        enforce_backup_retention(tmp_path, keep_generations=count, key_material=b"bad")
+
+
+def test_retention_skips_generation_with_exclusive_lock_without_blocking(tmp_path: Path) -> None:
+    import fcntl
+    import os
+
+    from nexus_ai_agent.storage.encrypted_backup_drill import enforce_backup_retention
+
+    root, key, generations = _retention_generations(tmp_path, 2)
+    fd = os.open(generations[0] / ".reader.lock", os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        result = enforce_backup_retention(root, keep_generations=1, key_material=key)
+        assert generations[0].name in result.skipped_leased_ids
+        assert generations[0].exists()
+        assert result.pruned_ids == ()
+    finally:
+        os.close(fd)
+
+
+def test_retention_never_follows_generation_or_content_symlinks(tmp_path: Path) -> None:
+    from nexus_ai_agent.storage.encrypted_backup_drill import enforce_backup_retention
+
+    root, key, generations = _retention_generations(tmp_path, 2)
+    external = tmp_path / "external"
+    external.mkdir()
+    sentinel = external / "sentinel"
+    sentinel.write_bytes(b"preserve")
+    (root / "drill-external").symlink_to(external, target_is_directory=True)
+    (generations[0] / "extra").symlink_to(sentinel)
+    receipt = enforce_backup_retention(root, keep_generations=1, key_material=key)
+    assert set(receipt.skipped_corrupt_ids) == {"drill-external", generations[0].name}
+    assert generations[0].exists()
+    assert sentinel.read_bytes() == b"preserve"
+
+
+def test_drill_can_run_retention_after_success(tmp_path: Path) -> None:
+    from nexus_ai_agent.storage.encrypted_backup_drill import (
+        run_encrypted_sqlite_backup_restore_drill,
+    )
+
+    root, key, generations = _retention_generations(tmp_path, 2)
+    new = run_encrypted_sqlite_backup_restore_drill(
+        tmp_path / "retention.sqlite", root, key, retain_generations=1
+    )
+    assert new.retention_receipt is not None
+    assert new.retention_receipt.retained_ids == (new.archive_path.parent.name,)
+    assert set(new.retention_receipt.pruned_ids) == {p.name for p in generations}
+    assert new.archive_path.exists()

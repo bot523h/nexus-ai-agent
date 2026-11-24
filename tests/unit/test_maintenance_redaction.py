@@ -134,3 +134,73 @@ def test_scratch_dir_is_removed_after_a_failing_drill(tmp_path: Path, monkeypatc
     assert all(not path.exists() for path in created), (
         f"scratch dirs leaked after a failing drill: {[p for p in created if p.exists()]}"
     )
+
+
+def test_query_password_removed_before_psql_and_written_to_passfile(tmp_path: Path) -> None:
+    url = f"postgresql://nexus@host/db?password={POISON}&sslmode=verify-full"
+    safe, env = restore_module._pg_psql_env(url, tmp_path)
+    assert POISON not in safe
+    assert "sslmode=verify-full" in safe
+    assert POISON in Path(env["PGPASSFILE"]).read_text()
+
+
+def test_psql_timeout_never_leaks_subprocess_exception(monkeypatch: pytest.MonkeyPatch) -> None:
+    import subprocess
+    import traceback
+
+    def fail(*args, **kwargs):
+        raise subprocess.TimeoutExpired(cmd=[POISON], timeout=1, stderr=POISON, output=POISON)
+
+    monkeypatch.setattr(restore_module.subprocess, "run", fail)
+    with pytest.raises(restore_module.RestoreVerificationError) as caught:
+        restore_module._list_postgres_tables("psql", "postgresql://nexus@host/db")
+    assert caught.value.__context__ is None
+    assert POISON not in repr(caught.value)
+    assert POISON not in "".join(traceback.format_exception(caught.value))
+
+
+def test_upload_provider_exception_chain_is_redacted(tmp_path: Path) -> None:
+    import traceback
+
+    from nexus_ai_agent.maintenance.backup import _upload_actionable
+    from nexus_ai_agent.maintenance.failures import MaintenanceOperationError
+    from nexus_ai_agent.storage.providers.base import StorageError
+
+    class LeakyProvider:
+        async def upload(self, *, local_path: Path, remote_key: str) -> None:
+            inner = StorageError(POISON)
+            inner.stderr = POISON
+            inner.cmd = ["command", POISON]
+            try:
+                raise inner
+            except StorageError as error:
+                raise StorageError(f"provider said {POISON}") from error
+
+    with pytest.raises(MaintenanceOperationError) as caught:
+        _upload_actionable(LeakyProvider(), local_path=tmp_path / "unused", key="backups/db/key")  # type: ignore[arg-type]
+    error = caught.value
+    assert POISON not in str(error)
+    assert POISON not in repr(error)
+    assert error.__cause__ is not None
+    assert POISON not in str(error.__cause__)
+    assert POISON not in "".join(traceback.format_exception(error))
+    assert error.failure.category == "unknown"
+
+
+def test_restore_provider_failure_redacts_nested_diagnostics() -> None:
+    import traceback
+
+    from nexus_ai_agent.maintenance.failures import MaintenanceOperationError
+    from nexus_ai_agent.storage.providers.base import StorageError
+
+    class LeakyProvider:
+        async def list_files(self, *, prefix: str) -> list[str]:
+            error = StorageError({"server": POISON})
+            error.detail = POISON
+            raise error
+
+    with pytest.raises(MaintenanceOperationError) as caught:
+        restore_module.resolve_latest_r2_key(LeakyProvider())  # type: ignore[arg-type]
+    assert POISON not in str(caught.value)
+    assert POISON not in repr(caught.value.__cause__)
+    assert POISON not in "".join(traceback.format_exception(caught.value))

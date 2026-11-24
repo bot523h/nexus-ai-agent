@@ -171,3 +171,20 @@ def test_gaussian_kernel_preserves_constant_signal() -> None:
     assert np.all(kernel >= 0)
     assert np.sum(kernel) == pytest.approx(1.0, abs=1e-12)
     assert np.convolve(np.ones(100), kernel, mode="valid") == pytest.approx(np.ones(92), abs=1e-12)
+
+
+def test_merkle_verifier_accepts_independent_fixed_rfc6962_audit_path() -> None:
+    # Five leaves, index two: leaf-3, subtree(leaf-0, leaf-1), leaf-4.
+    # Values computed independently from RFC 6962's prefixed SHA-256 rules.
+    proof = (
+        "f76836325aec5699d8d71f8e42e9d47c5c29b08059ba296384f7ca40ad3a40ae",
+        "60a53eed0de87a90c8e59427c59c46253c33a76a09502a51801300927b7e6bdc",
+        "ea9fc1a1b6e191b460d0d6306e3e870c173f39330f13cda1b70cfc72bdc398ba",
+    )
+    root = "00d21829a5503145348abcf712513eacf2a274211ad83e970202bb5b6d80b286"
+    assert verify_merkle_inclusion_proof(
+        b"leaf-2", index=2, total_leaves=5, proof=proof, expected_root=root
+    )
+    assert not verify_merkle_inclusion_proof(
+        b"leaf-2", index=2, total_leaves=5, proof=tuple(reversed(proof)), expected_root=root
+    )
