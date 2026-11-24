@@ -25,6 +25,7 @@ import time
 from collections.abc import Iterator, Mapping, Set
 from contextlib import closing, contextmanager
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import MappingProxyType
 from urllib.parse import parse_qs, urlsplit
@@ -505,7 +506,11 @@ def _parse_manifest(raw: bytes) -> dict[str, object]:
         "merkle_root",
         "auth_tag_hex",
     }
-    if set(obj) not in (fields, fields | {"key_source", "key_fingerprint"}):
+    if set(obj) not in (
+        fields,
+        fields | {"key_source", "key_fingerprint"},
+        fields | {"key_source", "key_fingerprint", "created_at_utc"},
+    ):
         raise ValueError("invalid manifest")
     return obj
 
@@ -517,8 +522,8 @@ def _verify_encrypted_sqlite_backup(
     *,
     max_database_bytes: int = 64 * 1024 * 1024,
     require_trusted_key_source: bool = True,
-) -> bytes:
-    """Authenticate an artifact before returning any plaintext; never restore on failure."""
+) -> tuple[bytes, int | None]:
+    """Authenticate and return plaintext plus the authenticated UTC timestamp."""
     from cryptography.exceptions import InvalidTag
     from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
@@ -532,9 +537,9 @@ def _verify_encrypted_sqlite_backup(
             k: manifest[k] for k in ("schema_version", "source_sha256", "row_counts", "nonce_hex")
         }
         version = manifest["schema_version"]
-        if type(version) is not int or version not in (1, 2):
+        if type(version) is not int or version not in (1, 2, 3):
             raise ValueError("invalid version")
-        if version == 2:
+        if version in (2, 3):
             aad.update({k: manifest[k] for k in ("key_source", "key_fingerprint")})
             if manifest["key_source"] not in ("csprng", "secret_env", "raw_unattested"):
                 raise ValueError("invalid key source")
@@ -544,6 +549,20 @@ def _verify_encrypted_sqlite_backup(
                 raise ValueError("key fingerprint mismatch")
         elif "key_source" in manifest or "key_fingerprint" in manifest:
             raise ValueError("invalid legacy manifest")
+        created_us: int | None = None
+        if version == 3:
+            timestamp = manifest.get("created_at_utc")
+            if not isinstance(timestamp, str):
+                raise ValueError("invalid creation timestamp")
+            created = datetime.fromisoformat(timestamp)
+            if created.tzinfo is None or created.utcoffset() != timedelta(0):
+                raise ValueError("creation timestamp must be UTC")
+            created = created.astimezone(timezone.utc)
+            delta = created - datetime(1970, 1, 1, tzinfo=timezone.utc)
+            created_us = (delta.days * 86400 + delta.seconds) * 1_000_000 + delta.microseconds
+            aad["created_at_utc"] = timestamp
+        elif "created_at_utc" in manifest:
+            raise ValueError("unexpected creation timestamp")
         nonce = bytes.fromhex(str(manifest["nonce_hex"]))
         tag = bytes.fromhex(str(manifest["auth_tag_hex"]))
         if len(nonce) != 12 or len(tag) != 16:
@@ -559,7 +578,7 @@ def _verify_encrypted_sqlite_backup(
             hashlib.sha256(plaintext).hexdigest(), str(manifest["source_sha256"])
         ):
             raise ValueError("plaintext digest mismatch")
-        return plaintext
+        return plaintext, created_us
     except (ValueError, TypeError, OSError, InvalidTag, KeyError):
         pass
     # Raise outside the handler: even __context__ must not retain untrusted input.
@@ -612,20 +631,22 @@ def verify_encrypted_sqlite_backup(
     archive, manifest = Path(archive_path), Path(manifest_path)
     if archive.parent == manifest.parent and archive.parent.name.startswith("drill-"):
         with backup_reader_lease(archive.parent):
-            return _verify_encrypted_sqlite_backup(
+            plaintext, _ = _verify_encrypted_sqlite_backup(
                 archive,
                 manifest,
                 key,
                 max_database_bytes=max_database_bytes,
                 require_trusted_key_source=require_trusted_key_source,
             )
-    return _verify_encrypted_sqlite_backup(
+            return plaintext
+    plaintext, _ = _verify_encrypted_sqlite_backup(
         archive,
         manifest,
         key,
         max_database_bytes=max_database_bytes,
         require_trusted_key_source=require_trusted_key_source,
     )
+    return plaintext
 
 
 @dataclass(frozen=True)
@@ -658,8 +679,8 @@ def enforce_backup_retention(
 ) -> BackupRetentionReceipt:
     """Authenticate first, then prune superseded cooperating local generations.
 
-    Generation age uses archive mtime with a name tie-break; these filesystem
-    timestamps are not authenticated. Roots must be trusted against path swaps.
+    V3 creation time is authenticated; legacy generations use archive mtime.
+    Ties use generation ID. Roots must be trusted against path swaps.
     Readers not using the lease and changing external pin sets cannot be fenced.
     """
     if type(keep_generations) is not int or keep_generations < 1:
@@ -706,7 +727,7 @@ def enforce_backup_retention(
                         )
                         try:
                             _validate_generation_entries(gen_fd)
-                            _verify_encrypted_sqlite_backup(
+                            _, created_us = _verify_encrypted_sqlite_backup(
                                 generation / "backup.enc",
                                 generation / "manifest.json",
                                 material,
@@ -719,7 +740,14 @@ def enforce_backup_retention(
                             os.close(gen_fd)
                     if not stat.S_ISREG(archive_info.st_mode):
                         raise ValueError("invalid archive")
-                    valid.append((archive_info.st_mtime_ns, name))
+                    valid.append(
+                        (
+                            created_us * 1000
+                            if created_us is not None
+                            else archive_info.st_mtime_ns,
+                            name,
+                        )
+                    )
                 except BlockingIOError:
                     leased.append(name)
                 except (OSError, ValueError):
@@ -897,7 +925,8 @@ def run_encrypted_sqlite_backup_restore_drill(
             source_hash = hashlib.sha256(plaintext).hexdigest()
             nonce = os.urandom(12)
             aad = {
-                "schema_version": 2,
+                "schema_version": 3,
+                "created_at_utc": datetime.now(timezone.utc).isoformat(timespec="microseconds"),
                 "key_source": material.source,
                 "key_fingerprint": material.fingerprint_sha256,
                 "source_sha256": source_hash,

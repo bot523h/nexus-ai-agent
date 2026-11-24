@@ -614,6 +614,7 @@ def test_drill_archive_decrypts_with_independently_constructed_aad(tmp_path: Pat
         name: manifest[name]
         for name in (
             "schema_version",
+            "created_at_utc",
             "source_sha256",
             "row_counts",
             "nonce_hex",
@@ -749,6 +750,7 @@ def test_verify_legacy_v1_drill_artifact(tmp_path: Path) -> None:
     manifest.pop("key_source")
     manifest.pop("key_fingerprint")
     manifest["schema_version"] = 1
+    manifest.pop("created_at_utc")
     aad = {
         name: manifest[name]
         for name in ("schema_version", "source_sha256", "row_counts", "nonce_hex")
@@ -1070,3 +1072,125 @@ def test_drill_can_run_retention_after_success(tmp_path: Path) -> None:
     assert new.retention_receipt.retained_ids == (new.archive_path.parent.name,)
     assert set(new.retention_receipt.pruned_ids) == {p.name for p in generations}
     assert new.archive_path.exists()
+
+
+def test_retention_uses_authenticated_time_not_filesystem_mtime(tmp_path: Path) -> None:
+    import os
+
+    from nexus_ai_agent.storage.encrypted_backup_drill import enforce_backup_retention
+
+    root, key, generations = _retention_generations(tmp_path, 2)
+    os.utime(generations[0] / "backup.enc", ns=(4_000_000_000_000_000_000,) * 2)
+    os.utime(generations[0], ns=(4_000_000_000_000_000_000,) * 2)
+    os.utime(generations[1] / "backup.enc", ns=(1_000_000_000,) * 2)
+    receipt = enforce_backup_retention(root, keep_generations=1, key_material=key)
+    assert receipt.retained_ids == (generations[1].name,)
+    assert receipt.pruned_ids == (generations[0].name,)
+
+
+def test_forged_creation_timestamp_is_rejected_and_does_not_displace_valid(
+    tmp_path: Path,
+) -> None:
+    import json
+
+    from nexus_ai_agent.storage.encrypted_backup_drill import (
+        BackupIntegrityTamperError,
+        enforce_backup_retention,
+        verify_encrypted_sqlite_backup,
+    )
+
+    root, key, generations = _retention_generations(tmp_path, 2)
+    manifest_path = generations[1] / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["created_at_utc"] = "9999-01-01T00:00:00+00:00"
+    manifest_path.write_text(json.dumps(manifest))
+    with pytest.raises(BackupIntegrityTamperError):
+        verify_encrypted_sqlite_backup(generations[1] / "backup.enc", manifest_path, key)
+    receipt = enforce_backup_retention(root, keep_generations=1, key_material=key)
+    assert receipt.retained_ids == (generations[0].name,)
+    assert receipt.skipped_corrupt_ids == (generations[1].name,)
+    assert receipt.pruned_ids == ()
+
+
+def test_legacy_v2_verified_and_retention_falls_back_to_mtime(tmp_path: Path) -> None:
+    import json
+    import os
+
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+    from nexus_ai_agent.storage.encrypted_backup_drill import (
+        enforce_backup_retention,
+        verify_encrypted_sqlite_backup,
+    )
+
+    root, key, generations = _retention_generations(tmp_path, 2)
+    legacy = generations[0]
+    manifest_path = legacy / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["schema_version"] = 2
+    del manifest["created_at_utc"]
+    fields = (
+        "schema_version",
+        "source_sha256",
+        "row_counts",
+        "nonce_hex",
+        "key_source",
+        "key_fingerprint",
+    )
+    aad = json.dumps(
+        {field: manifest[field] for field in fields},
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+    ).encode("ascii")
+    aes_key = hashlib.sha256(b"nexus-local-drill-aesgcm-v1\x00" + key.key_bytes).digest()
+    plaintext = (legacy / "restored.sqlite").read_bytes()
+    encrypted = AESGCM(aes_key).encrypt(bytes.fromhex(manifest["nonce_hex"]), plaintext, aad)
+    assert encrypted[:-16] == (legacy / "backup.enc").read_bytes()
+    manifest["auth_tag_hex"] = encrypted[-16:].hex()
+    manifest_path.write_text(json.dumps(manifest))
+    assert verify_encrypted_sqlite_backup(legacy / "backup.enc", manifest_path, key) == plaintext
+    os.utime(legacy / "backup.enc", ns=(4_000_000_000_000_000_000,) * 2)
+    receipt = enforce_backup_retention(root, keep_generations=1, key_material=key)
+    assert receipt.retained_ids == (legacy.name,)
+    assert receipt.pruned_ids == (generations[1].name,)
+
+
+@pytest.mark.parametrize(
+    "timestamp", [None, 42, "not-a-timestamp", "2026-01-01T00:00:00", "2026-01-01T00:00:00+01:00"]
+)
+def test_invalid_v3_creation_timestamp_fails_authentication(
+    tmp_path: Path, timestamp: object
+) -> None:
+    import json
+
+    from nexus_ai_agent.storage.encrypted_backup_drill import (
+        BackupIntegrityTamperError,
+        verify_encrypted_sqlite_backup,
+    )
+
+    _, key, generations = _retention_generations(tmp_path, 1)
+    manifest_path = generations[0] / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    assert manifest["schema_version"] == 3
+    manifest["created_at_utc"] = timestamp
+    manifest_path.write_text(json.dumps(manifest))
+    with pytest.raises(BackupIntegrityTamperError):
+        verify_encrypted_sqlite_backup(generations[0] / "backup.enc", manifest_path, key)
+
+
+def test_legacy_schema_cannot_claim_unauthenticated_creation_time(tmp_path: Path) -> None:
+    import json
+
+    from nexus_ai_agent.storage.encrypted_backup_drill import (
+        BackupIntegrityTamperError,
+        verify_encrypted_sqlite_backup,
+    )
+
+    _, key, generations = _retention_generations(tmp_path, 1)
+    manifest_path = generations[0] / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["schema_version"] = 2
+    manifest_path.write_text(json.dumps(manifest))
+    with pytest.raises(BackupIntegrityTamperError):
+        verify_encrypted_sqlite_backup(generations[0] / "backup.enc", manifest_path, key)

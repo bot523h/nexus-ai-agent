@@ -41,8 +41,9 @@ does not prove how a secret was generated.
 The wrapper binds the label and bytes with a process-local authenticator to reject
 accidental relabeling via dataclass replacement. Neither Python-private values nor
 that authenticator provide isolation against code in the same interpreter; key
-wrappers must be reissued after a process restart. Version 2 manifests authenticate the key
-source and a domain-separated key fingerprint as AAD; version 1 remains readable.
+wrappers must be reissued after a process restart. Version 3 manifests authenticate
+the UTC creation timestamp, key source, and domain-separated fingerprint as AAD;
+versions 1 and 2 remain readable.
 The drill uses AES-GCM with manifest metadata authenticated as AAD, limits
 whole-file reads, checks SQLite
 integrity, and uses a deadline during SQLite online backup. Source and work
@@ -58,9 +59,10 @@ recovery after process or power failure remains unverified.
 
 Optional local drill retention authenticates each candidate before counting it,
 keeps corrupt or incomplete generations, and uses cooperative shared reader
-leases and exclusive pruning locks. It only considers `drill-` generations and
-uses an archive mtime plus name tie-break for ordering: this timestamp is not
-authenticated and requires a trusted root. Pins and reader-lease snapshots must
+leases and exclusive pruning locks. It only considers `drill-` generations.
+Verified version 3 timestamps determine ordering; legacy versions fall back to
+archive mtime, which is unauthenticated, with generation ID breaking ties. The
+root must remain trusted against path replacement. Pins and reader-lease snapshots must
 be provided by a cooperating caller; an on-disk `.pin` also protects a generation.
 Readers using other paths or not taking the reader lease are not protected.
 Pruning renames to a private quarantine before descriptor-relative removal; a
