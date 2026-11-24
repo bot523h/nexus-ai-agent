@@ -342,12 +342,14 @@ class WorkspaceFilesystem:
                 info = os.fstat(fd)
                 if not stat.S_ISREG(info.st_mode):
                     raise FilesystemBoundaryError("path is not a regular file")
-                with os.fdopen(fd, "rb") as handle:
+                with os.fdopen(fd, "rb", closefd=False) as handle:
                     return handle.read() if max_bytes is None else handle.read(max_bytes)
             except FilesystemBoundaryError:
                 raise
             except OSError as exc:
                 raise FilesystemBoundaryError("file could not be read safely") from exc
+            finally:
+                os.close(fd)
 
     def iter_bytes(self, raw: str, *, chunk_size: int = 1 << 20) -> Iterator[bytes]:
         """Yield a contained regular file's bytes in bounded chunks.
@@ -413,7 +415,7 @@ class WorkspaceFilesystem:
                 info = os.fstat(fd)
                 if not stat.S_ISREG(info.st_mode):
                     raise FilesystemBoundaryError("path is not a regular file")
-                with os.fdopen(fd, "rb") as handle:
+                with os.fdopen(fd, "rb", closefd=False) as handle:
                     while True:
                         chunk = handle.read(1 << 20)
                         if not chunk:
@@ -424,6 +426,8 @@ class WorkspaceFilesystem:
                 raise
             except OSError as exc:
                 raise FilesystemBoundaryError("file could not be read safely") from exc
+            finally:
+                os.close(fd)
         return digest.hexdigest(), size
 
     def exists(self, raw: str) -> bool:
