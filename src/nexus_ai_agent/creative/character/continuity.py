@@ -7,11 +7,16 @@ claim to measure pixel-level continuity against imagery.  "Verified" here
 means "within the calibrated band", not "visually indistinguishable".
 
 Each dimension produces one of three states (plus ``NOT_MEASURED`` for
-dimensions with no source):
+dimensions with no source, and ``INSUFFICIENT_EVIDENCE`` for measured
+dimensions whose sample count is below the caller's floor):
 
 * ``VERIFIED`` — measured distance is within the calibrated verified band;
 * ``REVIEW_REQUIRED`` — measured distance is inside the review band;
-* ``IDENTITY_DRIFT`` — measured distance is at or above the drift threshold.
+* ``IDENTITY_DRIFT`` — measured distance is at or above the drift threshold;
+* ``NOT_MEASURED`` — no measurement was supplied for the dimension;
+* ``INSUFFICIENT_EVIDENCE`` — a distance was supplied, but it rests on fewer
+  than ``min_evidence_samples`` samples, so it is not scored at all: thin
+  evidence may neither pass (``VERIFIED``) nor accuse (``IDENTITY_DRIFT``).
 
 The aggregate verdict is the lowest-precedence state present: ``IDENTITY_DRIFT``
 dominates, then ``REVIEW_REQUIRED``, then ``INSUFFICIENT_EVIDENCE``, then
@@ -128,6 +133,8 @@ def verify_dimensions(
     thresholds: Mapping[str, ContinuityThreshold],
     *,
     note: str = "",
+    evidence_counts: Mapping[str, int] | None = None,
+    min_evidence_samples: int = 1,
 ) -> ContinuityReport:
     """Verify a set of dimension measurements against calibrated thresholds.
 
@@ -136,9 +143,30 @@ def verify_dimensions(
     measurement at or above ``drift_min`` are IDENTITY_DRIFT; between
     ``verified_max`` and ``drift_min`` are REVIEW_REQUIRED; at or below
     ``verified_max`` are VERIFIED.
+
+    ``evidence_counts`` maps dimension → the number of independent samples the
+    distance rests on (``min_evidence_samples`` is the floor, default 1).  A
+    measured dimension whose count is below the floor is reported as
+    ``INSUFFICIENT_EVIDENCE`` and is **not** scored: a distance computed from
+    too few samples must not be allowed to pass as VERIFIED, nor to accuse a
+    character of IDENTITY_DRIFT.  Dimensions absent from ``evidence_counts``
+    are scored exactly as before, so the parameter is backwards compatible.
     """
     if not measurements:
         raise ValueError("at least one dimension must be measured")
+    if isinstance(min_evidence_samples, bool) or not isinstance(min_evidence_samples, int):
+        raise ValueError("min_evidence_samples must be an int")
+    if min_evidence_samples < 1:
+        raise ValueError("min_evidence_samples must be >= 1")
+    evidence: dict[str, int] = {}
+    for key, count in (evidence_counts or {}).items():
+        if key not in measurements:
+            raise ValueError(f"evidence_counts[{key!r}] has no matching measurement")
+        if isinstance(count, bool) or not isinstance(count, int):
+            raise ValueError(f"evidence_counts[{key!r}] must be an int sample count")
+        if count < 0:
+            raise ValueError(f"evidence_counts[{key!r}] must be non-negative")
+        evidence[key] = count
     # Every (key, threshold) pair must be internally consistent: a threshold
     # stored under one key must be calibrated for that same key.  A mismatch is
     # a caller bug, not a valid calibration, so the verdict would silently
@@ -166,6 +194,12 @@ def verify_dimensions(
             raise ValueError(f"distance for {name!r} must be finite (no NaN or +/-inf)")
         if distance < 0.0:
             raise ValueError(f"distance for {name!r} must be non-negative")
+        if evidence.get(name, min_evidence_samples) < min_evidence_samples:
+            # Measured, but on a thinner sample base than the caller's floor:
+            # the distance is real but not decidable, so it is reported as
+            # INSUFFICIENT_EVIDENCE rather than scored into a band.
+            results[name] = DimensionResult(name, distance, VerificationState.INSUFFICIENT_EVIDENCE)
+            continue
         if distance >= threshold.drift_min:
             state = VerificationState.IDENTITY_DRIFT
         elif distance > threshold.verified_max:
@@ -175,9 +209,11 @@ def verify_dimensions(
         results[name] = DimensionResult(name, distance, state)
 
     states = {result.state for result in results.values()}
-    # Defensive fallback (unreachable for a validated verify_dimensions call —
-    # every dimension produces a state); kept so a direct ContinuityReport
-    # construction with an unknown state cannot silently pass.
+    # Precedence selection over the per-dimension states.  Every branch is
+    # reachable: INSUFFICIENT_EVIDENCE comes from a measured dimension below
+    # the caller's evidence floor, the other four from the banded scoring.  The
+    # loop keeps VERIFIED last, so the aggregate is never VERIFIED unless every
+    # single dimension is VERIFIED (fail-closed).
     verdict = VerificationState.INSUFFICIENT_EVIDENCE
     for state in STATE_PRECEDENCE:
         if state in states:
