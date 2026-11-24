@@ -183,6 +183,37 @@ class FencedFilesystemEffectDestination:
                 self._atomic_write(self._project / (effect_key + ".effect"), payload)
             return self._observation(effect_key, fencing_epoch, "PRESENT", data)
 
+    def compensate(self, observation: ExternalEffectObservation) -> ExternalEffectObservation:
+        """Remove a verified payload after persisting its epoch tombstone.
+
+        A crash between tombstoning and unlink leaves the payload quarantined,
+        never writable by the stale epoch. Retrying with a fresh inspection is
+        safe. A newer epoch is never deleted by an older recovery worker.
+        """
+        if (
+            not isinstance(observation, ExternalEffectObservation)
+            or observation.status != "PRESENT"
+        ):
+            raise DestinationStateError("compensation requires a PRESENT observation")
+        key, epoch = observation.effect_key, observation.fencing_epoch
+        self._validate(key, epoch)
+        with self._locked(key):
+            data = self._metadata(key)
+            if data["highest_epoch"] > epoch:
+                raise StaleEpochError("compensation cannot remove a newer epoch")
+            published = self._published_digest(key, data)
+            if published is not None:
+                if observation != self._observation(key, epoch, "PRESENT", data):
+                    raise DestinationStateError("compensation observation changed")
+                data["highest_epoch"] = max(data["highest_epoch"], epoch)
+                data["tombstone_epoch"] = max(data["tombstone_epoch"], epoch)
+                self._write_metadata(key, data)
+                (self._project / (key + ".effect")).unlink()
+                self._sync_dir(self._project)
+            elif data["tombstone_epoch"] < epoch:
+                raise DestinationStateError("absent compensation lacks a durable tombstone")
+            return self._observation(key, epoch, "ABSENT", data)
+
     def inspect(self, *, effect_key: str, fencing_epoch: int) -> ExternalEffectObservation:
         """Atomically fence an absent effect through the requested epoch."""
         self._validate(effect_key, fencing_epoch)

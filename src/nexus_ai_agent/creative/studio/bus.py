@@ -503,6 +503,7 @@ class PlanTransaction:
     plan_id: str = field(default_factory=lambda: uuid4().hex)
     steps: tuple[PlanStep, ...] = ()
     require_compensation: bool = True
+    admitted_ir_hash: str | None = None
     _snapshot: dict[str, Any] | None = field(default=None, repr=False)
     _bus: CommandBus | None = field(default=None, repr=False)
     state: PlanTransactionState = PlanTransactionState.PENDING
@@ -875,6 +876,14 @@ class PlanTransaction:
             "rollback_on_self_error": step.rollback_on_self_error,
             "external_effects": step.external_effects,
         }
+        if self.admitted_ir_hash is not None:
+            if (
+                not isinstance(self.admitted_ir_hash, str)
+                or len(self.admitted_ir_hash) != 64
+                or any(char not in "0123456789abcdef" for char in self.admitted_ir_hash)
+            ):
+                raise PlanTransactionError("invalid admitted DAG hash")
+            evidence["admitted_ir_hash"] = self.admitted_ir_hash
         self._replay_safe = self._replay_safe and _replay_safe(evidence)
         return _canonical_hash(evidence)
 
@@ -2274,3 +2283,23 @@ class CommandBus:
         self._project = new_project
         self._history = [*outcome.history, transaction]
         return result
+
+
+def compose_durable_command_bus(
+    project: Project,
+    *,
+    registry: CapabilityRegistry,
+    authorizer: ProjectAuthorizer,
+    store: DurablePlanDedupePort,
+    verifiers: Mapping[str, Callable[[Project, TypedCommand, CommandResult, str], bool]],
+) -> CommandBus:
+    """Central construction seam for durable adapters; retain the single bus pipeline."""
+    if store is None or authorizer is None:
+        raise ValueError("durable composition requires store and project authority")
+    return CommandBus(
+        project,
+        registry=registry,
+        authorizer=authorizer,
+        durable_dedupe_store=store,
+        durable_verifiers=verifiers,
+    )

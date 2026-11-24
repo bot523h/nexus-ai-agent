@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import re
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from dataclasses import field as dc_field
 from typing import Any, Literal
@@ -313,6 +313,30 @@ class CapabilityRegistry:
         self._index[spec.operation_id] = spec
         self._domain_of[spec.operation_id] = domain
         self._capability_of[spec.operation_id] = cap
+
+    def verify_declared_contracts(
+        self, contracts: Mapping[str, Mapping[str, str]]
+    ) -> tuple[str, ...]:
+        """Check registered schema/permission identities against operation truth.
+
+        This is drift detection, not an L4 claim, a permission grant, or proof
+        of handler correctness. Runtime pre/postcondition checks remain required.
+        """
+        verified: list[str] = []
+        for operation in sorted(self._index):
+            spec = self._index[operation]
+            contract = contracts.get(operation)
+            expected = {
+                "permission_level": spec.permission_level.value,
+                "input_model": f"{spec.input_model.__module__}.{spec.input_model.__qualname__}",
+                "handler": spec.handler.__name__,
+            }
+            if contract is None or any(
+                contract.get(key) != value for key, value in expected.items()
+            ):
+                raise ValueError(f"{operation}: declared operation contract drift")
+            verified.append(operation)
+        return tuple(verified)
 
     def get_spec(self, operation_id: str) -> OperationSpec:
         try:

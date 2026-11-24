@@ -131,6 +131,12 @@ class EffectObservationVerifier(Protocol):
     def verify(self, observation: ExternalEffectObservation) -> bool: ...
 
 
+class EffectCompensator(Protocol):
+    """Trusted idempotent destination remediation; not request-supplied code."""
+
+    def compensate(self, observation: ExternalEffectObservation) -> ExternalEffectObservation: ...
+
+
 @dataclass(frozen=True)
 class RecoveryRoute:
     """Trusted, deployment-configured destination and separate verifier.
@@ -142,6 +148,7 @@ class RecoveryRoute:
     destination: DurableEffectDestination
     verifier: EffectObservationVerifier
     verifier_id: str
+    compensator: EffectCompensator | None = None
 
 
 @dataclass(frozen=True)

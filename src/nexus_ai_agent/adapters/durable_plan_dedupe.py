@@ -1372,9 +1372,10 @@ class DurablePlanDedupeStore:
     ) -> None:
         """Consume trusted, current evidence and atomically resolve quarantine.
 
-        Only independently verified, fenced ABSENT effects are eligible. PRESENT
-        effects require a separately verified compensation mechanism, which this
-        path does not yet implement. Operator authentication remains external.
+        Takeover requires independently verified, fenced ABSENT effects. The
+        acknowledge_present policy records observed PRESENT effects as VERIFIED
+        but retains quarantine: it never repeats them or claims compensation.
+        Operator authentication remains external.
         """
         self._validate_identity(plan_id, plan_hash, project_id)
         validate_plan_identity(operator_id, name="operator_id")
@@ -1386,7 +1387,12 @@ class DurablePlanDedupeStore:
             or not 0 <= expected_attempt <= 2**63 - 1
         ):
             raise ValueError("expected_attempt must be a nonnegative bounded integer")
-        if resolution_action not in ("confirm_rolled_back", "authorize_takeover"):
+        if resolution_action not in (
+            "confirm_rolled_back",
+            "authorize_takeover",
+            "acknowledge_present",
+            "compensate_present",
+        ):
             raise ValueError("unsupported repair action")
         if not isinstance(reason, str) or not reason.strip() or len(reason) > 2048:
             raise ValueError("repair reason must contain 1 to 2048 characters")
@@ -1459,14 +1465,61 @@ class DurablePlanDedupeStore:
                     effect.step_id != entry.step_id
                     or effect.effect_key != entry.effect_key
                     or effect.fencing_epoch != entry.attempt
-                    or effect.observation_status != "ABSENT"
-                    or effect.destination_fenced is not True
+                    or effect.observation_status not in ("PRESENT", "ABSENT")
+                    or (
+                        effect.observation_status == "PRESENT"
+                        and resolution_action not in ("acknowledge_present", "compensate_present")
+                    )
+                    or (
+                        effect.observation_status == "ABSENT"
+                        and effect.destination_fenced is not True
+                    )
                 ):
                     raise PlanStoreStateError("effect is not verified fenced ABSENT")
             if conn.execute("SELECT count(*) FROM plan_repair_events").fetchone()[0] >= MAX_RECORDS:
                 raise PlanStoreCapacityError("repair audit capacity reached")
-            if resolution_action == "authorize_takeover" and expected_attempt >= 2**63 - 1:
+            if (
+                resolution_action in ("authorize_takeover", "compensate_present")
+                and expected_attempt >= 2**63 - 1
+            ):
                 raise PlanStoreStateError("execution attempt counter exhausted")
+            remediations: dict[str, ExternalEffectObservation] = {}
+            if resolution_action == "compensate_present":
+                # Validate every route before invoking any external remediation.
+                for effect in recovery_evidence.effect_evidences:
+                    if effect.observation_status == "PRESENT":
+                        route = self._recovery_routes.get((project_id, effect.step_id))
+                        if (
+                            route is None
+                            or route.compensator is None
+                            or route.verifier_id != effect.verifier_id
+                        ):
+                            raise PlanStoreStateError("trusted compensation route is unavailable")
+                for effect in recovery_evidence.effect_evidences:
+                    if effect.observation_status != "PRESENT":
+                        continue
+                    route = self._recovery_routes[(project_id, effect.step_id)]
+                    assert route.compensator is not None
+                    before = ExternalEffectObservation(
+                        effect.effect_key,
+                        effect.fencing_epoch,
+                        "PRESENT",
+                        effect.observation_digest,
+                    )
+                    if route.verifier.verify(before) is not True:
+                        raise PlanStoreStateError("PRESENT observation changed before compensation")
+                    after = route.compensator.compensate(before)
+                    if (
+                        not isinstance(after, ExternalEffectObservation)
+                        or after.status != "ABSENT"
+                        or after.effect_key != effect.effect_key
+                        or after.fencing_epoch != effect.fencing_epoch
+                        or route.verifier.verify(after) is not True
+                    ):
+                        raise PlanStoreStateError(
+                            "compensation absence was not independently verified"
+                        )
+                    remediations[effect.step_id] = after
             audit = _encode_evidence(
                 {
                     "operator_id": operator_id,
@@ -1476,14 +1529,30 @@ class DurablePlanDedupeStore:
                     "previous_attempt": row[1],
                     "resolved_at": now,
                     "recovery_evidence": json.loads(body),
+                    **(
+                        {
+                            "remediations": {
+                                key: asdict(value) for key, value in remediations.items()
+                            }
+                        }
+                        if remediations
+                        else {}
+                    ),
                 }
             )
             for entry, effect in zip(unresolved, recovery_evidence.effect_evidences, strict=True):
                 changed = conn.execute(
-                    "UPDATE compensation_journal SET status='NOT_APPLIED',evidence_json=? "
+                    "UPDATE compensation_journal SET status=?,evidence_json=? "
                     "WHERE project_id=? AND plan_id=? AND plan_hash=? AND step_id=? "
                     "AND effect_key=? AND attempt=? AND status=?",
                     (
+                        (
+                            "COMPENSATED"
+                            if effect.step_id in remediations
+                            else "VERIFIED"
+                            if effect.observation_status == "PRESENT"
+                            else "NOT_APPLIED"
+                        ),
                         _encode_evidence(asdict(effect)),
                         project_id,
                         plan_id,
@@ -1496,7 +1565,13 @@ class DurablePlanDedupeStore:
                 ).rowcount
                 if changed != 1:
                     raise PlanStoreStateError("recovery journal changed while repairing")
-            target = "ROLLED_BACK" if resolution_action == "confirm_rolled_back" else "RESERVED"
+            target = (
+                "ROLLED_BACK"
+                if resolution_action in ("confirm_rolled_back", "compensate_present")
+                else "RESERVED"
+            )
+            if resolution_action == "acknowledge_present":
+                target = expected_status
             takeover = resolution_action == "authorize_takeover"
             changed = conn.execute(
                 "UPDATE plans SET status=?, repair_evidence_json=?, owner_token=NULL, "
@@ -1507,7 +1582,7 @@ class DurablePlanDedupeStore:
                     audit,
                     int(takeover),
                     int(takeover),
-                    expected_attempt + int(takeover),
+                    expected_attempt + int(takeover or resolution_action == "compensate_present"),
                     project_id,
                     plan_id,
                     plan_hash,

@@ -1430,3 +1430,151 @@ def test_inspection_never_issues_nonce_for_unproven_or_racing_destination(
     with sqlite3.connect(path) as conn:
         assert conn.execute("SELECT count(*) FROM plan_recovery_inspections").fetchone() == (0,)
         assert conn.execute("SELECT status,attempt FROM plans").fetchone() == ("IN_DOUBT", 1)
+
+
+def test_present_acknowledgement_records_verification_without_reexecution(tmp_path: Path) -> None:
+    """Real destination/SQLite; authorization callback is a test double."""
+    from nexus_ai_agent.adapters.fenced_filesystem_destination import (
+        FencedFilesystemEffectDestination,
+        FilesystemObservationVerifier,
+    )
+    from nexus_ai_agent.creative.studio.durable_dedupe import RecoveryRoute
+
+    destination = FencedFilesystemEffectDestination(tmp_path, project_id="default")
+    verifier = FilesystemObservationVerifier(tmp_path, project_id="default")
+    path = tmp_path / "present.db"
+    store = DurablePlanDedupeStore(
+        path,
+        repair_authorizer=lambda *_args: True,
+        recovery_routes={("default", "step"): RecoveryRoute(destination, verifier, "reader")},
+    )
+    lease = store.reserve_and_start("p", "a" * 64, external_effects=True, nonce="n")
+    store.record_compensation_intent(
+        "p",
+        "a" * 64,
+        attempt=lease.attempt,
+        owner_token=lease.owner_token,
+        step_id="step",
+        effect_key="b" * 64,
+    )
+    original = destination.apply(effect_key="b" * 64, fencing_epoch=1, payload=b"once")
+    store.quarantine("p", "a" * 64, attempt=lease.attempt, owner_token=lease.owner_token)
+    evidence = store.inspect_recovery(
+        "default", "p", "a" * 64, expected_status="IN_DOUBT", expected_attempt=1, operator_id="op"
+    )
+    store.repair_in_doubt(
+        "default",
+        "p",
+        "a" * 64,
+        expected_status="IN_DOUBT",
+        expected_attempt=1,
+        operator_id="op",
+        resolution_action="acknowledge_present",
+        reason="verified on disk",
+        recovery_evidence=evidence,
+    )
+    assert destination.inspect(effect_key="b" * 64, fencing_epoch=1) == original
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("SELECT status,attempt FROM plans").fetchone() == ("IN_DOUBT", 1)
+        assert conn.execute("SELECT status FROM compensation_journal").fetchone() == ("VERIFIED",)
+        assert conn.execute("SELECT consumed FROM plan_recovery_inspections").fetchone() == (1,)
+    with pytest.raises(PlanStoreStateError):
+        store.repair_in_doubt(
+            "default",
+            "p",
+            "a" * 64,
+            expected_status="IN_DOUBT",
+            expected_attempt=1,
+            operator_id="op",
+            resolution_action="acknowledge_present",
+            reason="replay",
+            recovery_evidence=evidence,
+        )
+
+
+@pytest.mark.parametrize("fail_after_delete", [False, True])
+def test_present_compensation_is_verified_and_crash_retry_safe(
+    tmp_path: Path, fail_after_delete: bool
+) -> None:
+    from nexus_ai_agent.adapters.fenced_filesystem_destination import (
+        FencedFilesystemEffectDestination,
+        FilesystemObservationVerifier,
+        StaleEpochError,
+    )
+    from nexus_ai_agent.creative.studio.durable_dedupe import (
+        ExternalEffectObservation,
+        RecoveryRoute,
+    )
+
+    destination = FencedFilesystemEffectDestination(tmp_path, project_id="default")
+    verifier = FilesystemObservationVerifier(tmp_path, project_id="default")
+
+    class InterruptedCompensator:
+        def compensate(self, observation: ExternalEffectObservation) -> ExternalEffectObservation:
+            after = destination.compensate(observation)
+            if fail_after_delete:
+                raise RuntimeError("crash after destination deletion")
+            return after
+
+    store = DurablePlanDedupeStore(
+        tmp_path / "compensate.db",
+        repair_authorizer=lambda *_args: True,
+        recovery_routes={
+            ("default", "step"): RecoveryRoute(
+                destination, verifier, "reader", InterruptedCompensator()
+            )
+        },
+    )
+    lease = store.reserve_and_start("p", "a" * 64, external_effects=True, nonce="n")
+    store.record_compensation_intent(
+        "p",
+        "a" * 64,
+        attempt=lease.attempt,
+        owner_token=lease.owner_token,
+        step_id="step",
+        effect_key="b" * 64,
+    )
+    observation = destination.apply(effect_key="b" * 64, fencing_epoch=1, payload=b"once")
+    store.quarantine("p", "a" * 64, attempt=lease.attempt, owner_token=lease.owner_token)
+    evidence = store.inspect_recovery(
+        "default", "p", "a" * 64, expected_status="IN_DOUBT", expected_attempt=1, operator_id="op"
+    )
+
+    def repair() -> None:
+        store.repair_in_doubt(
+            "default",
+            "p",
+            "a" * 64,
+            expected_status="IN_DOUBT",
+            expected_attempt=1,
+            operator_id="op",
+            resolution_action="compensate_present",
+            reason="rollback",
+            recovery_evidence=evidence,
+        )
+
+    if fail_after_delete:
+        with pytest.raises(RuntimeError, match="crash"):
+            repair()
+        with sqlite3.connect(store.path) as conn:
+            assert conn.execute("SELECT status,attempt FROM plans").fetchone() == ("IN_DOUBT", 1)
+            assert conn.execute("SELECT consumed FROM plan_recovery_inspections").fetchone() == (0,)
+        evidence = store.inspect_recovery(
+            "default",
+            "p",
+            "a" * 64,
+            expected_status="IN_DOUBT",
+            expected_attempt=1,
+            operator_id="op",
+        )
+    repair()
+    with sqlite3.connect(store.path) as conn:
+        assert conn.execute("SELECT status,attempt FROM plans").fetchone() == ("ROLLED_BACK", 2)
+        assert conn.execute("SELECT status FROM compensation_journal").fetchone() == (
+            ("NOT_APPLIED" if fail_after_delete else "COMPENSATED"),
+        )
+    assert verifier.verify(destination.compensate(observation))
+    with pytest.raises(StaleEpochError):
+        destination.apply(effect_key="b" * 64, fencing_epoch=1, payload=b"once")
+    with pytest.raises(PlanStoreStateError):
+        repair()
