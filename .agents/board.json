@@ -8802,7 +8802,10 @@
         "Wave 2: StudioExecutionPort and public command parse/fingerprint boundary; runtime has no concrete bus or private-store dependency.",
         "Wave 2: explicit fenced UTF-8 artifact operation with declared pre/postcondition contracts, independent byte-level verification, durable ingress and unchanged-file cold replay.",
         "Wave 2: credential-authenticated project:repair scope, one-use recovery evidence, PRESENT acknowledgement/compensation and ABSENT takeover after real subprocess os._exit(73).",
-        "Wave 2: PR #355 GraphQL review audit: all seven Sourcery threads already resolved; no duplicate replies or resolution calls."
+        "Wave 2: PR #355 GraphQL review audit: all seven Sourcery threads already resolved; no duplicate replies or resolution calls.",
+        "Checkpoint 3A: accepted 720-test suite; >=98% lines and branches independently on all 11 W4 modules (f318b04c).",
+        "Checkpoint 3B: scripts/w4_mutations.py and tests/unit/test_w4_mutations.py; 30/30 deterministic source mutants killed, strict named failure oracle, byte/SHA restoration and cache purge. Campaign wall time remains above the 30-second target.",
+        "Checkpoint 3B: tests/benchmarks/w4_command_bus_benchmark.py; N=5 independent temporary SQLite WAL scenarios, compile/SHA/IBPC, fenced publication and real subprocess-death PRESENT recovery with nonce replay rejection. Final CI closure pending."
       ],
       "note": "",
       "previous_release_reason": "auto-released by gc at 2026-11-24T09:08:55Z (stale active lease)"
