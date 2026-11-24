@@ -326,3 +326,245 @@ async def test_async_store_alias_publishes_real_bytes(tmp_path: Path) -> None:
     key = store.blob_key_for(sha)
     assert await store.store_async(staging, key) == (sha, size, False)
     assert store.open(key) == b"content"
+
+
+@pytest.mark.asyncio
+async def test_replay_registry_evicts_only_idle_locks(monkeypatch: pytest.MonkeyPatch) -> None:
+    import asyncio
+
+    from nexus_ai_agent.creative.assets import service as module
+
+    monkeypatch.setattr(module, "_MAX_REPLAY_LOCKS", 65)
+    loop = asyncio.get_running_loop()
+    held = asyncio.Lock()
+    await held.acquire()
+    registry = {"held": held, **{f"idle-{i}": asyncio.Lock() for i in range(64)}}
+    monkeypatch.setitem(module._replay_locks, loop, registry)
+    new = module._replay_lock_for(Mock(bind=None), "new")
+    assert registry["held"] is held and held.locked()
+    assert registry["unknown:new"] is new
+    assert len(registry) == 2
+    held.release()
+
+
+@pytest.mark.asyncio
+async def test_replay_registry_keeps_all_held_locks(monkeypatch: pytest.MonkeyPatch) -> None:
+    import asyncio
+
+    from nexus_ai_agent.creative.assets import service as module
+
+    monkeypatch.setattr(module, "_MAX_REPLAY_LOCKS", 1)
+    held = asyncio.Lock()
+    await held.acquire()
+    registry = {"held": held}
+    monkeypatch.setitem(module._replay_locks, asyncio.get_running_loop(), registry)
+    module._replay_lock_for(Mock(bind=None), "new")
+    assert registry["held"] is held and len(registry) == 2
+    held.release()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("winner", [False, True])
+async def test_ingest_unique_conflict_rolls_back_before_resolving(
+    monkeypatch: pytest.MonkeyPatch, winner: bool
+) -> None:
+    import io
+    from contextlib import asynccontextmanager
+
+    from sqlalchemy.exc import IntegrityError
+
+    from nexus_ai_agent.creative.assets import service as module
+    from nexus_ai_agent.creative.assets.models import IngestRequest
+
+    session = Mock(
+        commit=AsyncMock(side_effect=IntegrityError("insert", {}, Exception("unique"))),
+        rollback=AsyncMock(),
+    )
+
+    @asynccontextmanager
+    async def factory():
+        yield session
+
+    repo = repo_mock()
+    repo.find_ingest_by_key = AsyncMock(side_effect=[None, record() if winner else None])
+    repo.create_ingest = AsyncMock()
+    monkeypatch.setattr(module, "SqlAssetRepository", lambda _: repo)
+    store = store_mock()
+    service = AssetLibraryService(blob_store=store, authorizer=Mock(), session_factory=factory)
+    service._resolve_existing = AsyncMock(return_value="winner")
+    if winner:
+        assert (
+            await service._ingest_admitted(
+                project_id="p", request=IngestRequest(idempotency_key="k"), stream=io.BytesIO(b"x")
+            )
+            == "winner"
+        )
+        service._resolve_existing.assert_awaited_once()
+    else:
+        with pytest.raises(IntegrityError):
+            await service._ingest_admitted(
+                project_id="p", request=IngestRequest(idempotency_key="k"), stream=io.BytesIO(b"x")
+            )
+        service._resolve_existing.assert_not_awaited()
+    session.rollback.assert_awaited_once()
+    store.stage_to.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("outcome", ["different", "failed"])
+async def test_adopted_replay_never_returns_mismatched_or_failed_result(outcome: str) -> None:
+    import io
+
+    from nexus_ai_agent.creative.assets.errors import IdempotencyConflict
+    from nexus_ai_agent.creative.assets.ingestion import IngestRecoveryReport
+
+    store, repo = store_mock(), repo_mock()
+    store.new_staging_key.return_value = "staging/replay"
+    store.stage_to.return_value = ("a" * 64, 12)
+    repo.set_staging_key = AsyncMock(return_value=True)
+    repo.get_ingest_fresh = AsyncMock(return_value=record(content_sha256="b" * 64, size_bytes=12))
+    service = AssetLibraryService(blob_store=store, authorizer=Mock())
+    state = IngestState.READY if outcome == "different" else IngestState.FAILED
+    service._reconcile_committing = AsyncMock(
+        return_value=IngestRecoveryReport("ingest", state, RecoveryOutcome.FAILED)
+    )
+    with pytest.raises(IdempotencyConflict if outcome == "different" else RecoveryError):
+        await service._resolve_interrupted(repo, Mock(), record(), io.BytesIO(b"replay"))
+    store.remove_staging.assert_not_called()
+    repo.set_staging_key.assert_awaited_once_with("ingest", "staging/replay")
+
+
+@pytest.mark.asyncio
+async def test_metadata_incomplete_is_not_returned(monkeypatch: pytest.MonkeyPatch) -> None:
+    from contextlib import asynccontextmanager
+    from types import SimpleNamespace
+
+    from nexus_ai_agent.creative.assets import service as module
+    from nexus_ai_agent.creative.assets.errors import AssetNotFound
+
+    @asynccontextmanager
+    async def factory():
+        yield object()
+
+    repo = repo_mock()
+    repo.get_link_for_project = AsyncMock(
+        return_value=SimpleNamespace(asset_id="a", version_id="v")
+    )
+    repo.list_project_assets = AsyncMock(
+        return_value=[SimpleNamespace(asset_id="a", version_id="v")]
+    )
+    repo.get_asset = AsyncMock(return_value=None)
+    repo.get_version = AsyncMock(return_value=object())
+    monkeypatch.setattr(module, "SqlAssetRepository", lambda _: repo)
+    service = AssetLibraryService(
+        blob_store=store_mock(), authorizer=Mock(), session_factory=factory
+    )
+    with pytest.raises(AssetNotFound, match="incomplete"):
+        await service.get_asset(actor_kind="user", actor_id="u", project_id="p", asset_id="a")
+    assert await service.list_project_assets(actor_kind="user", actor_id="u", project_id="p") == []
+
+
+@pytest.mark.asyncio
+async def test_resolved_race_without_owned_staging_does_not_remove_files(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from nexus_ai_agent.creative.assets import service as module
+
+    store, repo = store_mock(), repo_mock()
+    repo.get_ingest_fresh = AsyncMock(return_value=record(state=IngestState.READY))
+    session = Mock(rollback=AsyncMock(), commit=AsyncMock())
+    monkeypatch.setattr(
+        module, "reconcile_ingest", AsyncMock(side_effect=IngestAlreadyResolved("i"))
+    )
+    service = AssetLibraryService(blob_store=store, authorizer=Mock())
+    report = await service._reconcile_committing(session, repo, record())
+    assert report.outcome is RecoveryOutcome.ALREADY_READY
+    session.rollback.assert_awaited_once()
+    store.remove_staging.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_startup_refuses_recovered_row_without_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from contextlib import asynccontextmanager
+
+    from nexus_ai_agent.creative.assets import service as module
+    from nexus_ai_agent.creative.assets.ingestion import IngestRecoveryReport
+
+    @asynccontextmanager
+    async def factory():
+        yield object()
+
+    repo = repo_mock()
+    repo.list_pending_ingests = AsyncMock(return_value=[])
+    repo.get_ingest = AsyncMock(return_value=None)
+    monkeypatch.setattr(module, "SqlAssetRepository", lambda _: repo)
+    store = LocalContentAddressedBlobStore(tmp_path / "blob")
+    service = AssetLibraryService(blob_store=store, authorizer=Mock(), session_factory=factory)
+    service.recover_all = AsyncMock(
+        return_value=[
+            IngestRecoveryReport("failed", IngestState.FAILED, RecoveryOutcome.FAILED),
+            IngestRecoveryReport("ingest", IngestState.READY, RecoveryOutcome.COMPLETED),
+        ]
+    )
+    with pytest.raises(RecoveryError, match="missing its asset identity"):
+        await async_reconcile_asset_library_startup(service)
+    repo.get_ingest.assert_awaited_once_with("ingest")
+    from nexus_ai_agent.creative.assets.admission import asset_admission_lock
+
+    with asset_admission_lock(store._fs.root, exclusive=True, timeout_seconds=0.1):
+        pass
+
+
+def test_sync_startup_entrypoint_runs_async_reconciliation(monkeypatch: pytest.MonkeyPatch) -> None:
+    from nexus_ai_agent.creative.assets import service as module
+
+    expected = module.StartupReconciliationReport((), (), 0)
+    worker = AsyncMock(return_value=expected)
+    monkeypatch.setattr(module, "async_reconcile_asset_library_startup", worker)
+    service = AssetLibraryService(blob_store=store_mock(), authorizer=Mock())
+    assert reconcile_asset_library_startup(service, max_sweep_items=3) == expected
+    worker.assert_awaited_once_with(service, max_sweep_items=3)
+
+
+def test_marker_cleanup_missing_file_and_max_entries(tmp_path: Path) -> None:
+    import hashlib
+
+    from nexus_ai_agent.creative.assets.admission import asset_admission_lock
+
+    store = LocalContentAddressedBlobStore(tmp_path / "blob")
+    for key in ("staging/one", "staging/two"):
+        raw = key.encode()
+        (
+            tmp_path / "blob" / "staging" / (".cleanup-" + hashlib.sha256(raw).hexdigest())
+        ).write_bytes(raw)
+    with asset_admission_lock(store._fs.root, exclusive=True) as lease:
+        removed = store.cleanup_orphaned_staging_keys(
+            active_staging_keys=set(), admission_lease=lease, max_entries=1
+        )
+    assert len(removed) == 1
+    assert len(list((tmp_path / "blob" / "staging").iterdir())) == 1
+
+
+def test_pending_cleanup_does_not_remove_authoritative_active_key(tmp_path: Path) -> None:
+    import io
+
+    from nexus_ai_agent.creative.assets.admission import asset_admission_lock
+
+    store = LocalContentAddressedBlobStore(tmp_path / "blob")
+    key, _, _ = store.stage(io.BytesIO(b"active"), max_bytes=100)
+    store._pending_staging_cleanups.add(key)
+    with asset_admission_lock(store._fs.root, exclusive=True) as lease:
+        assert store.reconcile_staging_cleanups(
+            active_staging_keys={key}, admission_lease=lease
+        ) == (key,)
+    assert (tmp_path / "blob" / key).read_bytes() == b"active"
+
+
+def test_remove_staging_is_best_effort_on_io_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = LocalContentAddressedBlobStore(tmp_path / "blob")
+    monkeypatch.setattr(store._fs, "unlink", Mock(side_effect=OSError("io failure")))
+    assert store.remove_staging("staging/missing") is None
