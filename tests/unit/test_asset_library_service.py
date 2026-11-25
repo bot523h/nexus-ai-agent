@@ -161,7 +161,11 @@ async def test_read_content_detects_tampering(tmp_path: Path) -> None:
     # Corrupt the stored blob on disk; read must refuse rather than serve it.
     for f in (tmp_path / "blobs" / "blobs").rglob("*"):
         if f.is_file():
-            f.write_bytes(b"tampered")
+            f.chmod(0o600)
+            try:
+                f.write_bytes(b"tampered")
+            finally:
+                f.chmod(0o400)
     with pytest.raises(ContentIntegrityError):
         await service.read_content(
             actor_kind="user", actor_id=ACTOR, project_id=PROJECT, asset_id=result.asset_id

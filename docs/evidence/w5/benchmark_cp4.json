@@ -1,0 +1,59 @@
+{
+  "metrics": {
+    "admission_shared_lock_per_acquire_ms": {
+      "max_ms": 0.01367172,
+      "mean_ms": 0.012852526666666668,
+      "median_ms": 0.01285874,
+      "min_ms": 0.01202712,
+      "p95_ms": 0.01367172,
+      "samples_ms": [
+        0.01285874,
+        0.01367172,
+        0.01202712
+      ]
+    },
+    "aesgcm_sqlite_backup_restore_retention_ms": {
+      "max_ms": 8.338682,
+      "mean_ms": 7.700459333333334,
+      "median_ms": 7.705202,
+      "min_ms": 7.057494,
+      "p95_ms": 8.338682,
+      "samples_ms": [
+        8.338682,
+        7.705202,
+        7.057494
+      ]
+    },
+    "atomic_publish_64k_ms": {
+      "max_ms": 2.854826,
+      "mean_ms": 1.7483676666666668,
+      "median_ms": 1.231539,
+      "min_ms": 1.158738,
+      "p95_ms": 2.854826,
+      "samples_ms": [
+        2.854826,
+        1.231539,
+        1.158738
+      ]
+    },
+    "atomic_rollback_64k_injected_fsync_ms": {
+      "max_ms": 2.21142,
+      "mean_ms": 1.7856943333333333,
+      "median_ms": 1.588022,
+      "min_ms": 1.557641,
+      "p95_ms": 2.21142,
+      "samples_ms": [
+        2.21142,
+        1.588022,
+        1.557641
+      ]
+    }
+  },
+  "p95_method": "nearest-rank; with N=3 p95 is the maximum",
+  "platform": "Linux-6.1.158+-x86_64-with-glibc2.36",
+  "python": "3.11.2",
+  "runs": 3,
+  "source_head": "be158ac9f4ed76dcad3ce795d880094cb60f87f7",
+  "truth": "REAL-DISK; rollback uses MOCK fault injection; no remote backup",
+  "unit": "milliseconds"
+}

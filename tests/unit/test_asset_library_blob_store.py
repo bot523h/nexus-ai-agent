@@ -100,6 +100,8 @@ def test_tampered_blob_is_detected(store: LocalContentAddressedBlobStore, tmp_pa
     # Corrupt the stored bytes on disk, then re-verify.
     target = tmp_path / "blobstore" / blob_key
     assert target.exists()
+    # Model a same-owner attacker able to change permissions on the read-only blob.
+    target.chmod(0o600)
     target.write_bytes(b"tampered")
     assert store.verify(blob_key, sha256=sha, size_bytes=size) is False
     with pytest.raises(ContentIntegrityError):

@@ -24,6 +24,12 @@ class Settings(BaseSettings):
         default="data/app.sqlite",
         validation_alias=AliasChoices("NEXUS_DB_PATH", "DB_PATH"),
     )
+    asset_library_root: str | None = Field(
+        default=None, validation_alias="NEXUS_ASSET_LIBRARY_ROOT"
+    )
+    asset_library_db_path: str | None = Field(
+        default=None, validation_alias="NEXUS_ASSET_LIBRARY_DB_PATH"
+    )
     database_url: str | None = Field(
         default=None,
         validation_alias=AliasChoices("NEXUS_DATABASE_URL", "DATABASE_URL"),

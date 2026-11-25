@@ -27,6 +27,7 @@ import asyncio
 import datetime as dt
 import hashlib
 import json
+import os
 import shutil
 import sqlite3
 import subprocess
@@ -37,10 +38,12 @@ from typing import Any
 from nexus_ai_agent.config.settings import Settings
 from nexus_ai_agent.maintenance.failures import (
     MaintenanceOperationError,
-    classify_storage_failure,
+    safe_storage_failure,
 )
+from nexus_ai_agent.maintenance.redact import scrub_exception_chain, split_dsn_password
 from nexus_ai_agent.observability.logging import get_logger
 from nexus_ai_agent.storage.db import enforce_postgres_policy
+from nexus_ai_agent.storage.encrypted_backup_drill import verify_production_backup_preflight
 from nexus_ai_agent.storage.providers.b2 import B2Provider
 from nexus_ai_agent.storage.providers.base import ProviderUnavailable, StorageError
 from nexus_ai_agent.storage.providers.r2 import R2Provider
@@ -71,15 +74,38 @@ def _dump_postgres(database_url: str, dest: Path) -> None:
     # ``--clean --if-exists`` makes the artifact self-contained for recovery:
     # a restore drops and recreates the objects instead of failing on an
     # existing schema (the plain-text format is applied with ``psql``).
-    proc = subprocess.run(
-        [pg_dump, "--no-owner", "--clean", "--if-exists", "--file", str(dest), database_url],
-        capture_output=True,
-        text=True,
-        timeout=1800,
-        check=False,
-    )
-    if proc.returncode != 0:
-        raise RuntimeError(f"pg_dump failed: {proc.stderr.strip()[:400]}")
+    failure: str | None = None
+    try:
+        safe_url, password = split_dsn_password(database_url)
+    except ValueError:
+        safe_url, password = "", None
+        failure = "invalid connection URL"
+    env = os.environ.copy()
+    if password is not None:
+        env["PGPASSWORD"] = password
+    try:
+        if failure is not None:
+            raise ValueError("invalid connection URL")
+        proc = subprocess.run(
+            [pg_dump, "--no-owner", "--clean", "--if-exists", "--file", str(dest), safe_url],
+            capture_output=True,
+            text=True,
+            timeout=1800,
+            check=False,
+            env=env,
+        )
+        if proc.returncode != 0:
+            failure = "failed"
+    except subprocess.TimeoutExpired:
+        failure = "timed out"
+    except (OSError, subprocess.SubprocessError, ValueError):
+        failure = "failed to start"
+    # Raise outside the handler: stderr and subprocess exception objects may
+    # contain a complete connection URL or a bare password.
+    if failure == "timed out":
+        raise TimeoutError("pg_dump timed out")
+    if failure is not None:
+        raise RuntimeError(f"pg_dump {failure}")
 
 
 def _dump_sqlite(db_path: Path, dest: Path) -> None:
@@ -136,6 +162,7 @@ def _verify_sqlite_dump(dump_path: Path) -> dict[str, Any]:
                 integrity = rows[0][0] if rows else ""
                 counts = _sqlite_inventory(temp_db, conn)
         except sqlite3.DatabaseError as exc:
+            scrub_exception_chain(exc)
             raise RuntimeError(f"backup artifact is not a readable SQLite DB: {exc}") from exc
     if integrity != "ok":
         raise RuntimeError(f"SQLite integrity_check failed: {integrity[:200]}")
@@ -281,11 +308,42 @@ def _upload_actionable(
     """Upload with the operator-actionable failure taxonomy — never a bare raise."""
     try:
         asyncio.run(provider.upload(local_path=local_path, remote_key=key))
-    except (ProviderUnavailable, MaintenanceOperationError):
+    except ProviderUnavailable as exc:
+        scrub_exception_chain(exc)
+        raise
+    except MaintenanceOperationError as exc:
+        from dataclasses import replace
+
+        failure = exc.failure
+        # The provider controls every field of its exception, including supposedly
+        # actionable text. Retain only a recognized category and a boolean flag.
+        categories = {
+            "credentials",
+            "bucket",
+            "key",
+            "permission",
+            "network",
+            "transient",
+            "integrity",
+            "config",
+            "unknown",
+        }
+        category = failure.category if failure.category in categories else "unknown"
+        exc.failure = replace(
+            failure,
+            what="upload",
+            where=key,
+            category=category,
+            retryable=failure.retryable if type(failure.retryable) is bool else False,
+            why=f"storage provider reported a {category} failure",
+            operator_action="review storage configuration and classify the failure before retrying",
+        )
+        scrub_exception_chain(exc)
+        exc.args = (exc.failure.render(),)
         raise
     except StorageError as exc:
         raise MaintenanceOperationError(
-            classify_storage_failure(operation="upload", where=key, exc=exc, bucket=bucket)
+            safe_storage_failure(operation="upload", where=key, exc=exc, bucket=bucket)
         ) from exc
 
 
@@ -336,6 +394,13 @@ def create_backup(*, settings: Settings, dry_run: bool = False) -> dict[str, Any
         summary["detail"] = "dry-run: nothing dumped or uploaded"
         return summary
 
+    # Validate both the supplied settings and the database URL actually selected
+    # by the canonical backend policy, before provider creation or dumping.
+    verify_production_backup_preflight(settings, allow_local_database=database_url is None)
+    if database_url is not None:
+        verify_production_backup_preflight(
+            settings.model_copy(update={"database_url": database_url})
+        )
     provider = _build_provider(settings)
     if not provider.is_configured():
         # Fail loudly: a silently skipped backup is worse than a red job.
@@ -366,9 +431,7 @@ def create_backup(*, settings: Settings, dry_run: bool = False) -> dict[str, Any
             )
         except StorageError as exc:
             raise MaintenanceOperationError(
-                classify_storage_failure(
-                    operation="readback", where=key, exc=exc, bucket=bucket_attr
-                )
+                safe_storage_failure(operation="readback", where=key, exc=exc, bucket=bucket_attr)
             ) from exc
 
     summary.update(
@@ -406,7 +469,7 @@ def create_backup(*, settings: Settings, dry_run: bool = False) -> dict[str, Any
             )
         except StorageError as exc:
             raise MaintenanceOperationError(
-                classify_storage_failure(
+                safe_storage_failure(
                     operation="sidecar readback",
                     where=sidecar_key,
                     exc=exc,
