@@ -488,3 +488,27 @@ def test_perception_receipt_validation() -> None:
         PerceptionReport(audio="x", scene=good_scene)  # type: ignore[arg-type]
     with pytest.raises(TypeError):
         PerceptionReport(audio=good_audio, scene="x")  # type: ignore[arg-type]
+
+
+def test_perception_dataclasses_normalise_mutable_sequences() -> None:
+    audio = AudioPerception(
+        integrated_lkfs=-20.0,
+        momentary_lkfs=[-20.0],  # type: ignore[arg-type]
+        short_term_lkfs=[-20.0],  # type: ignore[arg-type]
+        loudness_range_lu=0.0,
+        true_peak_dbtp=-1.0,
+        bark_centroid=1.0,
+        silences=[[0.0, 1.0]],  # type: ignore[arg-type]
+    )
+    assert audio.momentary_lkfs == (-20.0,)
+    assert audio.short_term_lkfs == (-20.0,)
+    assert audio.silences == ((0.0, 1.0),)
+    with pytest.raises(AttributeError):
+        audio.momentary_lkfs.append(-20.0)  # type: ignore[attr-defined]
+
+    scene = ScenePerception([], 0, 0, 0, 0, 0.0)  # type: ignore[arg-type]
+    assert scene.transitions == ()
+
+    frame = SceneFrame([0.5, 0.5], 1.0, [[0.1, 0.9]])  # type: ignore[arg-type]
+    assert frame.histogram == (0.5, 0.5)
+    assert frame.luminance_grid == ((0.1, 0.9),)

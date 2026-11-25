@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import importlib.util
+import shutil
+import subprocess
 import sys
 from collections import Counter
 from pathlib import Path
@@ -73,17 +75,35 @@ def test_bytecode_cache_purge(tmp_path: Path) -> None:
     assert not alias.exists()
 
 
-def test_run_mutation_kills_and_restores() -> None:
+def _sandbox(tmp_path: Path) -> Path:
+    shutil.copytree(
+        ROOT / "src",
+        tmp_path / "src",
+        ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+    )
+    return tmp_path
+
+
+def _copy_test(sandbox: Path, relative: str) -> None:
+    destination = sandbox / relative
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(ROOT / relative, destination)
+
+
+def test_run_mutation_kills_and_restores_in_isolated_sandbox(tmp_path: Path) -> None:
+    sandbox = _sandbox(tmp_path)
     mutation = harness.MUTATIONS[0]
-    source = ROOT / mutation.source
+    source = sandbox / mutation.source
+    _copy_test(sandbox, mutation.test)
     before = hashlib.sha256(source.read_bytes()).hexdigest()
-    outcome = harness.run_mutation(mutation)
+    outcome = harness.run_mutation(mutation, repo_root=sandbox)
     assert outcome == "killed"
     assert hashlib.sha256(source.read_bytes()).hexdigest() == before
     assert source.read_text(encoding="utf-8").count(mutation.old) == 1
 
 
-def test_run_mutation_detects_survivor_and_restores() -> None:
+def test_run_mutation_detects_survivor_and_restores(tmp_path: Path) -> None:
+    sandbox = _sandbox(tmp_path)
     mutation = harness.Mutation(
         name="neutral",
         wave=1,
@@ -92,9 +112,45 @@ def test_run_mutation_detects_survivor_and_restores() -> None:
         old="import math\n",
         new="import math  # neutral mutation\n",
     )
-    source = ROOT / mutation.source
+    source = sandbox / mutation.source
+    _copy_test(sandbox, mutation.test)
     before = hashlib.sha256(source.read_bytes()).hexdigest()
-    outcome = harness.run_mutation(mutation)
+    outcome = harness.run_mutation(mutation, repo_root=sandbox)
     assert outcome == "survived"
     assert hashlib.sha256(source.read_bytes()).hexdigest() == before
     assert "# neutral mutation" not in source.read_text(encoding="utf-8")
+
+
+def test_classifier_requires_real_test_failure() -> None:
+    killed = subprocess.CompletedProcess(["pytest"], 1, "1 failed, 7 passed\n", "")
+    assert harness._classify_mutant_outcome(killed) == "killed"
+    survived = subprocess.CompletedProcess(["pytest"], 0, "8 passed\n", "")
+    assert harness._classify_mutant_outcome(survived) == "survived"
+    syntax = subprocess.CompletedProcess(["pytest"], 2, "", "SyntaxError: bad mutant")
+    assert harness._classify_mutant_outcome(syntax) == "invalid"
+    collection = subprocess.CompletedProcess(["pytest"], 2, "", "ERROR collecting tests")
+    assert harness._classify_mutant_outcome(collection) == "invalid"
+    import_error = subprocess.CompletedProcess(["pytest"], 1, "1 failed", "ImportError")
+    assert harness._classify_mutant_outcome(import_error) == "invalid"
+
+
+def test_run_mutation_marks_collection_failure_invalid(tmp_path: Path) -> None:
+    sandbox = tmp_path
+    (sandbox / "src" / "pkg").mkdir(parents=True)
+    (sandbox / "src" / "pkg" / "__init__.py").write_text("", encoding="utf-8")
+    (sandbox / "src" / "pkg" / "mod.py").write_text("VALUE = 1\n", encoding="utf-8")
+    test_path = sandbox / "tests" / "unit" / "test_mod.py"
+    test_path.parent.mkdir(parents=True)
+    test_path.write_text(
+        "import missing_dependency_that_cannot_exist\n\ndef test_ok():\n    assert True\n",
+        encoding="utf-8",
+    )
+    mutation = harness.Mutation(
+        "invalid_collection",
+        1,
+        "src/pkg/mod.py",
+        "tests/unit/test_mod.py",
+        "VALUE = 1",
+        "VALUE = 2",
+    )
+    assert harness.run_mutation(mutation, repo_root=sandbox) == "invalid"

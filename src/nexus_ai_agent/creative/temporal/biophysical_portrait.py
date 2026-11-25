@@ -61,10 +61,68 @@ def _validate_reflectance(reflectance: Sequence[float]) -> tuple[float, ...]:
         if isinstance(value, bool) or not isinstance(value, (int, float)):
             raise SkinModelError("reflectance values must be real numbers")
         number = float(value)
-        if not math.isfinite(number) or not 0.0 <= number <= 1.0:
-            raise SkinModelError("reflectance must be finite and inside [0, 1]")
+        if not math.isfinite(number) or not 0.0 < number <= 1.0:
+            raise SkinModelError("reflectance must be finite and inside (0, 1]")
         values.append(number)
     return tuple(values)
+
+
+def _validate_spectral_basis(
+    values: Sequence[float], label: str, *, reflectance_baseline: bool = False
+) -> tuple[float, ...]:
+    if not values:
+        raise SkinModelError(f"{label} must not be empty")
+    validated = []
+    for value in values:
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise SkinModelError(f"{label} values must be finite real numbers")
+        number = float(value)
+        if not math.isfinite(number):
+            raise SkinModelError(f"{label} values must be finite real numbers")
+        if number < 0.0:
+            raise SkinModelError(f"{label} values must be non-negative")
+        if reflectance_baseline and not 0.0 < number <= 1.0:
+            raise SkinModelError(f"{label} values must lie inside (0, 1]")
+        validated.append(number)
+    return tuple(validated)
+
+
+def _nnls_two(
+    melanin_extinction: tuple[float, ...],
+    hemoglobin_extinction: tuple[float, ...],
+    target: tuple[float, ...],
+    ridge: float,
+) -> tuple[float, float, bool]:
+    """Exact two-variable non-negative least squares via the active-set candidates."""
+
+    gram_00 = sum(component * component for component in melanin_extinction) + ridge
+    gram_11 = sum(component * component for component in hemoglobin_extinction) + ridge
+    gram_01 = sum(a * b for a, b in zip(melanin_extinction, hemoglobin_extinction, strict=True))
+    determinant = gram_00 * gram_11 - gram_01 * gram_01
+    if determinant <= 1e-18:
+        raise SkinModelError("spectral basis is degenerate; cannot invert")
+    projection_mel = sum(a * y for a, y in zip(melanin_extinction, target, strict=True))
+    projection_hem = sum(b * y for b, y in zip(hemoglobin_extinction, target, strict=True))
+    raw_melanin = (gram_11 * projection_mel - gram_01 * projection_hem) / determinant
+    raw_hemoglobin = (gram_00 * projection_hem - gram_01 * projection_mel) / determinant
+    if raw_melanin >= 0.0 and raw_hemoglobin >= 0.0:
+        return raw_melanin, raw_hemoglobin, False
+
+    candidates = (
+        (max(0.0, projection_mel / gram_00), 0.0),
+        (0.0, max(0.0, projection_hem / gram_11)),
+        (0.0, 0.0),
+    )
+
+    def residual(candidate: tuple[float, float]) -> float:
+        melanin, hemoglobin = candidate
+        return sum(
+            (y - melanin * a - hemoglobin * b) ** 2
+            for y, a, b in zip(target, melanin_extinction, hemoglobin_extinction, strict=True)
+        )
+
+    selected = min(candidates, key=lambda candidate: (residual(candidate), candidate))
+    return selected[0], selected[1], True
 
 
 def _validate_wavelengths(wavelengths: Sequence[float] | None) -> tuple[float, ...]:
@@ -92,12 +150,14 @@ class SkinChromophoreEstimate:
             value = getattr(self, name)
             if not math.isfinite(value) or value < 0.0:
                 raise SkinModelError(f"{name} must be finite and non-negative")
-        if not self.reconstructed_optical_density:
+        reconstructed = tuple(self.reconstructed_optical_density)
+        if not reconstructed:
             raise SkinModelError("reconstructed optical density must not be empty")
-        if any(not math.isfinite(value) for value in self.reconstructed_optical_density):
+        if any(not math.isfinite(value) for value in reconstructed):
             raise SkinModelError("reconstructed optical density must be finite")
         if not isinstance(self.clamped, bool):
             raise TypeError("clamped must be a bool")
+        object.__setattr__(self, "reconstructed_optical_density", reconstructed)
 
 
 def reflectance_from_chromophores(
@@ -110,13 +170,21 @@ def reflectance_from_chromophores(
 ) -> tuple[float, ...]:
     """Forward Beer-Lambert model: concentrations -> reflectance spectrum."""
 
-    if melanin < 0.0 or hemoglobin < 0.0:
-        raise SkinModelError("chromophore concentrations must be non-negative")
-    if len(baseline) != len(melanin_extinction) or len(baseline) != len(hemoglobin_extinction):
+    for label, value in (("melanin", melanin), ("hemoglobin", hemoglobin)):
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise SkinModelError(f"{label} concentration must be a finite real number")
+        if not math.isfinite(float(value)):
+            raise SkinModelError(f"{label} concentration must be a finite real number")
+        if value < 0.0:
+            raise SkinModelError("chromophore concentrations must be non-negative")
+    baseline_values = _validate_spectral_basis(baseline, "baseline", reflectance_baseline=True)
+    mel_values = _validate_spectral_basis(melanin_extinction, "melanin extinction")
+    hem_values = _validate_spectral_basis(hemoglobin_extinction, "hemoglobin extinction")
+    if len(baseline_values) != len(mel_values) or len(baseline_values) != len(hem_values):
         raise SkinModelError("spectral basis vectors must share a length")
     optical_density = [
-        base + melanin * mel + hemoglobin * hem
-        for base, mel, hem in zip(baseline, melanin_extinction, hemoglobin_extinction, strict=True)
+        base + float(melanin) * mel + float(hemoglobin) * hem
+        for base, mel, hem in zip(baseline_values, mel_values, hem_values, strict=True)
     ]
     return tuple(math.exp(-density) for density in optical_density)
 
@@ -124,48 +192,42 @@ def reflectance_from_chromophores(
 def estimate_chromophores(
     reflectance: Sequence[float],
     *,
+    baseline: Sequence[float] | None = None,
     wavelengths_nm: Sequence[float] | None = None,
     ridge: float = 1e-9,
 ) -> SkinChromophoreEstimate:
-    """Closed-form non-negative 2x2 Gramian least-squares chromophore inversion."""
+    """Exact non-negative 2x2 active-set least-squares chromophore inversion."""
 
     values = _validate_reflectance(reflectance)
+    baseline_values = _validate_spectral_basis(
+        BASELINE_OPTICAL_DENSITY if baseline is None else baseline,
+        "baseline",
+        reflectance_baseline=True,
+    )
     _validate_wavelengths(wavelengths_nm)
     if not math.isfinite(ridge) or ridge < 0.0:
         raise SkinModelError("ridge must be finite and non-negative")
     size = len(values)
-    if size != len(BASELINE_OPTICAL_DENSITY):
+    if size != len(baseline_values):
         raise SkinModelError(
             "reflectance must cover the same bands as the spectral basis "
-            f"({len(BASELINE_OPTICAL_DENSITY)}), got {size}"
+            f"({len(baseline_values)}), got {size}"
         )
     target = []
-    for value, base in zip(values, BASELINE_OPTICAL_DENSITY, strict=True):
-        optical_density = -math.log(max(value, _REFLECTANCE_FLOOR))
-        target.append(optical_density - base)
-    mel = MELANIN_EXTINCTION
-    hem = HEMOGLOBIN_EXTINCTION
-    gram_00 = sum(component * component for component in mel) + ridge
-    gram_11 = sum(component * component for component in hem) + ridge
-    gram_01 = sum(a * b for a, b in zip(mel, hem, strict=False))
-    determinant = gram_00 * gram_11 - gram_01 * gram_01
-    if determinant <= 1e-18:
-        raise SkinModelError("spectral basis is degenerate; cannot invert")
-    projection_mel = sum(a * y for a, y in zip(mel, target, strict=False))
-    projection_hem = sum(b * y for b, y in zip(hem, target, strict=False))
-    raw_melanin = (gram_11 * projection_mel - gram_01 * projection_hem) / determinant
-    raw_hemoglobin = (gram_00 * projection_hem - gram_01 * projection_mel) / determinant
-    clamped = raw_melanin < 0.0 or raw_hemoglobin < 0.0
-    melanin = max(0.0, raw_melanin)
-    hemoglobin = max(0.0, raw_hemoglobin)
+    for value, base in zip(values, baseline_values, strict=True):
+        baseline_reflectance = math.exp(-base)
+        target.append(-math.log(max(value, _REFLECTANCE_FLOOR) / baseline_reflectance))
+    mel = _validate_spectral_basis(MELANIN_EXTINCTION, "melanin extinction")
+    hem = _validate_spectral_basis(HEMOGLOBIN_EXTINCTION, "hemoglobin extinction")
+    melanin, hemoglobin, clamped = _nnls_two(mel, hem, tuple(target), ridge)
     reconstructed = tuple(
         base + melanin * a + hemoglobin * b
-        for base, a, b in zip(BASELINE_OPTICAL_DENSITY, mel, hem, strict=True)
+        for base, a, b in zip(baseline_values, mel, hem, strict=True)
     )
     residual = math.sqrt(
         sum(
             (y - (melanin * a + hemoglobin * b)) ** 2
-            for y, a, b in zip(target, MELANIN_EXTINCTION, HEMOGLOBIN_EXTINCTION, strict=False)
+            for y, a, b in zip(target, mel, hem, strict=True)
         )
     )
     return SkinChromophoreEstimate(
@@ -316,10 +378,12 @@ class HueProtectionResult:
             raise SkinModelError("delta_deg must lie inside [0, 180]")
         if not isinstance(self.allowed, bool):
             raise TypeError("allowed must be a bool")
-        if len(self.adjusted_rgb) != 3 or any(
-            not math.isfinite(value) or not 0.0 <= value <= 1.0 for value in self.adjusted_rgb
+        adjusted = tuple(self.adjusted_rgb)
+        if len(adjusted) != 3 or any(
+            not math.isfinite(value) or not 0.0 <= value <= 1.0 for value in adjusted
         ):
             raise SkinModelError("adjusted_rgb must be a finite sRGB triple")
+        object.__setattr__(self, "adjusted_rgb", adjusted)
 
 
 def enforce_skin_hue_protection(

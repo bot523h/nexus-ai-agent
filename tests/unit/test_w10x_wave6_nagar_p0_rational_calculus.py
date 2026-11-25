@@ -361,3 +361,11 @@ def test_speed_ramp_validation() -> None:
         RampInversion(F(1), F(1), F(2), F(3))
     with pytest.raises(TypeError):
         RampInversion(1.0, F(1), F(1), F(1))  # type: ignore[arg-type]
+
+
+def test_timeline_edit_normalises_mutable_clip_sequence() -> None:
+    clips = [_clip(0, 2), _clip(2, 3)]  # type: ignore[list-item]
+    edit = TimelineEdit(clips, F(3), F(0))  # type: ignore[arg-type]
+    assert edit.clips == (_clip(0, 2), _clip(2, 3))
+    with pytest.raises(AttributeError):
+        edit.clips.append(_clip(3, 4))  # type: ignore[attr-defined]

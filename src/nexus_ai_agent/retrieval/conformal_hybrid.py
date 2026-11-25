@@ -20,18 +20,20 @@ from nexus_ai_agent.creative.perception.radiometric_scene_cut import (
     js_distance,
 )
 from nexus_ai_agent.memory.riemannian_vector_fallback import (
-    compensated_dot_product,
     compensated_l2_norm,
+    cosine_similarity,
 )
 
 __all__ = [
     "BM25Plus",
     "ConformalCalibrator",
+    "ConformalHybridRetriever",
     "Document",
     "EpistemicRetrievalStatus",
     "HybridRetriever",
     "RetrievalError",
     "RetrievalResult",
+    "RetrievalValidationError",
     "RetrievedDocument",
     "tokenize",
 ]
@@ -44,6 +46,10 @@ _DEFAULT_DELTA: Final[float] = 1.0
 
 class RetrievalError(ValueError):
     """Raised when retrieval input violates a scoring or calibration invariant."""
+
+
+class RetrievalValidationError(RetrievalError):
+    """Raised when a document or query has no lexical evidence to score."""
 
 
 def tokenize(text: str) -> tuple[str, ...]:
@@ -68,8 +74,12 @@ class Document:
     def __post_init__(self) -> None:
         if not isinstance(self.doc_id, str) or not self.doc_id:
             raise RetrievalError("doc_id must be a non-empty string")
-        if not isinstance(self.text, str) or not self.text:
-            raise RetrievalError("text must be a non-empty string")
+        if not isinstance(self.text, str) or not self.text.strip():
+            raise RetrievalValidationError("text must be a non-empty string")
+        if not tokenize(self.text):
+            raise RetrievalValidationError(
+                "document text must contain at least one alphanumeric token"
+            )
         if self.embedding is not None:
             vector = tuple(self.embedding)
             if not vector:
@@ -85,7 +95,12 @@ class Document:
 
 
 class BM25Plus:
-    """Okapi BM25+ with Robertson-Sparck Jones IDF."""
+    """Okapi BM25+ with Robertson-Sparck Jones IDF.
+
+    The lower-bounded TF term is ``tf*(k1+1)/(tf+k1*(1-b+b*|D|/avgdl)) + delta``.
+    This implementation adds ``delta`` only when the query term occurs in the
+    document, preserving the historical zero score for absent terms.
+    """
 
     def __init__(
         self,
@@ -154,13 +169,10 @@ class BM25Plus:
 def _angular_similarity(first: Sequence[float], second: Sequence[float]) -> float:
     if len(first) != len(second):
         raise RetrievalError("embedding dimensions must match")
-    norm_first = compensated_l2_norm(first)
-    norm_second = compensated_l2_norm(second)
-    if norm_first < 1e-12 or norm_second < 1e-12:
+    if compensated_l2_norm(first) < 1e-12 or compensated_l2_norm(second) < 1e-12:
         raise RetrievalError("embeddings must have non-zero norm")
-    cosine = compensated_dot_product(first, second) / (norm_first * norm_second)
-    clamped = max(-1.0, min(1.0, cosine))
-    return 1.0 - math.acos(clamped) / math.pi
+    cosine = cosine_similarity(first, second)
+    return 1.0 - math.acos(cosine) / math.pi
 
 
 @dataclass(frozen=True, slots=True)
@@ -243,15 +255,17 @@ class RetrievalResult:
     def __post_init__(self) -> None:
         if not isinstance(self.status, EpistemicRetrievalStatus):
             raise RetrievalError("status must be an EpistemicRetrievalStatus")
-        if any(not isinstance(document, RetrievedDocument) for document in self.documents):
+        documents = tuple(self.documents)
+        if any(not isinstance(document, RetrievedDocument) for document in documents):
             raise TypeError("documents must contain RetrievedDocument values")
         if self.status is EpistemicRetrievalStatus.ABSTAIN_INSUFFICIENT_EVIDENCE:
-            if self.documents:
+            if documents:
                 raise RetrievalError("abstention must not carry documents")
-        elif not self.documents:
+        elif not documents:
             raise RetrievalError("OK results must carry at least one document")
         if self.conformal_quantile is not None and math.isnan(self.conformal_quantile):
             raise RetrievalError("conformal_quantile must be finite or +infinity")
+        object.__setattr__(self, "documents", documents)
 
     @property
     def abstained(self) -> bool:
@@ -292,6 +306,8 @@ class HybridRetriever:
 
     def _term_distribution(self, doc_id: str) -> tuple[float, ...]:
         tokens = tokenize(self._index[doc_id].text)
+        if not self._vocabulary or not tokens:
+            raise RetrievalValidationError("cannot compute term distribution for tokenless text")
         counts = {term: 0 for term in self._vocabulary}
         for term in tokens:
             counts[term] += 1
@@ -347,6 +363,10 @@ class HybridRetriever:
         dense_weight: float = 1.0,
         mmr_lambda: float = 0.7,
     ) -> RetrievalResult:
+        if not tokenize(query):
+            raise RetrievalValidationError(
+                "query_text must contain at least one alphanumeric token"
+            )
         if isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0:
             raise RetrievalError("limit must be a positive int")
         if isinstance(rrf_k, bool) or not isinstance(rrf_k, int) or rrf_k < 0:
@@ -406,3 +426,6 @@ class HybridRetriever:
             documents=documents,
             conformal_quantile=quantile,
         )
+
+
+ConformalHybridRetriever = HybridRetriever

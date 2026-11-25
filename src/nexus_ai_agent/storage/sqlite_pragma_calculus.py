@@ -24,6 +24,7 @@ from typing import Final
 
 __all__ = [
     "ContentionCalculusReceipt",
+    "PragmaValidationError",
     "QueueInstabilityError",
     "SQLitePragmaPolicy",
     "SQLitePragmaReceipt",
@@ -48,6 +49,10 @@ class SQLitePragmaVerificationError(RuntimeError):
     """Raised when SQLite did not honour a pragma the caller required."""
 
 
+class PragmaValidationError(ValueError):
+    """Raised when a requested pragma policy is internally inconsistent."""
+
+
 class QueueInstabilityError(ArithmeticError):
     """Raised when the offered load makes the queue mathematically unstable."""
 
@@ -64,6 +69,7 @@ class SQLitePragmaPolicy:
     trusted_schema: bool = False
     cell_size_check: bool = True
     require_wal_for_file_backed: bool = True
+    allow_relaxed_durability: bool = False
 
     def __post_init__(self) -> None:
         journal = _normalise_choice("journal_mode", self.journal_mode, _JOURNAL_MODES)
@@ -81,9 +87,14 @@ class SQLitePragmaPolicy:
             "trusted_schema",
             "cell_size_check",
             "require_wal_for_file_backed",
+            "allow_relaxed_durability",
         ):
             if not isinstance(getattr(self, flag), bool):
                 raise TypeError(f"{flag} must be a bool")
+        if self.synchronous == "NORMAL" and not self.allow_relaxed_durability:
+            raise PragmaValidationError(
+                "synchronous=NORMAL requires explicit allow_relaxed_durability=True"
+            )
         if self.require_wal_for_file_backed and self.journal_mode != "WAL":
             raise ValueError("require_wal_for_file_backed demands journal_mode='WAL'")
 
@@ -318,11 +329,16 @@ def policy_for_contention(
     target_tail_prob: float = 1e-6,
     *,
     synchronous: str = "FULL",
+    allow_relaxed_durability: bool = False,
 ) -> tuple[SQLitePragmaPolicy, ContentionCalculusReceipt]:
     """Build a pragma policy whose ``busy_timeout`` is the computed tail bound."""
 
     receipt = compute_optimal_busy_timeout_ms(
         arrival_rate_hz, mean_service_ms, service_cv, target_tail_prob
     )
-    policy = SQLitePragmaPolicy(busy_timeout_ms=receipt.busy_timeout_ms, synchronous=synchronous)
+    policy = SQLitePragmaPolicy(
+        busy_timeout_ms=receipt.busy_timeout_ms,
+        synchronous=synchronous,
+        allow_relaxed_durability=allow_relaxed_durability,
+    )
     return policy, receipt

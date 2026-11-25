@@ -453,3 +453,11 @@ def test_inbox_missing_receipt_and_close(tmp_path) -> None:
         assert reopened.receipt("telegram", 1).state is InboxState.COMMITTED
     finally:
         reopened.close()
+
+
+def test_callback_tag_is_128_bit_and_direct_poison_pill_is_explicit() -> None:
+    envelope = CallbackActionEnvelope(CallbackAction.SET_LANGUAGE, "fa", 7)
+    encoded = envelope.encode(SECRET)
+    assert len(encoded.rsplit(".", 1)[1]) == 32
+    assert CallbackActionEnvelope.decode(encoded, SECRET).session_epoch == 7
+    assert advance(InboxState.RECEIVED, InboxState.QUARANTINED) is InboxState.QUARANTINED

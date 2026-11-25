@@ -9,11 +9,13 @@ import pytest
 from nexus_ai_agent.retrieval.conformal_hybrid import (
     BM25Plus,
     ConformalCalibrator,
+    ConformalHybridRetriever,
     Document,
     EpistemicRetrievalStatus,
     HybridRetriever,
     RetrievalError,
     RetrievalResult,
+    RetrievalValidationError,
     RetrievedDocument,
     tokenize,
 )
@@ -201,3 +203,23 @@ def test_result_validation() -> None:
         RetrievalResult(EpistemicRetrievalStatus.OK, ())
     with pytest.raises(RetrievalError):
         RetrievalResult(EpistemicRetrievalStatus.OK, (document,), math.nan)
+
+
+def test_retrieval_validation_rejects_tokenless_text() -> None:
+    assert issubclass(RetrievalValidationError, RetrievalError)
+    assert ConformalHybridRetriever is HybridRetriever
+    for text in ("   ", "!!!", "---"):
+        with pytest.raises(RetrievalValidationError):
+            Document("d", text)
+    retriever = HybridRetriever(DOCS)
+    with pytest.raises(RetrievalValidationError):
+        retriever.search("!!!", (1.0, 0.0, 0.0))
+    retriever._vocabulary = ()
+    with pytest.raises(RetrievalValidationError):
+        retriever._term_distribution("d1")
+
+
+def test_retrieval_result_normalises_document_sequence() -> None:
+    document = RetrievedDocument("d1", 1.0, 1, 1, 0.0, 1.0)
+    result = RetrievalResult(EpistemicRetrievalStatus.OK, [document])  # type: ignore[arg-type]
+    assert result.documents == (document,)

@@ -430,3 +430,15 @@ def test_plan_validation() -> None:
         DirectorPlan((action,), (), 1.0, 2.0, 4.5)
     with pytest.raises(DirectorPlanningError):
         DirectorPlan((), (), -1.0, 0.0, 0.0)
+
+
+def test_backdoor_rejects_outcome_in_adjustment_even_without_direct_effect() -> None:
+    graph = CausalGraph(("X", "Y", "Z"), (("Z", "X"), ("Z", "Y")))
+    assert is_valid_backdoor_set(graph, "X", "Y", {"Z"}) is True
+    assert is_valid_backdoor_set(graph, "X", "Y", {"Y"}) is False
+    assert is_valid_backdoor_set(graph, "X", "Y", set()) is False
+
+
+def test_backdoor_rejects_mediator_descendant() -> None:
+    graph = CausalGraph(("X", "M", "Y"), (("X", "M"), ("M", "Y")))
+    assert is_valid_backdoor_set(graph, "X", "Y", {"M"}) is False

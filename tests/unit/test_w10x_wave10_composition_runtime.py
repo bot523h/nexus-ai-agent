@@ -30,6 +30,7 @@ from nexus_ai_agent.creative.composition.engine import (
 from nexus_ai_agent.creative.composition.license_lattice import (
     LicenseCombination,
     LicenseError,
+    LicensePolicyError,
     LicenseRegime,
     combine_licenses,
     join,
@@ -587,3 +588,69 @@ def test_engine_rejections() -> None:
         CompositionExecution(plan, "receipt", proof)  # type: ignore[arg-type]
     with pytest.raises(TypeError):
         CompositionExecution(plan, receipt, "proof")  # type: ignore[arg-type]
+
+
+def test_direct_license_receipt_is_consistent() -> None:
+    with pytest.raises(LicensePolicyError):
+        LicenseCombination(
+            (LicenseRegime.PUBLIC_DOMAIN,),
+            LicenseRegime.ATTRIBUTION_CC_BY,
+            False,
+        )
+
+
+def test_compiler_and_plan_normalise_mutable_edge_sequences() -> None:
+    graph = CompositionGraph(
+        (source_contract(), gain_contract()),
+        [["src", "audio", "gain", "audio"]],  # type: ignore[list-item]
+    )
+    assert graph.edges == (("src", "audio", "gain", "audio"),)
+    plan = make_plan()
+    replaced = dataclasses.replace(
+        plan,
+        edges=[list(edge) for edge in plan.edges],  # type: ignore[arg-type]
+    )
+    assert all(isinstance(edge, tuple) for edge in replaced.edges)
+    with pytest.raises(CompositionCompileError):
+        dataclasses.replace(plan, edges=(("src", "audio"),))  # type: ignore[arg-type]
+    with pytest.raises(CompositionCompileError):
+        CompositionGraph(
+            (source_contract(), gain_contract()),
+            ((1, "audio", "gain", "audio"),),  # type: ignore[arg-type]
+        )
+
+
+def test_verifier_optional_hmac_proof_binding() -> None:
+    plan = make_plan()
+    receipt = _receipt(plan)
+    verifier = CompositionVerifier()
+    integrity = verifier.verify(plan, receipt)
+    keyed = verifier.verify(plan, receipt, secret_key=b"wave10-secret")
+    assert len(keyed.merkle_root) == 64
+    assert keyed.merkle_root != integrity.merkle_root
+    assert (
+        keyed.merkle_root == verifier.verify(plan, receipt, secret_key=b"wave10-secret").merkle_root
+    )
+    assert (
+        keyed.merkle_root != verifier.verify(plan, receipt, secret_key=b"other-secret").merkle_root
+    )
+    with pytest.raises(CompositionVerificationError):
+        verifier.verify(plan, receipt, secret_key=b"")
+    with pytest.raises(CompositionVerificationError):
+        verifier.verify(plan, receipt, secret_key="not-bytes")  # type: ignore[arg-type]
+
+
+def test_compiler_rejects_empty_edge_parts_and_non_string_order() -> None:
+    with pytest.raises(CompositionCompileError):
+        CompositionGraph(
+            (source_contract(), gain_contract()),
+            (("", "audio", "gain", "audio"),),
+        )
+    with pytest.raises(CompositionCompileError):
+        CompositionGraph(
+            (source_contract(), gain_contract()),
+            ("abcd",),  # type: ignore[arg-type]
+        )
+    plan = make_plan()
+    with pytest.raises(CompositionCompileError):
+        dataclasses.replace(plan, order=(1,))  # type: ignore[arg-type]

@@ -157,7 +157,12 @@ def test_apply_and_verify_in_memory_and_non_wal(tmp_path: Path) -> None:
     try:
         receipt = apply_and_verify_sqlite_pragmas(
             conn,
-            SQLitePragmaPolicy(journal_mode="WAL", synchronous="NORMAL", foreign_keys=False),
+            SQLitePragmaPolicy(
+                journal_mode="WAL",
+                synchronous="NORMAL",
+                foreign_keys=False,
+                allow_relaxed_durability=True,
+            ),
         )
         assert receipt.file_backed is False
         assert receipt.journal_mode == "memory"
@@ -329,5 +334,17 @@ def test_policy_for_contention_round_trip() -> None:
     policy, receipt = policy_for_contention(20.0, 10.0, 1.0)
     assert policy.busy_timeout_ms == receipt.busy_timeout_ms
     assert policy.synchronous == "FULL"
-    policy2, _ = policy_for_contention(20.0, 10.0, 1.0, synchronous="NORMAL")
+    policy2, _ = policy_for_contention(
+        20.0, 10.0, 1.0, synchronous="NORMAL", allow_relaxed_durability=True
+    )
     assert policy2.synchronous == "NORMAL"
+    assert policy2.allow_relaxed_durability is True
+
+
+def test_relaxed_durability_requires_explicit_opt_in() -> None:
+    with pytest.raises(mod.PragmaValidationError):
+        SQLitePragmaPolicy(synchronous="NORMAL")
+    policy = SQLitePragmaPolicy(synchronous="normal", allow_relaxed_durability=True)
+    assert policy.synchronous == "NORMAL"
+    with pytest.raises(TypeError):
+        SQLitePragmaPolicy(allow_relaxed_durability=1)  # type: ignore[arg-type]

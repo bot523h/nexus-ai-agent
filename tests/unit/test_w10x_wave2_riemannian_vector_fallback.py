@@ -298,3 +298,22 @@ def test_len_and_close_roundtrip(tmp_path) -> None:
         assert reopened.get("a") == (1.0, 2.0, 3.0)
     finally:
         reopened.close()
+
+
+def test_dot_product_overflow_fails_closed() -> None:
+    with pytest.raises(mod.VectorFallbackError):
+        compensated_dot_product([1e308, 1e308], [1e308, 1e308])
+    assert issubclass(mod.VectorFallbackError, VectorValidationError)
+
+
+def test_cosine_scales_large_and_tiny_finite_vectors() -> None:
+    assert cosine_similarity([1e300, 0.0], [1e300, 0.0]) == pytest.approx(1.0)
+    assert riemannian_geodesic_distance([1e300, 0.0], [1e300, 0.0]) == 0.0
+    assert cosine_similarity([1e-300, 0.0], [1e-300, 0.0]) == pytest.approx(1.0)
+    assert cosine_similarity([1e300, 0.0], [0.0, 1e300]) == pytest.approx(0.0)
+
+
+def test_vector_audit_report_normalises_sequences() -> None:
+    report = VectorAuditReport(2, ["a"], ["b"])  # type: ignore[arg-type]
+    assert report.tampered_ids == ("a",)
+    assert report.quarantined_ids == ("b",)

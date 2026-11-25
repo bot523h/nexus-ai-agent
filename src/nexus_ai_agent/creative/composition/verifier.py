@@ -9,12 +9,14 @@ and output digest into a SHA-256 Merkle root.
 from __future__ import annotations
 
 import hashlib
+import hmac
 import math
 import struct
 from collections.abc import Mapping
 from dataclasses import dataclass
 from fractions import Fraction
 from types import MappingProxyType
+from typing import Final
 
 from nexus_ai_agent.creative.composition.compiler import CompositionPlan, canonical_json
 from nexus_ai_agent.creative.composition.license_lattice import LicenseRegime
@@ -29,10 +31,19 @@ __all__ = [
 ]
 
 _DIGEST_LENGTH = 64
+_LEAF_DOMAIN: Final[bytes] = b"nexus.composition.proof.leaf.v1\0"
+_NODE_DOMAIN: Final[bytes] = b"nexus.composition.proof.node.v1\0"
 
 
 class CompositionVerificationError(ValueError):
     """Raised when an execution receipt violates a conservation or proof law."""
+
+
+def _proof_digest(domain: bytes, payload: bytes, secret_key: bytes | None) -> bytes:
+    data = domain + payload
+    if secret_key is None:
+        return hashlib.sha256(data).digest()
+    return hmac.new(secret_key, data, hashlib.sha256).digest()
 
 
 @dataclass(frozen=True, slots=True)
@@ -105,6 +116,13 @@ class CompositionExecutionReceipt:
 
 @dataclass(frozen=True, slots=True)
 class CompositionProof:
+    """Sealed execution proof.
+
+    ``merkle_root`` is a domain-separated SHA-256 integrity digest by default,
+    or HMAC-SHA256 when the verifier is supplied a secret key.  The key is never
+    stored on the proof.
+    """
+
     plan_digest: str
     merkle_root: str
     license_supremum: LicenseRegime
@@ -142,11 +160,17 @@ class CompositionVerifier:
         receipt: CompositionExecutionReceipt,
         *,
         max_energy: float = 1e12,
+        secret_key: bytes | None = None,
     ) -> CompositionProof:
         if not isinstance(plan, CompositionPlan):
             raise TypeError("plan must be a CompositionPlan")
         if not isinstance(receipt, CompositionExecutionReceipt):
             raise TypeError("receipt must be a CompositionExecutionReceipt")
+        if secret_key is not None and (
+            not isinstance(secret_key, (bytes, bytearray)) or not secret_key
+        ):
+            raise CompositionVerificationError("secret_key must be non-empty bytes or None")
+        key = bytes(secret_key) if secret_key is not None else None
         if not math.isfinite(max_energy) or max_energy <= 0.0:
             raise CompositionVerificationError("max_energy must be finite and positive")
         if receipt.plan_digest != plan.plan_digest:
@@ -193,8 +217,8 @@ class CompositionVerifier:
                     f"{port.name}:{digests[(node, port.name)]}" for port in contract.outputs
                 ),
             }
-            leaves.append(hashlib.sha256(canonical_json(payload).encode("utf-8")).digest())
-        root = self._merkle_root(leaves)
+            leaves.append(_proof_digest(_LEAF_DOMAIN, canonical_json(payload).encode("utf-8"), key))
+        root = self._merkle_root(leaves, key)
         return CompositionProof(
             plan_digest=plan.plan_digest,
             merkle_root=root,
@@ -206,13 +230,13 @@ class CompositionVerifier:
         )
 
     @staticmethod
-    def _merkle_root(leaves: list[bytes]) -> str:
+    def _merkle_root(leaves: list[bytes], secret_key: bytes | None = None) -> str:
         level = list(leaves)
         while len(level) > 1:
             next_level: list[bytes] = []
             for index in range(0, len(level), 2):
                 left = level[index]
                 right = level[index + 1] if index + 1 < len(level) else left
-                next_level.append(hashlib.sha256(left + right).digest())
+                next_level.append(_proof_digest(_NODE_DOMAIN, left + right, secret_key))
             level = next_level
         return level[0].hex()

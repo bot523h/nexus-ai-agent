@@ -374,3 +374,26 @@ def test_hurter_driffield_response() -> None:
         hurter_driffield_density(1.0, d_max=0.01)
     with pytest.raises(OptimalTransportError):
         hurter_driffield_density(1.0, h0=-1.0)
+
+
+def test_chromophore_validation_rejects_zero_reflectance_and_custom_baseline() -> None:
+    with pytest.raises(SkinModelError):
+        estimate_chromophores([0.0] * len(portrait.BASELINE_OPTICAL_DENSITY))
+    baseline = (0.2, 0.21, 0.22, 0.23, 0.24, 0.25)
+    reflectance = reflectance_from_chromophores(0.31, 0.17, baseline=baseline)
+    estimate = estimate_chromophores(reflectance, baseline=baseline)
+    assert estimate.melanin == pytest.approx(0.31, rel=1e-7)
+    assert estimate.hemoglobin == pytest.approx(0.17, rel=1e-7)
+    with pytest.raises(SkinModelError):
+        reflectance_from_chromophores(0.1, 0.1, melanin_extinction=(math.nan,) * 6)
+    with pytest.raises(SkinModelError):
+        reflectance_from_chromophores(0.1, 0.1, baseline=(1.5,) * 6)
+    with pytest.raises(SkinModelError):
+        reflectance_from_chromophores(0.1, 0.1, hemoglobin_extinction=(-1.0,) * 6)
+
+
+def test_skin_result_sequences_are_normalised() -> None:
+    estimate = SkinChromophoreEstimate(0.1, 0.2, 0.0, [0.1] * 6, False)  # type: ignore[arg-type]
+    assert estimate.reconstructed_optical_density == (0.1,) * 6
+    hue = HueProtectionResult(10.0, 20.0, 15.0, 10.0, True, [0.2, 0.3, 0.4])  # type: ignore[arg-type]
+    assert hue.adjusted_rgb == (0.2, 0.3, 0.4)

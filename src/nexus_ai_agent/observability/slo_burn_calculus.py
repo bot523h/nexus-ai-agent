@@ -119,14 +119,16 @@ class SLOReport:
     def __post_init__(self) -> None:
         if not isinstance(self.state, SLOState):
             raise SLOConfigError("state must be an SLOState")
-        if any(not isinstance(window, BurnWindowResult) for window in self.windows):
+        windows = tuple(self.windows)
+        if any(not isinstance(window, BurnWindowResult) for window in windows):
             raise TypeError("windows must contain BurnWindowResult values")
-        if not self.windows:
+        if not windows:
             raise SLOConfigError("at least one window is required")
         if not math.isfinite(self.overall_remaining) or not 0.0 <= self.overall_remaining <= 1.0:
             raise SLOConfigError("overall_remaining must lie inside [0, 1]")
         if not math.isfinite(self.target) or not 0.0 < self.target < 1.0:
             raise SLOConfigError("target must lie inside (0, 1)")
+        object.__setattr__(self, "windows", windows)
 
 
 class SLOBurnEvaluator:

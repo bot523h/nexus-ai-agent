@@ -55,6 +55,19 @@ def sha256_digest(payload: object) -> str:
     return hashlib.sha256(canonical_json(payload).encode("utf-8")).hexdigest()
 
 
+def _normalise_edges(
+    edges: Sequence[Sequence[str]],
+) -> tuple[tuple[str, str, str, str], ...]:
+    normalised = []
+    for edge in edges:
+        if isinstance(edge, str) or len(edge) != 4:
+            raise CompositionCompileError("edges must be (source, output, target, input)")
+        if any(not isinstance(part, str) or not part for part in edge):
+            raise CompositionCompileError("edge endpoints and ports must be non-empty strings")
+        normalised.append((edge[0], edge[1], edge[2], edge[3]))
+    return tuple(normalised)
+
+
 @dataclass(frozen=True, slots=True)
 class CompositionGraph:
     contracts: tuple[CapabilityContract, ...]
@@ -70,10 +83,8 @@ class CompositionGraph:
         if len(set(ids)) != len(ids):
             raise CompositionCompileError("capability ids must be unique")
         index = {contract.capability_id: contract for contract in contracts}
-        edges = tuple(self.edges)
+        edges = _normalise_edges(self.edges)
         for edge in edges:
-            if len(edge) != 4:
-                raise CompositionCompileError("edges must be (source, output, target, input)")
             source, output, target, input_port = edge
             if source not in index or target not in index:
                 raise CompositionCompileError("edge references an unknown capability")
@@ -142,8 +153,11 @@ class CompositionPlan:
 
     def __post_init__(self) -> None:
         order = tuple(self.order)
-        if not order or len(set(order)) != len(order):
-            raise CompositionCompileError("order must be a non-empty unique sequence")
+        if not order or any(not isinstance(node, str) or not node for node in order):
+            raise CompositionCompileError("order must contain non-empty strings")
+        if len(set(order)) != len(order):
+            raise CompositionCompileError("order must be unique")
+        edges = _normalise_edges(self.edges)
         if not isinstance(self.plan_digest, str) or not _DIGEST_PATTERN.match(self.plan_digest):
             raise CompositionCompileError("plan_digest must be a 64-character lowercase hex digest")
         digests = dict(self.node_digests)
@@ -158,6 +172,7 @@ class CompositionPlan:
         if not isinstance(self.licenses, LicenseCombination):
             raise TypeError("licenses must be a LicenseCombination")
         object.__setattr__(self, "order", order)
+        object.__setattr__(self, "edges", edges)
         object.__setattr__(self, "node_digests", MappingProxyType(digests))
         object.__setattr__(self, "contracts", MappingProxyType(contracts))
 

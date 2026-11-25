@@ -47,17 +47,23 @@ class AudioPerception:
     silences: tuple[tuple[float, float], ...]
 
     def __post_init__(self) -> None:
+        momentary = tuple(float(value) for value in self.momentary_lkfs)
+        short_term = tuple(float(value) for value in self.short_term_lkfs)
+        silences = tuple((float(start), float(end)) for start, end in self.silences)
         _loudness_value(self.integrated_lkfs, "integrated_lkfs")
         _loudness_value(self.true_peak_dbtp, "true_peak_dbtp")
-        for value in (*self.momentary_lkfs, *self.short_term_lkfs):
+        for value in (*momentary, *short_term):
             _loudness_value(value, "block loudness")
         if not math.isfinite(self.loudness_range_lu) or self.loudness_range_lu < 0.0:
             raise ValueError("loudness_range_lu must be finite and non-negative")
         if not math.isfinite(self.bark_centroid) or self.bark_centroid < 0.0:
             raise ValueError("bark_centroid must be finite and non-negative")
-        for start, end in self.silences:
+        for start, end in silences:
             if not math.isfinite(start) or not math.isfinite(end) or start < 0.0 or end < start:
                 raise ValueError("silence intervals must be ordered and finite")
+        object.__setattr__(self, "momentary_lkfs", momentary)
+        object.__setattr__(self, "short_term_lkfs", short_term)
+        object.__setattr__(self, "silences", silences)
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,6 +76,7 @@ class ScenePerception:
     mean_entropy: float
 
     def __post_init__(self) -> None:
+        transitions = tuple(self.transitions)
         counts = (
             self.hard_cuts,
             self.dissolves,
@@ -80,10 +87,11 @@ class ScenePerception:
             isinstance(count, bool) or not isinstance(count, int) or count < 0 for count in counts
         ):
             raise ValueError("transition counts must be non-negative ints")
-        if sum(counts) != len(self.transitions):
+        if sum(counts) != len(transitions):
             raise ValueError("transition counts must partition the transition tuple")
         if not math.isfinite(self.mean_entropy) or self.mean_entropy < 0.0:
             raise ValueError("mean_entropy must be finite and non-negative")
+        object.__setattr__(self, "transitions", transitions)
 
     @property
     def total_cuts(self) -> int:

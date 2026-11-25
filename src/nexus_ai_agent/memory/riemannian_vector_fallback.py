@@ -27,6 +27,7 @@ __all__ = [
     "ForensicVectorIndex",
     "ForensicVectorTamperError",
     "VectorAuditReport",
+    "VectorFallbackError",
     "VectorMatch",
     "VectorValidationError",
     "compensated_dot_product",
@@ -42,6 +43,10 @@ _MIN_NORM: Final[float] = 1e-12
 
 class VectorValidationError(ValueError):
     """Raised when a vector is empty, non-finite, zero-norm or mis-sized."""
+
+
+class VectorFallbackError(VectorValidationError):
+    """Raised when a compensated numeric primitive overflows or loses finiteness."""
 
 
 class ForensicVectorTamperError(RuntimeError):
@@ -90,7 +95,10 @@ def compensated_dot_product(u: Sequence[float], v: Sequence[float]) -> float:
         else:
             compensation += (product - running) + total
         total = running
-    return total + compensation
+    result = total + compensation
+    if not math.isfinite(result):
+        raise VectorFallbackError("dot product overflowed to non-finite value")
+    return result
 
 
 def compensated_l2_norm(u: Sequence[float]) -> float:
@@ -115,13 +123,17 @@ def compensated_l2_norm(u: Sequence[float]) -> float:
 
 
 def unit_vector(u: Sequence[float]) -> tuple[float, ...]:
-    """Project a non-zero vector onto the unit hypersphere."""
+    """Project a non-zero vector onto the unit hypersphere after max-abs scaling."""
 
     values = _validate_vector(u)
-    norm = compensated_l2_norm(values)
+    scale = max(abs(component) for component in values)
+    if scale == 0.0:
+        raise VectorValidationError(f"vector norm 0.0 is below the {_MIN_NORM} floor")
+    scaled = tuple(component / scale for component in values)
+    norm = compensated_l2_norm(scaled)
     if norm < _MIN_NORM:
         raise VectorValidationError(f"vector norm {norm!r} is below the {_MIN_NORM} floor")
-    return tuple(component / norm for component in values)
+    return tuple(component / norm for component in scaled)
 
 
 def cosine_similarity(u: Sequence[float], v: Sequence[float]) -> float:
@@ -191,6 +203,12 @@ class VectorAuditReport:
     checked: int
     tampered_ids: tuple[str, ...]
     quarantined_ids: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "tampered_ids", tuple(str(item) for item in self.tampered_ids))
+        object.__setattr__(
+            self, "quarantined_ids", tuple(str(item) for item in self.quarantined_ids)
+        )
 
     @property
     def clean(self) -> bool:

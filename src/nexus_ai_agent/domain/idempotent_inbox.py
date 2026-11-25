@@ -7,7 +7,10 @@ is a Byzantine conflict and fails closed.
 
 The callback codec keeps inline-button state inside Telegram's 64-byte
 ``callback_data`` budget and carries a monotonic ``session_epoch`` so a button
-from an old message cannot silently undo a newer selection.
+from an old message cannot silently undo a newer selection.  Callback tags use
+128 bits (32 hex characters) of HMAC-SHA256.  The DFA also exposes an explicit
+direct poison-pill path ``RECEIVED -> QUARANTINED`` for malformed deliveries
+that must be isolated before any handler claims them.
 """
 
 from __future__ import annotations
@@ -37,7 +40,7 @@ __all__ = [
 ]
 
 _CALLBACK_MAX_BYTES: Final[int] = 64
-_TAG_BYTES: Final[int] = 8
+_TAG_BYTES: Final[int] = 32
 _SUPPORTED_CALLBACK_VERSION: Final[int] = 1
 
 

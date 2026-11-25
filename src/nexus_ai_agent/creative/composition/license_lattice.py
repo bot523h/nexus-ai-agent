@@ -16,6 +16,7 @@ from functools import reduce
 __all__ = [
     "LicenseCombination",
     "LicenseError",
+    "LicensePolicyError",
     "LicenseRegime",
     "combine_licenses",
     "join",
@@ -24,6 +25,10 @@ __all__ = [
 
 class LicenseError(ValueError):
     """Raised when a license combination is invalid or mixed with bad intent."""
+
+
+class LicensePolicyError(LicenseError):
+    """Raised when a directly constructed license receipt is inconsistent."""
 
 
 class LicenseRegime(Enum):
@@ -71,6 +76,21 @@ def join(first: LicenseRegime, second: LicenseRegime) -> LicenseRegime:
     return _TOP
 
 
+def _expected_supremum(values: tuple[LicenseRegime, ...], commercial_intent: bool) -> LicenseRegime:
+    if not values:
+        raise LicenseError("at least one license regime is required")
+    if any(not isinstance(regime, LicenseRegime) for regime in values):
+        raise TypeError("regimes must contain LicenseRegime values")
+    if not isinstance(commercial_intent, bool):
+        raise TypeError("commercial_intent must be a bool")
+    supremum = reduce(join, values, _PD)
+    if commercial_intent and _NON_COMMERCIAL in values:
+        supremum = _TOP
+    if commercial_intent and _SHARE_ALIKE in values and _PROPRIETARY in values:
+        supremum = _TOP
+    return supremum
+
+
 @dataclass(frozen=True, slots=True)
 class LicenseCombination:
     regimes: tuple[LicenseRegime, ...]
@@ -87,6 +107,9 @@ class LicenseCombination:
             raise TypeError("supremum must be a LicenseRegime")
         if not isinstance(self.commercial_intent, bool):
             raise TypeError("commercial_intent must be a bool")
+        expected = _expected_supremum(regimes, self.commercial_intent)
+        if self.supremum is not expected:
+            raise LicensePolicyError("inconsistent LicenseCombination receipt")
         object.__setattr__(self, "regimes", regimes)
 
     @property
@@ -97,18 +120,8 @@ class LicenseCombination:
 def combine_licenses(
     regimes: Sequence[LicenseRegime], *, commercial_intent: bool = False
 ) -> LicenseCombination:
-    if not isinstance(commercial_intent, bool):
-        raise TypeError("commercial_intent must be a bool")
     values = tuple(regimes)
-    if not values:
-        raise LicenseError("at least one license regime is required")
-    if any(not isinstance(regime, LicenseRegime) for regime in values):
-        raise TypeError("regimes must contain LicenseRegime values")
-    supremum = reduce(join, values, _PD)
-    if commercial_intent and _NON_COMMERCIAL in values:
-        supremum = _TOP
-    if commercial_intent and _SHARE_ALIKE in values and _PROPRIETARY in values:
-        supremum = _TOP
+    supremum = _expected_supremum(values, commercial_intent)
     return LicenseCombination(
         regimes=values,
         supremum=supremum,

@@ -205,10 +205,12 @@ class SceneFrame:
     def __post_init__(self) -> None:
         if len(self.histogram) < 2:
             raise CutDetectionError("histogram needs at least two bins")
-        _normalise(self.histogram)
+        normalised_histogram = _normalise(self.histogram)
         if not math.isfinite(self.entropy) or self.entropy < 0.0:
             raise CutDetectionError("entropy must be finite and non-negative")
-        _validate_grid(self.luminance_grid, "luminance")
+        normalised_grid = _validate_grid(self.luminance_grid, "luminance")
+        object.__setattr__(self, "histogram", normalised_histogram)
+        object.__setattr__(self, "luminance_grid", normalised_grid)
 
     @classmethod
     def from_rgb_grid(

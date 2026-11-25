@@ -335,7 +335,7 @@ def is_valid_backdoor_set(
             raise CausalEffectError(f"unknown node {node!r}")
     if treatment == outcome:
         raise CausalEffectError("treatment and outcome must differ")
-    if treatment in adjustment:
+    if treatment in adjustment or outcome in adjustment:
         return False
     descendants = graph.descendants(treatment)
     if any(node in descendants for node in adjustment):

@@ -267,3 +267,11 @@ def test_burn_result_and_report_validation() -> None:
         SLOReport(SLOState.HEALTHY, (result,), 1.5, 0.99)
     with pytest.raises(SLOConfigError):
         SLOReport(SLOState.HEALTHY, (result,), 0.0, 1.0)
+
+
+def test_slo_report_normalises_mutable_window_sequence() -> None:
+    window = BurnWindowResult("5m", 99, 1, 100, 0.01, 1.0, 0.0)
+    report = SLOReport(SLOState.HEALTHY, [window], 0.0, 0.99)  # type: ignore[arg-type]
+    assert report.windows == (window,)
+    with pytest.raises(AttributeError):
+        report.windows.append(window)  # type: ignore[attr-defined]

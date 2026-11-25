@@ -165,12 +165,14 @@ class TimelineEdit:
     delta_duration: Fraction
 
     def __post_init__(self) -> None:
-        for clip in self.clips:
+        clips = tuple(self.clips)
+        for clip in clips:
             if not isinstance(clip, Clip):
                 raise TypeError("clips must contain Clip values")
+        object.__setattr__(self, "clips", clips)
         object.__setattr__(self, "total_duration", _fraction(self.total_duration, "total"))
         object.__setattr__(self, "delta_duration", _fraction(self.delta_duration, "delta"))
-        expected = total_duration(self.clips)
+        expected = total_duration(clips)
         if expected != self.total_duration:
             raise IntervalAlgebraError("total_duration disagrees with the clip sum")
 

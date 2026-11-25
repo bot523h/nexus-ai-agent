@@ -1,10 +1,12 @@
 """W10X scientific mutation campaign (30 mutants, bytecode-cache safe).
 
 Each mutant replaces one source snippet with a semantically wrong variant and
-runs only that wave's focused test module.  A mutant is *killed* when pytest
-exits non-zero.  Source bytes are restored in ``finally`` and verified against
-their pre-flight SHA-256; bytecode caches are purged before each mutation, after
-writing, and after restoring.
+runs only that wave's focused test module inside a disposable copy of ``src`` and
+the selected tests.  A mutant is *killed* only by exit code 1 with a real test
+failure; collection errors, syntax errors and other infrastructure failures are
+classified ``invalid`` rather than counted as kills.  Source bytes are restored
+in ``finally`` and verified against their pre-flight SHA-256; bytecode caches are
+purged before each mutation, after writing, and after restoring.
 """
 
 from __future__ import annotations
@@ -13,14 +15,28 @@ import hashlib
 import importlib
 import importlib.util
 import os
+import re
+import shutil
 import subprocess
 import sys
+import tempfile
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
 sys.dont_write_bytecode = True
 
 ROOT = Path(__file__).resolve().parents[1]
+_INFRA_TOKENS = (
+    "ERROR collecting",
+    "ImportError",
+    "ModuleNotFoundError",
+    "SyntaxError",
+    "no tests ran",
+    "collected 0 items",
+    "INTERNALERROR",
+)
+_FAILED_PATTERN = re.compile(r"\b[1-9]\d*\s+failed\b")
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,8 +93,8 @@ MUTATIONS: tuple[Mutation, ...] = (
         2,
         "src/nexus_ai_agent/memory/riemannian_vector_fallback.py",
         _wave(2, "riemannian_vector_fallback"),
-        "    return total + compensation",
-        "    return total",
+        "    result = total + compensation",
+        "    result = total",
     ),
     Mutation(
         "w2_identity_geodesic_artefact",
@@ -238,8 +254,8 @@ MUTATIONS: tuple[Mutation, ...] = (
         8,
         "src/nexus_ai_agent/retrieval/conformal_hybrid.py",
         _wave(8, "conformal_hybrid_retrieval"),
-        "    return 1.0 - math.acos(clamped) / math.pi",
-        "    return 1.0 - clamped",
+        "    return 1.0 - math.acos(cosine) / math.pi",
+        "    return 1.0 - cosine",
     ),
     # Wave 9 — PID clamp, SPRT trip and SLO freeze.
     Mutation(
@@ -313,14 +329,15 @@ def _purge_bytecode_cache(source_path: Path) -> None:
     importlib.invalidate_caches()
 
 
-def preflight() -> list[Mutation]:
+def preflight(repo_root: Path = ROOT) -> list[Mutation]:
     seen: set[str] = set()
+    root = Path(repo_root)
     for mutation in MUTATIONS:
         if mutation.name in seen:
             raise SystemExit(f"duplicate mutation name: {mutation.name}")
         seen.add(mutation.name)
-        source = ROOT / mutation.source
-        test = ROOT / mutation.test
+        source = root / mutation.source
+        test = root / mutation.test
         if not source.is_file():
             raise SystemExit(f"missing source: {mutation.source}")
         if not test.is_file():
@@ -335,8 +352,9 @@ def preflight() -> list[Mutation]:
     return list(MUTATIONS)
 
 
-def run_mutation(mutation: Mutation) -> str:
-    source = ROOT / mutation.source
+def run_mutation(mutation: Mutation, repo_root: Path = ROOT) -> str:
+    root = Path(repo_root)
+    source = root / mutation.source
     original = source.read_bytes()
     original_digest = hashlib.sha256(original).hexdigest()
     _purge_bytecode_cache(source)
@@ -344,26 +362,11 @@ def run_mutation(mutation: Mutation) -> str:
         mutated = original.decode("utf-8").replace(mutation.old, mutation.new, 1)
         source.write_bytes(mutated.encode("utf-8"))
         _purge_bytecode_cache(source)
-        env = os.environ.copy()
-        env["PYTHONDONTWRITEBYTECODE"] = "1"
-        source_root = str(ROOT / "src")
-        env["PYTHONPATH"] = (
-            source_root
-            if not env.get("PYTHONPATH")
-            else source_root + os.pathsep + env["PYTHONPATH"]
-        )
         try:
             completed = subprocess.run(
-                [
-                    sys.executable,
-                    "-m",
-                    "pytest",
-                    "--noconftest",
-                    "-q",
-                    mutation.test,
-                ],
-                cwd=ROOT,
-                env=env,
+                [sys.executable, "-m", "pytest", "-q", mutation.test],
+                cwd=root,
+                env=_test_env(root),
                 capture_output=True,
                 text=True,
                 timeout=300,
@@ -371,7 +374,7 @@ def run_mutation(mutation: Mutation) -> str:
             )
         except subprocess.TimeoutExpired:
             return "not_run"
-        return "killed" if completed.returncode != 0 else "survived"
+        return _classify_mutant_outcome(completed)
     finally:
         source.write_bytes(original)
         _purge_bytecode_cache(source)
@@ -380,20 +383,95 @@ def run_mutation(mutation: Mutation) -> str:
         importlib.invalidate_caches()
 
 
-def main() -> int:
-    mutations = preflight()
-    counts = {"killed": 0, "survived": 0, "invalid": 0, "not_run": 0}
-    for index, mutation in enumerate(mutations, 1):
-        outcome = run_mutation(mutation)
-        counts[outcome] += 1
-        print(f"[{index:02d}/{len(mutations)}] {outcome:8s} {mutation.name}", flush=True)
-        if outcome == "survived":
-            print("  !! mutant survived: inspect the focused suite", flush=True)
-    print(
-        f"SUMMARY killed={counts['killed']} survived={counts['survived']} "
-        f"invalid={counts['invalid']} not_run={counts['not_run']}"
+def _test_env(repo_root: Path) -> dict[str, str]:
+    env = os.environ.copy()
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
+    source_root = str(Path(repo_root) / "src")
+    existing = env.get("PYTHONPATH")
+    env["PYTHONPATH"] = source_root if not existing else source_root + os.pathsep + existing
+    return env
+
+
+def _classify_mutant_outcome(completed: subprocess.CompletedProcess[str]) -> str:
+    """Only a focused test failure with exit code 1 counts as a killed mutant."""
+
+    output = (completed.stdout or "") + (completed.stderr or "")
+    if completed.returncode == 0:
+        return "survived"
+    if completed.returncode != 1:
+        return "invalid"
+    if any(token in output for token in _INFRA_TOKENS):
+        return "invalid"
+    if not (_FAILED_PATTERN.search(output) or "FAILED" in output):
+        return "invalid"
+    return "killed"
+
+
+def run_baseline(repo_root: Path = ROOT, mutations: Sequence[Mutation] | None = None) -> bool:
+    root = Path(repo_root)
+    selected = tuple(mutations) if mutations is not None else tuple(preflight(root))
+    tests = sorted({mutation.test for mutation in selected})
+    try:
+        completed = subprocess.run(
+            [sys.executable, "-m", "pytest", "-q", *tests],
+            cwd=root,
+            env=_test_env(root),
+            capture_output=True,
+            text=True,
+            timeout=600,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return False
+    if completed.returncode != 0:
+        print("BASELINE FAILURE", flush=True)
+        print((completed.stdout or "")[-4000:], flush=True)
+        print((completed.stderr or "")[-2000:], flush=True)
+    return completed.returncode == 0
+
+
+def _prepare_sandbox(repo_root: Path, mutations: Sequence[Mutation]) -> Path:
+    sandbox = Path(tempfile.mkdtemp(prefix="w10x-mutations-"))
+    shutil.copytree(
+        Path(repo_root) / "src",
+        sandbox / "src",
+        ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
     )
-    return 0 if counts["killed"] == len(mutations) else 1
+    for relative in sorted({mutation.test for mutation in mutations}):
+        destination = sandbox / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(Path(repo_root) / relative, destination)
+    return sandbox
+
+
+def run_campaign(repo_root: Path = ROOT) -> int:
+    mutations = tuple(preflight(repo_root))
+    sandbox = _prepare_sandbox(repo_root, mutations)
+    try:
+        if not run_baseline(sandbox, mutations):
+            print("BASELINE FAILED: refusing to classify mutants", flush=True)
+            return 1
+        counts = {"killed": 0, "survived": 0, "invalid": 0, "not_run": 0}
+        for index, mutation in enumerate(mutations, 1):
+            outcome = run_mutation(mutation, repo_root=sandbox)
+            counts[outcome] += 1
+            print(f"[{index:02d}/{len(mutations)}] {outcome:8s} {mutation.name}", flush=True)
+            if outcome == "survived":
+                print("  !! mutant survived: inspect the focused suite", flush=True)
+            if outcome == "invalid":
+                print("  !! invalid mutant run: not evidence of a kill", flush=True)
+        print(
+            f"SUMMARY total={len(mutations)} killed={counts['killed']} "
+            f"survived={counts['survived']} invalid={counts['invalid']} "
+            f"not_run={counts['not_run']}"
+        )
+        return 0 if counts["killed"] == len(mutations) else 1
+    finally:
+        shutil.rmtree(sandbox, ignore_errors=True)
+
+
+def main() -> int:
+    return run_campaign()
 
 
 if __name__ == "__main__":
