@@ -29,6 +29,7 @@ must never be a schema guest inside the authority it observes.
 
 from __future__ import annotations
 
+import json
 import logging
 import sqlite3
 import threading
@@ -36,6 +37,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from nexus_ai_agent.provenance.models import (
     GENESIS_HASH,
@@ -79,7 +81,7 @@ class CausalConflictError(RuntimeError):
 _CLAIM_FIELDS: tuple[str, ...] = ("status", "error", "payload_digest", "result_digest")
 
 
-def _claims_conflict(existing: dict, event: CausalEvent) -> bool:
+def _claims_conflict(existing: dict[str, Any], event: CausalEvent) -> bool:
     return any(existing.get(field) != getattr(event, field) for field in _CLAIM_FIELDS)
 
 
@@ -321,6 +323,41 @@ class CausalJournal:
             dedupe_key=str(key) if key is not None else None,
             created_at=str(row["created_at"]),
         )
+
+    def verify_column_integrity(self) -> None:
+        """Verify indexed columns in ``nexus_causal_journal`` match ``record_json``."""
+        if self._memory_connection is None and not self.db_path.exists():
+            return
+        with self._lock:
+            try:
+                with self._connection() as conn:
+                    rows = conn.execute(
+                        "SELECT seq, record_hash, prev_hash, kind, job_id, attempt,"
+                        " dedupe_key, record_json FROM nexus_causal_journal ORDER BY seq ASC"
+                    ).fetchall()
+            except sqlite3.DatabaseError as exc:
+                raise ValueError(f"unreadable causal journal store: {exc}") from exc
+        for row in rows:
+            seq, rec_hash, prev_hash, col_kind, col_job_id, col_attempt, col_dedupe, raw_json = row
+            try:
+                parsed = json.loads(str(raw_json))
+            except json.JSONDecodeError as exc:
+                raise ValueError(
+                    f"causal journal seq={seq} has corrupt record_json: {exc}"
+                ) from exc
+            if not isinstance(parsed, dict):
+                raise ValueError(f"causal journal seq={seq} record_json is not an object")
+            if (
+                str(parsed.get("kind", "")) != str(col_kind)
+                or str(parsed.get("job_id", "")) != str(col_job_id)
+                or parsed.get("attempt") != col_attempt
+                or str(parsed.get("prev_hash", "")) != str(prev_hash)
+                or int(parsed.get("seq", -1)) != int(seq)
+            ):
+                raise ValueError(
+                    f"causal journal seq={seq} indexed columns disagree with record_json "
+                    f"(record_hash={rec_hash}, dedupe_key={col_dedupe!r})"
+                )
 
     @contextmanager
     def _connection(self) -> Iterator[sqlite3.Connection]:
