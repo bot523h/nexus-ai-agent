@@ -25,8 +25,8 @@
       }
     ],
     "generation_command": "python -m nexus_ai_agent.nagar",
-    "source_revision": "882f27db497c2893a4da2f826785945fe53a38c7",
-    "generated_at": "2026-11-19T09:54:42Z",
+    "source_revision": "b5b44f8d3e467f46e196e725460b6a57fada6f6e",
+    "generated_at": "2026-11-24T18:56:22Z",
     "deterministic_fields": [
       "reconciliation",
       "operations[*].pipeline",
@@ -542,7 +542,8 @@
           "tests/unit/test_nagar_wave1_green_cockpit.py",
           "tests/unit/test_slideshow_pack.py",
           "tests/unit/test_studio_discovery.py",
-          "tests/unit/test_studio_preview_master_boundary.py"
+          "tests/unit/test_studio_preview_master_boundary.py",
+          "tests/unit/test_w4_cp4_coverage.py"
         ]
       },
       "media.play": {
@@ -551,6 +552,7 @@
         ],
         "files": [
           "tests/architecture/test_nagar_studio_isolation.py",
+          "tests/integration/test_w4_ingress_e2e.py",
           "tests/unit/test_cognition_e2e_pipeline.py",
           "tests/unit/test_cognition_gateway.py",
           "tests/unit/test_command_capability_contract.py",
@@ -562,7 +564,8 @@
           "tests/unit/test_slideshow_pack.py",
           "tests/unit/test_studio_discovery.py",
           "tests/unit/test_studio_integration_contracts.py",
-          "tests/unit/test_studio_preview_master_boundary.py"
+          "tests/unit/test_studio_preview_master_boundary.py",
+          "tests/unit/test_w4_cp4_coverage.py"
         ]
       },
       "motion.add_glow": {
@@ -1082,7 +1085,8 @@
           "tests/unit/test_pack_manifest_verify.py",
           "tests/unit/test_slideshow_pack.py",
           "tests/unit/test_studio_discovery.py",
-          "tests/unit/test_studio_preview_master_boundary.py"
+          "tests/unit/test_studio_preview_master_boundary.py",
+          "tests/unit/test_w4_cp4_coverage.py"
         ]
       },
       "timeline.sync_multicam": {
@@ -3903,7 +3907,8 @@
           "tests/unit/test_nagar_wave1_green_cockpit.py",
           "tests/unit/test_slideshow_pack.py",
           "tests/unit/test_studio_discovery.py",
-          "tests/unit/test_studio_preview_master_boundary.py"
+          "tests/unit/test_studio_preview_master_boundary.py",
+          "tests/unit/test_w4_cp4_coverage.py"
         ],
         "recorded_execution_proof": false,
         "recorded_artifact_proof": false,
@@ -3958,6 +3963,7 @@
         ],
         "suite_reference_files": [
           "tests/architecture/test_nagar_studio_isolation.py",
+          "tests/integration/test_w4_ingress_e2e.py",
           "tests/unit/test_cognition_e2e_pipeline.py",
           "tests/unit/test_cognition_gateway.py",
           "tests/unit/test_command_capability_contract.py",
@@ -3969,7 +3975,8 @@
           "tests/unit/test_slideshow_pack.py",
           "tests/unit/test_studio_discovery.py",
           "tests/unit/test_studio_integration_contracts.py",
-          "tests/unit/test_studio_preview_master_boundary.py"
+          "tests/unit/test_studio_preview_master_boundary.py",
+          "tests/unit/test_w4_cp4_coverage.py"
         ],
         "recorded_execution_proof": false,
         "recorded_artifact_proof": false,
@@ -7775,7 +7782,8 @@
           "tests/unit/test_pack_manifest_verify.py",
           "tests/unit/test_slideshow_pack.py",
           "tests/unit/test_studio_discovery.py",
-          "tests/unit/test_studio_preview_master_boundary.py"
+          "tests/unit/test_studio_preview_master_boundary.py",
+          "tests/unit/test_w4_cp4_coverage.py"
         ],
         "recorded_execution_proof": false,
         "recorded_artifact_proof": false,
