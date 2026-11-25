@@ -1889,3 +1889,105 @@ def test_concurrent_writers_preserve_chain_and_dag_integrity(tmp_path: Path) -> 
         evidence_digest=_sha256(b"e"),
         issued_at_utc="2026-11-24T00:00:00Z",
     ).startswith("hmac-sha256:")
+
+
+def test_p3_restore_uses_readonly_mode_without_mutating_backup_or_sidecars(
+    tmp_path: Path,
+) -> None:
+    """Refinement 1A: restore() opens source via SQLite mode=ro URI."""
+    src_graph = CreativeGraph(tmp_path / "src.sqlite")
+    proj = src_graph.put_node("PROJECT", {"id": "p-ro"}).node
+    assert proj is not None
+    backup_path = tmp_path / "readonly_backup.sqlite"
+    src_graph.backup(backup_path)
+    # Switch the standalone backup file to DELETE journal mode so no WAL/SHM
+    # sidecars are attached, then freeze permissions to 0o444 and verify restore
+    # opens it strictly read-only without mutating bytes or creating sidecars.
+    with sqlite3.connect(backup_path) as bak_conn:
+        bak_conn.execute("PRAGMA journal_mode = DELETE")
+        bak_conn.commit()
+    before_bytes = backup_path.read_bytes()
+    backup_path.chmod(0o444)
+    try:
+        dst_graph = CreativeGraph(tmp_path / "dst.sqlite")
+        dst_graph.restore(backup_path)
+        assert dst_graph.get_node(proj.node_id) is not None
+        assert backup_path.read_bytes() == before_bytes
+        assert not (tmp_path / "readonly_backup.sqlite-wal").exists()
+        assert not (tmp_path / "readonly_backup.sqlite-shm").exists()
+    finally:
+        backup_path.chmod(0o644)
+
+    with pytest.raises(GraphStateError, match="not a readable database"):
+        dst_graph.restore(tmp_path / "does_not_exist.sqlite")
+
+
+def test_p3_promote_epistemic_status_rejects_terminal_nodes_and_edges(
+    tmp_path: Path,
+) -> None:
+    """Refinement 1B: promote_epistemic_status refuses nodes/edges in terminal status."""
+    graph = CreativeGraph(
+        tmp_path / "promote_terminal.sqlite", proof_verification_keys=_TEST_KEY_RING
+    )
+    for idx, terminal_status in enumerate(("superseded", "invalidated", "revoked")):
+        res = graph.put_node(
+            "INTENT",
+            {"id": f"intent-{idx}"},
+            {"goal": f"g-{idx}"},
+            epistemic_status=EpistemicStatus.HYPOTHESIS,
+        )
+        assert res.node is not None
+        graph.set_status(res.node.node_id, terminal_status)
+        with pytest.raises(GraphStateTransitionError, match="terminal status"):
+            graph.promote_epistemic_status(
+                res.node.node_id,
+                EpistemicStatus.MEASURED_EVIDENCE,
+                evidence_digest=_sha256(b"ev"),
+            )
+
+    p = graph.put_node("PROJECT", {"id": "p-edge"}).node
+    i = graph.put_node("INTENT", {"id": "i-edge"}).node
+    assert p is not None and i is not None
+    edge = graph.put_edge(
+        "PROJECT_HAS_INTENT",
+        p.node_id,
+        i.node_id,
+        epistemic_status=EpistemicStatus.HYPOTHESIS,
+    ).edge
+    assert edge is not None
+    graph.revoke_edge(edge.edge_id)
+    with pytest.raises(GraphStateTransitionError, match="terminal status"):
+        graph.promote_epistemic_status(
+            edge.edge_id,
+            EpistemicStatus.MEASURED_EVIDENCE,
+            evidence_digest=_sha256(b"ev"),
+            is_edge=True,
+        )
+
+
+def test_p3_integrity_check_emits_graph032_on_revision_count_mismatch(
+    tmp_path: Path,
+) -> None:
+    """Refinement 1C: GRAPH032 fires when revision_count disagrees with node transitions."""
+    db_path = tmp_path / "rev_count.sqlite"
+    graph = CreativeGraph(db_path)
+    node = graph.put_node("INTENT", {"id": "rev-1"}, {"step": 1}).node
+    assert node is not None
+    graph.put_node("INTENT", {"id": "rev-1"}, {"step": 2})
+
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "UPDATE nexus_graph_node SET revision_count = 99 WHERE node_id = ?",
+            (node.node_id,),
+        )
+        conn.commit()
+
+    reopened = CreativeGraph(db_path, verify_on_open=False)
+    report = reopened.integrity_check()
+    assert not report.ok
+    matching = [
+        f
+        for f in report.findings
+        if f.code == "GRAPH032" and "revision_count" in f.message and f.witness == node.node_id
+    ]
+    assert len(matching) == 1

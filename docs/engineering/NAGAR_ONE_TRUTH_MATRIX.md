@@ -5,14 +5,15 @@ test or an observable run. Vocabulary: `VERIFIED` · `PARTIAL` · `MISSING` ·
 `BLOCKED` · `DEFERRED`. Numbers are reproducible with the commands named in
 `docs/architecture/TESTING.md` §6.
 
-**Audit base:** `main` @ `d6876ab378b88b2ccca1187b1f3c51be5bf52657`
-(2026-11-19), the merge of PR #350. Since the previous revision
-(`main` @ `6838c543` plus the Stage 1 change on
-`nagar-one-slice2-artifact-revision-binding`, PR #319) the base also carries
-PR #344 (Waves 1–7 closeout: bounded CI parity, median benchmarks, traced
-history) and PR #350 (v1 module consolidation: `resource_packs`,
-`hyper_compiler`, `personal_cloud_vault`, `storyboard_compiler`, API lifespan).
-Rows below whose evidence lives in those modules were re-run at this base.
+**Audit base:** `main` @ `3ee52c4f4a492ae8573e76026711dffeb1adcd6e`
+(2026-11-25), the merge of PR #356 (`Wave 5: secure blob publication and
+authenticated backup drill`) atop PR #350–#354, #357 (`W6 Science`), #358
+(`W6.7` bytecode-cache deterministic mutations), #359 (`Stage 2-A` durable
+`CreativeGraph` DAG + RFC 8785 JCS lineage), and #360 (`W10X` 10-wave
+scientific convergence). Note: PR #355 (`feat(w4): integrated durable plan
+reservation, command bus fencing & IBPC approval`) remains open on GitHub
+(`arena/f3f2c5f9-nexus-ai-agent`) and is not yet merged into `main`.
+Rows below whose evidence lives in the merged modules reflect the live base.
 
 | Capability | Status | Implementation site | Test / evidence | Remaining gap |
 |---|---|---|---|---|
@@ -34,7 +35,7 @@ Rows below whose evidence lives in those modules were re-run at this base.
 | Independent verification (artifact-level) | VERIFIED | `jobs/verification.py`; `jobs/creative_verification.py` | verifier suite | Footprint-level verifier lives in `nagar/ibpc/footprint.py` (video scope) |
 | Artifact Passport | VERIFIED (durable) | `provenance/passport.py`; `jobs/creative_passport.py` | `tests/integration/test_provenance_passport_e2e.py` | Passport→pinned-revision/AssetVersion link is **Stage 2** (slice-3, gated on PR #294) |
 | Provenance journal (hash-chained) | VERIFIED | `provenance/journal.py`, `models.py` | provenance suite | — |
-| Creative Graph / lineage | PARTIAL (in-memory) | `creative/spine/models.py::CreativeGraph` | spine tests | Durable, rebuildable graph is **Stage 2** (PR #294) |
+| Creative Graph / lineage | VERIFIED (Stage 2-A projection; spine DTO unification pending Wave 2) | `provenance/graph.py::CreativeGraph` (durable, RFC 8785 JCS, causal invalidation + Wave 0 P3 hardening); `creative/spine/models.py::CreativeGraph` (in-memory) | `tests/unit/test_creative_graph.py`; `tests/unit/test_creative_graph_mutations.py` (17/17 killed); spine tests | Unify spine `CreativeGraph` as planning DTO over durable `provenance/graph.py::CreativeGraph` + transactional `provenance_outbox` reconciler (Wave 2) |
 | Session / Turn persistence | MISSING (in-process) | `nagar/ibpc/session.py` (in-memory) | IBPC suite (in-process) | Durable store is **Stage 3** |
 | Approval persistence + replay prevention | PARTIAL (in-memory, single-process) | `nagar/ibpc/approval.py` (single-use CAS, in-memory) | `scripts/ibpc_security_mutations.py` (13/13) | Durable, cross-process single-use is **Stage 3** |
 | Privacy consent + cloud egress | PARTIAL | `nagar/ibpc/privacy.py` (LOCAL_VAULT default; typed refusal for non-local) | IBPC privacy tests | Durable consent store is **Stage 3** |
@@ -43,27 +44,30 @@ Rows below whose evidence lives in those modules were re-run at this base.
 | Personal cloud vault (BYOS drivers) | VERIFIED | `storage/personal_cloud_vault/byos_drivers.py` (Local / S3 SigV4 / portable bundle), `crypto_chunk_envelope.py`, `sync_journal_manager.py` | `tests/storage/personal_cloud_vault/` (3 files, 93 cases) + `tests/unit/test_personal_cloud_vault_lease_fence.py` (final lease fence under a landed lease) | GC/streaming residency ceiling is measured by `tracemalloc` and is environment-sensitive outside the CI image; see `docs/architecture/TESTING.md` §7 |
 | Storyboard compiler (typed manifest) | VERIFIED (library) | `creative/storyboard_compiler/{bilingual_script_parser,cinematography_solver,editorial_cut_solver}.py` | `tests/creative/storyboard_compiler/` (199 cases at this base) incl. HMAC seal, whole-script substitution, and the strict-anchor gate | No production consumer yet: nothing under `src/` calls `compile_storyboard`, so delivery does not consult the manifest |
 | Resource packs + hyper compiler | VERIFIED (library) | `storage/resource_packs/`; `creative/hyper_compiler/` | `tests/storage/resource_packs/`, `tests/creative/hyper_compiler/` | Pack activation in the live lanes is later work; the trust plane itself is gated by `scripts/pack_trust_mutations.py` |
-| Migration schema (single head) | VERIFIED | `migrations/versions/*` (head `20261107bindfence`) | `tests/unit/test_migrations.py` (upgrade=exact schema, no drift, downgrade empties) | — |
+| Migration schema (single head) | VERIFIED | `migrations/versions/*` (head `20261112connect`) | `tests/unit/test_migrations.py` (upgrade=exact schema, no drift, downgrade empties) | — |
 
-## Stage gates (as of 2026-11-19, `main` @ `d6876ab3`)
+## Stage gates (as of 2026-11-25, `main` @ `3ee52c4`)
 
 - Stage 0 (contract + matrix + freeze) — **CLOSED**: this matrix, the product
   contract and the architecture pages are the frozen frame.
 - Stage 1 (durable Project ↔ Revision ↔ AssetVersion) — **IMPLEMENTED**;
-  `task-282-slice-2` merged as PR #319 (`6838c543` lineage) and the row above
-  is verified at the current base.
-- Stage 2 (Creative Graph & Passport closure) — **BLOCKED** on PR #294
-  (`merged_into_main`, not in this tree) and on slice-2; it is not implemented
-  here, so every Stage 2 row stays `PARTIAL`.
+  `task-282-slice-2` merged as PR #319 (`6838c543` lineage) and verified at the
+  current base.
+- Stage 2-A (durable CreativeGraph DAG + RFC 8785 JCS + causal invalidation) —
+  **LANDED** in PR #359 (`provenance/graph.py::CreativeGraph`) with Wave 0 P3
+  hardening (read-only URI `restore()`, terminal-node/edge epistemic promotion
+  refusal, `GRAPH032` `revision_count` parity check). Stage 2-B (Queue-to-
+  Provenance transactional outbox, spine DTO unification, and Passport
+  Revision/AssetVersion cryptographic binding) is **Wave 2** target work.
 - Stage 3 (production-grade Live Editing: durable session/approval/privacy) —
-  **NOT STARTED**, no board claim. The in-memory `nagar/ibpc/*` surfaces are
+  **NOT STARTED** on `main` (PR #355 `W4` durable plan dedupe/command bus
+  fencing remains open on GitHub). The in-memory `nagar/ibpc/*` surfaces are
   labelled as such above rather than promoted.
 
 The board's live queue (`.agents/board.json` → `next_work`, updated
-2026-11-12) is execution-core hardening, not Stage 2/3 product work:
-`task-255` (AttemptStaging in the render publication path), `task-256`
-(heartbeat liveness), `task-257` (pending cancel semantics, merged via PR #338),
-`task-259`/`task-260`/`task-263` (schema invariant, execution-core mutation CI
-job, single-owner startup guard) and `task-269` (cognition quality harness). A
-row in this matrix is only promoted when its code *and* its test are in the same
-commit — planning language is never evidence.
+2026-11-25) tracks Wave 1 execution-core hardening (`task-255`, `task-256`,
+`task-259`, `task-262`, `task-263`) and Wave 2 provenance/outbox/passport
+convergence (`task-282-slice-3`, `wave2-provenance-outbox-reconciler`,
+`wave2-spine-creative-graph-unification`). `task-257` (PR #338), `task-260`,
+and `task-264` are closed. A row in this matrix is only promoted when its code
+*and* its test are in the same commit — planning language is never evidence.
