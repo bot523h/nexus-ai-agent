@@ -982,6 +982,55 @@ def test_retention_prunes_only_verified_old_generations(tmp_path: Path) -> None:
     assert all(p.exists() for p in generations[3:])
 
 
+def test_retention_prunes_with_python310_rmtree_signature(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Exercise real pruning while rejecting the Python 3.11-only keyword. [MOCK]"""
+    from nexus_ai_agent.storage import encrypted_backup_drill as drill
+
+    root, key, generations = _retention_generations(tmp_path, 2)
+    original = drill.shutil.rmtree
+    calls: list[Path] = []
+
+    def python310_rmtree(path, *args, **kwargs):
+        if "dir_fd" in kwargs:
+            raise TypeError("rmtree() got an unexpected keyword argument 'dir_fd'")
+        calls.append(Path(path))
+        return original(path, *args, **kwargs)
+
+    python310_rmtree.avoids_symlink_attacks = original.avoids_symlink_attacks
+    monkeypatch.setattr(drill.shutil, "rmtree", python310_rmtree)
+    receipt = drill.enforce_backup_retention(root, keep_generations=1, key_material=key)
+    assert receipt.pruned_ids == (generations[0].name,)
+    assert not generations[0].exists() and generations[1].exists()
+    assert len(calls) == 1 and calls[0].parent == root
+    assert calls[0].name.startswith(".pruned-")
+
+
+@pytest.mark.parametrize("identity_check", [1, 2])
+def test_retention_refuses_changed_quarantine_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, identity_check: int
+) -> None:
+    """A failed identity check preserves the quarantine rather than deleting it. [MOCK]"""
+    from nexus_ai_agent.storage import encrypted_backup_drill as drill
+
+    root, key, generations = _retention_generations(tmp_path, 2)
+    original = drill.os.path.samestat
+    calls = 0
+
+    def mismatched_identity(first, second):
+        nonlocal calls
+        calls += 1
+        return False if calls == identity_check else original(first, second)
+
+    monkeypatch.setattr(drill.os.path, "samestat", mismatched_identity)
+    with pytest.raises(RuntimeError, match="quarantine identity changed"):
+        drill.enforce_backup_retention(root, keep_generations=1, key_material=key)
+    quarantine = list(root.glob(".pruned-*"))
+    assert calls == identity_check and len(quarantine) == 1
+    assert (quarantine[0] / "backup.enc").exists() and generations[1].exists()
+
+
 def test_retention_corrupt_newer_cannot_displace_valid_old(tmp_path: Path) -> None:
     from nexus_ai_agent.storage.encrypted_backup_drill import enforce_backup_retention
 

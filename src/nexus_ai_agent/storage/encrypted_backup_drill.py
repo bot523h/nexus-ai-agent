@@ -803,7 +803,20 @@ def enforce_backup_retention(
                             os.rename(name, quarantine, src_dir_fd=root_fd, dst_dir_fd=root_fd)
                             moved = True
                             os.fsync(root_fd)
-                            shutil.rmtree(quarantine, dir_fd=root_fd)
+                            # Python 3.10's rmtree has no dir_fd parameter. Verify both
+                            # path identities before using the absolute pathname. This
+                            # still relies on the documented trusted-root/cooperative
+                            # writer boundary; pathname checks and rmtree are not atomic.
+                            root_info = os.stat(root, follow_symlinks=False)
+                            quarantine_info = os.stat(
+                                quarantine, dir_fd=root_fd, follow_symlinks=False
+                            )
+                            if not os.path.samestat(root_info, os.fstat(root_fd)) or not (
+                                stat.S_ISDIR(quarantine_info.st_mode)
+                                and os.path.samestat(quarantine_info, info)
+                            ):
+                                raise RuntimeError("retention quarantine identity changed")
+                            shutil.rmtree(root / quarantine)
                             os.fsync(root_fd)
                             pruned.append(name)
                         finally:
