@@ -5,7 +5,9 @@ repository actually contained at the audit moment. It is not a roadmap and not a
 current state; `docs/engineering/NAGAR_ONE_TRUTH_MATRIX.md` and `.agents/board.json` are.
 
 - Audit date: 2026-11-25
-- Base: `origin/main` @ `3ee52c4f` (`Merge pull request #356 from bot523h/arena/0862dda3-nexus-ai-agent`)
+- Base at audit time: `origin/main` @ `3ee52c4f` (`Merge pull request #356 …`)
+- Base after the mid-flight merge of **#355** (`428492e2`): the branch was merged up to date, and the
+  board conflict was resolved newest-state-wins with schema 2 still valid
 - Auditing branch: `openhands/w11x-grand-pr-convergence-20261125`
 - Clone: full clone (no `.git/shallow`), so ancestry tests are reliable here
 
@@ -59,7 +61,7 @@ curl -s -H "Authorization: token $GITHUB_TOKEN" \
 | 17 open legacy PRs | **46** open PRs at audit time |
 | `#356` @ `0d37c711` needs merging | already merged; `main` HEAD **is** the #356 merge (`3ee52c4f`), and `origin/pr/356` tip `4991991a` is an ancestor of `main` |
 | `#355` @ `1cbb6ad9` | real `origin/pr/355` head is **`d0b58ea9`**; no commit `1cbb6ad9` is the PR tip |
-| `src/nexus_ai_agent/adapters/durable_plan_dedupe.py:6` docstring is stale | **the file does not exist** anywhere in the tree |
+| `src/nexus_ai_agent/adapters/durable_plan_dedupe.py:6` docstring is stale | the file **did not exist** at audit time; it landed with **#355**, merged into `main` as `428492e2` while this branch was open. Its docstring then still said *"not yet wired to CommandBus"*, which is false: `compose_durable_command_bus()` injects the store into `CommandBus` as its `DurablePlanDedupePort` and `DurableStudioExecutionRuntime` builds it. Corrected (CP-1 item 3) |
 | `provenance_transitions` table backs `revision_count` | **no such table**; revisions are recorded in `nexus_graph_chain` (`node_create` / `node_advance`) plus `nexus_graph_node_history` |
 | CP-1 1C = new diagnostic code `GRAPH032` | `GRAPH032` is **already used** for history-metadata/monotonic-transition findings; the parity check ships as **`GRAPH034`** |
 | `src/nexus_ai_agent/creative/ibpc/{service,approval,privacy,live_session}.py` | the IBPC slice lives at **`src/nexus_ai_agent/nagar/ibpc/`**; there is no `creative/ibpc/` package |
@@ -130,6 +132,8 @@ CP-1 only, fully gated (see `.agents/board.json` → `task-w11x-cp1-provenance-h
 | 1A | `CreativeGraph.restore()` opens the backup source read-only (`file:…?mode=ro`, `uri=True`); a mistyped path is refused instead of being created as an empty database | `test_restore_opens_backup_source_read_only` |
 | 1B | `promote_epistemic_status()` raises `GraphStateTransitionError` on a terminal node status (and on a revoked edge); no chain entry, no history row, no epistemic change | `test_epistemic_promotion_refused_on_terminal_node[superseded\|invalidated\|revoked]`, `test_epistemic_promotion_refused_on_revoked_edge` |
 | 1C | `_integrity_check_conn()` emits **`GRAPH034`** when a node's `revision_count` disagrees with its `node_create`/`node_advance` chain entries since the node's most recent creation | `test_revision_count_chain_parity_is_enforced_graph034` |
+| 1D (item 3) | `adapters/durable_plan_dedupe.py` docstring now states the real wiring (two seams, one store) instead of claiming it is unwired | `tests/unit/test_w4_cp1_durable_dedupe_and_approvals.py`, `tests/unit/test_w4_durable_bus_and_dedupe.py` |
+| — | AST mutation campaign extended **17 → 20**: `M18` weakens the terminal guard, `M19` downgrades `mode=ro` to `mode=rwc`, `M20` weakens the `GRAPH034` condition — 20/20 killed, 0 survived, 0 invalid | `tests/unit/test_creative_graph_mutations.py` |
 
 1C needed one design decision worth recording: parity is measured **from the node's most recent
 `node_create`**. A `replace=True` journal rebuild deletes and re-creates projected nodes, so
