@@ -82,6 +82,12 @@ from nexus_ai_agent.provenance.models import (
     verify_chain,
 )
 from nexus_ai_agent.provenance.observer import CausalObserver, QueueLedgerObserver
+from nexus_ai_agent.provenance.outbox import (
+    OutboxEvent,
+    OutboxReconciler,
+    OutboxReconcileReport,
+    ProvenanceOutboxStore,
+)
 from nexus_ai_agent.provenance.passport import (
     ArtifactPassport,
     Finding,
@@ -131,8 +137,12 @@ __all__ = [
     "JcsError",
     "JobFacts",
     "LedgerRecord",
+    "OutboxEvent",
+    "OutboxReconcileReport",
+    "OutboxReconciler",
     "PassportBuilder",
     "PassportStatus",
+    "ProvenanceOutboxStore",
     "QueueLedgerObserver",
     "WriteResult",
     "canonical_bytes",

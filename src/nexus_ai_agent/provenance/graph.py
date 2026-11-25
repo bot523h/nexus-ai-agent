@@ -2198,6 +2198,134 @@ class CreativeGraph:
             "impact_digest": impact.impact_digest,
         }
 
+    def commit_verified_revision(
+        self,
+        *,
+        node_id: str,
+        verification_proof: EpistemicProof,
+        evidence_digest: str | None = None,
+    ) -> GraphNode:
+        """Promote a node to ``VERIFIED_COMMIT`` iff ``verification_proof`` verifies."""
+        if not isinstance(verification_proof, EpistemicProof):
+            raise EpistemicProofError("commit_verified_revision requires a valid EpistemicProof")
+        promoted = self.promote_epistemic_status(
+            node_id,
+            EpistemicStatus.VERIFIED_COMMIT,
+            proof=verification_proof,
+            evidence_digest=evidence_digest or verification_proof.evidence_digest,
+            is_edge=False,
+        )
+        assert isinstance(promoted, GraphNode)
+        return promoted
+
+    def invalidate_downstream(
+        self, node_id: str, *, reason: str = "upstream_invalidated", apply: bool = True
+    ) -> CausalImpactResult:
+        """Propagate causal invalidation to all active downstream descendants."""
+        return self.propagate_invalidation(node_id, reason=reason, apply=apply)
+
+    def record_planning_lineage(
+        self,
+        *,
+        project_id: str,
+        intent_id: str,
+        intent_payload: dict[str, Any],
+        creative_ir_id: str,
+        creative_ir_payload: dict[str, Any],
+        compiled_plan_id: str,
+        compiled_plan_payload: dict[str, Any],
+        command_dag_id: str,
+        command_dag_payload: dict[str, Any],
+        source: str = "creative_spine",
+    ) -> dict[str, str]:
+        """Persist Intent -> Typed IR -> Compiled Plan -> Command DAG lineage."""
+        intent_res = self.put_node(
+            kind="INTENT",
+            identity={"project_id": project_id, "intent_id": intent_id},
+            payload={"project_id": project_id, "stage": "intent", **intent_payload},
+            logical_entity_id=f"intent:{project_id}:{intent_id}",
+            revision_id=intent_id,
+            source=source,
+        )
+        ir_res = self.put_node(
+            kind="REVISION",
+            identity={"project_id": project_id, "creative_ir_id": creative_ir_id},
+            payload={"project_id": project_id, "stage": "creative_ir", **creative_ir_payload},
+            logical_entity_id=f"creative_ir:{project_id}:{creative_ir_id}",
+            revision_id=creative_ir_id,
+            source=source,
+        )
+        plan_res = self.put_node(
+            kind="PLAN",
+            identity={"project_id": project_id, "compiled_plan_id": compiled_plan_id},
+            payload={"project_id": project_id, "stage": "compiled_plan", **compiled_plan_payload},
+            logical_entity_id=f"compiled_plan:{project_id}:{compiled_plan_id}",
+            revision_id=compiled_plan_id,
+            source=source,
+        )
+        dag_res = self.put_node(
+            kind="COMMAND",
+            identity={"project_id": project_id, "command_dag_id": command_dag_id},
+            payload={"project_id": project_id, "stage": "command_dag", **command_dag_payload},
+            logical_entity_id=f"command_dag:{project_id}:{command_dag_id}",
+            revision_id=command_dag_id,
+            source=source,
+        )
+        assert intent_res.node is not None
+        assert ir_res.node is not None
+        assert plan_res.node is not None
+        assert dag_res.node is not None
+        self.put_edge(
+            relation="INTENT_COMPILED_TO_REVISION",
+            src=intent_res.node.node_id,
+            dst=ir_res.node.node_id,
+            payload={"project_id": project_id},
+            source=source,
+        )
+        self.put_edge(
+            relation="REVISION_HAS_PLAN",
+            src=ir_res.node.node_id,
+            dst=plan_res.node.node_id,
+            payload={"project_id": project_id},
+            source=source,
+        )
+        self.put_edge(
+            relation="PLAN_EMITS_COMMAND",
+            src=plan_res.node.node_id,
+            dst=dag_res.node.node_id,
+            payload={"project_id": project_id},
+            source=source,
+        )
+        return {
+            "intent": intent_res.node.node_id,
+            "creative_ir": ir_res.node.node_id,
+            "compiled_plan": plan_res.node.node_id,
+            "command_dag": dag_res.node.node_id,
+        }
+
+    def nodes_for_project(self, project_id: str) -> list[GraphNode]:
+        """Return all non-revoked durable nodes carrying ``project_id``."""
+        target = _validate_non_empty(project_id, field_name="project_id")
+        with self._lock, self._connection() as connection:
+            rows = connection.execute(
+                "SELECT node_id, kind, identity_json, logical_entity_id, revision_id,"
+                " content_digest, payload_json, payload_digest, epistemic_status,"
+                " evidence_digest, proof_json, status, superseded_by, source,"
+                " source_seq, revision_count, created_at, updated_at"
+                " FROM nexus_graph_node ORDER BY created_at ASC, node_id ASC"
+            ).fetchall()
+        matched: list[GraphNode] = []
+        for row in rows:
+            node = self._node_from_row(row)
+            if node.status == "revoked":
+                continue
+            if (
+                node.identity.get("project_id") == target
+                or node.payload.get("project_id") == target
+            ):
+                matched.append(node)
+        return matched
+
     def project_history(self, project_node_id: str) -> list[dict[str, Any]]:
         return self.descendants(project_node_id)
 

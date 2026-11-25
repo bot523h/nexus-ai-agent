@@ -48,7 +48,11 @@ def test_queue_schema_isolated_to_owned_table(tmp_path: Path) -> None:
             "SELECT name FROM sqlite_master WHERE type = 'table'"
         ).fetchall()
 
-    assert {row[0] for row in tables} == {"nexus_job_queue", "nexus_attempt_leases"}
+    assert {row[0] for row in tables} == {
+        "nexus_job_queue",
+        "nexus_attempt_leases",
+        "provenance_outbox",
+    }
 
 
 @pytest.mark.asyncio

@@ -1394,13 +1394,19 @@ async def creative_render_binding_confirm(
                 fence_check=fence_check,
             )
             result["asset_version_id"] = registration.asset_version_id
+            result["base_revision_id"] = revision_id
+            result["accepted_revision_id"] = registration.binding.revision_id
+            result["verification_proof_digest"] = verifier_digest
             intent["artifact_version_id"] = registration.asset_version_id
+            intent["base_revision_id"] = revision_id
+            intent["accepted_revision_id"] = registration.binding.revision_id
+            intent["verification_proof_digest"] = verifier_digest
             intent["derived_receipt_ref"] = registration.binding.derived_receipt_ref
         else:
             # Compatibility for payload schemas that carry no persisted
             # ArtifactPassport: those keep the established revision binding and
             # are never presented as first-class AssetVersion lineage.
-            await store.bind(
+            bound = await store.bind(
                 project_id=project_id,
                 revision_id=revision_id,
                 artifact_id=measured,
@@ -1410,6 +1416,28 @@ async def creative_render_binding_confirm(
                 artifact_version_id=intent.get("artifact_version_id") or None,
                 attempt=fencing_token,
             )
+            result["base_revision_id"] = revision_id
+            result["accepted_revision_id"] = bound.revision_id
+            intent["base_revision_id"] = revision_id
+            intent["accepted_revision_id"] = bound.revision_id
+        from nexus_ai_agent.provenance.graph import node_identity
+
+        raw_inputs = payload.get("input_asset_version_ids") or result.get("input_asset_version_ids")
+        if isinstance(raw_inputs, (list, tuple)):
+            in_vers = [str(v) for v in raw_inputs if isinstance(v, str) and v]
+            result["input_asset_version_ids"] = in_vers
+            intent["input_asset_version_ids"] = in_vers
+        if job_id and fencing_token >= 1:
+            prov_node_id = node_identity(
+                "ARTIFACT",
+                {
+                    "job_id": job_id,
+                    "attempt_epoch": fencing_token,
+                    "content_digest": measured,
+                },
+            )
+            result["provenance_node_id"] = prov_node_id
+            intent["provenance_node_id"] = prov_node_id
     except Exception as exc:  # noqa: BLE001 - every binding failure must be typed
         raise CreativeRenderError(
             "artifact_binding_failed", f"{type(exc).__name__}: {exc}"

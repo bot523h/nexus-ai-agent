@@ -126,6 +126,16 @@ from nexus_ai_agent.provenance.models import (
     sha256_hex,
 )
 from nexus_ai_agent.provenance.observer import CausalObserver
+from nexus_ai_agent.provenance.outbox import (
+    OUTBOX_EVENT_ATTEMPT_RESERVED,
+    OUTBOX_EVENT_ATTEMPT_SUPERSEDED,
+    OUTBOX_EVENT_ATTEMPT_VERIFIED,
+    OUTBOX_EVENT_JOB_COMPLETED,
+    OUTBOX_EVENT_JOB_FAILED,
+    ProvenanceOutboxStore,
+    ensure_outbox_schema,
+    insert_outbox_event_tx,
+)
 
 JobHandler = Callable[[dict[str, object]], Awaitable[dict[str, object]]]
 JobCompletionHook = Callable[["JobCompletion"], Awaitable[None]]
@@ -3330,6 +3340,7 @@ class InProcessJobQueue:
                 WHERE status IN ('RUNNING', 'VERIFYING')
                 """
             )
+            ensure_outbox_schema(connection)
             self._backfill_request_identities(connection)
             self._backfill_legacy_attempts(connection)
 
@@ -4002,6 +4013,32 @@ class InProcessJobQueue:
                     now,
                 ),
             )
+            q_meta = connection.execute(
+                "SELECT job_type, payload_json FROM nexus_job_queue WHERE id = ?",
+                (job_id,),
+            ).fetchone()
+            outbox_payload: dict[str, object] = {
+                "job_type": str(q_meta["job_type"]) if q_meta is not None else "unknown",
+                "worker_id": self._worker_id,
+            }
+            if q_meta is not None:
+                try:
+                    parsed_p = json.loads(str(q_meta["payload_json"]))
+                    if isinstance(parsed_p, dict):
+                        for k in ("project_id", "revision_id"):
+                            if parsed_p.get(k) is not None:
+                                outbox_payload[k] = str(parsed_p[k])
+                except ValueError:
+                    pass
+            insert_outbox_event_tx(
+                connection,
+                event_type=OUTBOX_EVENT_ATTEMPT_RESERVED,
+                job_id=job_id,
+                attempt_id=identifier,
+                attempt_epoch=attempt_number,
+                payload=outbox_payload,
+                created_at=now,
+            )
             return ExecutionClaim(job_id=job_id, attempt=attempt_number)
 
     def _owns_execution(self, claim: ExecutionClaim, expected: JobStatus) -> bool:
@@ -4156,7 +4193,7 @@ class InProcessJobQueue:
         result_json = canonical_json(result)
         verification_json = canonical_json(verification)
         execution_evidence_json = canonical_json(execution_evidence)
-        with self._db_lock, self._connection() as connection:
+        with self._db_lock, self._write_connection() as connection:
             row = connection.execute(
                 """
                 SELECT attempt_history_json FROM nexus_job_queue
@@ -4178,10 +4215,11 @@ class InProcessJobQueue:
             )
             if attempt is None:
                 return False
+            now = _now()
             attempt.update(
                 {
                     "status": "verified",
-                    "verified_at": _now(),
+                    "verified_at": now,
                     "execution_result_json": result_json,
                     "verification_json": verification_json,
                     "execution_evidence_json": execution_evidence_json,
@@ -4202,7 +4240,27 @@ class InProcessJobQueue:
                     claim.attempt,
                 ),
             )
-            return cursor.rowcount == 1
+            if cursor.rowcount != 1:
+                return False
+            ver_digest = "sha256:" + hashlib.sha256(verification_json.encode("utf-8")).hexdigest()
+            verified_payload: dict[str, object] = {
+                "verification_proof_digest": ver_digest,
+                "evidence_digest": ver_digest,
+            }
+            if isinstance(result.get("sha256"), str):
+                verified_payload["artifact_digest"] = str(result["sha256"])
+            if isinstance(result.get("artifact_path"), str):
+                verified_payload["artifact_path"] = str(result["artifact_path"])
+            insert_outbox_event_tx(
+                connection,
+                event_type=OUTBOX_EVENT_ATTEMPT_VERIFIED,
+                job_id=claim.job_id,
+                attempt_id=creative_attempt_id(claim.job_id, claim.attempt),
+                attempt_epoch=claim.attempt,
+                payload=verified_payload,
+                created_at=now,
+            )
+            return True
 
     def _mark_completed(
         self,
@@ -4221,21 +4279,77 @@ class InProcessJobQueue:
             raise ValueError("reconciliation requires a persisted passport and source attempt")
 
         def _sync_completed_lease(conn: sqlite3.Connection) -> None:
-            if (
-                conn.execute(
-                    "SELECT 1 FROM nexus_job_queue WHERE id = ? AND status = ? AND attempt = ?",
-                    (claim.job_id, JobStatus.COMPLETED.value, claim.attempt),
-                ).fetchone()
-                is not None
-            ):
-                conn.execute(
-                    """
-                    UPDATE nexus_attempt_leases
-                    SET status = 'COMPLETED', updated_at = ?
-                    WHERE job_id = ? AND attempt_epoch = ? AND status IN ('RUNNING', 'VERIFYING')
-                    """,
-                    (_now(), claim.job_id, claim.attempt),
+            q_row = conn.execute(
+                "SELECT job_type, payload_json FROM nexus_job_queue "
+                "WHERE id = ? AND status = ? AND attempt = ?",
+                (claim.job_id, JobStatus.COMPLETED.value, claim.attempt),
+            ).fetchone()
+            if q_row is None:
+                return
+            ts = _now()
+            conn.execute(
+                """
+                UPDATE nexus_attempt_leases
+                SET status = 'COMPLETED', updated_at = ?
+                WHERE job_id = ? AND attempt_epoch = ? AND status IN ('RUNNING', 'VERIFYING')
+                """,
+                (ts, claim.job_id, claim.attempt),
+            )
+            completed_payload: dict[str, object] = {
+                "job_type": str(q_row["job_type"]),
+                "worker_id": self._worker_id,
+            }
+            try:
+                parsed_p = json.loads(str(q_row["payload_json"]))
+            except ValueError:
+                parsed_p = {}
+            binding = result.get("artifact_binding")
+            binding_dict = binding if isinstance(binding, dict) else {}
+            project_id = binding_dict.get("project_id") or (
+                parsed_p.get("project_id") if isinstance(parsed_p, dict) else None
+            )
+            if isinstance(project_id, str) and project_id:
+                completed_payload["project_id"] = project_id
+            base_rev = binding_dict.get("revision_id") or (
+                parsed_p.get("revision_id") if isinstance(parsed_p, dict) else None
+            )
+            if isinstance(base_rev, str) and base_rev:
+                completed_payload["base_revision_id"] = base_rev
+                completed_payload["accepted_revision_id"] = str(
+                    result.get("accepted_revision_id") or base_rev
                 )
+            art_sha = (
+                binding_dict.get("artifact_id")
+                or result.get("sha256")
+                or result.get("content_sha256")
+            )
+            if isinstance(art_sha, str) and art_sha:
+                completed_payload["artifact_digest"] = art_sha
+            if isinstance(result.get("artifact_path"), str):
+                completed_payload["artifact_path"] = str(result["artifact_path"])
+            out_ver = result.get("asset_version_id") or binding_dict.get("artifact_version_id")
+            if isinstance(out_ver, str) and out_ver:
+                completed_payload["output_asset_version_id"] = out_ver
+            in_vers = result.get("input_asset_version_ids") or (
+                parsed_p.get("input_asset_version_ids") if isinstance(parsed_p, dict) else None
+            )
+            if isinstance(in_vers, (list, tuple)) and in_vers:
+                completed_payload["input_asset_version_ids"] = [str(v) for v in in_vers]
+            ver_block = result.get(VERIFICATION_RESULT_KEY)
+            if isinstance(ver_block, dict):
+                completed_payload["verification_proof_digest"] = (
+                    "sha256:"
+                    + hashlib.sha256(canonical_json(ver_block).encode("utf-8")).hexdigest()
+                )
+            insert_outbox_event_tx(
+                conn,
+                event_type=OUTBOX_EVENT_JOB_COMPLETED,
+                job_id=claim.job_id,
+                attempt_id=creative_attempt_id(claim.job_id, claim.attempt),
+                attempt_epoch=claim.attempt,
+                payload=completed_payload,
+                created_at=ts,
+            )
 
         result_json = canonical_json(result)
         with self._db_lock, self._write_connection(on_commit=_sync_completed_lease) as connection:
@@ -4373,7 +4487,22 @@ class InProcessJobQueue:
                 """,
                 (now, claim.job_id, claim.attempt),
             )
+            insert_outbox_event_tx(
+                connection,
+                event_type=OUTBOX_EVENT_JOB_FAILED,
+                job_id=claim.job_id,
+                attempt_id=creative_attempt_id(claim.job_id, claim.attempt),
+                attempt_epoch=claim.attempt,
+                payload={"error": error, "status": status.value},
+                created_at=now,
+            )
             return True
+
+    def outbox_store(self) -> ProvenanceOutboxStore:
+        """Return a :class:`ProvenanceOutboxStore` bound to this queue's SQLite DB."""
+        if self._memory_connection is not None:
+            return ProvenanceOutboxStore(memory_connection=self._memory_connection)
+        return ProvenanceOutboxStore(self.db_path)
 
     @staticmethod
     def _lease_from_row(row: sqlite3.Row) -> AttemptLeaseRecord:
@@ -4633,6 +4762,24 @@ class InProcessJobQueue:
                     now_iso,
                     now_iso,
                 ),
+            )
+            insert_outbox_event_tx(
+                connection,
+                event_type=OUTBOX_EVENT_ATTEMPT_SUPERSEDED,
+                job_id=job_id,
+                attempt_id=str(lease_row["attempt_id"]),
+                attempt_epoch=old_epoch,
+                payload={"superseded_by": new_attempt_id, "new_worker_id": normalized_worker},
+                created_at=now_iso,
+            )
+            insert_outbox_event_tx(
+                connection,
+                event_type=OUTBOX_EVENT_ATTEMPT_RESERVED,
+                job_id=job_id,
+                attempt_id=new_attempt_id,
+                attempt_epoch=new_epoch,
+                payload={"worker_id": normalized_worker, "supersedes_epoch": old_epoch},
+                created_at=now_iso,
             )
             new_row = connection.execute(
                 """
