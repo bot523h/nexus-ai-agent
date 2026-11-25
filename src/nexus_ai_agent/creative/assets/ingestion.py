@@ -18,10 +18,12 @@ exactly one completion path.
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from dataclasses import dataclass
 from enum import Enum
 
+from nexus_ai_agent.creative.assets.admission import AdmissionLease
 from nexus_ai_agent.creative.assets.errors import (
     BlobStoreError,
     ContentIntegrityError,
@@ -67,6 +69,7 @@ async def publish_and_commit(
     media_kind: MediaKind,
     media_type: str,
     original_filename: str = "",
+    admission_lease: AdmissionLease | None = None,
 ) -> tuple[str, str, bool]:
     """Publish staged bytes, verify them, and write the metadata graph.
 
@@ -75,10 +78,19 @@ async def publish_and_commit(
     happens once, after it returns.
     """
     blob_key = blob_store.blob_key_for(content_sha256)
-    measured_sha, measured_size, deduplicated = blob_store.store(staging_key, blob_key)
+    if admission_lease is None:
+        measured_sha, measured_size, deduplicated = await blob_store.publish_from_staging_async(
+            staging_key, blob_key
+        )
+    else:
+        measured_sha, measured_size, deduplicated = await blob_store.publish_from_staging_async(
+            staging_key, blob_key, admission_lease=admission_lease
+        )
     if (measured_sha, measured_size) != (content_sha256, size_bytes):
         raise ContentIntegrityError("published bytes do not match the staged identity")
-    if not blob_store.verify(blob_key, sha256=content_sha256, size_bytes=size_bytes):
+    if not await asyncio.to_thread(
+        blob_store.verify, blob_key, sha256=content_sha256, size_bytes=size_bytes
+    ):
         raise ContentIntegrityError("published blob failed independent verification")
 
     asset_id = uuid.uuid4().hex
@@ -118,13 +130,20 @@ async def reconcile_ingest(
     repo: AssetRepository,
     blob_store: BlobStore,
     ingest: IngestRecord,
+    *,
+    admission_lease: AdmissionLease | None = None,
 ) -> IngestRecoveryReport:
     """Complete or fail exactly one interrupted ingest.  Never invents success."""
     if ingest.state is IngestState.READY:
-        if ingest.blob_key and blob_store.verify(
-            ingest.blob_key,
-            sha256=ingest.content_sha256 or "",
-            size_bytes=ingest.size_bytes or 0,
+        if (
+            ingest.blob_key is not None
+            and ingest.blob_key != ""
+            and await asyncio.to_thread(
+                blob_store.verify,
+                ingest.blob_key,
+                sha256=ingest.content_sha256 or "",
+                size_bytes=ingest.size_bytes or 0,
+            )
         ):
             return IngestRecoveryReport(
                 ingest.ingest_id, IngestState.READY, RecoveryOutcome.ALREADY_READY
@@ -143,20 +162,49 @@ async def reconcile_ingest(
             ingest.ingest_id, IngestState.FAILED, RecoveryOutcome.FAILED, "already failed"
         )
 
+    if ingest.staging_key and not await blob_store.wait_for_in_flight_publication(
+        ingest.staging_key
+    ):
+        return IngestRecoveryReport(
+            ingest.ingest_id,
+            IngestState.STAGING,
+            RecoveryOutcome.STILL_STAGING,
+            "publication worker remains in flight",
+        )
+
     # STAGING: prefer the staged bytes; otherwise finalise a published blob.
     if ingest.staging_key:
         try:
-            staging_sha, staging_size = blob_store.stage_identity(ingest.staging_key)
+            staging_sha, staging_size = await asyncio.to_thread(
+                blob_store.stage_identity, ingest.staging_key
+            )
         except BlobStoreError:
             # The staging file is gone (already published or lost); fall through
             # to the final-blob path or an explicit failure.  Never invent success.
             staging_sha = None
             staging_size = None
         if staging_sha is not None and staging_size is not None:
+            # Tx2 records the identity before publication.  Once present it is
+            # authoritative: re-hashing altered staging bytes must not silently
+            # turn an interrupted upload into a different successful asset.
+            recorded = (ingest.content_sha256, ingest.size_bytes)
+            if recorded != (None, None) and recorded != (staging_sha, staging_size):
+                if not await repo.mark_failed(
+                    ingest.ingest_id, error_code="staging_integrity_mismatch"
+                ):
+                    raise IngestAlreadyResolved(ingest.ingest_id)
+                return IngestRecoveryReport(
+                    ingest.ingest_id,
+                    IngestState.FAILED,
+                    RecoveryOutcome.FAILED,
+                    "staged content does not match its recorded identity",
+                )
             media_type = ingest.media_type
             media_kind = ingest.media_kind
             if media_type is None or media_kind is None:
-                header = blob_store.read_staging_header(ingest.staging_key, HEADER_BYTES)
+                header = await asyncio.to_thread(
+                    blob_store.read_staging_header, ingest.staging_key, HEADER_BYTES
+                )
                 detected = detect_media_type(header) if header else None
                 if detected is None or detected not in SUPPORTED_MEDIA_TYPES:
                     if not await repo.mark_failed(
@@ -179,6 +227,7 @@ async def reconcile_ingest(
                 media_kind=media_kind,
                 media_type=media_type,
                 original_filename=ingest.original_filename,
+                admission_lease=admission_lease,
             )
             return IngestRecoveryReport(
                 ingest.ingest_id, IngestState.READY, RecoveryOutcome.COMPLETED
@@ -186,7 +235,9 @@ async def reconcile_ingest(
 
     if ingest.content_sha256 and ingest.size_bytes is not None and ingest.media_type:
         blob_key = blob_store.blob_key_for(ingest.content_sha256)
-        if blob_store.verify(blob_key, sha256=ingest.content_sha256, size_bytes=ingest.size_bytes):
+        if await asyncio.to_thread(
+            blob_store.verify, blob_key, sha256=ingest.content_sha256, size_bytes=ingest.size_bytes
+        ):
             asset_id = uuid.uuid4().hex
             version_id = uuid.uuid4().hex
             media_kind = ingest.media_kind or SUPPORTED_MEDIA_TYPES[ingest.media_type]

@@ -74,7 +74,12 @@ def _settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Any:
     monkeypatch.delenv("R2_BUCKET", raising=False)
     from nexus_ai_agent.config.settings import Settings
 
-    return Settings(db_path=str(tmp_path / "app.sqlite3"))
+    settings = Settings(db_path=str(tmp_path / "app.sqlite3"))
+    settings.r2_account_id = "0123456789abcdef0123456789abcdef"
+    settings.r2_access_key_id = "access-key"
+    settings.r2_secret_access_key = "secret-key"
+    settings.r2_bucket = "backup-bucket"
+    return settings
 
 
 def _sqlite_artifact(path: Path, table: str = "jobs", rows: int = 3) -> Path:

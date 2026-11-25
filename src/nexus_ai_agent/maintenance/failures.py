@@ -14,7 +14,7 @@ maintenance lane. The provider itself is untouched.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 
@@ -179,6 +179,25 @@ def classify_storage_failure(
         operator_action=f"capture the full job log and classify manually — bucket={bucket!r}"
         if bucket
         else "capture the full job log and classify manually",
+    )
+
+
+def safe_storage_failure(
+    *, operation: str, where: str, exc: BaseException, bucket: str | None = None
+) -> ActionableFailure:
+    """Classify first, then remove untrusted diagnostics and cause-chain text."""
+    from nexus_ai_agent.maintenance.redact import scrub_exception_chain
+
+    failure = classify_storage_failure(operation=operation, where=where, exc=exc, bucket=bucket)
+    scrub_exception_chain(exc)
+    return replace(
+        failure,
+        why=f"storage provider reported a {failure.category} failure",
+        operator_action=(
+            "capture the job log and classify manually"
+            if failure.category == "unknown"
+            else failure.operator_action
+        ),
     )
 
 

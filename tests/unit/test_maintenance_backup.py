@@ -74,6 +74,10 @@ def _settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, db_rows: int = 3)
 
 
 def _provider(settings: Any, fake: _FakeR2, monkeypatch: pytest.MonkeyPatch) -> None:
+    settings.r2_account_id = "0123456789abcdef0123456789abcdef"
+    settings.r2_access_key_id = "access-key"
+    settings.r2_secret_access_key = "secret-key"
+    settings.r2_bucket = "backup-bucket"
     monkeypatch.setattr("nexus_ai_agent.maintenance.backup._build_provider", lambda settings: fake)
 
 
@@ -156,7 +160,7 @@ def test_postgres_dump_verifies_via_sha256_round_trip(
     the check uses the download primitive the provider already exposes."""
     from nexus_ai_agent.config.settings import Settings
 
-    monkeypatch.setenv("NEXUS_DATABASE_URL", "postgresql://u:p@h/db")
+    monkeypatch.setenv("NEXUS_DATABASE_URL", "postgresql://u:p@h/db?sslmode=verify-full")
     from nexus_ai_agent.config import settings as settings_module
 
     settings_module.get_settings.cache_clear()
@@ -182,7 +186,7 @@ def test_postgres_dump_rejects_truncated_artifact(
 ) -> None:
     from nexus_ai_agent.config.settings import Settings
 
-    monkeypatch.setenv("NEXUS_DATABASE_URL", "postgresql://u:p@h/db")
+    monkeypatch.setenv("NEXUS_DATABASE_URL", "postgresql://u:p@h/db?sslmode=verify-full")
     from nexus_ai_agent.config import settings as settings_module
 
     settings_module.get_settings.cache_clear()
@@ -275,6 +279,77 @@ def test_pg_dump_is_self_contained_for_restore(
     monkeypatch.setattr(backup_module.subprocess, "run", _fake_run)
     monkeypatch.setattr(backup_module.shutil, "which", lambda name: f"/usr/bin/{name}")
 
-    backup_module._dump_postgres("postgresql://u:p@h/db", tmp_path / "out.sql")
+    backup_module._dump_postgres("postgresql://u:p@h/db?sslmode=verify-full", tmp_path / "out.sql")
     assert "--clean" in captured["argv"]
     assert "--if-exists" in captured["argv"]
+
+
+def test_pg_dump_failure_does_not_expose_driver_stderr(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import traceback
+
+    from nexus_ai_agent.maintenance import backup
+
+    secret = "CANARY_SECRET_KEY_99887766554433221100"
+    monkeypatch.setattr(backup.shutil, "which", lambda _: "/usr/bin/pg_dump")
+    monkeypatch.setattr(
+        backup.subprocess,
+        "run",
+        lambda *args, **kwargs: type("Result", (), {"returncode": 1, "stderr": secret})(),
+    )
+    with pytest.raises(RuntimeError) as caught:
+        backup._dump_postgres(f"postgresql://user:{secret}@host/db", tmp_path / "out")
+    assert secret not in str(caught.value)
+    assert secret not in repr(caught.value)
+    assert secret not in "".join(traceback.format_exception(caught.value))
+    assert caught.value.__context__ is None
+
+
+def test_pg_dump_timeout_does_not_attach_sensitive_subprocess_exception(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import subprocess
+    import traceback
+
+    from nexus_ai_agent.maintenance import backup
+
+    secret = "CANARY_SECRET_KEY_99887766554433221100"
+    monkeypatch.setattr(backup.shutil, "which", lambda _: "/usr/bin/pg_dump")
+
+    def timeout(*args: Any, **kwargs: Any) -> None:
+        raise subprocess.TimeoutExpired(cmd=[secret], timeout=1, stderr=secret)
+
+    monkeypatch.setattr(backup.subprocess, "run", timeout)
+    with pytest.raises(TimeoutError) as caught:
+        backup._dump_postgres(f"postgresql://user:{secret}@host/db", tmp_path / "out")
+    assert caught.value.__context__ is None
+    assert secret not in "".join(traceback.format_exception(caught.value))
+
+
+@pytest.mark.parametrize("query_password", [False, True])
+def test_pg_dump_credentials_never_reach_argv(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, query_password: bool
+) -> None:
+    from nexus_ai_agent.maintenance import backup
+
+    secret = "CANARY_SECRET_KEY_99887766554433221100"
+    argv_seen: list[str] = []
+    env_seen: dict[str, str] = {}
+
+    def fake_run(argv: list[str], **kwargs: Any) -> Any:
+        argv_seen.extend(argv)
+        env_seen.update(kwargs["env"])
+        return type("Result", (), {"returncode": 0, "stderr": ""})()
+
+    monkeypatch.setattr(backup.shutil, "which", lambda _: "/usr/bin/pg_dump")
+    monkeypatch.setattr(backup.subprocess, "run", fake_run)
+    url = (
+        f"postgresql://user@host/db?password={secret}&sslmode=verify-full"
+        if query_password
+        else f"postgresql://user:{secret}@host/db?sslmode=verify-full"
+    )
+    backup._dump_postgres(url, tmp_path / "out")
+    assert secret not in repr(argv_seen)
+    assert env_seen["PGPASSWORD"] == secret
+    assert "sslmode=verify-full" in argv_seen[-1]

@@ -88,7 +88,12 @@ def _settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Any:
 
 def _run_backup(tmp_path: Path, fake: _FakeR2, monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     monkeypatch.setattr(backup_module, "_build_provider", lambda settings: fake)
-    return create_backup(settings=_settings(tmp_path, monkeypatch))
+    settings = _settings(tmp_path, monkeypatch)
+    settings.r2_account_id = "0123456789abcdef0123456789abcdef"
+    settings.r2_access_key_id = "access-key"
+    settings.r2_secret_access_key = "secret-key"
+    settings.r2_bucket = "backup-bucket"
+    return create_backup(settings=settings)
 
 
 class TestSidecarManifest:

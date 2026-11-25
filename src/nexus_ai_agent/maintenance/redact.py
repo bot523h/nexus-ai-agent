@@ -14,7 +14,7 @@ without importing storage.
 from __future__ import annotations
 
 import re
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import unquote, unquote_plus, urlsplit, urlunsplit
 
 #: The placeholder that replaces every secret.  A stable literal (not a hash)
 #: so an operator can grep evidence for it and see that redaction happened.
@@ -104,12 +104,84 @@ def split_dsn_password(url: str) -> tuple[str, str | None]:
     if "://" not in url:
         return url, None
     parts = urlsplit(url)
-    if "@" not in parts.netloc:
-        return url, None
-    userinfo, _, hostpart = parts.netloc.rpartition("@")
-    if ":" not in userinfo:
-        return url, None
-    user, _, password = userinfo.partition(":")
-    new_netloc = f"{user}@{hostpart}"
-    stripped = urlunsplit((parts.scheme, new_netloc, parts.path, parts.query, parts.fragment))
-    return stripped, password
+    netloc = parts.netloc
+    password = unquote(parts.password) if parts.password is not None else None
+    if "@" in netloc:
+        userinfo, _, hostpart = netloc.rpartition("@")
+        if ":" in userinfo:
+            netloc = f"{userinfo.partition(':')[0]}@{hostpart}"
+    query_parts = []
+    for part in parts.query.split("&") if parts.query else []:
+        name, sep, value = part.partition("=")
+        if unquote_plus(name).lower() == "password":
+            password = unquote_plus(value) if sep else ""
+        else:
+            query_parts.append(part)
+    return urlunsplit(
+        (parts.scheme, netloc, parts.path, "&".join(query_parts), parts.fragment)
+    ), password
+
+
+def scrub_exception_chain(exc: BaseException) -> None:
+    """Remove untrusted exception text before attaching a provider error as cause.
+
+    Provider diagnostics can contain arbitrary bare credentials, so pattern-only
+    redaction is insufficient. Preserve exception types and non-text metadata,
+    but replace untrusted text/bytes in arguments and common diagnostic fields.
+    """
+    seen: set[int] = set()
+    seen_values: set[int] = set()
+
+    def scrub(value: object) -> object:
+        if isinstance(value, str):
+            return REDACTED
+        if isinstance(value, (bytes, bytearray, memoryview)):
+            return REDACTED.encode()
+        if isinstance(value, (tuple, list, dict)):
+            if id(value) in seen_values:
+                return REDACTED
+            seen_values.add(id(value))
+        if isinstance(value, tuple):
+            return tuple(scrub(item) for item in value)
+        if isinstance(value, list):
+            return [scrub(item) for item in value]
+        if isinstance(value, dict):
+            return {scrub(key): scrub(item) for key, item in value.items()}
+        if value is None or type(value) in (bool, int, float):
+            return value
+        return REDACTED
+
+    pending = [exc]
+    while pending:
+        current = pending.pop()
+        if id(current) in seen:
+            continue
+        seen.add(id(current))
+        if current.__cause__ is not None:
+            pending.append(current.__cause__)
+        if current.__context__ is not None:
+            pending.append(current.__context__)
+        current.args = tuple(scrub(item) for item in current.args)
+        names = set(vars(current)) | {
+            "message",
+            "detail",
+            "reason",
+            "stderr",
+            "stdout",
+            "output",
+            "cmd",
+            "filename",
+            "filename2",
+            "strerror",
+            "path",
+        }
+        for name in names:
+            try:
+                value = getattr(current, name, None)
+                if isinstance(value, BaseException):
+                    pending.append(value)
+                elif isinstance(value, (str, bytes, bytearray, memoryview, tuple, list, dict)):
+                    setattr(current, name, scrub(value))
+            except (AttributeError, TypeError):
+                # Some built-in exception attributes are read-only aliases.
+                continue

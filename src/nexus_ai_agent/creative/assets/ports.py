@@ -9,8 +9,10 @@ No web framework, Telegram, LLM provider or cloud SDK type appears here.
 
 from __future__ import annotations
 
+from contextlib import AbstractAsyncContextManager
 from typing import BinaryIO, Protocol
 
+from nexus_ai_agent.creative.assets.admission import AdmissionLease
 from nexus_ai_agent.creative.assets.models import (
     AssetIdentity,
     AssetVersion,
@@ -22,6 +24,12 @@ from nexus_ai_agent.creative.assets.models import (
 
 class BlobStore(Protocol):
     """Content-addressed storage of immutable bytes (synchronous, local I/O)."""
+
+    def admission(
+        self, *, admission_lease: AdmissionLease | None = None
+    ) -> AbstractAsyncContextManager[AdmissionLease]:
+        """Fence an ingest or recovery transaction against maintenance."""
+        ...
 
     def new_staging_key(self) -> str:
         """Allocate a fresh, unguessable staging key."""
@@ -39,8 +47,22 @@ class BlobStore(Protocol):
         """Measure ``(sha256, size)`` of a stream with no filesystem effect."""
         ...
 
-    def store(self, staging_key: str, blob_key: str) -> tuple[str, int, bool]:
+    def store(
+        self, staging_key: str, blob_key: str, *, admission_lease: AdmissionLease | None = None
+    ) -> tuple[str, int, bool]:
         """Atomically publish staged bytes; return ``(sha256, size, deduplicated)``."""
+        ...
+
+    async def publish_from_staging_async(
+        self, staging_key: str, blob_key: str, *, admission_lease: AdmissionLease | None = None
+    ) -> tuple[str, int, bool]:
+        """Publish without blocking the event loop."""
+        ...
+
+    async def wait_for_in_flight_publication(
+        self, staging_key: str, *, timeout_seconds: float = 0.1
+    ) -> bool:
+        """Wait briefly for a process-local publication worker."""
         ...
 
     def verify(self, blob_key: str, *, sha256: str, size_bytes: int) -> bool:
@@ -59,7 +81,9 @@ class BlobStore(Protocol):
         """Read only the leading bytes of a staged file for classification."""
         ...
 
-    def remove_staging(self, staging_key: str) -> None:
+    def remove_staging(
+        self, staging_key: str, *, admission_lease: AdmissionLease | None = None
+    ) -> None:
         """Best-effort removal of a staging file."""
         ...
 
