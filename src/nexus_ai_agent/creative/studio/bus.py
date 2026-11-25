@@ -63,9 +63,9 @@ import json
 import threading
 from collections import OrderedDict
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from enum import Enum
-from typing import Any, cast
+from typing import Any, Protocol, TypedDict, cast
 from uuid import uuid4
 
 from pydantic import ValidationError
@@ -78,9 +78,21 @@ from nexus_ai_agent.creative.studio.capabilities import (
     OperationSpec,
     build_wave1_registry,
 )
+from nexus_ai_agent.creative.studio.durable_dedupe import (
+    ApprovalBinding,
+    ApprovalBindingError,
+    ApprovalVerifier,
+    DurablePlanDedupePort,
+    PlanApprovalRequirement,
+    PlanInDoubtQuarantineError,
+    PlanStoreStateError,
+    RecoveryEvidence,
+    verify_approval_binding,
+)
 from nexus_ai_agent.creative.studio.lifecycle import check_required_packs
 from nexus_ai_agent.creative.studio.models import (
     PROTOCOL_VERSION,
+    ActorIdentity,
     AuthorizationError,
     CapabilityError,
     CommandExecutionError,
@@ -98,7 +110,17 @@ from nexus_ai_agent.creative.studio.models import (
     TypedCommand,
     compute_state_hash,
 )
+from nexus_ai_agent.creative.studio.plan_identifiers import (
+    derive_effect_key,
+    validate_plan_identity,
+)
 from nexus_ai_agent.creative.studio.references import ReferenceResolver
+
+
+class _DurableFenceArgs(TypedDict):
+    project_id: str
+    attempt: int
+    owner_token: str
 
 
 def _unique_json_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -232,6 +254,14 @@ def _canonical_hash(payload: Any) -> str:
         )
     except Exception:
         canonical = json.dumps({"unserializable_type": type(payload).__qualname__})
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _durable_hash(payload: Any) -> str:
+    """Hash only actual, finite JSON; never turn malformed evidence into a receipt."""
+    canonical = json.dumps(
+        payload, sort_keys=True, ensure_ascii=True, separators=(",", ":"), allow_nan=False
+    )
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
@@ -473,6 +503,7 @@ class PlanTransaction:
     plan_id: str = field(default_factory=lambda: uuid4().hex)
     steps: tuple[PlanStep, ...] = ()
     require_compensation: bool = True
+    admitted_ir_hash: str | None = None
     _snapshot: dict[str, Any] | None = field(default=None, repr=False)
     _bus: CommandBus | None = field(default=None, repr=False)
     state: PlanTransactionState = PlanTransactionState.PENDING
@@ -492,8 +523,7 @@ class PlanTransaction:
     _step_results: dict[int, Any] = field(default_factory=dict, repr=False)
 
     def __post_init__(self) -> None:
-        if not isinstance(self.plan_id, str) or not self.plan_id.strip():
-            raise ValueError("plan_id must be a non-empty string")
+        validate_plan_identity(self.plan_id, name="plan_id")
         if self.require_compensation and any(
             step.execute is not None and step.compensate is None for step in self.steps
         ):
@@ -551,6 +581,10 @@ class PlanTransaction:
         with bus._lock:
             if bus._executing:
                 raise CommandExecutionError("Re-entrant execution is forbidden")
+            if bus._durable_store is not None:
+                raise PlanTransactionError(
+                    "durable store configured; use bus.dispatch_plan with durable approvals"
+                )
             if self.state is not PlanTransactionState.PENDING:
                 raise PlanTransactionError("transaction already finished")
             self._preflight(bus)
@@ -842,6 +876,14 @@ class PlanTransaction:
             "rollback_on_self_error": step.rollback_on_self_error,
             "external_effects": step.external_effects,
         }
+        if self.admitted_ir_hash is not None:
+            if (
+                not isinstance(self.admitted_ir_hash, str)
+                or len(self.admitted_ir_hash) != 64
+                or any(char not in "0123456789abcdef" for char in self.admitted_ir_hash)
+            ):
+                raise PlanTransactionError("invalid admitted DAG hash")
+            evidence["admitted_ir_hash"] = self.admitted_ir_hash
         self._replay_safe = self._replay_safe and _replay_safe(evidence)
         return _canonical_hash(evidence)
 
@@ -882,6 +924,10 @@ class PlanTransaction:
                 continue
             try:
                 compensation_result = step.compensate(self._step_results.get(record.step_index))
+                if _failed_boolean(compensation_result):
+                    raise PlanTransactionError(
+                        f"compensation for step {record.step_index} returned an unsuccessful result"
+                    )
                 output_hash = _canonical_hash(compensation_result)
             except BaseException as exc:  # noqa: BLE001 - collect, never abandon
                 errors.append(exc)
@@ -907,12 +953,67 @@ class PlanTransaction:
         return errors
 
 
+class StudioExecutionPort(Protocol):
+    """Public durable execution boundary consumed by ingress facades."""
+
+    def uses_durable_store(self, store: DurablePlanDedupePort) -> bool: ...
+
+    def durable_approval_requirements(
+        self, plan: PlanTransaction, *, policy_version: str, authenticated_actor: ActorIdentity
+    ) -> tuple[PlanApprovalRequirement, ...]: ...
+
+    def dispatch_plan(
+        self,
+        plan: PlanTransaction,
+        *,
+        approval_attestations: tuple[ApprovalBinding, ...] | None = None,
+        policy_version: str | None = None,
+        authenticated_actor: ActorIdentity | None = None,
+        approval_verifier: ApprovalVerifier | None = None,
+        deadline_monotonic_ns: int | None = None,
+        lease_ttl_seconds: float = 30.0,
+    ) -> PlanTransaction | PlanResultSummary: ...
+
+    def inspect_durable_recovery(
+        self,
+        plan_id: str,
+        plan_hash: str,
+        *,
+        authenticated_operator: ActorIdentity,
+        expected_status: str,
+        expected_attempt: int,
+    ) -> RecoveryEvidence[Any]: ...
+
+    def recover_durable_plan(
+        self,
+        plan_id: str,
+        plan_hash: str,
+        *,
+        authenticated_operator: ActorIdentity,
+        expected_status: str,
+        expected_attempt: int,
+        resolution_action: str,
+        reason: str,
+        recovery_evidence: RecoveryEvidence[Any] | None = None,
+    ) -> None: ...
+
+
+def parse_command(command: TypedCommand | dict[str, Any] | str | bytes) -> TypedCommand:
+    """Public canonical envelope parsing seam; revalidates typed inputs."""
+    return _parse(command)
+
+
+def command_fingerprint(command: TypedCommand) -> str:
+    """Public semantic command identity, excluding transport-only fields."""
+    return _fingerprint(_parse(command))
+
+
 class CommandBus:
     """Validates typed commands and applies them atomically to central state."""
 
     def __init__(
         self,
-        state: Project,
+        state: Project | None,
         registry: CapabilityRegistry | None = None,
         resolver: ReferenceResolver | None = None,
         *,
@@ -920,7 +1021,18 @@ class CommandBus:
         allow_experimental: bool = False,
         audio_engine: Any = None,
         engine_ports: Mapping[str, Any] | None = None,
+        durable_store: DurablePlanDedupePort | None = None,
+        durable_dedupe_store: DurablePlanDedupePort | None = None,
+        durable_verifiers: Mapping[str, Callable[[Project, TypedCommand, CommandResult, str], bool]]
+        | None = None,
     ) -> None:
+        if durable_store is not None and durable_dedupe_store is not None:
+            raise ValueError("configure only one durable store")
+        self._durable_store = durable_store if durable_store is not None else durable_dedupe_store
+        self._durable_verifiers = dict(durable_verifiers or {})
+        if any(not callable(verifier) for verifier in self._durable_verifiers.values()):
+            raise ValueError("durable verifiers must be callable")
+        self._durable_context: dict[str, Any] = {}
         self._registry = registry if registry is not None else build_wave1_registry()
         self._resolver = resolver if resolver is not None else ReferenceResolver()
         self._authorizer = authorizer
@@ -944,7 +1056,13 @@ class CommandBus:
         # model_copy(update=...) bypasses Pydantic's derived state_hash and
         # validation (the worker uses it when registering its staged asset).
         # Never let a stale/fabricated hash become an optimistic precondition.
-        self._project = Project.model_validate(state.model_dump(mode="json"))
+        if state is None and (self._durable_store is None or authorizer is None):
+            raise ValueError("a cold bus requires a durable store and project authorizer")
+        self._project: Project = (
+            Project.model_validate(state.model_dump(mode="json"))
+            if state is not None
+            else cast(Project, None)
+        )
         self._history: list[EditTransaction] = []
         self._idempotency: dict[tuple[str, str, str], _Reservation] = {}
         self._executing = False
@@ -952,10 +1070,19 @@ class CommandBus:
         self._plan_cache: OrderedDict[str, tuple[str, PlanTransaction]] = OrderedDict()
         self._plan_summaries: OrderedDict[str, tuple[str, PlanResultSummary]] = OrderedDict()
 
+    def uses_durable_store(self, store: DurablePlanDedupePort) -> bool:
+        """Read-only wiring check without exposing the store to callers."""
+        return store is not None and self._durable_store is store
+
+    def _require_project(self) -> None:
+        if self._project is None:
+            raise PlanTransactionError("project is not loaded; only committed replay is available")
+
     @property
     def project(self) -> Project:
         """A deep copy of the central state (safe to read without the lock)."""
         with self._lock:
+            self._require_project()
             return self._project.model_copy(deep=True)
 
     @property
@@ -976,11 +1103,13 @@ class CommandBus:
     @property
     def state_revision(self) -> int:
         with self._lock:
+            self._require_project()
             return self._project.state_revision
 
     @property
     def state_hash(self) -> str:
         with self._lock:
+            self._require_project()
             return self._project.state_hash
 
     def dispatch(self, command: TypedCommand | dict[str, Any] | str | bytes) -> CommandResult:
@@ -989,22 +1118,999 @@ class CommandBus:
         with self._lock:
             if self._executing:
                 raise CommandExecutionError("nested command dispatch during execution is forbidden")
+            self._require_project()
             return self._dispatch_locked(parsed)
 
-    def dispatch_plan(self, plan: PlanTransaction) -> PlanTransaction | PlanResultSummary:
-        """Execute a :class:`PlanTransaction` atomically under the bus lock.
+    def dispatch_plan(
+        self,
+        plan: PlanTransaction,
+        *,
+        approval_attestations: tuple[ApprovalBinding, ...] | None = None,
+        policy_version: str | None = None,
+        authenticated_actor: ActorIdentity | None = None,
+        approval_verifier: ApprovalVerifier | None = None,
+        deadline_monotonic_ns: int | None = None,
+        lease_ttl_seconds: float = 30.0,
+    ) -> PlanTransaction | PlanResultSummary:
+        """Execute a plan, requiring the durable lifecycle when a store is configured.
 
-        Steps run in order; the first failure stops forward progress and every
-        previously succeeded step is compensated in exact LIFO order. The
-        transaction's state machine (``COMMITTED`` / ``ROLLED_BACK`` /
-        ``ROLLBACK_FAILED``) and its step/rollback records carry the outcome.
+        Durable approval scopes, identity, policy, verifier and monotonic deadline
+        must come from trusted request context. Without a store, the original
+        in-memory plan execution remains available without those arguments.
         """
         if not isinstance(plan, PlanTransaction):
             raise CommandValidationError("dispatch_plan requires a PlanTransaction")
         with self._lock:
             if self._executing:
                 raise CommandExecutionError("nested plan dispatch during execution is forbidden")
+            if self._durable_store is not None:
+                if (
+                    approval_attestations is None
+                    or policy_version is None
+                    or authenticated_actor is None
+                    or approval_verifier is None
+                    or deadline_monotonic_ns is None
+                ):
+                    raise PlanTransactionError("durable plan execution requires approval context")
+                return self.dispatch_durable_plan(
+                    plan,
+                    approval_attestations,
+                    policy_version=policy_version,
+                    authenticated_actor=authenticated_actor,
+                    approval_verifier=approval_verifier,
+                    deadline_monotonic_ns=deadline_monotonic_ns,
+                    lease_ttl_seconds=lease_ttl_seconds,
+                )
+            if lease_ttl_seconds != 30.0 or any(
+                value is not None
+                for value in (
+                    approval_attestations,
+                    policy_version,
+                    authenticated_actor,
+                    approval_verifier,
+                    deadline_monotonic_ns,
+                )
+            ):
+                raise PlanTransactionError("durable store is not configured")
             return self._dispatch_plan_locked(plan)
+
+    def dispatch_durable_plan(
+        self,
+        plan: PlanTransaction,
+        bindings: tuple[ApprovalBinding, ...],
+        *,
+        policy_version: str,
+        authenticated_actor: ActorIdentity,
+        approval_verifier: ApprovalVerifier,
+        deadline_monotonic_ns: int,
+        lease_ttl_seconds: float = 30.0,
+    ) -> PlanResultSummary:
+        """Run registered steps with fenced intents and a checksummed receipt.
+
+        The caller authenticates the actor and supplies an independently trusted
+        approval verifier. Effect verifiers and external-fencing capability are
+        trusted composition-root registrations, never command-envelope claims.
+        SQLite fences its own writes; it cannot fence an external destination.
+        Receipt hashes detect corruption, not a malicious database writer.
+        """
+        store = self._durable_store
+        if store is None:
+            raise PlanTransactionError("durable store is not configured")
+        if isinstance(deadline_monotonic_ns, bool) or not isinstance(deadline_monotonic_ns, int):
+            raise ValueError("deadline_monotonic_ns must be an integer")
+
+        def check_deadline() -> None:
+            if store.monotonic_ns() >= deadline_monotonic_ns:
+                raise TimeoutError("durable plan deadline expired")
+
+        with self._lock:
+            check_deadline()
+            cold_replay = self._try_cold_durable_replay(
+                plan,
+                bindings,
+                policy_version=policy_version,
+                authenticated_actor=authenticated_actor,
+                approval_verifier=approval_verifier,
+                deadline_monotonic_ns=deadline_monotonic_ns,
+            )
+            if cold_replay is not None:
+                return cold_replay
+            self._require_project()
+            requirements = self.verify_durable_approvals(
+                plan,
+                bindings,
+                policy_version=policy_version,
+                authenticated_actor=authenticated_actor,
+                now=store.utc_timestamp(),
+                verifier=approval_verifier,
+            )
+            accepted_steps = plan.steps
+            input_hashes = tuple(
+                plan._step_input_hash(i, step) for i, step in enumerate(accepted_steps)
+            )
+            commands: list[TypedCommand] = []
+            specs: list[OperationSpec] = []
+            verifiers: list[Callable[[Project, TypedCommand, CommandResult, str], bool]] = []
+            seen: set[tuple[str, str]] = set()
+            for step in plan.steps:
+                assert step.command is not None
+                command = _parse(step.command)
+                spec = self._registry.get_spec(command.operation)
+                if not command.idempotency_key:
+                    raise CommandValidationError("durable steps require idempotency keys")
+                key = (command.operation, command.idempotency_key)
+                if key in seen or (self._project.project_id, *key) in self._idempotency:
+                    raise IdempotencyConflictError("durable step idempotency key is not fresh")
+                seen.add(key)
+                if command.operation not in self._durable_verifiers:
+                    raise PlanTransactionError("operation has no independent durable verifier")
+                external = (
+                    step.external_effects
+                    or spec.external_effects
+                    or bool(getattr(spec.handler, "external_effects", False))
+                )
+                if external and spec.durable_effects is not True:
+                    raise PlanTransactionError(
+                        "external operation lacks destination fencing support"
+                    )
+                commands.append(command)
+                specs.append(spec)
+                verifiers.append(self._durable_verifiers[command.operation])
+            first = requirements[0]
+            nonces = tuple(binding.nonce for binding in bindings)
+            snapshot = _clone_plan_snapshot(vars(self))
+            check_deadline()
+            try:
+                lease = store.reserve_and_start(
+                    plan.plan_id,
+                    first.plan_hash,
+                    project_id=first.project_id,
+                    external_effects=bool(plan._external_step_indices),
+                    nonce=nonces[0],
+                    additional_nonces=nonces[1:],
+                    lease_ttl_seconds=lease_ttl_seconds,
+                )
+            except PlanInDoubtQuarantineError as original:
+                try:
+                    replay = store.replay_committed(
+                        plan.plan_id,
+                        first.plan_hash,
+                        project_id=first.project_id,
+                        external_effects=bool(plan._external_step_indices),
+                        nonce=nonces[0],
+                        additional_nonces=nonces[1:],
+                    )
+                except PlanStoreStateError:
+                    raise original from None
+                check_deadline()
+                self.verify_durable_approvals(
+                    plan,
+                    bindings,
+                    policy_version=policy_version,
+                    authenticated_actor=authenticated_actor,
+                    now=store.utc_timestamp(),
+                    verifier=approval_verifier,
+                )
+                if any(not b.issued_at <= store.utc_timestamp() < b.expires_at for b in bindings):
+                    raise ApprovalBindingError("approval expired during verification") from None
+                check_deadline()
+                if replay.evidence_json is None:
+                    raise PlanStoreStateError("committed receipt is missing") from None
+                return self._rehydrate_durable_receipt(
+                    plan, first, replay.evidence_json, deadline_monotonic_ns=deadline_monotonic_ns
+                )
+            fence: _DurableFenceArgs = {
+                "project_id": first.project_id,
+                "attempt": lease.attempt,
+                "owner_token": lease.owner_token,
+            }
+            completed: list[tuple[int, str, CommandResult]] = []
+            trace: list[EditTransaction] = []
+            uncertain = False
+            self._executing = True
+            plan.state = PlanTransactionState.EXECUTING
+            try:
+                for index, (step, command, expected, binding, spec, verifier) in enumerate(
+                    zip(
+                        accepted_steps,
+                        commands,
+                        requirements,
+                        bindings,
+                        specs,
+                        verifiers,
+                        strict=True,
+                    )
+                ):
+                    if plan.steps != accepted_steps:
+                        raise PlanTransactionError("durable plan changed after approval")
+
+                    def heartbeat() -> None:
+                        check_deadline()
+                        store.heartbeat(
+                            plan.plan_id,
+                            first.plan_hash,
+                            lease_ttl_seconds=lease_ttl_seconds,
+                            **fence,
+                        )
+
+                    heartbeat()
+                    self._validate_durable_boundary(
+                        plan,
+                        index,
+                        step,
+                        command,
+                        expected,
+                        binding,
+                        authenticated_actor=authenticated_actor,
+                        approval_verifier=approval_verifier,
+                    )
+                    heartbeat()
+                    if (
+                        plan.steps != accepted_steps
+                        or plan._step_input_hash(index, step) != input_hashes[index]
+                    ):
+                        raise PlanTransactionError("durable step changed after approval")
+                    effect_key = derive_effect_key(
+                        project_id=first.project_id,
+                        plan_id=plan.plan_id,
+                        node_id=expected.step_id,
+                        idempotency_key=command.idempotency_key or "",
+                        fingerprint=_fingerprint(command),
+                    )
+                    store.record_compensation_intent(
+                        plan.plan_id,
+                        first.plan_hash,
+                        step_id=expected.step_id,
+                        effect_key=effect_key,
+                        **fence,
+                    )
+                    uncertain = True
+                    self._durable_context = {
+                        "effect_key": effect_key,
+                        "deadline_monotonic_ns": deadline_monotonic_ns,
+                        "fencing_epoch": lease.fencing_epoch,
+                        "durable_heartbeat": heartbeat,
+                        "durable_owner_token": lease.owner_token,
+                        "durable_plan_id": plan.plan_id,
+                        "durable_plan_hash": first.plan_hash,
+                        "durable_project_id": first.project_id,
+                    }
+                    result = self._dispatch_locked(command, expected_spec=spec)
+                    self._durable_context = {}
+                    heartbeat()
+                    if (
+                        verifier(
+                            self._project.model_copy(deep=True),
+                            command.model_copy(deep=True),
+                            result.model_copy(deep=True),
+                            effect_key,
+                        )
+                        is not True
+                    ):
+                        raise PlanTransactionError("independent effect verification failed")
+                    heartbeat()
+                    digest = _durable_hash(result.model_dump(mode="json"))
+                    store.verify_effect_intent(
+                        plan.plan_id,
+                        first.plan_hash,
+                        step_id=expected.step_id,
+                        effect_key=effect_key,
+                        verification_digest=digest,
+                        deadline_monotonic_ns=deadline_monotonic_ns,
+                        **fence,
+                    )
+                    uncertain = False
+                    completed.append((index, effect_key, result))
+                    trace.append(self._history[-1].model_copy(deep=True))
+                    plan._step_records.append(
+                        PlanStepRecord(
+                            index,
+                            step.operation,
+                            "succeeded",
+                            input_hashes[index],
+                            digest,
+                        )
+                    )
+                heartbeat()
+                if plan.steps != accepted_steps:
+                    raise PlanTransactionError("durable plan changed during execution")
+                receipt = self._durable_receipt(plan, first, snapshot, trace)
+                # Never commit a receipt that a fresh bus cannot validate and rehydrate.
+                probe = CommandBus(
+                    snapshot["_project"], registry=self._registry, authorizer=self._authorizer
+                )
+                probe._history = [
+                    EditTransaction.model_validate_json(raw) for raw in snapshot["_history"]
+                ]
+                probe._idempotency = snapshot["_idempotency"]
+                probe._rehydrate_durable_receipt(plan, first, json.dumps(receipt, allow_nan=False))
+                plan.state = PlanTransactionState.EXECUTING
+                heartbeat()
+                store.finish(
+                    plan.plan_id,
+                    first.plan_hash,
+                    evidence=receipt,
+                    deadline_monotonic_ns=deadline_monotonic_ns,
+                    **fence,
+                )
+                plan.state = PlanTransactionState.COMMITTED
+                return PlanResultSummary(
+                    plan.plan_id,
+                    plan.state,
+                    tuple(plan._step_records),
+                    self._project.state_revision,
+                )
+            except BaseException as original:
+                self._durable_context = {}
+                errors: list[BaseException] = []
+                if completed:
+                    try:
+                        store.mark_compensating(plan.plan_id, first.plan_hash, **fence)
+                    except BaseException as exc:
+                        errors.append(exc)
+                    else:
+                        for index, effect_key, result in reversed(completed):
+                            step = accepted_steps[index]
+                            succeeded = False
+                            try:
+                                check_deadline()
+                                store.heartbeat(
+                                    plan.plan_id,
+                                    first.plan_hash,
+                                    lease_ttl_seconds=lease_ttl_seconds,
+                                    **fence,
+                                )
+                                if step.compensate is not None:
+                                    if plan._callback_hash(step) != plan._accepted_callbacks[index]:
+                                        raise PlanTransactionError("durable compensator changed")
+                                    outcome = step.compensate(result)
+                                    if _failed_boolean(outcome):
+                                        raise PlanTransactionError("compensation returned failure")
+                                succeeded = True
+                            except BaseException as exc:
+                                errors.append(exc)
+                            try:
+                                store.record_compensation_step(
+                                    plan.plan_id,
+                                    first.plan_hash,
+                                    step_id=requirements[index].step_id,
+                                    effect_key=effect_key,
+                                    succeeded=succeeded,
+                                    evidence={"compensated": succeeded},
+                                    **fence,
+                                )
+                            except BaseException as exc:
+                                errors.append(exc)
+                        if not uncertain:
+                            try:
+                                store.record_compensation(
+                                    plan.plan_id,
+                                    first.plan_hash,
+                                    succeeded=not errors,
+                                    evidence={"compensated": not errors},
+                                    **fence,
+                                )
+                            except BaseException as exc:
+                                errors.append(exc)
+                    if uncertain:
+                        try:
+                            store.quarantine(plan.plan_id, first.plan_hash, **fence)
+                        except BaseException as exc:
+                            errors.append(exc)
+                    plan.state = (
+                        PlanTransactionState.ROLLBACK_FAILED
+                        if errors or uncertain
+                        else PlanTransactionState.ROLLED_BACK
+                    )
+                else:
+                    try:
+                        store.quarantine(plan.plan_id, first.plan_hash, **fence)
+                    except BaseException as exc:
+                        errors.append(exc)
+                    plan.state = PlanTransactionState.ROLLBACK_FAILED
+                for name, value in snapshot.items():
+                    if name == "_history":
+                        value = [EditTransaction.model_validate_json(raw) for raw in value]
+                    setattr(self, name, value)
+                _raise_control_error(original, errors)
+                if errors:
+                    raise PlanRollbackError(
+                        "durable plan failed and cleanup is incomplete",
+                        plan_id=plan.plan_id,
+                        original_error=original,
+                        rollback_errors=tuple(errors),
+                    ) from original
+                raise
+            finally:
+                self._durable_context = {}
+                self._executing = False
+
+    def inspect_durable_recovery(
+        self,
+        plan_id: str,
+        plan_hash: str,
+        *,
+        authenticated_operator: ActorIdentity,
+        expected_status: str,
+        expected_attempt: int,
+    ) -> RecoveryEvidence[Any]:
+        """Inspect using store-configured trusted routes and issue one-use evidence."""
+        with self._lock:
+            if self._executing or self._durable_store is None or self._authorizer is None:
+                raise AuthorizationError("durable recovery authority is not available")
+            self._require_project()
+            if not isinstance(authenticated_operator, ActorIdentity):
+                raise AuthorizationError("authenticated operator is required")
+            access = self._authorizer.authorize(authenticated_operator, self._project.project_id)
+            if (
+                access.actor != authenticated_operator
+                or access.project_id != self._project.project_id
+            ):
+                raise AuthorizationError("authorizer returned a mismatched operator or project")
+            access.require_permissions(("project:repair",))
+            return self._durable_store.inspect_recovery(
+                self._project.project_id,
+                plan_id,
+                plan_hash,
+                expected_status=expected_status,
+                expected_attempt=expected_attempt,
+                operator_id=authenticated_operator.actor_id,
+            )
+
+    def recover_durable_plan(
+        self,
+        plan_id: str,
+        plan_hash: str,
+        *,
+        authenticated_operator: ActorIdentity,
+        expected_status: str,
+        expected_attempt: int,
+        resolution_action: str,
+        reason: str,
+        recovery_evidence: RecoveryEvidence[Any] | None = None,
+    ) -> None:
+        """Ask the trusted store to perform an authorized, audited CAS repair.
+
+        The caller must authenticate the operator independently; the store's
+        configured repair authorizer makes a second independent decision.
+        """
+        with self._lock:
+            if self._executing or self._durable_store is None or self._authorizer is None:
+                raise AuthorizationError("durable repair authority is not available")
+            self._require_project()
+            if not isinstance(authenticated_operator, ActorIdentity):
+                raise AuthorizationError("authenticated operator is required")
+            access = self._authorizer.authorize(authenticated_operator, self._project.project_id)
+            if (
+                access.actor != authenticated_operator
+                or access.project_id != self._project.project_id
+            ):
+                raise AuthorizationError(
+                    "authorizer returned a grant for another operator or project"
+                )
+            access.require_permissions(("project:repair",))
+            self._durable_store.repair_in_doubt(
+                self._project.project_id,
+                plan_id,
+                plan_hash,
+                expected_status=expected_status,
+                expected_attempt=expected_attempt,
+                operator_id=authenticated_operator.actor_id,
+                resolution_action=resolution_action,
+                reason=reason,
+                recovery_evidence=recovery_evidence,
+            )
+
+    def _validate_durable_boundary(
+        self,
+        plan: PlanTransaction,
+        index: int,
+        step: PlanStep,
+        command: TypedCommand,
+        expected: PlanApprovalRequirement,
+        binding: ApprovalBinding,
+        *,
+        authenticated_actor: ActorIdentity,
+        approval_verifier: ApprovalVerifier,
+    ) -> None:
+        store = self._durable_store
+        if store is None:
+            raise PlanTransactionError("durable store is not configured")
+        if (
+            command.actor != authenticated_actor
+            or plan._callback_hash(step) != plan._accepted_callbacks[index]
+        ):
+            raise AuthorizationError("durable actor or callback changed")
+        spec, validated, project_id = self._validate_dispatch(command)
+        self._resolver.validate_input_refs(command.input_refs, self._project)
+        data = validated.model_dump(mode="json")
+        for field_name in spec.reference_fields:
+            value: Any = getattr(validated, field_name)
+            if value is not None:
+                pinned = (
+                    value.model_copy(update={"captured_at_command": True})
+                    if isinstance(value, Playhead)
+                    else self._resolver.resolve(value, self._project)
+                )
+                data[field_name] = pinned.model_dump(mode="json")
+        normalized = json.dumps(
+            data, sort_keys=True, ensure_ascii=True, separators=(",", ":"), allow_nan=False
+        )
+        params_hash = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+        verify_approval_binding(
+            binding,
+            project_id=project_id,
+            plan_id=plan.plan_id,
+            plan_hash=expected.plan_hash,
+            actor_id=authenticated_actor.actor_id,
+            step_id=expected.step_id,
+            capability_version=self._registry.describe(command.operation).version,
+            normalized_params_hash=params_hash,
+            policy_version=expected.policy_version,
+            now=store.utc_timestamp(),
+            verifier=approval_verifier,
+        )
+        if not binding.issued_at <= store.utc_timestamp() < binding.expires_at:
+            raise ApprovalBindingError("approval expired during verification")
+
+    def _try_cold_durable_replay(
+        self,
+        plan: PlanTransaction,
+        bindings: tuple[ApprovalBinding, ...],
+        *,
+        policy_version: str,
+        authenticated_actor: ActorIdentity,
+        approval_verifier: ApprovalVerifier,
+        deadline_monotonic_ns: int,
+    ) -> PlanResultSummary | None:
+        """Authenticate and validate committed evidence before publishing any state."""
+        store = self._durable_store
+        if store is None or self._authorizer is None:
+            return None
+        if self._executing or not isinstance(plan, PlanTransaction):
+            raise PlanTransactionError("plan is not available for durable replay")
+        if plan.state is not PlanTransactionState.PENDING:
+            raise PlanTransactionError("plan is not available for durable replay")
+        if not isinstance(authenticated_actor, ActorIdentity):
+            raise AuthorizationError("authenticated actor context is required")
+        if (
+            not isinstance(bindings, tuple)
+            or not bindings
+            or any(not isinstance(binding, ApprovalBinding) for binding in bindings)
+        ):
+            raise ApprovalBindingError("invalid approval bindings")
+        first = bindings[0]
+        if first.actor_id != authenticated_actor.actor_id or first.plan_id != plan.plan_id:
+            raise ApprovalBindingError("approval does not match the plan")
+        access = self._authorizer.authorize(authenticated_actor, first.project_id)
+        if access.actor != authenticated_actor or access.project_id != first.project_id:
+            raise AuthorizationError("authorizer returned a mismatched project grant")
+        record = store.find_committed(plan.plan_id, first.plan_hash, project_id=first.project_id)
+        if record is None:
+            return None
+        # The authority is checked before parsing or disclosing any receipt data.
+        if len(bindings) != len(plan.steps) or len({b.nonce for b in bindings}) != len(bindings):
+            raise ApprovalBindingError("one unique approval binding is required per step")
+        for index, binding in enumerate(bindings):
+            verify_approval_binding(
+                binding,
+                project_id=first.project_id,
+                plan_id=plan.plan_id,
+                plan_hash=first.plan_hash,
+                actor_id=authenticated_actor.actor_id,
+                step_id=f"step-{index}",
+                capability_version=binding.capability_version,
+                normalized_params_hash=binding.normalized_params_hash,
+                policy_version=policy_version,
+                now=store.utc_timestamp(),
+                verifier=approval_verifier,
+            )
+        try:
+            raw = record.evidence_json
+            if raw is None or len(raw.encode("utf-8")) > 65536:
+                raise ValueError("invalid receipt size")
+            receipt = json.loads(raw, object_pairs_hook=_unique_json_pairs)
+            payload = receipt["payload"]
+            if receipt["digest"] != _durable_hash(payload):
+                raise ValueError("receipt digest mismatch")
+            if "before_project" not in payload:
+                if self._project is None:
+                    raise ValueError("legacy receipt lacks a base snapshot")
+                return None
+            before = Project.model_validate(payload["before_project"])
+            if (
+                before.project_id != first.project_id
+                or before.state_hash != payload["before_project"]["state_hash"]
+                or before.state_hash != payload["before_hash"]
+                or before.state_revision != payload["before_revision"]
+            ):
+                raise ValueError("invalid base project")
+            history = [EditTransaction.model_validate(item) for item in payload["before_history"]]
+            prior: dict[tuple[str, str, str], _Reservation] = {}
+            for item in payload["before_idempotency"]:
+                key = tuple(item["key"])
+                if (
+                    len(key) != 3
+                    or any(not isinstance(part, str) for part in key)
+                    or key[0] != first.project_id
+                    or key in prior
+                    or item["result"] is None
+                ):
+                    raise ValueError("invalid base reservation")
+                prior[cast(tuple[str, str, str], key)] = _Reservation(
+                    item["fingerprint"], CommandResult.model_validate(item["result"])
+                )
+            if self._project is not None:
+                current = self._project
+                if current.project_id != first.project_id:
+                    raise ValueError("project mismatch")
+                final = Project.model_validate(payload["project"])
+                ancestor = any(
+                    tx.parent_revision == current.state_revision
+                    and tx.previous_state_hash == current.state_hash
+                    and Project.model_validate(tx.state_before) == current
+                    for tx in history
+                )
+                if current != before and current != final and not ancestor:
+                    raise ValueError("in-memory project is not an ancestor of the receipt")
+            probe = CommandBus(
+                before,
+                registry=self._registry,
+                resolver=self._resolver,
+                authorizer=self._authorizer,
+                allow_experimental=self._allow_experimental,
+                audio_engine=self._audio_engine,
+                engine_ports=self._engine_ports,
+            )
+            probe._history = history
+            probe._idempotency = prior
+            requirements = probe.verify_durable_approvals(
+                plan,
+                bindings,
+                policy_version=policy_version,
+                authenticated_actor=authenticated_actor,
+                now=store.utc_timestamp(),
+                verifier=approval_verifier,
+            )
+            if bool(plan._external_step_indices) != record.external_effects:
+                raise ValueError("external effect declaration differs")
+            try:
+                result = probe._rehydrate_durable_receipt(plan, requirements[0], raw)
+            finally:
+                plan.state = PlanTransactionState.PENDING
+        except (TypeError, ValueError, KeyError, IndexError, ValidationError) as exc:
+            raise PlanStoreStateError("invalid durable receipt") from exc
+        if store.monotonic_ns() >= deadline_monotonic_ns:
+            raise TimeoutError("durable plan deadline expired")
+        authorized = store.replay_committed(
+            plan.plan_id,
+            first.plan_hash,
+            project_id=first.project_id,
+            external_effects=record.external_effects,
+            nonce=first.nonce,
+            additional_nonces=tuple(binding.nonce for binding in bindings[1:]),
+        )
+        if authorized.evidence_json != raw:
+            raise PlanStoreStateError("committed receipt changed during replay")
+        for binding, expected in zip(bindings, requirements, strict=True):
+            verify_approval_binding(
+                binding,
+                project_id=expected.project_id,
+                plan_id=expected.plan_id,
+                plan_hash=expected.plan_hash,
+                actor_id=expected.actor_id,
+                step_id=expected.step_id,
+                capability_version=expected.capability_version,
+                normalized_params_hash=expected.normalized_params_hash,
+                policy_version=expected.policy_version,
+                now=store.utc_timestamp(),
+                verifier=approval_verifier,
+            )
+        if store.monotonic_ns() >= deadline_monotonic_ns:
+            raise TimeoutError("durable plan deadline expired")
+        self._project, self._history, self._idempotency = (
+            probe._project,
+            probe._history,
+            probe._idempotency,
+        )
+        plan.state = PlanTransactionState.COMMITTED
+        return result
+
+    def _durable_receipt(
+        self,
+        plan: PlanTransaction,
+        expected: PlanApprovalRequirement,
+        snapshot: dict[str, Any],
+        trace: list[EditTransaction],
+    ) -> dict[str, Any]:
+        before: Project = snapshot["_project"]
+        payload = {
+            "version": 1,
+            "plan_id": plan.plan_id,
+            "plan_hash": expected.plan_hash,
+            "before_hash": before.state_hash,
+            "before_revision": before.state_revision,
+            "before_project": before.model_dump(mode="json"),
+            "before_history": [json.loads(raw) for raw in snapshot["_history"]],
+            "before_idempotency": [
+                {
+                    "key": list(key),
+                    "fingerprint": value.fingerprint,
+                    "result": value.result.model_dump(mode="json") if value.result else None,
+                }
+                for key, value in sorted(snapshot["_idempotency"].items())
+            ],
+            "project": self._project.model_dump(mode="json"),
+            "history": [r.model_dump(mode="json") for r in self._history],
+            "trace": [r.model_dump(mode="json") for r in trace],
+            "idempotency": [
+                {
+                    "key": list(key),
+                    "fingerprint": value.fingerprint,
+                    "result": value.result.model_dump(mode="json") if value.result else None,
+                }
+                for key, value in sorted(self._idempotency.items())
+            ],
+            "steps": [asdict(r) for r in plan._step_records],
+        }
+        return {"payload": payload, "digest": _durable_hash(payload)}
+
+    def _rehydrate_durable_receipt(
+        self,
+        plan: PlanTransaction,
+        expected: PlanApprovalRequirement,
+        evidence_json: str,
+        *,
+        deadline_monotonic_ns: int | None = None,
+    ) -> PlanResultSummary:
+        try:
+            if len(evidence_json) > 65536 or len(evidence_json.encode("utf-8")) > 65536:
+                raise ValueError("receipt exceeds the byte limit")
+            receipt = json.loads(evidence_json, object_pairs_hook=_unique_json_pairs)
+            payload = receipt["payload"]
+            if (
+                receipt["digest"] != _durable_hash(payload)
+                or type(payload["version"]) is not int
+                or payload["version"] != 1
+            ):
+                raise ValueError("receipt digest or version mismatch")
+            if (
+                type(payload["before_revision"]) is not int
+                or type(payload["project"]["state_revision"]) is not int
+                or payload["plan_id"] != plan.plan_id
+                or payload["plan_hash"] != expected.plan_hash
+                or payload["before_hash"] != self._project.state_hash
+                or payload["before_revision"] != self._project.state_revision
+            ):
+                raise ValueError("receipt does not match the authorized initial state")
+            project = Project.model_validate(payload["project"])
+            if (
+                project.project_id != self._project.project_id
+                or project.state_hash != payload["project"]["state_hash"]
+                or project.state_revision != self._project.state_revision + len(plan.steps)
+            ):
+                raise ValueError("receipt project state is invalid")
+            history = [EditTransaction.model_validate(item) for item in payload["history"]]
+            trace = [EditTransaction.model_validate(item) for item in payload["trace"]]
+            if len(trace) != len(plan.steps) or not history or history[-1] != trace[-1]:
+                raise ValueError("receipt history is inconsistent")
+            records = tuple(PlanStepRecord(**item) for item in payload["steps"])
+            if len(records) != len(plan.steps) or any(
+                r.step_index != i
+                or r.capability_name != plan.steps[i].operation
+                or r.status != "succeeded"
+                or r.input_hash != plan._step_input_hash(i, plan.steps[i])
+                for i, r in enumerate(records)
+            ):
+                raise ValueError("receipt steps are inconsistent")
+            prior = self._project
+            for index, tx in enumerate(trace):
+                before = Project.model_validate(tx.state_before)
+                command = _parse(plan.steps[index].command)  # type: ignore[arg-type]
+                if (
+                    before != prior
+                    or before.state_hash != tx.state_before.get("state_hash")
+                    or type(tx.state_before.get("state_revision")) is not int
+                    or tx.previous_state_hash != prior.state_hash
+                    or tx.parent_revision != prior.state_revision
+                    or tx.operation != command.operation
+                ):
+                    raise ValueError("receipt transaction chain is inconsistent")
+                if index + 1 < len(plan.steps):
+                    prior = Project.model_validate(trace[index + 1].state_before)
+                else:
+                    prior = project
+                if (
+                    tx.new_state_hash != prior.state_hash
+                    or prior.state_revision != tx.parent_revision + 1
+                ):
+                    raise ValueError("receipt transaction result is inconsistent")
+            reservations: dict[tuple[str, str, str], _Reservation] = {}
+            for item in payload["idempotency"]:
+                key = tuple(item["key"])
+                if (
+                    len(key) != 3
+                    or any(not isinstance(part, str) for part in key)
+                    or key[0] != project.project_id
+                    or key in reservations
+                    or item["result"] is None
+                ):
+                    raise ValueError("receipt idempotency reservation is invalid")
+                reservations[cast(tuple[str, str, str], key)] = _Reservation(
+                    item["fingerprint"], CommandResult.model_validate(item["result"])
+                )
+            if len(reservations) != len(self._idempotency) + len(plan.steps):
+                raise ValueError("receipt reservation count is inconsistent")
+            for key, value in self._idempotency.items():
+                if reservations.get(key) != value:
+                    raise ValueError("receipt changed a prior reservation")
+            for index, step in enumerate(plan.steps):
+                command = _parse(step.command)  # type: ignore[arg-type]
+                key = (project.project_id, command.operation, command.idempotency_key or "")
+                reservation = reservations.get(key)
+                tx = trace[index]
+                if (
+                    reservation is None
+                    or reservation.fingerprint != _fingerprint(command)
+                    or reservation.result is None
+                    or reservation.result.transaction_id != tx.transaction_id
+                    or reservation.result.state_revision != tx.parent_revision + 1
+                    or reservation.result.state_hash != tx.new_state_hash
+                    or records[index].output_hash
+                    != _durable_hash(reservation.result.model_dump(mode="json"))
+                ):
+                    raise ValueError("receipt step reservation is inconsistent")
+        except (TypeError, ValueError, KeyError, IndexError, ValidationError) as exc:
+            raise PlanStoreStateError("invalid durable receipt") from exc
+        if deadline_monotonic_ns is not None:
+            if self._durable_store is None:
+                raise PlanStoreStateError("durable store is not configured")
+            if self._durable_store.monotonic_ns() >= deadline_monotonic_ns:
+                raise TimeoutError("durable plan deadline expired")
+        self._project, self._history, self._idempotency = project, history, reservations
+        plan.state = PlanTransactionState.COMMITTED
+        return PlanResultSummary(plan.plan_id, plan.state, records, project.state_revision)
+
+    def durable_approval_requirements(
+        self, plan: PlanTransaction, *, policy_version: str, authenticated_actor: ActorIdentity
+    ) -> tuple[PlanApprovalRequirement, ...]:
+        """Derive approval scopes without reserving or executing the plan.
+
+        ``policy_version`` and ``authenticated_actor`` must come from trusted
+        composition or authenticated request context, not the plan's claims.
+        Only registry-backed commands with independently authorized actors are
+        eligible; legacy arbitrary execute closures are refused here. Calling
+        this method grants no execution authority and consumes no nonce.
+        """
+        if not isinstance(plan, PlanTransaction):
+            raise CommandValidationError("approval preflight requires a PlanTransaction")
+        validate_plan_identity(policy_version, name="policy_version")
+        if not isinstance(authenticated_actor, ActorIdentity):
+            raise AuthorizationError("authenticated actor context is required")
+        try:
+            authenticated_actor = ActorIdentity.model_validate(
+                authenticated_actor.model_dump(mode="json")
+            )
+        except ValidationError as exc:
+            raise AuthorizationError("authenticated actor context is invalid") from exc
+        with self._lock:
+            if self._executing or plan.state is not PlanTransactionState.PENDING:
+                raise PlanTransactionError("plan is not available for approval preflight")
+            self._require_project()
+            if self._authorizer is None:
+                raise AuthorizationError("durable approval requires a trusted project authorizer")
+            if not 1 <= len(plan.steps) <= 128:
+                raise PlanTransactionError("durable plan must contain 1 to 128 steps")
+            plan._preflight(self)
+            descriptions: list[tuple[str, str, str, str]] = []
+            step_hashes: list[str] = []
+            for index, step in enumerate(plan.steps):
+                if step.command is None:
+                    raise PlanTransactionError(
+                        "durable approval refuses arbitrary execute callbacks"
+                    )
+                command = _parse(step.command)
+                if command.actor is None:
+                    raise AuthorizationError("durable approval requires an authenticated actor")
+                if command.actor != authenticated_actor:
+                    raise AuthorizationError("command actor differs from authenticated actor")
+                spec, validated, project_id = self._validate_dispatch(command)
+                self._resolver.validate_input_refs(command.input_refs, self._project)
+                input_data = validated.model_dump(mode="json")
+                for field_name in spec.reference_fields:
+                    raw_value: Any = getattr(validated, field_name)
+                    if raw_value is not None:
+                        if isinstance(raw_value, Playhead):
+                            pinned = raw_value.model_copy(update={"captured_at_command": True})
+                        else:
+                            pinned = self._resolver.resolve(raw_value, self._project)
+                        input_data[field_name] = pinned.model_dump(mode="json")
+                normalized = json.dumps(
+                    input_data,
+                    sort_keys=True,
+                    ensure_ascii=True,
+                    separators=(",", ":"),
+                    allow_nan=False,
+                )
+                params_hash = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+                capability_version = self._registry.describe(command.operation).version
+                descriptions.append(
+                    (project_id, command.actor.actor_id, capability_version, params_hash)
+                )
+                step_hashes.append(plan._step_input_hash(index, step))
+            if not plan._replay_safe:
+                raise PlanTransactionError("durable approval refuses opaque callback state")
+            plan_hash = _canonical_hash(
+                {
+                    "project_id": self._project.project_id,
+                    "plan_id": plan.plan_id,
+                    "state_revision": self._project.state_revision,
+                    "state_hash": self._project.state_hash,
+                    "history_hash": _canonical_hash(
+                        [r.model_dump(mode="json") for r in self._history]
+                    ),
+                    "policy_version": policy_version,
+                    "step_hashes": step_hashes,
+                    "scopes": descriptions,
+                }
+            )
+            return tuple(
+                PlanApprovalRequirement(
+                    project_id,
+                    plan.plan_id,
+                    plan_hash,
+                    actor_id,
+                    f"step-{index}",
+                    capability_version,
+                    params_hash,
+                    policy_version,
+                )
+                for index, (project_id, actor_id, capability_version, params_hash) in enumerate(
+                    descriptions
+                )
+            )
+
+    def verify_durable_approvals(
+        self,
+        plan: PlanTransaction,
+        bindings: tuple[ApprovalBinding, ...],
+        *,
+        policy_version: str,
+        authenticated_actor: ActorIdentity,
+        now: float,
+        verifier: ApprovalVerifier,
+    ) -> tuple[PlanApprovalRequirement, ...]:
+        """Revalidate every approval against current bus authority without execution.
+
+        This is preflight only: it does not consume nonces or authorize effects.
+        The future durable execution path must atomically consume all nonces and
+        recheck each binding at step boundaries before performing any effect.
+        """
+        with self._lock:
+            requirements = self.durable_approval_requirements(
+                plan, policy_version=policy_version, authenticated_actor=authenticated_actor
+            )
+            if not isinstance(bindings, tuple) or len(bindings) != len(requirements):
+                raise ApprovalBindingError("one approval binding is required per step")
+            if any(not isinstance(binding, ApprovalBinding) for binding in bindings):
+                raise ApprovalBindingError("invalid approval binding")
+            if len({binding.nonce for binding in bindings}) != len(bindings):
+                raise ApprovalBindingError("approval nonces must be unique")
+            for binding, expected in zip(bindings, requirements, strict=True):
+                verify_approval_binding(
+                    binding,
+                    project_id=expected.project_id,
+                    plan_id=expected.plan_id,
+                    plan_hash=expected.plan_hash,
+                    actor_id=expected.actor_id,
+                    step_id=expected.step_id,
+                    capability_version=expected.capability_version,
+                    normalized_params_hash=expected.normalized_params_hash,
+                    policy_version=expected.policy_version,
+                    now=now,
+                    verifier=verifier,
+                )
+            return requirements
 
     def _dispatch_plan_locked(self, plan: PlanTransaction) -> PlanTransaction | PlanResultSummary:
         """Transactional plan execution (see :meth:`dispatch_plan`)."""
@@ -1086,8 +2192,12 @@ class CommandBus:
 
         return spec, validated, project_id
 
-    def _dispatch_locked(self, command: TypedCommand) -> CommandResult:
+    def _dispatch_locked(
+        self, command: TypedCommand, *, expected_spec: OperationSpec | None = None
+    ) -> CommandResult:
         spec, validated, project_id = self._validate_dispatch(command)
+        if expected_spec is not None and spec is not expected_spec:
+            raise PlanTransactionError("operation capability changed after durable preflight")
 
         # 6. All declared input_refs and semantic time references are validated
         # against the authorized current project before any reservation/handler.
@@ -1168,6 +2278,7 @@ class CommandBus:
             input_data=input_data,
             history=tuple(self._history),
             **engine_kwargs,
+            **self._durable_context,
         )
         try:
             # A buggy handler cannot mutate central state even if it then raises.
@@ -1215,6 +2326,14 @@ class CommandBus:
                 # non-authoritative result can never be master evidence.
                 "execution_mode": command.execution_policy.mode,
                 "authoritative": spec.authoritative_for(command.execution_policy.mode),
+                **(
+                    {
+                        "durable_effect_key": self._durable_context["effect_key"],
+                        "durable_fencing_epoch": self._durable_context["fencing_epoch"],
+                    }
+                    if self._durable_context
+                    else {}
+                ),
             },
             undo_available=True,
         )
@@ -1223,3 +2342,23 @@ class CommandBus:
         self._project = new_project
         self._history = [*outcome.history, transaction]
         return result
+
+
+def compose_durable_command_bus(
+    project: Project,
+    *,
+    registry: CapabilityRegistry,
+    authorizer: ProjectAuthorizer,
+    store: DurablePlanDedupePort,
+    verifiers: Mapping[str, Callable[[Project, TypedCommand, CommandResult, str], bool]],
+) -> CommandBus:
+    """Central construction seam for durable adapters; retain the single bus pipeline."""
+    if store is None or authorizer is None:
+        raise ValueError("durable composition requires store and project authority")
+    return CommandBus(
+        project,
+        registry=registry,
+        authorizer=authorizer,
+        durable_dedupe_store=store,
+        durable_verifiers=verifiers,
+    )

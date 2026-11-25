@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import re
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from dataclasses import field as dc_field
 from typing import Any, Literal
@@ -106,6 +106,16 @@ class OperationContext:
     atlas_engine: Any = None
     morpheus_engine: Any = None
     hyperion_engine: Any = None
+    effect_key: str | None = None
+    deadline_monotonic_ns: int | None = None
+    fencing_epoch: int | None = None
+    durable_heartbeat: Callable[[], None] | None = None
+    # Sensitive execution fence: only registered, trusted destination adapters
+    # should receive or use it, and it must not be included in receipts/logs.
+    durable_owner_token: str | None = None
+    durable_plan_id: str | None = None
+    durable_plan_hash: str | None = None
+    durable_project_id: str | None = None
 
 
 OperationHandler = Callable[[Project, OperationContext], OperationOutcome]
@@ -153,6 +163,11 @@ class OperationSpec:
     #: Handler writes outside the bus snapshot: plans must supply compensation.
     #: This registry declaration is authoritative even when PlanStep omits it.
     external_effects: bool = False
+    #: Trusted registration guarantees that the destination enforces the
+    #: supplied effect key and fencing epoch; the bus itself cannot do so.
+    durable_effects: bool = False
+    precondition_contract: str = ""
+    postcondition_contract: str = ""
 
     @property
     def effective_permissions(self) -> tuple[str, ...]:
@@ -300,6 +315,39 @@ class CapabilityRegistry:
         self._index[spec.operation_id] = spec
         self._domain_of[spec.operation_id] = domain
         self._capability_of[spec.operation_id] = cap
+
+    def verify_declared_contracts(
+        self, contracts: Mapping[str, Mapping[str, str]]
+    ) -> tuple[str, ...]:
+        """Check registered schema/permission identities against operation truth.
+
+        This is drift detection, not an L4 claim, a permission grant, or proof
+        of handler correctness. Runtime pre/postcondition checks remain required.
+        """
+        verified: list[str] = []
+        for operation in sorted(self._index):
+            spec = self._index[operation]
+            contract = contracts.get(operation)
+            expected = {
+                "permission_level": spec.permission_level.value,
+                "input_model": f"{spec.input_model.__module__}.{spec.input_model.__qualname__}",
+                "handler": spec.handler.__name__,
+            }
+            if spec.external_effects:
+                if not spec.precondition_contract or not spec.postcondition_contract:
+                    raise ValueError(
+                        f"{operation}: external operation lacks verification contracts"
+                    )
+                expected.update(
+                    precondition_contract=spec.precondition_contract,
+                    postcondition_contract=spec.postcondition_contract,
+                )
+            if contract is None or any(
+                contract.get(key) != value for key, value in expected.items()
+            ):
+                raise ValueError(f"{operation}: declared operation contract drift")
+            verified.append(operation)
+        return tuple(verified)
 
     def get_spec(self, operation_id: str) -> OperationSpec:
         try:
