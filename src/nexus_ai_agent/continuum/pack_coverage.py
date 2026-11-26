@@ -102,6 +102,11 @@ PACK_TEST_TARGETS: Mapping[str, tuple[str, ...]] = {
         # pack modules this measurement scores.
         "tests/unit/test_perception_pack.py",
         "tests/architecture/test_perception_boundary.py",
+        # W11X phase-2: the admission gate is part of the pack's runtime surface —
+        # its policy port and the production binding that feeds it are pack
+        # evidence, not host-layer evidence, so they are measured here.
+        "tests/unit/test_perception_gate.py",
+        "tests/unit/test_perception_gate_runtime.py",
     ),
     "caption": (
         "tests/unit/test_caption_pack.py",

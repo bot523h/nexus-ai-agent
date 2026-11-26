@@ -278,3 +278,75 @@ def test_the_pack_substrate_still_cannot_import_the_gate() -> None:
         if isinstance(node, ast.ImportFrom) and node.module is not None
     }
     assert not any(module.startswith("nexus_ai_agent.creative.verification") for module in imported)
+
+
+# ---------------------------------------------------------------------------
+# the port's own fail-closed branches (a wrong gate is a wiring defect)
+# ---------------------------------------------------------------------------
+
+
+def _spec_handler(registry: Any, operation_id: str) -> Any:
+    return registry.get_spec(operation_id).handler
+
+
+def test_a_gate_that_returns_a_non_mapping_fails_closed() -> None:
+    registry = _registry_with_gate(lambda context: ["not", "a", "mapping"])
+    with pytest.raises(Exception) as error:
+        _dispatch(
+            "analysis.mark_silences",
+            _silence_payload(licenses=["PUBLIC_DOMAIN"]),
+            registry=registry,
+        )
+    assert "not a mapping" in str(error.value)
+
+
+def test_a_gate_that_does_not_answer_yes_or_no_fails_closed() -> None:
+    registry = _registry_with_gate(lambda context: {"admitted": "probably"})
+    with pytest.raises(Exception) as error:
+        _dispatch(
+            "analysis.mark_silences",
+            _silence_payload(licenses=["PUBLIC_DOMAIN"]),
+            registry=registry,
+        )
+    assert "admitted=True/False" in str(error.value)
+
+
+def test_an_unbound_gate_still_records_a_marker_license_claim_as_unverified() -> None:
+    from nexus_ai_agent.creative.packs.runtime import build_runtime_registry
+
+    outcome = _dispatch(
+        "analysis.mark_silences",
+        _silence_payload(licenses=["PUBLIC_DOMAIN"]),
+        registry=build_runtime_registry(),
+    )
+    assert outcome.output["gate"]["outcome"] == "not_configured"
+    assert outcome.output["markers_added"] == 1
+
+
+def test_no_signal_evidence_is_never_gated() -> None:
+    payload = _loudness_payload(evidence=_loudness_evidence(None).model_dump(mode="json"))
+    outcome = _dispatch("analysis.assess_loudness", payload)
+    assert outcome.output["verdict"] == "no_signal"
+    assert outcome.output["gate"]["outcome"] == "not_configured"
+
+
+def test_a_license_conflict_publishes_no_scene_markers() -> None:
+    outcome = _dispatch(
+        "analysis.mark_scene_cuts",
+        {
+            "track_id": "a1",
+            "clip_id": "clip_a",
+            "evidence": _scene_evidence([5.0]).model_dump(mode="json"),
+            "licenses": ["NON_COMMERCIAL_ONLY"],
+            "commercial_intent": True,
+        },
+    )
+    assert outcome.output["markers_added"] == 0
+    assert outcome.output["refused"] is True
+    assert outcome.output["gate"]["outcome"] == "license_conflict"
+
+
+def _registry_with_gate(gate: Any) -> Any:
+    from nexus_ai_agent.creative.packs.runtime import build_runtime_registry
+
+    return build_runtime_registry(perception_gate=gate)

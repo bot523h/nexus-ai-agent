@@ -81,8 +81,15 @@ reached for it would (correctly) fail
 The gate therefore travels as **plain data**:
 
 ```python
-gate({"kind": "loudness", "integrated_lufs": -14.0, "target_lufs": -14.0,
-      "tolerance_lu": 1.0, "licenses": ["PERMISSIVE_MIT_APACHE"]})
+gate(
+    {
+        "kind": "loudness",
+        "integrated_lufs": -14.0,
+        "target_lufs": -14.0,
+        "tolerance_lu": 1.0,
+        "licenses": ["PERMISSIVE_MIT_APACHE"],
+    }
+)
 # -> {"admitted": True, "outcome": "pass", "recommended_gain_db": 0.0, ...}
 ```
 
