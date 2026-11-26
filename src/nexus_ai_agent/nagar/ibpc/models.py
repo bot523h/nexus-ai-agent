@@ -648,12 +648,19 @@ class ConsentRecord(BaseModel):
     scope: str = Field(min_length=1, max_length=256)
     granted_at: str = Field(min_length=1)
     consent_id: str = Field(default_factory=lambda: _new_id("consent"))
+    project_id: str = ""
     tenant_id: str = ""
+    processing_scope: str = ""
+    data_category: str = ""
+    provider_id: str = ""
     expires_at_utc: str = ""
 
     @property
     def consent_digest(self) -> str:
         return digest_of(self.model_dump(mode="json"))
+
+    def to_dict(self) -> dict[str, Any]:
+        return self.model_dump(mode="json")
 
 
 class DurableConsentGrant(BaseModel):

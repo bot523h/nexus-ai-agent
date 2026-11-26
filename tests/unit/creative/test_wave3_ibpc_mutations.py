@@ -147,6 +147,30 @@ def _omit_project_id_in_admin_audit_call(node: ast.AST) -> ast.AST:
     )
 
 
+def _strip_active_status_from_sql(node: ast.AST) -> ast.AST:
+    assert isinstance(node, ast.Constant) and isinstance(node.value, str)
+    return ast.copy_location(
+        ast.Constant(value=node.value.replace("AND m.status = 'ACTIVE'", "")),
+        node,
+    )
+
+
+def _only_initiating_project_for_audit(node: ast.AST) -> ast.AST:
+    assert isinstance(node, ast.For)
+    return ast.copy_location(
+        ast.For(
+            target=node.target,
+            iter=ast.List(
+                elts=[ast.Name(id="resolved_project", ctx=ast.Load())],
+                ctx=ast.Load(),
+            ),
+            body=node.body,
+            orelse=node.orelse,
+        ),
+        node,
+    )
+
+
 WAVE3_MUTANTS: tuple[Wave3MutantSpec, ...] = (
     Wave3MutantSpec(
         name="M01_session_epoch_fencing",
@@ -512,6 +536,67 @@ WAVE3_MUTANTS: tuple[Wave3MutantSpec, ...] = (
             "tests/unit/test_wave3_ibpc_durability.py::"
             "TestWave3FinalSecurityClosure::"
             "test_project_admin_audit_endpoint_returns_revoke_principal_and_revoke_binding_events"
+        ),
+        expected_tokens=("AssertionError", "KeyError"),
+    ),
+    Wave3MutantSpec(
+        name="M29_assert_actor_project_owner_always_allows",
+        relative_path=Path("adapters/studio_principal_auth.py"),
+        func_name="_assert_actor_project_owner_locked",
+        predicate=lambda n: _is_if_with_test_substr(n, "m_row is None"),
+        transform=_bypass_if,
+        target_test=(
+            "tests/unit/test_wave3_ibpc_durability.py::"
+            "TestWave3FinalSecurityClosure::"
+            "test_toctou_actor_downgraded_from_owner_to_viewer_after_precheck_rejected"
+        ),
+        expected_tokens=("AssertionError", "403"),
+    ),
+    Wave3MutantSpec(
+        name="M30_revocation_guard_ignores_revoked_target_membership",
+        relative_path=Path("adapters/studio_principal_auth.py"),
+        func_name="_assert_project_scoped_revocation_locked",
+        predicate=lambda n: (
+            isinstance(n, ast.Constant)
+            and isinstance(n.value, str)
+            and "AND m.status = 'ACTIVE'" in n.value
+            and "m.project_id = ?" in n.value
+        ),
+        transform=_strip_active_status_from_sql,
+        target_test=(
+            "tests/unit/test_wave3_ibpc_durability.py::"
+            "TestWave3FinalSecurityClosure::"
+            "test_revoked_target_membership_cannot_pass_project_revocation_guard"
+        ),
+        expected_tokens=("AssertionError", "403", "DID NOT RAISE"),
+    ),
+    Wave3MutantSpec(
+        name="M31_in_memory_consent_bypasses_project_isolation",
+        relative_path=Path("nagar/ibpc/privacy.py"),
+        func_name="has_consent",
+        predicate=lambda n: _is_if_with_test_substr(n, "c.project_id != project_id"),
+        transform=_bypass_if,
+        target_test=(
+            "tests/unit/test_wave3_ibpc_durability.py::"
+            "TestWave3FinalSecurityClosure::"
+            "test_in_memory_consent_cross_project_isolation"
+        ),
+        expected_tokens=("AssertionError",),
+    ),
+    Wave3MutantSpec(
+        name="M32_revoke_principal_single_project_audit_only",
+        relative_path=Path("adapters/studio_principal_auth.py"),
+        func_name="revoke_principal",
+        predicate=lambda n: (
+            isinstance(n, ast.For)
+            and isinstance(n.iter, ast.Name)
+            and n.iter.id == "affected_projects"
+        ),
+        transform=_only_initiating_project_for_audit,
+        target_test=(
+            "tests/unit/test_wave3_ibpc_durability.py::"
+            "TestWave3FinalSecurityClosure::"
+            "test_multi_project_global_revocation_records_audit_for_all_affected_projects"
         ),
         expected_tokens=("AssertionError", "KeyError"),
     ),

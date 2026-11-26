@@ -662,6 +662,12 @@ class PrivacyPolicy:
                     principal_id=g.principal_id,
                     scope=f"{g.processing_scope}:{g.data_category}",
                     granted_at=g.granted_at_utc,
+                    project_id=g.project_id,
+                    tenant_id=g.tenant_id,
+                    processing_scope=g.processing_scope,
+                    data_category=g.data_category,
+                    provider_id=g.provider_id,
+                    expires_at_utc=g.expires_at_utc,
                 )
                 for g in self._store.list_consents()
                 if not g.revoked_at_utc
@@ -701,8 +707,8 @@ class PrivacyPolicy:
         *,
         principal_id: str,
         scope: str,
-        project_id: str = "_session",
-        processing_scope: str = ProcessingScope.LOCAL_PROCESSING.value,
+        project_id: str = "",
+        processing_scope: str = "",
         data_category: str | None = None,
         expires_at_utc: str = "",
         provider_id: str = "",
@@ -712,23 +718,33 @@ class PrivacyPolicy:
         if not isinstance(mode, PrivacyMode):
             raise PrivacyViolation("invalid_mode", f"unknown privacy mode {mode!r}")
         now_utc = self._now()
+        effective_processing_scope = processing_scope or (
+            ProcessingScope.EXTERNAL_PROVIDER_DISPATCH.value
+            if provider_id
+            else ProcessingScope.LOCAL_PROCESSING.value
+        )
+        effective_data_category = data_category or scope
         record = ConsentRecord(
             mode=mode,
             principal_id=principal_id,
             scope=scope,
             granted_at=now_utc,
+            project_id=project_id,
             tenant_id=tenant_id,
+            processing_scope=effective_processing_scope,
+            data_category=effective_data_category,
+            provider_id=provider_id,
             expires_at_utc=expires_at_utc,
         )
         if self._store is not None:
             category = data_category or scope.upper()
             self._store.grant_consent(
                 consent_id=record.consent_id,
-                project_id=project_id,
+                project_id=project_id or "_session",
                 tenant_id=tenant_id,
                 principal_id=principal_id,
                 mode=mode,
-                processing_scope=processing_scope,
+                processing_scope=effective_processing_scope,
                 data_category=category,
                 provider_id=provider_id,
                 granted_at_utc=now_utc,
@@ -743,28 +759,60 @@ class PrivacyPolicy:
         *,
         principal_id: str,
         scope: str,
-        project_id: str = "_session",
-        processing_scope: str = ProcessingScope.LOCAL_PROCESSING.value,
+        project_id: str = "",
+        processing_scope: str = "",
+        data_category: str = "",
         tenant_id: str = "",
         provider_id: str = "",
     ) -> bool:
+        effective_ps = processing_scope or (
+            ProcessingScope.EXTERNAL_PROVIDER_DISPATCH.value
+            if provider_id
+            else ProcessingScope.LOCAL_PROCESSING.value
+        )
         if self._store is not None:
-            status, _ = self._store.check_consent_status(
-                project_id=project_id,
+            status, grant = self._store.check_consent_status(
+                project_id=project_id or "_session",
                 principal_id=principal_id,
                 mode=mode,
-                processing_scope=processing_scope,
-                data_category=scope.upper(),
+                processing_scope=effective_ps,
+                data_category=(data_category or scope).upper(),
                 now_utc=self._now(),
                 provider_id=provider_id,
                 tenant_id=tenant_id,
             )
+            if grant is not None and grant.tenant_id and not tenant_id.strip():
+                return False
             return status == "active"
         now_dt = _parse_utc(self._now())
+        is_cloud_or_external = (
+            mode is not PrivacyMode.LOCAL_VAULT
+            or processing_scope == ProcessingScope.EXTERNAL_PROVIDER_DISPATCH.value
+        )
         for c in self._consents:
-            if c.mode is not mode or c.principal_id != principal_id or scope not in c.scope:
+            if c.mode is not mode or c.principal_id != principal_id:
                 continue
-            if tenant_id and c.tenant_id != tenant_id:
+            if data_category and c.data_category != data_category:
+                continue
+            if not data_category and scope not in c.scope and c.data_category != scope:
+                continue
+            if (project_id or c.project_id) and c.project_id != project_id:
+                continue
+            if (tenant_id or c.tenant_id) and c.tenant_id != tenant_id:
+                continue
+            if (
+                is_cloud_or_external
+                and (project_id or c.project_id or c.tenant_id)
+                and not tenant_id.strip()
+            ):
+                continue
+            if processing_scope and c.processing_scope != processing_scope:
+                continue
+            if (
+                (is_cloud_or_external or provider_id or c.provider_id)
+                and (provider_id or c.provider_id)
+                and c.provider_id != provider_id
+            ):
                 continue
             if c.expires_at_utc and now_dt >= _parse_utc(c.expires_at_utc):
                 continue

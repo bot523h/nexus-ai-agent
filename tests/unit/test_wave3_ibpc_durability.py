@@ -1191,6 +1191,7 @@ class TestWave3EdgeCasesAndCoverage:
                 principal_id=OWNER_ID,
                 scope="transcript",
                 project_id="proj-1",
+                tenant_id="ten-1",
             )
             with pytest.raises(PrivacyViolation, match="no_provider_wired"):
                 mgr.assert_no_egress(sess.session_id, "transcript")
@@ -6280,6 +6281,14 @@ class TestWave3FinalSecurityClosure:
                 project_id="proj-p2a",
                 tenant_id="ten-p2a",
             )
+            # Empty tenant_id against a tenant-bound durable grant fails closed.
+            assert not policy.has_consent(
+                PrivacyMode.TRUSTED_CLOUD,
+                principal_id=OWNER_ID,
+                scope="transcript",
+                project_id="proj-p2a",
+                tenant_id="",
+            )
 
             # Revoke in durable store: has_consent must return False (no memory fallback).
             pstore.revoke_consent(
@@ -6833,3 +6842,124 @@ class TestWave3FinalSecurityClosure:
                 detail = json.loads(ev["detail"])
                 assert detail["initiating_project_id"] == "proj-alpha"
                 assert detail["affected_projects"] == ["proj-alpha", "proj-beta"]
+
+    def test_in_memory_consent_cross_project_isolation(self) -> None:
+        clock = _Clock("2026-11-01T00:00:00Z")
+        policy = PrivacyPolicy(now=clock, store=None)
+        rec = policy.record_consent(
+            PrivacyMode.TRUSTED_CLOUD,
+            principal_id="user-1",
+            project_id="proj-alpha",
+            tenant_id="tenant-1",
+            scope="voice",
+        )
+        rec_dict = rec.to_dict()
+        assert rec_dict["project_id"] == "proj-alpha"
+        assert rec_dict["tenant_id"] == "tenant-1"
+        assert rec_dict["data_category"] == "voice"
+
+        assert policy.has_consent(
+            PrivacyMode.TRUSTED_CLOUD,
+            principal_id="user-1",
+            project_id="proj-alpha",
+            tenant_id="tenant-1",
+            scope="voice",
+        )
+        # Cross-project query must fail closed.
+        assert not policy.has_consent(
+            PrivacyMode.TRUSTED_CLOUD,
+            principal_id="user-1",
+            project_id="proj-beta",
+            tenant_id="tenant-1",
+            scope="voice",
+        )
+        # Unscoped project_id must fail closed against project-bound consent.
+        assert not policy.has_consent(
+            PrivacyMode.TRUSTED_CLOUD,
+            principal_id="user-1",
+            project_id="",
+            tenant_id="tenant-1",
+            scope="voice",
+        )
+        assert not policy.has_consent(
+            PrivacyMode.TRUSTED_CLOUD,
+            principal_id="user-1",
+            project_id="proj-alpha",
+            tenant_id="",
+            scope="voice",
+        )
+        # Empty tenant_id for non-local scoped consent fails closed even when record tenant=''.
+        policy_no_ten = PrivacyPolicy(now=clock, store=None)
+        policy_no_ten.record_consent(
+            PrivacyMode.TRUSTED_CLOUD,
+            principal_id="user-1",
+            project_id="proj-alpha",
+            tenant_id="",
+            scope="voice",
+        )
+        assert not policy_no_ten.has_consent(
+            PrivacyMode.TRUSTED_CLOUD,
+            principal_id="user-1",
+            project_id="proj-alpha",
+            tenant_id="",
+            scope="voice",
+        )
+        # Processing scope & data_category mismatches also fail closed.
+        assert not policy.has_consent(
+            PrivacyMode.TRUSTED_CLOUD,
+            principal_id="user-1",
+            project_id="proj-alpha",
+            tenant_id="tenant-1",
+            scope="voice",
+            processing_scope=ProcessingScope.EXTERNAL_PROVIDER_DISPATCH.value,
+        )
+        assert not policy.has_consent(
+            PrivacyMode.TRUSTED_CLOUD,
+            principal_id="user-1",
+            project_id="proj-alpha",
+            tenant_id="tenant-1",
+            scope="voice",
+            data_category=DataCategory.VIDEO.value,
+        )
+
+    def test_in_memory_consent_cross_provider_isolation(self) -> None:
+        clock = _Clock("2026-11-01T00:00:00Z")
+        policy = PrivacyPolicy(now=clock, store=None)
+        rec = policy.record_consent(
+            PrivacyMode.TRUSTED_CLOUD,
+            principal_id="user-1",
+            project_id="proj-alpha",
+            tenant_id="tenant-1",
+            scope="voice",
+            processing_scope=ProcessingScope.EXTERNAL_PROVIDER_DISPATCH.value,
+            provider_id="provider-a",
+        )
+        assert rec.provider_id == "provider-a"
+        assert rec.processing_scope == ProcessingScope.EXTERNAL_PROVIDER_DISPATCH.value
+        assert policy.has_consent(
+            PrivacyMode.TRUSTED_CLOUD,
+            principal_id="user-1",
+            project_id="proj-alpha",
+            tenant_id="tenant-1",
+            scope="voice",
+            processing_scope=ProcessingScope.EXTERNAL_PROVIDER_DISPATCH.value,
+            provider_id="provider-a",
+        )
+        assert not policy.has_consent(
+            PrivacyMode.TRUSTED_CLOUD,
+            principal_id="user-1",
+            project_id="proj-alpha",
+            tenant_id="tenant-1",
+            scope="voice",
+            processing_scope=ProcessingScope.EXTERNAL_PROVIDER_DISPATCH.value,
+            provider_id="provider-b",
+        )
+        assert not policy.has_consent(
+            PrivacyMode.TRUSTED_CLOUD,
+            principal_id="user-1",
+            project_id="proj-alpha",
+            tenant_id="tenant-1",
+            scope="voice",
+            processing_scope=ProcessingScope.EXTERNAL_PROVIDER_DISPATCH.value,
+            provider_id="",
+        )
