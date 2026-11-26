@@ -998,6 +998,27 @@ class PrivacyPolicy:
                 occurred_at_utc=now_utc,
             )
             raise
+        if grant is not None and (
+            (grant.tenant_id.strip() or tenant_id.strip())
+            and grant.tenant_id.strip() != tenant_id.strip()
+        ):
+            self._store.record_audit_event(
+                consent_id=grant.consent_id,
+                event_type="DENIED",
+                project_id=project_id,
+                principal_id=principal_id,
+                mode=mode.value,
+                processing_scope=ps,
+                data_category=dc,
+                provider_id=provider_id,
+                actor_id=principal_id,
+                reason="consent_tenant_mismatch",
+                occurred_at_utc=now_utc,
+            )
+            raise PrivacyViolation(
+                "consent_tenant_mismatch",
+                f"consent for project {project_id!r} does not belong to tenant {tenant_id!r}",
+            )
         if status != "active":
             event_type: Literal["DENIED", "EXPIRED"] = (
                 "EXPIRED" if status == "expired" else "DENIED"

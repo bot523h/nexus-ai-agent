@@ -7713,7 +7713,7 @@ class TestWave3FinalSecurityClosure:
         store = DurablePrivacyConsentStore(tmp_path / "priv_empty_ten.sqlite3")
         try:
             policy = PrivacyPolicy(now=clock, store=store)
-            policy.grant_durable_consent(
+            grant = policy.grant_durable_consent(
                 project_id="proj-alpha",
                 tenant_id="tenant-alpha",
                 principal_id=OWNER_ID,
@@ -7762,6 +7762,36 @@ class TestWave3FinalSecurityClosure:
                 if e.event_type == "DENIED" and e.reason == "consent_tenant_mismatch"
             ]
             assert len(denied_entries) == 2
+
+            # Policy-layer defense-in-depth: even if a subclassed store omits tenant filtering
+            # inside check_consent_status(), enforce_processing_consent() still fails closed
+            # and persists a DENIED audit entry in SQLite.
+            class _UnfilteredTenantStore(DurablePrivacyConsentStore):
+                def check_consent_status(self, **kwargs: object) -> tuple[str, object]:
+                    return "active", grant
+
+            sub_store = _UnfilteredTenantStore(tmp_path / "priv_policy_depth.sqlite3")
+            try:
+                guarded_policy = PrivacyPolicy(now=clock, store=sub_store)
+                with pytest.raises(PrivacyViolation) as exc_policy:
+                    guarded_policy.enforce_processing_consent(
+                        project_id="proj-alpha",
+                        principal_id=OWNER_ID,
+                        mode=PrivacyMode.TRUSTED_CLOUD,
+                        processing_scope=ProcessingScope.LOCAL_PROCESSING,
+                        data_category=DataCategory.AUDIO,
+                        tenant_id="",
+                    )
+                assert exc_policy.value.reason == "consent_tenant_mismatch"
+                sub_denied = [
+                    e
+                    for e in sub_store.list_audit(project_id="proj-alpha")
+                    if e.event_type == "DENIED" and e.reason == "consent_tenant_mismatch"
+                ]
+                assert len(sub_denied) == 1
+                assert sub_denied[0].consent_id == grant.consent_id
+            finally:
+                sub_store.close()
         finally:
             store.close()
 

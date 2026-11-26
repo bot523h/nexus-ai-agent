@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-11-26T19:30:00Z",
+  "updated_at": "2026-11-26T20:00:00Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -8872,14 +8872,14 @@
       "zone": "nagar-ibpc-wave3-durability",
       "priority": "P0",
       "status": "completed_merged",
-      "scope": "Wave 3 IBPC durability & security closure: SQLite WAL live sessions/turns/contexts, RFC 8785 JCS canonical approval binding hash + key_id rotation/expiry, durable privacy consent ownership & exact-provider egress gating, Studio principal RBAC default & lifecycle/audit APIs, symlink/root containment, deterministic store close, >=98% line/branch coverage, and 40-mutant AST campaign.",
+      "scope": "Wave 3 IBPC durability & security closure: SQLite WAL live sessions/turns/contexts, RFC 8785 JCS canonical approval binding hash + key_id rotation/expiry, durable privacy consent ownership & exact-provider egress gating, Studio principal RBAC default & lifecycle/audit APIs, symlink/root containment, deterministic store close, >=98% line/branch coverage, and 36-mutant AST campaign.",
       "prerequisites": [],
       "acceptance_criteria": [
         "DurableLiveSessionStore enforces WAL pragmas, monotonic turn ordering, idempotency deduplication/conflict rejection, CAS session epoch fencing, and restart hydration.",
         "ApprovalBinding enforces RFC 8785 JCS canonical approval hash, key_id rotation/revocation, scope signature, revision id, and constant-time expiry verification without hardcoded keys.",
         "DurablePrivacyConsentStore enforces project/tenant ownership on revoke, exact provider_id egress matching, and append-only audit.",
         "StudioPrincipalAuthStore + /api/studio/projects/{project_id}/ibpc & /api/studio/principals enforce token auth, tenant isolation, OWNER/EDITOR/VIEWER/AUDITOR RBAC, and append-only admin audit.",
-        "40/40 AST mutants killed (0 survived, 0 invalid), >=98% line/branch coverage across all 10 Wave 3 modules, and all IBPC, Studio, boundary, lint, and strict mypy checks green."
+        "36/36 AST mutants killed (0 survived, 0 invalid), >=98% line/branch coverage across all 10 Wave 3 modules, and all IBPC, Studio, boundary, lint, and strict mypy checks green."
       ],
       "evidence_required": [
         "pytest tests/unit/test_wave3_ibpc_durability.py tests/unit/creative/test_wave3_ibpc_mutations.py",
@@ -8909,10 +8909,42 @@
         "tests/unit/test_wave3_ibpc_durability.py",
         "tests/unit/creative/test_wave3_ibpc_mutations.py"
       ],
-      "note": "PR #365 merged to main as 1a914457 (2026-11-26T18:59:13Z); Wave 3.5 defense-in-depth closure expands AST campaign to 40/40 mutants. Closed and lease released.",
+      "note": "PR #365 merged to main as 1a914457 (2026-11-26T18:59:13Z) with 36/36 AST mutants (M01-M36). Closed and lease released; Wave 3.5 follow-up M37-M40 tracked in task-w35-ibpc-security-closure (PR #366).",
       "delivered_pr": 365,
       "merge_commit_sha": "1a9144579f490e29b295da50a51a7dc437bfb7a5",
       "reconciled_at": "2026-11-26T19:30:00Z"
+    },
+    {
+      "task": "task-w35-ibpc-security-closure",
+      "title": "Wave 3.5: IBPC consent/scope defense-in-depth, SQLite DENIED audit & board provenance closure",
+      "title_fa": "موج ۳.۵: دفاع در عمق رضایت و محدوده IBPC، ممیزی DENIED در SQLite و بستن حاکمیت برد",
+      "zone": "nagar-ibpc-wave3-durability",
+      "priority": "P0",
+      "status": "active_in_review",
+      "scope": "Post-PR #365 Wave 3.5 defense-in-depth closure on PR #366: align durable vs in-memory provider_id consent matching, fail-closed empty/mismatched tenant_id at both DurablePrivacyConsentStore and PrivacyPolicy layers with persisted SQLite DENIED audit rows, enforce auth-first (401 before 400) and shared _resolve_scoped_project_id() conflict rejection in Studio IBPC API, reconcile .agents/board.json provenance (PR #355-#365), close superseded PR #364, and expand AST campaign M37-M40 (40-mutant AST campaign).",
+      "prerequisites": [
+        "task-w3-ibpc-durability"
+      ],
+      "acceptance_criteria": [
+        "DurablePrivacyConsentStore.check_consent_status() matches in-memory provider_id parity on non-external scopes and rejects empty/mismatched tenant_id with consent_tenant_mismatch.",
+        "PrivacyPolicy.enforce_processing_consent() persists SQLite DENIED audit rows on store-raised PrivacyViolation AND enforces Policy-level tenant defense-in-depth.",
+        "register_studio_principal() and bind_studio_principal_channel() authenticate first (401) and share _resolve_scoped_project_id() rejecting body/query project_id conflicts with 400.",
+        "40/40 AST mutants (M01-M40) killed (0 survived, 0 invalid) plus 4/4 test_ibpc_implementation_mutations.py killed and >=98% line/branch coverage across all 10 Wave 3 modules.",
+        "Board integrity, truth gate, version lockstep, architecture, and docs integrity gates all green."
+      ],
+      "evidence_required": [
+        "pytest tests/unit/test_wave3_ibpc_durability.py tests/unit/creative/test_wave3_ibpc_mutations.py tests/unit/test_ibpc_implementation_mutations.py",
+        "pytest tests/architecture/ tests/unit/test_docs_integrity.py tests/unit/test_agent_board.py",
+        "ruff check, ruff format --check, mypy --strict, check_board_integrity.py, nagar --check"
+      ],
+      "exclusive_paths": [],
+      "owner_hint": "arena/aac14be0-nexus-ai-agent",
+      "agent_branch": "arena/aac14be0-nexus-ai-agent",
+      "claimed_at": "2026-11-26T20:00:00Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "delivered_pr": 366,
+      "note": "PR #366 open in review on arena/aac14be0-nexus-ai-agent (based on main 1a914457) with 40/40 AST mutants (M01-M40) and no held path/gate locks."
     }
   ],
   "deferred_log": [
