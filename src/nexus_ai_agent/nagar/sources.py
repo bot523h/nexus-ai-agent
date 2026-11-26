@@ -16,7 +16,7 @@ The five sources (each an independent predicate over the tree)
     catalogue row.
 
 ``runtime_registry``
-    ``build_runtime_registry()`` — the composed registry's own answer to
+    ``build_production_registry()`` — the composed registry's own answer to
     "which operations can this process dispatch".  Its size is a
     *measurement*, never a constant.
 
@@ -99,6 +99,9 @@ _PACK_MODULES = (
     # operations adapter, so the declaration scan sees the same ids.
     "nexus_ai_agent.creative.packs.portrait.operations",
     "nexus_ai_agent.creative.packs.scene.operations",
+    # Harvested #247: the perception pack declares OPERATION_* in its models and
+    # re-exports them, so the declaration scan and the registry stay pinned.
+    "nexus_ai_agent.creative.packs.perception.operations",
     # Wave 5: the six NAGAR creative-engine capabilities declare their ids as
     # OPERATION_* constants in the engine capability layer, so the declaration
     # scan and the runtime registry stay bidirectionally pinned.
@@ -365,9 +368,9 @@ class Runtime:
 def read_runtime_registry(registry: CapabilityRegistry | None = None) -> Runtime:
     """Read the composed registry — the runtime's own answer."""
     if registry is None:
-        from nexus_ai_agent.creative.packs.runtime import build_runtime_registry
+        from nexus_ai_agent.creative.production_runtime import build_production_registry
 
-        registry = build_runtime_registry()
+        registry = build_production_registry()
     operations: list[RuntimeOperation] = []
     for operation_id in sorted(registry.list_operations()):
         spec = registry.get_spec(operation_id)

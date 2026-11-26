@@ -2,10 +2,11 @@
 
 Mission: Agent B — Operation Truth & Wave Planning Mission.
 Verifies:
-1. Product Catalog (70) != Runtime Registry (88) != Executable Surface (9).
+1. Product Catalog (70) != Runtime Registry (91) != Executable Surface (9).
    (Registry grew 57 -> 82 when the AETHEL portrait/scene packs were composed in
-   Wave 3, and 82 -> 88 in Wave 6 when the six NAGAR creative engines each
-   registered one read-only ``verify_media`` capability. Neither group is part of
+   Wave 3, 82 -> 88 in Wave 6 when the six NAGAR creative engines each
+   registered one read-only ``verify_media`` capability, and 88 -> 91 when the
+   perception pack was harvested from PR #247. None of these groups is part of
    the 70-op product catalog, so overlap (47) and the 23 catalog gaps are
    unchanged — the registry grows, the catalogue does not.)
 2. Exactly 23 operations are missing and preserved as EvidenceClass.MISSING / L0 / NOT_IMPLEMENTED.
@@ -70,9 +71,10 @@ def test_reconciliation_numbers_invariant() -> None:
 
     # 57 pre-Wave-3 + 25 AETHEL (portrait.refine 11 + scene.imaging 14) = 82,
     # + 6 engine verifications (audio.omega + cinema.{veritas,chronos,atlas,morpheus,hyperion})
-    # = 88. The engine capabilities are not product-catalog operations, so the
+    # = 88, + 3 perception operations (harvested from PR #247) = 91. None of the
+    # engine or perception capabilities is a product-catalog operation, so the
     # overlap and gap counts below must NOT move.
-    assert len(runtime_ops) == 88, f"Expected 88 registered operations, got {len(runtime_ops)}"
+    assert len(runtime_ops) == 91, f"Expected 91 registered operations, got {len(runtime_ops)}"
     engine_ops = {op for op in runtime_ops if op.endswith("_verify_media")}
     assert len(engine_ops) == 6, sorted(engine_ops)
 
@@ -107,7 +109,7 @@ def test_three_layers_are_strictly_decoupled() -> None:
     # 1. Catalog != Registry
     assert catalog_ops != runtime_ops
     assert len(catalog_ops) == 70
-    assert len(runtime_ops) == 88
+    assert len(runtime_ops) == 91
 
     # 2. Registry != Executable Surface
     assert runtime_ops != surface_ops

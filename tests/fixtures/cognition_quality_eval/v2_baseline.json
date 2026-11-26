@@ -427,7 +427,7 @@
     "valid_proposals_accepted": 6
   },
   "evaluation_version": "nexus-cognition-quality-eval/v2",
-  "fingerprint": "59f2f1e61fc749d8",
+  "fingerprint": "7bb632395ff641fc",
   "refusal_reasons": {
     "authority_field": 16,
     "disallowed_operation": 3,
@@ -440,6 +440,9 @@
   },
   "registry": {
     "offered_operations": [
+      "analysis.assess_loudness",
+      "analysis.mark_scene_cuts",
+      "analysis.mark_silences",
       "audio.align_music",
       "audio.beat_sync_cut",
       "audio.deess",

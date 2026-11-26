@@ -62,6 +62,7 @@ EXPECTED_PACKAGE_IDS = (
     "nexus.color.delivery",
     "nexus.portrait.refine",
     "nexus.scene.imaging",
+    "nexus.analysis.perception",
 )
 
 

@@ -79,6 +79,24 @@ def _register_slideshow(registry: CapabilityRegistry) -> object:
     return register_slideshow_operations(registry)
 
 
+def _register_perception(registry: CapabilityRegistry, gate: Any | None = None) -> object:
+    """Register the perception pack, optionally binding the admission port.
+
+    This module lives *inside* the pack substrate, whose law allows only
+    ``packs``/``studio``/``temporal`` imports, so it cannot import
+    ``creative.verification`` itself. The production binding is supplied by
+    :mod:`nexus_ai_agent.creative.production_runtime` (see ``MODULE_MAP.md`` R31);
+    a registry built here without one records ``gate.outcome == "not_configured"``
+    and claims no admission decision.
+    """
+    from nexus_ai_agent.creative.packs.perception.operations import (
+        register_perception_operations,
+    )
+
+    register_perception_operations(registry, gate=gate)
+    return registry
+
+
 def _register_caption(registry: CapabilityRegistry) -> object:
     from nexus_ai_agent.creative.packs.caption.operations import register_caption_operations
 
@@ -141,6 +159,9 @@ class PackComposition:
         return f"{self.directory} ({self.package_id})"
 
 
+#: The package id whose operations take the admission gate.
+_PERCEPTION_PACKAGE_ID = "nexus.analysis.perception"
+
 #: The builtin packs, in registration order.  The order is deterministic and
 #: part of the public contract: it is what ``nexus packs list`` prints and what
 #: the activation snapshot records.  ``slideshow`` first (the pack every other
@@ -195,6 +216,12 @@ COMPOSITION: tuple[PackComposition, ...] = (
         _register_scene,
         "object insertion, inpaint, outpaint, optics, atmosphere (Wave 3)",
     ),
+    PackComposition(
+        "perception",
+        "nexus.analysis.perception",
+        _register_perception,
+        "measured silence, scene cuts and loudness evidence to timeline edits (harvested #247)",
+    ),
 )
 
 #: ``directory -> composition`` for O(1) lookup by the gate and the CLI.
@@ -232,6 +259,7 @@ def build_runtime_registry(
     *,
     tone_library: Any | None = None,
     compositions: Iterable[PackComposition] | None = None,
+    perception_gate: Any | None = None,
 ) -> CapabilityRegistry:
     """Wave-1 catalog **plus every builtin pack's operations**.
 
@@ -246,7 +274,10 @@ def build_runtime_registry(
 
     registry = build_wave1_registry()
     for entry in compositions if compositions is not None else COMPOSITION:
-        entry.register(registry)
+        if perception_gate is not None and entry.package_id == _PERCEPTION_PACKAGE_ID:
+            _register_perception(registry, perception_gate)
+        else:
+            entry.register(registry)
     # Wave 5: the six NAGAR creative engines are capabilities too. They are
     # registered on every runtime registry (so the bus admits or *refuses* them
     # explicitly) but stay EXPERIMENTAL opt-ins in the render lane, and their
@@ -262,13 +293,16 @@ def build_pack_registry(
     current_version: str | None = None,
     tone_library: Any | None = None,
     compositions: Iterable[PackComposition] | None = None,
+    perception_gate: Any | None = None,
 ) -> PackRegistry:
     """A :class:`PackRegistry` over the full runtime composition.
 
     ``current_version`` defaults to :func:`installed_version`; pass ``""``
     explicitly to opt out of the version comparison entirely.
     """
-    registry = build_runtime_registry(tone_library=tone_library, compositions=compositions)
+    registry = build_runtime_registry(
+        tone_library=tone_library, compositions=compositions, perception_gate=perception_gate
+    )
     version = installed_version() if current_version is None else current_version
     return PackRegistry(registry, current_version=version or None)
 

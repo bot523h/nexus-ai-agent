@@ -25,8 +25,8 @@
       }
     ],
     "generation_command": "python -m nexus_ai_agent.nagar",
-    "source_revision": "e4436fb14522e2dbf846b855af52db78ddcc374b",
-    "generated_at": "2026-11-26T07:32:19Z",
+    "source_revision": "ccdb95b2b1d507d0dc31f270a1222aaa51cd7535",
+    "generated_at": "2026-11-26T17:05:41Z",
     "deterministic_fields": [
       "reconciliation",
       "operations[*].pipeline",
@@ -64,19 +64,20 @@
   "l4_unavailable_reason": "no repository source defines or measures a production-like level; recording L4 would be an unsourced claim",
   "reconciliation": {
     "catalog_count": 70,
-    "runtime_count": 88,
+    "runtime_count": 91,
     "overlap_count": 47,
     "missing_count": 23,
-    "runtime_only_count": 41,
-    "universe_count": 111,
+    "runtime_only_count": 44,
+    "universe_count": 114,
     "surface_count": 12,
-    "suite_executed_count": 82,
+    "suite_executed_count": 85,
     "missing_by_category": {
       "color": 3,
       "portrait": 10,
       "scene": 10
     },
     "runtime_only_by_category": {
+      "analysis": 3,
       "audio": 1,
       "cinema": 5,
       "media": 2,
@@ -112,6 +113,9 @@
       "scene.track_object"
     ],
     "runtime_only": [
+      "analysis.assess_loudness",
+      "analysis.mark_scene_cuts",
+      "analysis.mark_silences",
       "audio.omega_verify_media",
       "cinema.atlas_verify_media",
       "cinema.chronos_verify_media",
@@ -156,8 +160,8 @@
     ]
   },
   "declaration_parity": {
-    "declared_count": 88,
-    "registered_count": 88,
+    "declared_count": 91,
+    "registered_count": 91,
     "declared_not_registered": [],
     "registered_not_declared": []
   },
@@ -253,6 +257,30 @@
   "proof": {
     "suite_probe_rule": "operation id (string literal or imported OPERATION_* constant) in a test module that also calls .dispatch/._dispatch/.handler or a slideshow service entrypoint; the truth engine's own test files are excluded (they observe the engine, they do not evidence operations)",
     "suite_executed": {
+      "analysis.assess_loudness": {
+        "kinds": [
+          "dispatch"
+        ],
+        "files": [
+          "tests/unit/test_perception_gate_runtime.py"
+        ]
+      },
+      "analysis.mark_scene_cuts": {
+        "kinds": [
+          "dispatch"
+        ],
+        "files": [
+          "tests/unit/test_perception_gate_runtime.py"
+        ]
+      },
+      "analysis.mark_silences": {
+        "kinds": [
+          "dispatch"
+        ],
+        "files": [
+          "tests/unit/test_perception_gate_runtime.py"
+        ]
+      },
       "audio.align_music": {
         "kinds": [
           "dispatch",
@@ -973,6 +1001,7 @@
           "tests/unit/test_motion_pack.py",
           "tests/unit/test_nagar_free_text_slice.py",
           "tests/unit/test_nagar_wave1_green_cockpit.py",
+          "tests/unit/test_perception_pack.py",
           "tests/unit/test_slideshow_pack.py",
           "tests/unit/test_slideshow_upscale.py",
           "tests/unit/test_studio_discovery.py",
@@ -1909,6 +1938,168 @@
     }
   ],
   "operations": [
+    {
+      "operation_id": "analysis.assess_loudness",
+      "identity": {
+        "t_id": "NOT_AVAILABLE",
+        "category": "analysis",
+        "catalog_line": null,
+        "permission_level_catalog": "NOT_AVAILABLE",
+        "engine_catalog": "NOT_AVAILABLE",
+        "pack_id": "NOT_AVAILABLE",
+        "status_flag": "RUNTIME_ONLY"
+      },
+      "pipeline": {
+        "product": "MISSING",
+        "contract": "PRESENT",
+        "registry": "PRESENT",
+        "capability": "PRESENT",
+        "surface": "MISSING",
+        "command": "MISSING",
+        "execution": "MISSING",
+        "artifact": "MISSING",
+        "proof": "PROVEN"
+      },
+      "maturity": {
+        "level": 1,
+        "token": "L1",
+        "definition": "code: registered in build_runtime_registry() and domain-ready (typed input model with extra=\"forbid\", a named non-lambda handler, deterministic=True)"
+      },
+      "evidence": {
+        "suite_execution_kinds": [
+          "dispatch"
+        ],
+        "suite_reference_files": [
+          "tests/unit/test_perception_gate_runtime.py"
+        ],
+        "recorded_execution_proof": false,
+        "recorded_artifact_proof": false,
+        "recorded_proofs": [],
+        "gate4_runtime_verdict": "NOT_AVAILABLE",
+        "artifact_kind": "unspecified",
+        "surface_entrypoint": "NOT_AVAILABLE",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording L4 would be an unsourced claim",
+        "input_model": "nexus_ai_agent.creative.packs.perception.models.AssessLoudnessInput",
+        "handler": "_assess_loudness",
+        "permission_level": "A"
+      },
+      "source": {
+        "defined_in": null,
+        "registered_in": "build_runtime_registry()",
+        "surface_probe": null
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "nexus.analysis.perception"
+    },
+    {
+      "operation_id": "analysis.mark_scene_cuts",
+      "identity": {
+        "t_id": "NOT_AVAILABLE",
+        "category": "analysis",
+        "catalog_line": null,
+        "permission_level_catalog": "NOT_AVAILABLE",
+        "engine_catalog": "NOT_AVAILABLE",
+        "pack_id": "NOT_AVAILABLE",
+        "status_flag": "RUNTIME_ONLY"
+      },
+      "pipeline": {
+        "product": "MISSING",
+        "contract": "PRESENT",
+        "registry": "PRESENT",
+        "capability": "PRESENT",
+        "surface": "MISSING",
+        "command": "MISSING",
+        "execution": "MISSING",
+        "artifact": "MISSING",
+        "proof": "PROVEN"
+      },
+      "maturity": {
+        "level": 1,
+        "token": "L1",
+        "definition": "code: registered in build_runtime_registry() and domain-ready (typed input model with extra=\"forbid\", a named non-lambda handler, deterministic=True)"
+      },
+      "evidence": {
+        "suite_execution_kinds": [
+          "dispatch"
+        ],
+        "suite_reference_files": [
+          "tests/unit/test_perception_gate_runtime.py"
+        ],
+        "recorded_execution_proof": false,
+        "recorded_artifact_proof": false,
+        "recorded_proofs": [],
+        "gate4_runtime_verdict": "NOT_AVAILABLE",
+        "artifact_kind": "unspecified",
+        "surface_entrypoint": "NOT_AVAILABLE",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording L4 would be an unsourced claim",
+        "input_model": "nexus_ai_agent.creative.packs.perception.models.MarkSceneCutsInput",
+        "handler": "_mark_scene_cuts",
+        "permission_level": "B"
+      },
+      "source": {
+        "defined_in": null,
+        "registered_in": "build_runtime_registry()",
+        "surface_probe": null
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "nexus.analysis.perception"
+    },
+    {
+      "operation_id": "analysis.mark_silences",
+      "identity": {
+        "t_id": "NOT_AVAILABLE",
+        "category": "analysis",
+        "catalog_line": null,
+        "permission_level_catalog": "NOT_AVAILABLE",
+        "engine_catalog": "NOT_AVAILABLE",
+        "pack_id": "NOT_AVAILABLE",
+        "status_flag": "RUNTIME_ONLY"
+      },
+      "pipeline": {
+        "product": "MISSING",
+        "contract": "PRESENT",
+        "registry": "PRESENT",
+        "capability": "PRESENT",
+        "surface": "MISSING",
+        "command": "MISSING",
+        "execution": "MISSING",
+        "artifact": "MISSING",
+        "proof": "PROVEN"
+      },
+      "maturity": {
+        "level": 1,
+        "token": "L1",
+        "definition": "code: registered in build_runtime_registry() and domain-ready (typed input model with extra=\"forbid\", a named non-lambda handler, deterministic=True)"
+      },
+      "evidence": {
+        "suite_execution_kinds": [
+          "dispatch"
+        ],
+        "suite_reference_files": [
+          "tests/unit/test_perception_gate_runtime.py"
+        ],
+        "recorded_execution_proof": false,
+        "recorded_artifact_proof": false,
+        "recorded_proofs": [],
+        "gate4_runtime_verdict": "NOT_AVAILABLE",
+        "artifact_kind": "unspecified",
+        "surface_entrypoint": "NOT_AVAILABLE",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording L4 would be an unsourced claim",
+        "input_model": "nexus_ai_agent.creative.packs.perception.models.MarkSilencesInput",
+        "handler": "_mark_silences",
+        "permission_level": "B"
+      },
+      "source": {
+        "defined_in": null,
+        "registered_in": "build_runtime_registry()",
+        "surface_probe": null
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "nexus.analysis.perception"
+    },
     {
       "operation_id": "audio.align_music",
       "identity": {
@@ -7257,6 +7448,7 @@
           "tests/unit/test_motion_pack.py",
           "tests/unit/test_nagar_free_text_slice.py",
           "tests/unit/test_nagar_wave1_green_cockpit.py",
+          "tests/unit/test_perception_pack.py",
           "tests/unit/test_slideshow_pack.py",
           "tests/unit/test_slideshow_upscale.py",
           "tests/unit/test_studio_discovery.py",

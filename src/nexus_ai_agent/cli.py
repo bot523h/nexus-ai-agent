@@ -549,9 +549,9 @@ def _packs_registry() -> Any:
     Activation remains an explicit, auditable step (``nexus packs activate``), so
     ``packs list`` keeps reporting ``active: false`` until an operator says so.
     """
-    from nexus_ai_agent.creative.packs.runtime import build_pack_registry
+    from nexus_ai_agent.creative.production_runtime import build_production_pack_registry
 
-    return build_pack_registry()
+    return build_production_pack_registry()
 
 
 @packs_app.command("list")

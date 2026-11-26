@@ -378,9 +378,9 @@ def archive_trim_evidence(
 
 def runtime_evidence(result: Mapping[str, object] | None = None) -> dict[str, Any]:
     """Return legacy facts or the actual canonical execution snapshot."""
-    from nexus_ai_agent.creative.packs.runtime import build_runtime_registry
+    from nexus_ai_agent.creative.production_runtime import build_production_registry
 
-    registry = build_runtime_registry()
+    registry = build_production_registry()
     description = registry.describe(TIMELINE_TRIM_OPERATION)
     decision = registry.check_permission(TIMELINE_TRIM_OPERATION, confirmed=False)
     version: str

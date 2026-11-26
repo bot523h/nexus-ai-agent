@@ -48,7 +48,7 @@ builtin packs exist in the runtime:
 | `PackComposition` | one pack: `directory`, `package_id`, registrar, summary |
 | `COMPOSITION` | the builtin packs, in deterministic order (slideshow → caption → edit → motion → audio → delivery → portrait → scene; portrait/scene added by the ATLAS integration) |
 | `COMPOSITION_BY_DIRECTORY` / `COMPOSITION_BY_PACKAGE_ID` | O(1) lookups used by the gate and the CLI |
-| `build_runtime_registry()` | Wave-1 catalog + every pack's operations (82 operations today) |
+| `build_runtime_registry()` | Wave-1 catalog + every pack's operations (82 operations today); takes an optional `perception_gate=` (see §2a) |
 | `build_pack_registry()` | the same registry wrapped in a `PackRegistry` (what the CLI consumes) |
 | `build_pack_runtime()` | `PackRuntime`: composition + builtin registration + optional activation |
 | `PackRuntime.status()` | one `PackStatus` row per pack: capabilities, pending, active, signature, binaries |
@@ -67,6 +67,67 @@ builtin packs exist in the runtime:
 3. **No import side effects.** Registrars are imported lazily inside
    `build_runtime_registry()`, so importing the package never drags the creative
    packs into memory and no pack can cycle back into the composition module.
+
+### 2a. The admission gate is injected, never imported
+
+`creative.packs.runtime` lives inside the pack substrate and may import only
+`creative.packs`, `creative.studio`, `creative.temporal`
+([MODULE_MAP](../architecture/MODULE_MAP.md) R7). The perception pack's admission
+policy — the license superlattice join *and* the GUM guard band — lives in
+`creative.verification`, so the substrate **cannot** import it, and a pack that
+reached for it would (correctly) fail
+`tests/architecture/test_pack_substrate_does_not_cross_package_boundaries`.
+
+The gate therefore travels as **plain data**:
+
+```python
+gate(
+    {
+        "kind": "loudness",
+        "integrated_lufs": -14.0,
+        "target_lufs": -14.0,
+        "tolerance_lu": 1.0,
+        "licenses": ["PERMISSIVE_MIT_APACHE"],
+    }
+)
+# -> {"admitted": True, "outcome": "pass", "recommended_gain_db": 0.0, ...}
+```
+
+and is bound exactly once, in the composition root:
+
+| Caller | Builds its registry with |
+|---|---|
+| `creative/render_jobs.py` (render lane) | `creative.production_runtime.build_production_registry()` |
+| `jobs/creative_passport.py` | same |
+| `nagar/sources.py` (truth projection) | same |
+| `cli.py` (`nexus packs …`) | `creative.production_runtime.build_production_pack_registry()` |
+
+`build_runtime_registry(perception_gate=…)` and
+`build_pack_registry(perception_gate=…)` stay usable directly; when no gate is
+passed, every gate record says `outcome: "not_configured"` and claims no
+admission decision. That is the honest answer for a test that exercises handler
+arithmetic — and `tests/unit/test_perception_gate_runtime.py` asserts no
+production caller builds a registry that way.
+
+What the operations do with the record:
+
+- **`analysis.assess_loudness`** — gates *before* any recommendation. A refusal
+  (`abstain_insufficient_evidence`, `license_conflict`) sets
+  `verdict: "refused"` with `gain_db`, `projected_true_peak_dbfs` and
+  `normalize_arguments` all `None`: nothing a downstream command could act on.
+  A conclusive decision keeps the existing `within_tolerance` / `too_quiet` /
+  `too_loud` verdicts and adds the full gate record (interval, limits, effective
+  degrees of freedom) to the output.
+- **`analysis.mark_silences` / `analysis.mark_scene_cuts`** — gate on the license
+  join *when the caller declares contributing sources* (`licenses` on the input
+  model, validated against `LICENSE_REGIME_NAMES`). A conflict publishes **zero**
+  markers (`refused: true`); an undeclared set publishes normally with
+  `outcome: "no_license_declared"`.
+
+The loudness arithmetic itself is shared: `verification/loudness.py` imports only
+`math` and `uncertainty_gum`, so the pack's verdict and the FFmpeg adapter's
+budget are the same numbers (test:
+`tests/architecture/test_perception_boundary.py::test_the_loudness_model_is_dependency_free`).
 
 ---
 

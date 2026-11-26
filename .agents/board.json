@@ -7014,7 +7014,7 @@
       "title": "Repair existing PR #247: feat(creative): perception lane — measured silence/scene/loudness evidence (free offline FFmpeg)",
       "zone": "pr-repair-campaign",
       "priority": "P1",
-      "status": "queued",
+      "status": "active",
       "scope": "Repair https://github.com/bot523h/nexus-ai-agent/pull/247 on its existing branch feat/analysis-perception-pack, preserving intent and published history. Snapshot head 0c512257692ac971b4c03f8cfbfc37565f08cbe3; re-read live head, base, reviews, checks and all board sources before claiming. Resolve only evidenced defects, conflicts and required-check failures; no merge, force-push, protection changes, or approval fabrication.",
       "prerequisites": [],
       "acceptance_criteria": [
@@ -7056,13 +7056,13 @@
         "tests/unit/test_perception_pack.py",
         "tests/unit/test_perception_parsers.py"
       ],
-      "agent_branch": "",
-      "claimed_at": null,
+      "agent_branch": "openhands/w11x-phase2-forensic-triage-gum-harvest",
+      "claimed_at": "2026-11-26T07:05:26Z",
       "ttl_hours": 24,
       "gates_owner": false,
-      "generation": 0,
+      "generation": 1,
       "owner_hint": "Registered for a future authorized repair session on feat/analysis-perception-pack; not assigned or claimed by this registration.",
-      "note": "Registration only. Existing records and leases remain unchanged. Overlapping queued entries must never be claimed concurrently."
+      "note": ""
     },
     {
       "task": "task-274-langsmith-tracing",
@@ -9716,6 +9716,11 @@
         "rev": 3,
         "date": "2026-10-06",
         "note": "truth reconcile after the spine stack + owner-gate fix merged: merged claims moved to done; AGENTS.md sections 4/6 refreshed; #126/#183/#128/#184 MERGED, #127/#112 SUPERSEDED."
+      },
+      {
+        "rev": 4,
+        "date": "2026-11-26",
+        "note": "W11X phase-2 truth sync (PR #363): the GUM arithmetic corrections (JS bin coverage, two-block propagation, level-aware loudness variance, spectral condition number, construction-time PSD) and the perception admission gate binding at creative/production_runtime.py are recorded as MODULE_MAP R31 + DECISION_LOG D-0042/D-0043; the W11X mutation campaign is 22/22 killed and OPERATION_TRUTH.json was regenerated at this HEAD."
       }
     ]
   },

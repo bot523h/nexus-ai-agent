@@ -10,13 +10,13 @@ recomputed on every run. No number on this page is hand-maintained.
 | quantity | value | rule |
 |---|---|---|
 | product catalogue | 70 | rows of the pack tables in `docs/NAGAR_70_OPERATIONS_TDD.md` |
-| runtime registry | 88 | `build_runtime_registry()` |
+| runtime registry | 91 | `build_runtime_registry()` |
 | overlap | 47 | catalogue ∩ registry |
 | missing | 23 | catalogue − registry |
-| runtime-only | 41 | registry − catalogue |
-| universe | 111 | catalogue ∪ registry |
+| runtime-only | 44 | registry − catalogue |
+| universe | 114 | catalogue ∪ registry |
 | surface-reachable | 12 | allow-list ∪ slideshow entrypoint |
-| suite-executed | 82 | tests AST execution probe |
+| suite-executed | 85 | tests AST execution probe |
 
 ## Missing (catalogue rows no registrar ships)
 
@@ -50,6 +50,7 @@ recomputed on every run. No number on this page is hand-maintained.
 
 ## Runtime-only (dispatchable, never catalogued)
 
+* `analysis` — 3
 * `audio` — 1
 * `cinema` — 5
 * `media` — 2
@@ -59,6 +60,9 @@ recomputed on every run. No number on this page is hand-maintained.
 * `system` — 1
 * `timeline` — 1
 
+* `analysis.assess_loudness`
+* `analysis.mark_scene_cuts`
+* `analysis.mark_silences`
 * `audio.omega_verify_media`
 * `cinema.atlas_verify_media`
 * `cinema.chronos_verify_media`
