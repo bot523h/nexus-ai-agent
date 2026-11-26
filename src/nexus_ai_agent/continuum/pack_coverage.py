@@ -96,10 +96,11 @@ PACK_TEST_TARGETS: Mapping[str, tuple[str, ...]] = {
         "tests/architecture/test_audio_pack_boundary.py",
     ),
     "perception": (
-        # Harvested #247: the pack's own suite plus the parser suite and the
-        # boundary gate are its evidence (the same shape as the audio pack).
+        # Harvested #247: the pack's own suite plus the boundary gate are its
+        # evidence (the same shape as the audio pack).  The parser suite is not
+        # listed because it exercises `creative.perception.parsers`, not the
+        # pack modules this measurement scores.
         "tests/unit/test_perception_pack.py",
-        "tests/unit/test_perception_parsers.py",
         "tests/architecture/test_perception_boundary.py",
     ),
     "caption": (
