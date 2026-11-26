@@ -16,6 +16,7 @@ suite into prefix-matching.  The rule this module pins:
 
 from __future__ import annotations
 
+import ast
 import pathlib
 import types
 
@@ -166,12 +167,61 @@ class TestTheApprovalErrorSpelling:
         assert diagnostic in error.detail
         assert f"unauthorized_principal: {diagnostic}" in str(error)
 
-    def test_no_refusal_concatenates_the_diagnostic_onto_the_reason(self) -> None:
-        """Source-level fence: the bug was a spelling, so the spelling is guarded."""
-        source = pathlib.Path(service_mod.__file__).read_text(encoding="utf-8")
-        assert 'ApprovalError(f"unauthorized_principal:' not in source
-        assert 'ApprovalError(\n                    "unauthorized_principal:' not in source
-        assert 'AUTHORIZATION_REFUSAL_REASON = "unauthorized_principal"' in source
+    def test_the_reason_literal_exists_exactly_once_in_the_module(self) -> None:
+        """Wave 3-R7 AST fence: one constant, no concatenated spellings.
+
+        The bug was a *spelling*, so the spelling is guarded structurally: the
+        literal may appear exactly once (the ``AUTHORIZATION_REFUSAL_REASON``
+        assignment, annotated ``Final[str]``), and no ``Refusal(...)`` /
+        ``ApprovalError(...)`` call may build a reason by interpolation or by a
+        ``"unauthorized_principal:..."`` literal.
+        """
+        tree = ast.parse(pathlib.Path(service_mod.__file__).read_text(encoding="utf-8"))
+        literals = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Constant)
+            and isinstance(node.value, str)
+            and "unauthorized_principal" in node.value
+        ]
+        assert len(literals) == 1, [node.value for node in literals]
+        (only,) = literals
+        assert only.value == AUTHORIZATION_REFUSAL_REASON
+        # … it is the declared module constant (``AUTHORIZATION_REFUSAL_REASON:
+        # Final[str] = "unauthorized_principal"``), nothing else
+        annotated = [
+            node
+            for node in tree.body
+            if isinstance(node, ast.AnnAssign)
+            and isinstance(node.target, ast.Name)
+            and node.target.id == "AUTHORIZATION_REFUSAL_REASON"
+        ]
+        assert len(annotated) == 1
+        assert annotated[0].value is only
+        assert ast.unparse(annotated[0].annotation) == "Final[str]"
+
+        offenders: list[str] = []
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call) or not node.args:
+                continue
+            func = node.func
+            name = getattr(func, "id", None) or getattr(func, "attr", None)
+            if name not in {"Refusal", "ApprovalError"}:
+                continue
+            first = node.args[0]
+            if isinstance(first, ast.JoinedStr):
+                # ``f"{AUTHORIZATION_REFUSAL_REASON}:{diagnostic}"`` is the exact
+                # spelling this contract forbids
+                if any(
+                    isinstance(inner, ast.Name) and inner.id == "AUTHORIZATION_REFUSAL_REASON"
+                    for inner in ast.walk(first)
+                ):
+                    offenders.append(f"line {node.lineno}: interpolated reason")
+                continue
+            if isinstance(first, ast.Constant) and isinstance(first.value, str):
+                if first.value.startswith("unauthorized_principal:"):
+                    offenders.append(f"line {node.lineno}: {first.value!r}")
+        assert offenders == []
 
     def test_a_legacy_spelling_is_normalised_on_the_way_out(self) -> None:
         legacy = ApprovalError(

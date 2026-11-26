@@ -24,6 +24,8 @@ import pytest
 from nexus_ai_agent.connect.key_provider import StaticKeyRing
 from nexus_ai_agent.creative.packs.runtime import build_runtime_registry
 from nexus_ai_agent.nagar.ibpc.approval import ApprovalError
+from nexus_ai_agent.nagar.ibpc.principal_authority import MembershipRole
+from nexus_ai_agent.nagar.ibpc.principal_authority import PrincipalFacts as RoleFacts
 from nexus_ai_agent.nagar.ibpc.privacy import PrivacyPolicy
 from nexus_ai_agent.nagar.ibpc.service import IBPCService, IBPCServiceDeps, PipelineResult
 from nexus_ai_agent.nagar.ibpc.session import (
@@ -368,6 +370,28 @@ class _RecordingAuthority:
         )
 
 
+class _OwnerRoleAuthority:
+    """Role-authority double: verifies the requested principal as OWNER.
+
+    Wave 3-R7: approving and consuming require a verified Studio role, so the
+    full-pipeline security fixture composes a role source; the canonical port
+    still answers independently (the 3-way check cross-examines both).
+    """
+
+    def __init__(self, role: MembershipRole = MembershipRole.OWNER) -> None:
+        self.role = role
+
+    def authorize_action(
+        self, *, principal_id: str, project_id: str, binding_ref: str, action: object
+    ) -> RoleFacts:
+        return RoleFacts(
+            principal_id=principal_id,
+            project_id=project_id,
+            channel_binding_id=binding_ref,
+            role=self.role,
+        )
+
+
 @pytest.fixture()
 def service_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     import types
@@ -430,6 +454,7 @@ def service_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
             revision_provider=lambda: revision["current"],
             authority=authority,
             channel_binding_ref=BINDING_REF,
+            principal_authority=_OwnerRoleAuthority(),
             approval_key_provider=StaticKeyRing({"unit": b"u" * 32}, active_key_id="unit"),
         )
     )
@@ -950,6 +975,9 @@ async def test_voice_configuration_and_transcription_fail_closed(service_env, mo
 def test_missing_channel_binding_is_a_typed_refusal(service_env) -> None:
     service, queue, clip, _revision, _authority = service_env
     service._deps.channel_binding_ref = None
+    # identity-only planning composition: with a role authority present the
+    # missing binding would already refuse at session start (Wave 3-R7)
+    service._deps.principal_authority = None
     sid = _open_service_session(service)
     result = service.submit_text_intent(
         sid,
@@ -1047,8 +1075,20 @@ async def test_voice_pipeline_refusal_branches(service_env, tmp_path: Path, monk
             audio_dir=tmp_path / f"audio-{turn_id}",
         )
 
+    # Wave 3-R7: open the session while the authority still answers, then revoke
+    # it — the voice boundary must refuse before any transcription.
+    sid_revoked = _open_service_session(service)
+    service._deps.caption_engine = _RecordingEngine()
     authority.revoked = True
-    denied = await run_voice("voice-authority", _RecordingEngine())
+    denied = await service.submit_voice_intent(
+        sid_revoked,
+        "voice-authority",
+        sequence_number=1,
+        audio=b"audio",
+        asset_id="src",
+        source_path=str(clip),
+        audio_dir=tmp_path / "audio-voice-authority",
+    )
     assert isinstance(denied, Refusal) and denied.reason == "unauthorized_principal"
     authority.revoked = False
 

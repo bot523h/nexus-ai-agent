@@ -179,7 +179,7 @@ Enforcement, per invariant, is by test (no claim without a test):
 
 ### Mutation evidence (Wave 3)
 
-`scripts/w3_ibpc_mutations.py` attacks these guards directly: 31 source weakenings
+`scripts/w3_ibpc_mutations.py` attacks these guards directly: 44 source weakenings
 across `live_session.py`, `approval.py`, `privacy.py`, `principal_authority.py` and
 `service.py` (idempotency lookup disabled, stale-revision fence removed, monotonic
 index broken, CAS conflict ignored, termination not revoking approvals, WAL /
@@ -193,7 +193,7 @@ payload not presented, scope signature not re-checked, approval TTL inflated).
 Each mutant runs in an isolated `/tmp` sandbox with a three-layer bytecode purge
 (tree `__pycache__`, a dedicated `PYTHONPYCACHEPREFIX`, `PYTHONDONTWRITEBYTECODE`)
 and a SHA-256-verified restore. The oracle is strict: `pytest` exit **1** = killed,
-`0` = survived, anything else = harness error (never a kill). Result: **31/31
+`0` = survived, anything else = harness error (never a kill). Result: **44/44
 killed**, pristine tree GREEN before and after, shipped worktree untouched.
 
 Run it with `python scripts/w3_ibpc_mutations.py` (`--list` prints the catalogue,
@@ -207,6 +207,39 @@ A campaign deliberately rewrites tracked files in place, so nothing else may
 `git add`/commit while one is running — a concurrent commit swept a torch-mutant
 leftover into `scripts/ci_install.sh` once, and `tests/unit/test_ci_torch_disk_budget.py`
 caught it in CI. That is the harness working as intended; run one campaign at a time.
+
+#### Wave 3-R7: 3-way consistency and the identity-only execution ban
+
+Two gaps survived the R6 refusal-contract pass, and both are now guarded:
+
+* **3-way identity / project / binding agreement.** When a durable role authority
+  *and* the canonical identity port both answer, `_verify_canonical_identity`
+  requires every field (`principal_id`, `project_id`, `channel_binding_id`) to be
+  a non-empty, non-whitespace string that is *exactly* equal across the request,
+  the role authority's facts and the canonical port's resolution. R6 compared the
+  binding only when the canonical port returned one non-`None` value, so a
+  `None` / `""` / `"   "` binding — or a different `principal_id` / `project_id` —
+  was silently accepted and could mint a cross-principal approval. A missing or
+  empty binding is now `binding_inconsistent`; a mismatched principal/project is
+  `identity_mismatch`; both keep `reason == "unauthorized_principal"` with the
+  diagnostic in `detail`.
+* **No execution without a verified role.** An identity-only composition
+  (`principal_authority is None`, `require_role_authority=False`) may plan —
+  `SESSION_START` / `TURN_CREATE` — but `_EXECUTION_AND_APPROVAL_ACTIONS`
+  (`PREVIEW_GENERATE`, `APPROVAL_CONSUME`, `REVISION_RESTORE`) always fail closed
+  with `role_verification_required`. `approve()`, `execute()` and the queue
+  admission therefore cannot run in that mode: no approval is minted, none is
+  consumed, and no job is enqueued. The boundary also re-checks `ACTION_ROLES`
+  against the role authority's facts, so a `VIEWER` / `AUDITOR` is refused with
+  `insufficient_role` even if an authority were to answer without enforcing the
+  matrix itself. Production composition still fails closed at startup:
+  `build_durable_ibpc_service` raises `AuthorizationRefusalError` when
+  `require_role_authority=True` (the default) and no principal authority is
+  supplied.
+
+Both are attacked directly by the campaign: `M43_empty_canonical_binding_skips_the_check`
+and `M44_identity_only_may_approve_and_consume` (killed by
+`tests/unit/creative/ibpc/test_r7_authorization_hardening.py`).
 
 #### One guard, not two
 

@@ -41,7 +41,11 @@ from nexus_ai_agent.nagar.ibpc.approval_mac import KeyProviderError, StaticKeyRi
 from nexus_ai_agent.nagar.ibpc.canonical import digest_of, sha256_bytes
 from nexus_ai_agent.nagar.ibpc.composition import build_durable_ibpc_service
 from nexus_ai_agent.nagar.ibpc.models import ApprovalBinding, ApprovalState
-from nexus_ai_agent.nagar.ibpc.principal_authority import DurableStudioAuthorizationService
+from nexus_ai_agent.nagar.ibpc.principal_authority import (
+    DurableStudioAuthorizationService,
+    MembershipRole,
+)
+from nexus_ai_agent.nagar.ibpc.principal_authority import PrincipalFacts as RoleFacts
 from nexus_ai_agent.nagar.ibpc.service import IBPCService, IBPCServiceDeps
 from nexus_ai_agent.provenance.canonicalization import (
     CanonicalizationScheme,
@@ -509,6 +513,28 @@ class _PortAuthority:
         )
 
 
+class _OwnerRoleAuthority:
+    """Role-authority double: verifies the requested principal as OWNER.
+
+    Wave 3-R7: approving and consuming require a *verified Studio role*, so a
+    full-pipeline test must compose a role source.  The canonical port still
+    answers independently — the 3-way consistency check cross-examines both.
+    """
+
+    def __init__(self, role: MembershipRole = MembershipRole.OWNER) -> None:
+        self.role = role
+
+    def authorize_action(
+        self, *, principal_id: str, project_id: str, binding_ref: str, action: object
+    ) -> RoleFacts:
+        return RoleFacts(
+            principal_id=principal_id,
+            project_id=project_id,
+            channel_binding_id=binding_ref,
+            role=self.role,
+        )
+
+
 @pytest.fixture()
 def durable_service(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """A service wired to the REAL durable approval + session stores."""
@@ -580,6 +606,7 @@ def durable_service(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
             session_store=sessions,
             channel_binding_ref="cbn_" + "a" * 64,
             authority=_PortAuthority(),
+            principal_authority=_OwnerRoleAuthority(),
         )
     )
     yield service, queue, clip, ledger, sessions

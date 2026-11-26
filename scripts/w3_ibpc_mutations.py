@@ -491,8 +491,8 @@ MUTATIONS: tuple[Mutation, ...] = (
         IBPC / "service.py",
         (
             (
-                "            if self._deps.role_authority_enforced or action in _OWNER_ONLY_ACTIONS:",
-                "            return AuthorizedPrincipalFacts(  # mutation: identity is treated as OWNER\n                principal_id=resolved.principal_id,\n                project_id=resolved.project_id,\n                channel_binding_id=resolved.channel_binding_id,\n                role=MembershipRole.OWNER,\n            )\n            if self._deps.role_authority_enforced or action in _OWNER_ONLY_ACTIONS:",
+                "            if (\n                self._deps.role_authority_enforced\n                or action in _EXECUTION_AND_APPROVAL_ACTIONS\n                or action in _OWNER_ONLY_ACTIONS\n            ):",
+                "            return AuthorizedPrincipalFacts(  # mutation: identity is treated as OWNER\n                principal_id=resolved.principal_id,\n                project_id=resolved.project_id,\n                channel_binding_id=resolved.channel_binding_id,\n                role=MembershipRole.OWNER,\n            )\n            if (\n                self._deps.role_authority_enforced\n                or action in _EXECUTION_AND_APPROVAL_ACTIONS\n                or action in _OWNER_ONLY_ACTIONS\n            ):",
             ),
         ),
         "a verified identity is not a role: the OWNER-only action is refused without a role proof",
@@ -552,6 +552,29 @@ MUTATIONS: tuple[Mutation, ...] = (
             ),
         ),
         "a context that cannot be persisted is a typed failure, never a silent skip",
+    ),
+    # -- Wave 3-R7: cross-authority consistency + the identity-only ban ------ #
+    Mutation(
+        "M43_empty_canonical_binding_skips_the_check",
+        IBPC / "service.py",
+        (
+            (
+                '        resolved_binding = _identity_text(resolved, "channel_binding_id", "binding_inconsistent")',
+                '        resolved_binding = getattr(resolved, "channel_binding_id", None)  # mutation: an empty binding skips the check\n        if resolved_binding is None:\n            return',
+            ),
+        ),
+        "a canonical authority that returns no channel_binding_id can never skip the 3-way consistency check",
+    ),
+    Mutation(
+        "M44_identity_only_may_approve_and_consume",
+        IBPC / "service.py",
+        (
+            (
+                "            if (\n                self._deps.role_authority_enforced\n                or action in _EXECUTION_AND_APPROVAL_ACTIONS\n                or action in _OWNER_ONLY_ACTIONS\n            ):",
+                "            if self._deps.role_authority_enforced or action in _OWNER_ONLY_ACTIONS:  # mutation: identity-only mode may approve and consume",
+            ),
+        ),
+        "an identity-only composition can approve, consume, restore or enqueue only with a verified Studio role",
     ),
 )
 

@@ -39,6 +39,8 @@ from nexus_ai_agent.nagar.ibpc.approval_mac import StaticKeyRing
 from nexus_ai_agent.nagar.ibpc.authority import PrincipalFacts
 from nexus_ai_agent.nagar.ibpc.live_session import DurableLiveSessionStore
 from nexus_ai_agent.nagar.ibpc.models import CheckVerdict
+from nexus_ai_agent.nagar.ibpc.principal_authority import MembershipRole
+from nexus_ai_agent.nagar.ibpc.principal_authority import PrincipalFacts as RoleFacts
 from nexus_ai_agent.nagar.ibpc.service import (
     APPROVAL_TTL_MINUTES,
     IBPCService,
@@ -96,6 +98,28 @@ class _Authority:
             principal_id=principal_id,
             project_id=project_id,
             channel_binding_id=binding_ref,
+        )
+
+
+class _OwnerRoleAuthority:
+    """Role-authority double: verifies the requested principal as OWNER.
+
+    Wave 3-R7: approving and consuming require a *verified Studio role*, so a
+    full-pipeline test must compose a role source.  The canonical port still
+    answers independently — the 3-way consistency check cross-examines both.
+    """
+
+    def __init__(self, role: MembershipRole = MembershipRole.OWNER) -> None:
+        self.role = role
+
+    def authorize_action(
+        self, *, principal_id: str, project_id: str, binding_ref: str, action: object
+    ) -> RoleFacts:
+        return RoleFacts(
+            principal_id=principal_id,
+            project_id=project_id,
+            channel_binding_id=binding_ref,
+            role=self.role,
         )
 
 
@@ -178,6 +202,7 @@ def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
             session_store=sessions,
             channel_binding_ref=BINDING_REF,
             authority=_Authority(),
+            principal_authority=_OwnerRoleAuthority(),
         )
     )
 

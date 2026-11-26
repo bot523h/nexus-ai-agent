@@ -41,6 +41,9 @@ from nexus_ai_agent.nagar.ibpc.principal_authority import (
     StudioAuthorizationError,
 )
 from nexus_ai_agent.nagar.ibpc.principal_authority import (
+    PrincipalFacts as RoleFacts,
+)
+from nexus_ai_agent.nagar.ibpc.principal_authority import (
     StudioAction as PrincipalStudioAction,
 )
 from nexus_ai_agent.nagar.ibpc.privacy import (
@@ -122,6 +125,30 @@ class _VanishingAuthority(_Authority):
         )
 
 
+class _OwnerRoleAuthority:
+    """Role-authority double: verifies the requested principal as OWNER.
+
+    Wave 3-R7: approving and consuming require a *verified Studio role*, so the
+    closure harness composes a role source by default (representing the
+    production composition).  The canonical port still answers independently —
+    the 3-way consistency check cross-examines both.  A test that exercises the
+    identity-only planning composition passes ``principal_authority=None``.
+    """
+
+    def __init__(self, role: MembershipRole = MembershipRole.OWNER) -> None:
+        self.role = role
+
+    def authorize_action(
+        self, *, principal_id: str, project_id: str, binding_ref: str, action: object
+    ) -> RoleFacts:
+        return RoleFacts(
+            principal_id=principal_id,
+            project_id=project_id,
+            channel_binding_id=binding_ref,
+            role=self.role,
+        )
+
+
 @pytest.fixture()
 def harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """Media probes stubbed, stores real, authority injectable per test."""
@@ -189,6 +216,7 @@ def harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
             ),
             channel_binding_ref=BINDING_REF,
             authority=_Authority(),
+            principal_authority=_OwnerRoleAuthority(),
         )
         defaults.update(overrides)
         service = IBPCService(IBPCServiceDeps(**defaults))  # type: ignore[arg-type]
@@ -264,7 +292,7 @@ class TestCanonicalAuthorityRefusals:
         # guard (see scripts/ibpc_security_mutations.py::unconfigured_authority_allows),
         # so the refusal keeps the execute path's own typed reason instead of a
         # second, shadowing message.
-        service = harness.build(authority=None)
+        service = harness.build(authority=None, principal_authority=None)
         session_id = _session(service)
         result = _submit(service, harness.clip, session_id)
         assert type(result).__name__ == "Refusal"
@@ -276,7 +304,9 @@ class TestCanonicalAuthorityRefusals:
         assert service._deps.queue.enqueued == []
 
     def test_a_missing_channel_binding_refuses_the_turn(self, harness) -> None:
-        service = harness.build(channel_binding_ref=None)
+        # identity-only planning composition: the refusal surfaces at turn
+        # creation (a role composition would already refuse at session start)
+        service = harness.build(channel_binding_ref=None, principal_authority=None)
         session_id = _session(service)
         result = _submit(service, harness.clip, session_id)
         assert type(result).__name__ == "Refusal"
@@ -304,7 +334,7 @@ class TestCanonicalAuthorityRefusals:
         # canonical authority's refusal surfaces as the public *Refusal* contract
         # (exact reason, structured detail) before any turn fence or context.
         authority = _Authority(error=CanonicalAuthorityError("not_a_member", "no membership"))
-        service = harness.build(authority=authority)
+        service = harness.build(authority=authority, principal_authority=None)
         session_id = _session(service)
         result = _submit(service, harness.clip, session_id)
         assert type(result).__name__ == "Refusal"

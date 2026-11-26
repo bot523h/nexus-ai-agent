@@ -49,6 +49,8 @@ from nexus_ai_agent.nagar.ibpc.authority import DirectoryAuthority
 from nexus_ai_agent.nagar.ibpc.footprint import verify_keep
 from nexus_ai_agent.nagar.ibpc.intent import Clarification, Refusal
 from nexus_ai_agent.nagar.ibpc.models import ApprovalState, CheckVerdict
+from nexus_ai_agent.nagar.ibpc.principal_authority import MembershipRole
+from nexus_ai_agent.nagar.ibpc.principal_authority import PrincipalFacts as RoleFacts
 from nexus_ai_agent.nagar.ibpc.service import (
     IBPCService,
     IBPCServiceDeps,
@@ -107,6 +109,28 @@ def _clip(path: Path, *, seconds: float | None = None) -> None:
         pytest.skip(f"could not synthesize clip: {proc.stderr.decode('utf-8', 'replace')[-200:]}")
 
 
+class _OwnerRoleAuthority:
+    """Role-authority double: verifies the requested principal as OWNER.
+
+    Wave 3-R7: approving and consuming require a verified Studio role, so a
+    full-pipeline composition must provide one; the canonical port still answers
+    independently (the 3-way consistency check cross-examines both).
+    """
+
+    def __init__(self, role: MembershipRole = MembershipRole.OWNER) -> None:
+        self.role = role
+
+    def authorize_action(
+        self, *, principal_id: str, project_id: str, binding_ref: str, action: object
+    ) -> RoleFacts:
+        return RoleFacts(
+            principal_id=principal_id,
+            project_id=project_id,
+            channel_binding_id=binding_ref,
+            role=self.role,
+        )
+
+
 @pytest.fixture()
 def harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     creative_root = tmp_path / "creative_tmp"
@@ -140,6 +164,7 @@ def harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
             facts_provider=queue,
             attempt_provider=queue.get_attempt_history,
             authority=DirectoryAuthority(directory),
+            principal_authority=_OwnerRoleAuthority(),
             channel_binding_ref=channel_binding_id(binding),
             approval_key_provider=StaticKeyRing({"test-v1": b"t" * 32}, active_key_id="test-v1"),
         )
@@ -655,6 +680,7 @@ async def test_voice_turn_flows_through_the_same_pipeline(harness, tmp_path: Pat
         facts_provider=service._deps.facts_provider,
         attempt_provider=service._deps.attempt_provider,
         authority=service._deps.authority,
+        principal_authority=service._deps.principal_authority,
         channel_binding_ref=service._deps.channel_binding_ref,
         caption_engine=_FakeCaptionEngine("trim from 0.5 to 1.5 seconds"),
         approval_key_provider=service._deps.approval_key_provider,
@@ -891,6 +917,7 @@ async def test_voice_intent_runs_parse_body_off_the_event_loop(harness, tmp_path
         facts_provider=service._deps.facts_provider,
         attempt_provider=service._deps.attempt_provider,
         authority=service._deps.authority,
+        principal_authority=service._deps.principal_authority,
         channel_binding_ref=service._deps.channel_binding_ref,
         caption_engine=_FakeCaptionEngine("trim from 0.5 to 1.5 seconds"),
     )
@@ -958,6 +985,7 @@ async def test_corrupt_source_voice_is_a_typed_refusal_not_a_crash(harness, tmp_
         facts_provider=service._deps.facts_provider,
         attempt_provider=service._deps.attempt_provider,
         authority=service._deps.authority,
+        principal_authority=service._deps.principal_authority,
         channel_binding_ref=service._deps.channel_binding_ref,
         caption_engine=_FakeCaptionEngine("trim from 0.5 to 1.5 seconds"),
     )

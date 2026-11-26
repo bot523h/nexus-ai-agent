@@ -36,7 +36,7 @@ import threading
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Literal, Protocol
+from typing import Any, Final, Literal, Protocol
 
 from nexus_ai_agent.application.creative_intent import CanonicalCreativeIntent
 from nexus_ai_agent.application.ports.caption_engine import CaptionEnginePort
@@ -145,6 +145,22 @@ _OWNER_ONLY_ACTIONS = frozenset(
     action for action, roles in ACTION_ROLES.items() if roles == frozenset({MembershipRole.OWNER})
 )
 
+#: Actions that approve, consume, execute or administer a project.  Wave 3-R7:
+#: an *identity-only* composition (no role source at all) may plan — it may
+#: generate a proposal for a human to look at — but it can never reach one of
+#: these.  ``CanonicalAuthorityPort`` proves identity and membership; it cannot
+#: distinguish a ``VIEWER`` from an ``EDITOR``, so letting it satisfy
+#: ``PREVIEW_GENERATE`` / ``APPROVAL_CONSUME`` would let a read-only member mint
+#: and burn an approval token.  The refusal is ``role_verification_required``,
+#: and it happens before any approval is consumed or any job is enqueued.
+_EXECUTION_AND_APPROVAL_ACTIONS = frozenset(
+    {
+        PrincipalStudioAction.PREVIEW_GENERATE,
+        PrincipalStudioAction.APPROVAL_CONSUME,
+        PrincipalStudioAction.REVISION_RESTORE,
+    }
+)
+
 
 logger = logging.getLogger(__name__)
 
@@ -157,7 +173,7 @@ logger = logging.getLogger(__name__)
 #: ``str()``), never concatenated onto the reason.  Splitting it the other way
 #: (``reason="unauthorized_principal:insufficient_role"``) silently breaks every
 #: exact-match caller and pushes tests into prefix-matching.
-AUTHORIZATION_REFUSAL_REASON = "unauthorized_principal"
+AUTHORIZATION_REFUSAL_REASON: Final[str] = "unauthorized_principal"
 
 
 def _authorization_error(diagnostic: str, detail: str = "") -> ApprovalError:
@@ -187,6 +203,23 @@ def _authorization_refusal(exc: ApprovalError) -> Refusal:
 def _authority_port_detail(exc: CanonicalAuthorityError) -> str:
     """The structured detail a canonical-authority refusal carries."""
     return f"{exc.reason}: {exc.detail}".strip(": ")
+
+
+def _identity_text(
+    source: Any, field: str, reason: str, *, actor: str = "canonical authority"
+) -> str:
+    """Read one identity field strictly: a non-empty, non-whitespace ``str``.
+
+    Wave 3-R7: ``None`` / ``""`` / ``"   "`` / a non-string is a *refusal*, never
+    an implicit "no opinion" that silently skips a consistency comparison — that
+    skip is exactly how a cross-principal approval used to slip through.
+    """
+    value = getattr(source, field, None)
+    if not isinstance(value, str) or not value.strip():
+        raise _authorization_error(
+            reason, f"the {actor} returned a missing, empty or malformed {field}"
+        )
+    return value
 
 
 #: Durable turn states whose in-memory ``TurnState`` is reconstructed on recovery.
@@ -828,7 +861,7 @@ class IBPCService:
             verified = self._resolve_authority(session.principal_id, session.project_id)
         except CanonicalAuthorityError as exc:
             self._sessions.mark_failed(session_id, turn_id)
-            return Refusal("unauthorized_principal", f"{exc.reason}: {exc.detail}")
+            return Refusal(AUTHORIZATION_REFUSAL_REASON, _authority_port_detail(exc))
         src = Path(source_path)
         if not src.is_file():
             self._sessions.mark_failed(session_id, turn_id)
@@ -1700,10 +1733,21 @@ class IBPCService:
         every IBPC mutation with a typed ``ApprovalError`` — never a silent
         grant, never a cached identity, and never a synthesized role.
 
-        Returns the verified facts, or ``None`` **only** for the legacy
-        ``CanonicalAuthorityPort``-only composition whose authority confirms the
-        identity but carries no role: no caller may read that as a grant
-        (Wave 3-R2b).  Every role-gated action refuses in that mode.
+        Wave 3-R7 adds two invariants on top of the R2b role gate:
+
+        * **3-way consistency** — every identity field (``principal_id``,
+          ``project_id``, ``channel_binding_id``) must be a non-empty string that
+          is *exactly* equal across the request, the role authority's facts and
+          the canonical port's resolution.  A ``None``/empty binding from the
+          canonical port is a refusal, never a skipped comparison.
+        * **no execution without a verified role** — an identity-only composition
+          (no role source at all) may plan, but ``PREVIEW_GENERATE``,
+          ``APPROVAL_CONSUME`` and ``REVISION_RESTORE`` always refuse.
+
+        Returns the verified facts, or ``None`` **only** for planning in the
+        legacy ``CanonicalAuthorityPort``-only composition whose authority
+        confirms the identity but carries no role: no caller may read that as a
+        grant (Wave 3-R2b).
         """
         authority = self._deps.principal_authority
         binding_ref = self._deps.channel_binding_ref
@@ -1722,6 +1766,12 @@ class IBPCService:
                 resolved = self._resolve_authority(principal_id, project_id)
             except CanonicalAuthorityError as exc:
                 raise _authorization_error(exc.reason, exc.detail) from exc
+            # Wave 3-R7: validate the resolution BEFORE trusting any field of
+            # it — the principal, the project and the binding must all be
+            # non-empty and exactly what was requested.
+            self._verify_canonical_identity(
+                resolved, principal_id=principal_id, project_id=project_id
+            )
             # Wave 3-R2b: the canonical port proves IDENTITY, never a ROLE. A
             # synthesized OWNER used to be handed back here, which silently
             # granted the OWNER-only ``REVISION_RESTORE`` to any member.
@@ -1740,9 +1790,15 @@ class IBPCService:
                     channel_binding_id=resolved.channel_binding_id,
                     role=role,
                 )
-            # No verified role: an OWNER-only action, or a composition that
-            # requires role authority, fails closed here — never a synthetic grant.
-            if self._deps.role_authority_enforced or action in _OWNER_ONLY_ACTIONS:
+            # No verified role: an execution/approval action, an OWNER-only
+            # action, or a composition that requires role authority fails closed
+            # here — never a synthetic grant, and never a "planning" fallback
+            # that still consumes an approval or enqueues a job (Wave 3-R7).
+            if (
+                self._deps.role_authority_enforced
+                or action in _EXECUTION_AND_APPROVAL_ACTIONS
+                or action in _OWNER_ONLY_ACTIONS
+            ):
                 raise _authorization_error(
                     "role_verification_required",
                     f"{action.value} needs a verified Studio role and no role authority "
@@ -1762,11 +1818,6 @@ class IBPCService:
             reason = getattr(exc, "reason", "authority_refused")
             detail = getattr(exc, "detail", "") or str(exc)
             raise _authorization_error(reason, detail) from exc
-        if facts.principal_id != principal_id or facts.project_id != project_id:
-            raise _authorization_error(
-                "identity_mismatch",
-                "the authority returned a different identity than requested",
-            )
         # Wave 3-R2b: the role authority is the ONLY role source when it is
         # present, and the identity it verified must agree with the canonical
         # port's own view of the binding.
@@ -1774,21 +1825,100 @@ class IBPCService:
             resolved = self._resolve_authority(principal_id, project_id)
         except CanonicalAuthorityError as exc:
             raise _authorization_error(exc.reason, exc.detail) from exc
-        if (
-            getattr(resolved, "channel_binding_id", None) is not None
-            and resolved.channel_binding_id != facts.channel_binding_id
-        ):
-            raise _authorization_error(
-                "binding_inconsistent",
-                "the role authority and the canonical authority disagree on the binding",
-            )
+        # Wave 3-R7: strict 3-way agreement across request, role authority and
+        # canonical port — a missing/empty binding is a refusal, not a skip.
+        self._verify_canonical_identity(
+            resolved,
+            principal_id=principal_id,
+            project_id=project_id,
+            facts=facts,
+        )
         role = getattr(facts, "role", None)
         if not isinstance(role, MembershipRole):
             raise _authorization_error(
                 "role_verification_required",
                 "the role authority returned no verified Studio role",
             )
+        # Wave 3-R7: the boundary re-checks the matrix instead of trusting the
+        # authority to have done it.  A role authority that answers with facts
+        # but forgets to enforce ``ACTION_ROLES`` must not be able to hand a
+        # ``VIEWER`` an approval to consume — defence in depth, same diagnostic.
+        allowed = ACTION_ROLES[action]
+        if role not in allowed:
+            raise _authorization_error(
+                "insufficient_role",
+                f"{action.value} requires one of "
+                f"{sorted(r.value for r in allowed)}, principal holds {role.value}",
+            )
         return facts
+
+    def _verify_canonical_identity(
+        self,
+        resolved: Any,
+        *,
+        principal_id: str,
+        project_id: str,
+        facts: Any | None = None,
+    ) -> None:
+        """Wave 3-R7: exact identity / project / binding agreement.
+
+        Every field must be a non-empty, non-whitespace string, and the whole
+        tuple must agree:
+
+        * ``resolved`` (the ``CanonicalAuthorityPort`` answer) with the request;
+        * ``resolved`` with the configured ``channel_binding_ref``;
+        * when ``facts`` (the role authority's answer) is present, all three —
+          request, role authority, canonical port — on ``principal_id``,
+          ``project_id`` *and* ``channel_binding_id``.
+
+        A ``None``/``""``/``"   "`` binding is refused rather than treated as
+        "the authority has no opinion": skipping the comparison in that case let
+        a cross-binding approval through.
+        """
+        resolved_principal = _identity_text(resolved, "principal_id", "identity_mismatch")
+        resolved_project = _identity_text(resolved, "project_id", "identity_mismatch")
+        resolved_binding = _identity_text(resolved, "channel_binding_id", "binding_inconsistent")
+        if resolved_principal != principal_id or resolved_project != project_id:
+            raise _authorization_error(
+                "identity_mismatch",
+                "the canonical authority returned a different principal_id/project_id "
+                "than requested",
+            )
+        binding_ref = self._deps.channel_binding_ref
+        if binding_ref and resolved_binding != binding_ref:
+            raise _authorization_error(
+                "binding_inconsistent",
+                "the canonical authority returned a channel_binding_id that is not the "
+                "configured binding",
+            )
+        if facts is None:
+            return
+        facts_principal = _identity_text(
+            facts, "principal_id", "identity_mismatch", actor="role authority"
+        )
+        facts_project = _identity_text(
+            facts, "project_id", "identity_mismatch", actor="role authority"
+        )
+        facts_binding = _identity_text(
+            facts, "channel_binding_id", "binding_inconsistent", actor="role authority"
+        )
+        if facts_principal != principal_id or resolved_principal != principal_id:
+            raise _authorization_error(
+                "identity_mismatch",
+                "the request, the role authority and the canonical authority disagree "
+                "on the principal",
+            )
+        if facts_project != project_id or resolved_project != project_id:
+            raise _authorization_error(
+                "identity_mismatch",
+                "the request, the role authority and the canonical authority disagree "
+                "on the project",
+            )
+        if facts_binding != resolved_binding or (binding_ref and facts_binding != binding_ref):
+            raise _authorization_error(
+                "binding_inconsistent",
+                "the role authority and the canonical authority disagree on the binding",
+            )
 
     def _authorize_turn_creation(self, session: Any) -> Refusal | None:
         """Authorize ``TURN_CREATE`` for this session's principal, or refuse.

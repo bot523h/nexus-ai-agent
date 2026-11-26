@@ -31,6 +31,8 @@ from nexus_ai_agent.nagar.ibpc.live_session import (
     TurnStoreError,
 )
 from nexus_ai_agent.nagar.ibpc.models import CheckVerdict, ShadowPreviewManifest
+from nexus_ai_agent.nagar.ibpc.principal_authority import MembershipRole
+from nexus_ai_agent.nagar.ibpc.principal_authority import PrincipalFacts as RoleFacts
 from nexus_ai_agent.nagar.ibpc.service import (
     ApprovalError,
     IBPCService,
@@ -114,6 +116,28 @@ def _media_signature(scope) -> ScopeSignature:
     )
 
 
+class _OwnerRoleAuthority:
+    """Role-authority double: verifies the requested principal as OWNER.
+
+    Wave 3-R7: approving and consuming require a *verified Studio role*, so a
+    full-pipeline test must compose a role source.  The canonical port still
+    answers independently — the 3-way consistency check cross-examines both.
+    """
+
+    def __init__(self, role: MembershipRole = MembershipRole.OWNER) -> None:
+        self.role = role
+
+    def authorize_action(
+        self, *, principal_id: str, project_id: str, binding_ref: str, action: object
+    ) -> RoleFacts:
+        return RoleFacts(
+            principal_id=principal_id,
+            project_id=project_id,
+            channel_binding_id=binding_ref,
+            role=self.role,
+        )
+
+
 @pytest.fixture()
 def media(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """Media probes stubbed; the evidence models are REAL so they round-trip
@@ -148,6 +172,7 @@ def _service(root: Path, *, clock=NOW, **overrides) -> IBPCService:
         now=clock,
         channel_binding_ref=BINDING_REF,
         authority=_Authority(),
+        principal_authority=_OwnerRoleAuthority(),
         approval_key_provider=ring,
         approval_ledger=DurableCanonicalApprovalLedger(
             root / "approvals.sqlite3", key_provider=ring, now=clock

@@ -31,6 +31,8 @@ from nexus_ai_agent.nagar.ibpc.live_session import (
     TurnStatus,
 )
 from nexus_ai_agent.nagar.ibpc.models import CheckVerdict, ShadowPreviewManifest
+from nexus_ai_agent.nagar.ibpc.principal_authority import MembershipRole
+from nexus_ai_agent.nagar.ibpc.principal_authority import PrincipalFacts as RoleFacts
 from nexus_ai_agent.nagar.ibpc.service import IBPCService, IBPCServiceDeps
 from nexus_ai_agent.nagar.ibpc.signature import ScopeSignature
 
@@ -114,6 +116,28 @@ def media(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     return types.SimpleNamespace(clip=clip, root=tmp_path)
 
 
+class _OwnerRoleAuthority:
+    """Role-authority double: verifies the requested principal as OWNER.
+
+    Wave 3-R7: approving and consuming require a verified Studio role, so a
+    full-pipeline composition must provide one; the canonical port still answers
+    independently (the 3-way consistency check cross-examines both).
+    """
+
+    def __init__(self, role: MembershipRole = MembershipRole.OWNER) -> None:
+        self.role = role
+
+    def authorize_action(
+        self, *, principal_id: str, project_id: str, binding_ref: str, action: object
+    ) -> RoleFacts:
+        return RoleFacts(
+            principal_id=principal_id,
+            project_id=project_id,
+            channel_binding_id=binding_ref,
+            role=self.role,
+        )
+
+
 def _process(root: Path, *, revoked: bool = False, clock=NOW) -> IBPCService:
     """One "process": fresh in-memory state over the shared SQLite files."""
     ring = StaticKeyRing({"unit": KEY}, active_key_id="unit")
@@ -126,6 +150,7 @@ def _process(root: Path, *, revoked: bool = False, clock=NOW) -> IBPCService:
             now=clock,
             channel_binding_ref=BINDING_REF,
             authority=_Authority(revoked=revoked),
+            principal_authority=_OwnerRoleAuthority(),
             approval_key_provider=ring,
             approval_ledger=DurableCanonicalApprovalLedger(
                 root / "approvals.sqlite3", key_provider=ring, now=clock
