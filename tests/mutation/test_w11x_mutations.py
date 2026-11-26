@@ -1,6 +1,6 @@
-"""W11X wave-5 AST mutation campaign: GUM uncertainty, adapters and admission gate.
+"""W11X phase-2 AST mutation campaign: GUM math, adapters, gate and pack wiring.
 
-Fifteen surgical mutations, each attacking one mathematical invariant of the
+Twenty-two surgical mutations, each attacking one mathematical invariant of the
 JCGM 100:2008 propagation, the three-valued guard band, or the licence/GUM
 admission composition. The kill oracle is the strict one used by the
 creative-graph campaign: ``KILLED`` requires ``returncode == 1``, at least one
@@ -28,8 +28,14 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 VERIFICATION_DIR = REPO_ROOT / "src" / "nexus_ai_agent" / "creative" / "verification"
 GUM_FILE = VERIFICATION_DIR / "uncertainty_gum.py"
 ADAPTERS_FILE = VERIFICATION_DIR / "adapters.py"
+GATE_FILE = VERIFICATION_DIR / "perception_gate.py"
+LOUDNESS_FILE = VERIFICATION_DIR / "loudness.py"
+OPERATIONS_FILE = REPO_ROOT / "src/nexus_ai_agent/creative/packs/perception/operations.py"
 GUM_TESTS = "tests/unit/test_uncertainty_gum.py"
 ADAPTER_TESTS = "tests/unit/test_uncertainty_adapters.py"
+GATE_TESTS = "tests/unit/test_perception_gate.py"
+LOUDNESS_TESTS = "tests/unit/test_loudness_model.py"
+RUNTIME_TESTS = "tests/unit/test_perception_gate_runtime.py"
 
 _FORBIDDEN_CRASH_TOKENS: tuple[str, ...] = (
     "SyntaxError",
@@ -110,6 +116,14 @@ def _is_assign(node: ast.AST, target: str) -> bool:
     )
 
 
+def _is_return_starting(node: ast.AST, prefix: str) -> bool:
+    return (
+        isinstance(node, ast.Return)
+        and node.value is not None
+        and ast.unparse(node.value).startswith(prefix)
+    )
+
+
 def _is_call_starting(node: ast.AST, prefix: str) -> bool:
     return isinstance(node, ast.Call) and ast.unparse(node).startswith(prefix)
 
@@ -174,6 +188,34 @@ def _drop_sample_normalisation(node: ast.AST) -> ast.AST:
     return node
 
 
+def _require_both_histograms(node: ast.AST) -> ast.AST:
+    assert isinstance(node, ast.If)
+    node.test = ast.parse("p_value > 0.0 and q_value > 0.0", mode="eval").body
+    return node
+
+
+def _condition_from_inverse_entries(node: ast.AST) -> ast.AST:
+    assert isinstance(node, ast.Assign)
+    node.value = ast.parse(
+        "math.inf if min(inverse_mel, inverse_hem) <= 0.0 "
+        "else max(inverse_mel, inverse_hem, abs(inverse_cross)) / min(inverse_mel, inverse_hem)",
+        mode="eval",
+    ).body
+    return node
+
+
+def _drop_level_term(node: ast.AST) -> ast.AST:
+    assert isinstance(node, ast.Assign)
+    node.value = ast.parse("quantisation_step_value**2 * power", mode="eval").body
+    return node
+
+
+def _set_constant(node: ast.AST, value: float) -> ast.AST:
+    assert isinstance(node, ast.Assign)
+    node.value = ast.Constant(value=value)
+    return node
+
+
 def _use_objective(node: ast.AST) -> ast.AST:
     assert isinstance(node, ast.Assign)
     node.value = ast.Name(id="objective", ctx=ast.Load())
@@ -193,14 +235,14 @@ MUTATIONS: tuple[MutationSpec, ...] = (
         transform=_zero_first_argument,
     ),
     MutationSpec(
-        mutant_id="W02_negative_variance_unguarded",
-        invariant="a materially negative g^T Sigma g raises GUMCovarianceError",
+        mutant_id="W02_covariance_psd_unchecked",
+        invariant="a 3-input covariance with lambda_min < 0 must be refused",
         target_file=GUM_FILE,
-        func_name="combine",
+        func_name="__post_init__",
         test_file=GUM_TESTS,
-        test_selector="test_materially_negative_variance_is_a_covariance_error",
-        expected_error_tokens=("DID NOT RAISE", "GUMCovarianceError", "math domain"),
-        predicate=lambda n: _is_if(n, "variance < 0.0"),
+        test_selector="test_pairwise_cauchy_schwarz_is_not_enough_for_three_inputs",
+        expected_error_tokens=("DID NOT RAISE", "GUMCovarianceError"),
+        predicate=lambda n: _is_if(n, "size >= 3 and _gershgorin_floor(matrix) < 0.0"),
         transform=_weaken_to_false,
     ),
     MutationSpec(
@@ -233,7 +275,7 @@ MUTATIONS: tuple[MutationSpec, ...] = (
         test_file=GUM_TESTS,
         test_selector="test_welch_satterthwaite_is_capped_by_the_freedom_sum",
         expected_error_tokens=("assert", "1.0"),
-        predicate=lambda n: isinstance(n, ast.Return) and ast.unparse(n.value).startswith("min("),
+        predicate=lambda n: _is_return_starting(n, "min("),
         transform=_drop_cap,
     ),
     MutationSpec(
@@ -296,13 +338,13 @@ MUTATIONS: tuple[MutationSpec, ...] = (
     MutationSpec(
         mutant_id="W11_loudness_not_sample_averaged",
         invariant="quantisation noise shrinks as 1/sqrt(N)",
-        target_file=ADAPTERS_FILE,
-        func_name="loudness_uncertainty",
-        test_file=ADAPTER_TESTS,
-        test_selector="test_loudness_uncertainty_is_positive_and_shrinks_with_more_samples",
+        target_file=LOUDNESS_FILE,
+        func_name="mean_square_deviation",
+        test_file=LOUDNESS_TESTS,
+        test_selector="test_the_mean_square_deviation_shrinks_as_one_over_sqrt_samples",
         expected_error_tokens=("assert",),
-        predicate=lambda n: _is_assign(n, "mean_square_deviation"),
-        transform=_drop_sample_normalisation,
+        predicate=lambda n: _is_assign(n, "head"),
+        transform=_drop_level_term,
     ),
     MutationSpec(
         mutant_id="W12_js_gradient_flat",
@@ -310,11 +352,9 @@ MUTATIONS: tuple[MutationSpec, ...] = (
         target_file=ADAPTERS_FILE,
         func_name="_js_gradient",
         test_file=ADAPTER_TESTS,
-        test_selector="test_scene_cut_uncertainty_shrinks_with_more_pixels",
-        expected_error_tokens=("assert", "0.0"),
-        predicate=lambda n: (
-            isinstance(n, ast.Return) and ast.unparse(n.value).startswith("tuple(gradient")
-        ),
+        test_selector="test_the_scene_cut_budget_matches_the_closed_form_two_block_propagation",
+        expected_error_tokens=("assert",),
+        predicate=lambda n: _is_return_starting(n, "tuple(gradient"),
         transform=_flatten_gradient,
     ),
     MutationSpec(
@@ -345,10 +385,89 @@ MUTATIONS: tuple[MutationSpec, ...] = (
         target_file=ADAPTERS_FILE,
         func_name="_gramian_inverse",
         test_file=ADAPTER_TESTS,
-        test_selector="test_chromophore_uncertainty_detects_parallel_extinction_curves",
+        test_selector=("test_a_parallel_gramian_fails_closed_before_the_condition_is_reported"),
         expected_error_tokens=("ZeroDivisionError", "GUMInputError"),
         predicate=lambda n: _is_if(n, "determinant <= 0.0"),
         transform=_weaken_to_false,
+    ),
+    MutationSpec(
+        mutant_id="W16_js_bin_guard_restored",
+        invariant="a bin populated in only one histogram still contributes",
+        target_file=ADAPTERS_FILE,
+        func_name="_js_bin_contribution",
+        test_file=ADAPTER_TESTS,
+        test_selector="test_disjoint_histograms_are_maximally_different",
+        expected_error_tokens=("assert",),
+        predicate=lambda n: _is_if(n, "q_value > 0.0"),
+        transform=_require_both_histograms,
+    ),
+    MutationSpec(
+        mutant_id="W17_after_block_dropped",
+        invariant="the after-histogram's sampling noise is propagated too",
+        target_file=ADAPTERS_FILE,
+        func_name="_js_gradient_after",
+        test_file=ADAPTER_TESTS,
+        test_selector="test_the_scene_cut_budget_matches_the_closed_form_two_block_propagation",
+        expected_error_tokens=("assert",),
+        predicate=lambda n: _is_return_starting(n, "tuple(gradient"),
+        transform=_flatten_gradient,
+    ),
+    MutationSpec(
+        mutant_id="W19_condition_from_inverse_entries",
+        invariant="kappa_2 is lambda_max/lambda_min of the Gramian, not of its inverse",
+        target_file=ADAPTERS_FILE,
+        func_name="chromophore_uncertainty",
+        test_file=ADAPTER_TESTS,
+        test_selector="test_the_chromophore_condition_number_is_the_spectral_ratio",
+        expected_error_tokens=("assert",),
+        predicate=lambda n: _is_assign(n, "condition"),
+        transform=_condition_from_inverse_entries,
+    ),
+    MutationSpec(
+        mutant_id="W20_gate_license_refusal_ignored",
+        invariant="an incompatible license supremum refuses before the gain",
+        target_file=GATE_FILE,
+        func_name="gate_loudness",
+        test_file=GATE_TESTS,
+        test_selector="test_a_license_conflict_refuses_before_the_gain_is_considered",
+        expected_error_tokens=("assert", "license_conflict"),
+        predicate=lambda n: _is_if(n, "combination is not None and (not combination.compatible)"),
+        transform=_weaken_to_false,
+    ),
+    MutationSpec(
+        mutant_id="W21_gate_abstain_ignored",
+        invariant="a straddling interval abstains instead of publishing a gain",
+        target_file=GATE_FILE,
+        func_name="gate_loudness",
+        test_file=GATE_TESTS,
+        test_selector="test_a_straddling_measurement_abstains_instead_of_guessing",
+        expected_error_tokens=("assert",),
+        predicate=lambda n: _is_if(
+            n, "decision.outcome is VerificationOutcome.ABSTAIN_INSUFFICIENT_EVIDENCE"
+        ),
+        transform=_weaken_to_false,
+    ),
+    MutationSpec(
+        mutant_id="W22_marker_refusal_ignored",
+        invariant="a refused admission publishes no markers",
+        target_file=OPERATIONS_FILE,
+        func_name="_mark_silences",
+        test_file=RUNTIME_TESTS,
+        test_selector="test_a_license_conflict_publishes_no_markers_through_the_runtime",
+        expected_error_tokens=("assert", "markers_added"),
+        predicate=lambda n: _is_if(n, "admission.get('admitted') is False"),
+        transform=_weaken_to_false,
+    ),
+    MutationSpec(
+        mutant_id="W23_loudness_sensitivity_dropped",
+        invariant="u(L) = (10/ln10) u(M)/M carries the level through the sensitivity",
+        target_file=LOUDNESS_FILE,
+        func_name="loudness_budget",
+        test_file=LOUDNESS_TESTS,
+        test_selector="test_the_budget_is_the_propagation_of_the_mean_square_deviation",
+        expected_error_tokens=("assert",),
+        predicate=lambda n: _is_assign(n, "sensitivity"),
+        transform=lambda n: _set_constant(n, 1.0),
     ),
 )
 
@@ -443,7 +562,9 @@ def test_w11x_mutation_campaign_zero_survived() -> None:
                 f"SHA-256 mismatch after restoring {path}"
             )
 
-    assert len(MUTATIONS) == 15
+    # The pin is deliberate: a silently dropped mutant would otherwise look like
+    # a clean campaign. Raise it whenever a mutant is added, never lower it.
+    assert len(MUTATIONS) == 22
     assert invalid == [], f"Invalid mutants ({len(invalid)}): {invalid}"
     assert survived == [], f"Survived mutants ({len(survived)}): {survived}"
     assert len(killed) == len(MUTATIONS)

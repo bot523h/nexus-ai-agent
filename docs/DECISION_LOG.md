@@ -2944,3 +2944,77 @@ yet merged into `main`.
 `tests/unit/test_docs_integrity.py`, `scripts/check_board_integrity.py`, and
 `python -m nexus_ai_agent.nagar --check`.
 
+
+## D-0042 — GUM arithmetic corrections: the budget was under- and over-stated
+
+**Context.** An audit of `creative/verification/` found five independent
+arithmetic defects that each produced a confident wrong answer rather than a
+refusal:
+
+1. `_js_bin_contribution`'s predecessor skipped every bin where one histogram was
+   empty, so two *disjoint* histograms — the maximally different case — scored
+   `0.0` bits, and the scene-cut detector read a hard cut as no change at all.
+2. `scene_cut_uncertainty` propagated sampling noise from the *before* histogram
+   only. The after-histogram is a multinomial draw too, and on a short cut-in
+   frame it is the noisier one, so the budget was understated exactly where the
+   guard band matters.
+3. `loudness_uncertainty` used the deviation of a *sample*, `sqrt(q^2/(12N))`,
+   instead of the deviation of a *mean square*, `sqrt(q^2 M/(3N) + q^4/(180N))`.
+   The sample form ignores the level: at -60 LUFS it overstated `u` by ~500x, and
+   above -2.4 LUFS it understated it.
+4. The chromophore condition number was `max/min` of `G^-1`'s entries. For
+   `[[1, rho], [rho, 1]]` every entry of the inverse is `1/(1-rho^2)`, so it
+   reported `1.0` for every `rho`; the sensitivity is `kappa_2 = (1+rho)/(1-rho)`
+   of the Gramian (`19.0` at `rho = 0.9`).
+5. `UncertaintyInput` validated pairwise Cauchy-Schwarz only, which is necessary
+   but not sufficient: `[[1, -.6, -.6], [-.6, 1, -.6], [-.6, -.6, 1]]` has
+   `lambda_min = -0.2` yet passed, and `g^T Sigma g` could go negative after
+   construction.
+
+**Decision.** Fixed the arithmetic (each with a test that fails on the old code
+and a named AST mutant that keeps it fixed): every JS bin contributes its own
+`0.5 p log2(p/m) + 0.5 q log2(q/m)`; both multinomial blocks are propagated as
+`g^T diag(Sigma_P, Sigma_Q) g` with an optional `samples_per_histogram_after`;
+the level-aware mean-square variance lives in the **dependency-free**
+`verification/loudness.py` shared by the adapter and the admission gate;
+`kappa_2` is read off the Gramian spectrum; and `UncertaintyInput` proves
+positive semi-definiteness for `n >= 3` at construction (Gershgorin bound, then a
+deterministic Jacobi spectrum) while `combine` clamps cancellation noise instead
+of raising, because construction now owns the invariant. `W02`, `W11`, `W12` and
+`W19`–`W23` are the mutants that pin these decisions
+(`tests/mutation/test_w11x_mutations.py`, 22/22 killed).
+
+**Consequence.** A singular-but-PSD covariance stays legal (identical inputs are
+a legitimate degenerate case) and propagates to `u = 0`; a materially negative
+eigenvalue is refused where the matrix enters, with `lambda_min` in the message.
+
+## D-0043 — The perception admission gate is a plain-data port, bound at one composition root
+
+**Context.** The perception pack must be pure (law R7): it may import only
+`creative.packs`, `creative.studio` and `creative.temporal`. The admission gate
+lives in `creative.verification` and needs the license lattice and the GUM
+budget. Importing the gate inside `packs/runtime.py` broke
+`tests/architecture/test_pack_substrate_does_not_cross_package_boundaries`, and
+binding it at each call site duplicated the wiring with no proof the gate was
+ever bound.
+
+**Decision.** The gate's public surface is plain data — `gate_perception`,
+`gate_loudness`, `gate_licenses`, `parse_regimes` map a context mapping to a
+record mapping, with `admitted` strictly `True`/`False` (anything else is a wiring
+defect and fails closed) — and the pack receives it as an injected callable
+(`PerceptionGate`, a `TYPE_CHECKING`-free `Callable[[Mapping], Mapping]`). The
+single binding site is the new composition root
+`creative/production_runtime.py::build_production_registry`, used by the render
+lane, the creative passport, the truth projection, `nagar/sources` and the CLI.
+`build_runtime_registry` keeps its signature plus an optional
+`perception_gate=`, and records `gate.outcome == "not_configured"` when no gate
+is bound, so an ungated registry is honest instead of silently permissive. The
+pack's three operations gate *before* emitting: a refused loudness assessment
+publishes no gain and no `normalize_arguments`, and a refused marker command
+publishes zero markers. `docs/architecture/MODULE_MAP.md` R31 is the law;
+`tests/unit/test_perception_gate_runtime.py` is its enforcement (including an AST
+check that no production caller builds an ungated registry).
+
+**Consequence.** The license dimension is a *claim*: a caller that declares no
+contributing sources makes no license claim (`outcome == "no_license_declared"`)
+and the guard band still runs; a declared incompatible set refuses outright.
