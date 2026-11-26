@@ -1186,6 +1186,7 @@ class TestWave3EdgeCasesAndCoverage:
                 principal_id=OWNER_ID,
                 scope="audio",
                 project_id="proj-1",
+                tenant_id="ten-1",
             )
             assert rec.consent_id
             with pytest.raises(PrivacyViolation, match="no_provider_wired"):
@@ -3759,7 +3760,7 @@ class TestWave3SecurityClosureAndCoverage:
         # Non-OWNER cannot provision principals or bindings -> 403.
         assert (
             client.post(
-                "/api/studio/principals",
+                "/api/studio/principals?project_id=proj-w3",
                 headers=editor_h,
                 json={"principal_id": new_pid, "raw_token": "tok-new-principal-123"},
             ).status_code
@@ -3767,7 +3768,7 @@ class TestWave3SecurityClosureAndCoverage:
         )
         assert (
             client.post(
-                f"/api/studio/principals/{EDITOR_ID}/bindings",
+                f"/api/studio/principals/{EDITOR_ID}/bindings?project_id=proj-w3",
                 headers=editor_h,
                 json={"channel": "studio", "external_subject": "sub-e2"},
             ).status_code
@@ -3776,7 +3777,7 @@ class TestWave3SecurityClosureAndCoverage:
         # Cross-tenant principal / binding rejected -> 403.
         assert (
             client.post(
-                "/api/studio/principals",
+                "/api/studio/principals?project_id=proj-w3",
                 headers=owner_h,
                 json={
                     "principal_id": new_pid,
@@ -3788,7 +3789,7 @@ class TestWave3SecurityClosureAndCoverage:
         )
         assert (
             client.post(
-                f"/api/studio/principals/{t2_owner}/bindings",
+                f"/api/studio/principals/{t2_owner}/bindings?project_id=proj-w3",
                 headers=owner_h,
                 json={"channel": "studio", "external_subject": "sub-xten"},
             ).status_code
@@ -3797,7 +3798,7 @@ class TestWave3SecurityClosureAndCoverage:
         # Invalid principal id -> 400; short token -> 422; unknown principal binding -> 404.
         assert (
             client.post(
-                "/api/studio/principals/bad$pid/bindings",
+                "/api/studio/principals/bad$pid/bindings?project_id=proj-w3",
                 headers=owner_h,
                 json={"channel": "studio", "external_subject": "sub-bad"},
             ).status_code
@@ -3805,7 +3806,7 @@ class TestWave3SecurityClosureAndCoverage:
         )
         assert (
             client.post(
-                f"/api/studio/principals/{new_pid}/bindings",
+                f"/api/studio/principals/{new_pid}/bindings?project_id=proj-w3",
                 headers=owner_h,
                 json={"channel": "studio", "external_subject": "sub-missing"},
             ).status_code
@@ -3814,7 +3815,7 @@ class TestWave3SecurityClosureAndCoverage:
         # Invalid principal format caught by ValueError -> 400.
         assert (
             client.post(
-                "/api/studio/principals",
+                "/api/studio/principals?project_id=proj-w3",
                 headers=owner_h,
                 json={"principal_id": "not-a-valid-pid", "raw_token": "tok-valid-len-123"},
             ).status_code
@@ -3823,7 +3824,7 @@ class TestWave3SecurityClosureAndCoverage:
 
         # OWNER provisions principal + binds channel + grants/lists/revokes membership.
         r_p = client.post(
-            "/api/studio/principals",
+            "/api/studio/principals?project_id=proj-w3",
             headers=owner_h,
             json={
                 "principal_id": new_pid,
@@ -3833,7 +3834,7 @@ class TestWave3SecurityClosureAndCoverage:
         )
         assert r_p.status_code == 201
         r_b = client.post(
-            f"/api/studio/principals/{new_pid}/bindings",
+            f"/api/studio/principals/{new_pid}/bindings?project_id=proj-w3",
             headers=owner_h,
             json={"channel": "studio", "external_subject": "sub-new-editor"},
         )
@@ -5489,14 +5490,14 @@ class TestWave3FinalSecurityClosure:
         }
         # Existing principal_id via HTTP -> 409 Conflict.
         r_dup = client.post(
-            "/api/studio/principals",
+            "/api/studio/principals?project_id=proj-w3",
             headers=owner_h,
             json={"principal_id": victim, "raw_token": "tok-hijack-api"},
         )
         assert r_dup.status_code == 409
         # Duplicate raw_token via HTTP -> 409 Conflict.
         r_tok = client.post(
-            "/api/studio/principals",
+            "/api/studio/principals?project_id=proj-w3",
             headers=owner_h,
             json={"principal_id": other_pid, "raw_token": "tok-owner-p11"},
         )
@@ -5559,7 +5560,7 @@ class TestWave3FinalSecurityClosure:
             "X-Nexus-Principal-Token": "tok-owner-p12",
         }
         r_ok = client.post(
-            f"/api/studio/principals/{p2}/bindings",
+            f"/api/studio/principals/{p2}/bindings?project_id=proj-w3",
             headers=owner_h,
             json={"channel": "telegram", "external_subject": "tg-p2-123"},
         )
@@ -5569,13 +5570,13 @@ class TestWave3FinalSecurityClosure:
 
         # Re-binding the same (channel, external_subject) or binding_ref -> 409 Conflict.
         r_dup_sub = client.post(
-            f"/api/studio/principals/{OWNER_ID}/bindings",
+            f"/api/studio/principals/{OWNER_ID}/bindings?project_id=proj-w3",
             headers=owner_h,
             json={"channel": "telegram", "external_subject": "tg-p2-123"},
         )
         assert r_dup_sub.status_code == 409
         r_dup_ref = client.post(
-            f"/api/studio/principals/{OWNER_ID}/bindings",
+            f"/api/studio/principals/{OWNER_ID}/bindings?project_id=proj-w3",
             headers=owner_h,
             json={
                 "channel": "telegram",
@@ -5587,7 +5588,7 @@ class TestWave3FinalSecurityClosure:
         # Binding to a revoked principal via API -> 403.
         assert (
             client.post(
-                f"/api/studio/principals/{p_rev}/bindings",
+                f"/api/studio/principals/{p_rev}/bindings?project_id=proj-w3",
                 headers=owner_h,
                 json={"channel": "telegram", "external_subject": "tg-rev-api"},
             ).status_code
@@ -5972,3 +5973,329 @@ class TestWave3FinalSecurityClosure:
         assert r_no_tok.status_code == 401
         r_prod_ok = client.get("/api/studio/projects/proj-a/jobs/job-1/state", headers=owner_b_h)
         assert r_prod_ok.status_code == 403  # viewer/non-member on proj-a fails RBAC, not 401
+
+    def test_owner_mutation_without_project_id_or_across_projects_rejected(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from nexus_ai_agent.api import app as app_module
+        from nexus_ai_agent.config.settings import get_settings
+
+        clock = _Clock()
+        ws = tmp_path / "ws"
+        ws.mkdir()
+        auth_db = tmp_path / "auth.sqlite3"
+        auth = StudioPrincipalAuthStore(auth_db, now=clock)
+        auth.ensure_project("proj-alpha", tenant_id="ten-1")
+        auth.ensure_project("proj-beta", tenant_id="ten-1")
+
+        owner_alpha = "prn_" + "4" * 32
+        member_beta = "prn_" + "5" * 32
+        auth.register_principal(owner_alpha, tenant_id="ten-1", raw_token="tok-owner-alpha")
+        auth.bind_channel(owner_alpha, channel="studio", external_subject="sub-owner-alpha")
+        auth.grant_membership(
+            "proj-alpha", owner_alpha, role=StudioRole.OWNER, granted_by=owner_alpha
+        )
+
+        auth.register_principal(member_beta, tenant_id="ten-1", raw_token="tok-member-beta")
+        auth.grant_membership(
+            "proj-beta", member_beta, role=StudioRole.EDITOR, granted_by=owner_alpha
+        )
+        auth.close()
+
+        monkeypatch.setenv("NEXUS_DASHBOARD_TOKEN", "deploy-tok")
+        monkeypatch.setenv("NEXUS_STUDIO_PROJECT_IDS", "proj-alpha,proj-beta")
+        monkeypatch.setenv("NEXUS_STUDIO_WORKSPACE_ROOT", str(ws))
+        monkeypatch.setenv("NEXUS_STUDIO_AUTH_DB", str(auth_db))
+        monkeypatch.setenv("NEXUS_QUEUE_DB_PATH", str(tmp_path / "q.sqlite3"))
+        get_settings.cache_clear()
+        monkeypatch.setattr(app_module, "_creative_registry", None)
+
+        client = TestClient(app_module.app)
+        alpha_h = {
+            "Authorization": "Bearer deploy-tok",
+            "X-Nexus-Principal-Token": "tok-owner-alpha",
+        }
+        # Omitting project_id on principal/binding provisioning fails closed with 403.
+        r_no_proj_p = client.post(
+            "/api/studio/principals",
+            headers=alpha_h,
+            json={"principal_id": "prn_" + "6" * 32, "raw_token": "tok-unscoped-p1a"},
+        )
+        assert r_no_proj_p.status_code == 403
+        assert "project_scope_required" in r_no_proj_p.text
+
+        r_no_proj_b = client.post(
+            f"/api/studio/principals/{member_beta}/bindings",
+            headers=alpha_h,
+            json={"channel": "studio", "external_subject": "sub-unscoped-p1a"},
+        )
+        assert r_no_proj_b.status_code == 403
+        assert "project_scope_required" in r_no_proj_b.text
+
+        # OWNER of proj-alpha cannot bind channel to a principal exclusive to proj-beta.
+        r_cross_proj_b = client.post(
+            f"/api/studio/principals/{member_beta}/bindings?project_id=proj-alpha",
+            headers=alpha_h,
+            json={"channel": "studio", "external_subject": "sub-cross-proj-p1a"},
+        )
+        assert r_cross_proj_b.status_code == 403
+        assert "principal_not_in_project" in r_cross_proj_b.text
+
+    def test_revoke_principal_and_binding_blocked_when_target_not_in_project_or_active_in_other_project(  # noqa: E501
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from nexus_ai_agent.api import app as app_module
+        from nexus_ai_agent.config.settings import get_settings
+
+        clock = _Clock()
+        ws = tmp_path / "ws"
+        ws.mkdir()
+        auth_db = tmp_path / "auth.sqlite3"
+        auth = StudioPrincipalAuthStore(auth_db, now=clock)
+        auth.ensure_project("proj-alpha", tenant_id="ten-1")
+        auth.ensure_project("proj-beta", tenant_id="ten-1")
+
+        owner_alpha = "prn_" + "a1" * 16
+        owner_beta = "prn_" + "b1" * 16
+        beta_only = "prn_" + "c1" * 16
+        shared_user = "prn_" + "d1" * 16
+
+        auth.register_principal(owner_alpha, tenant_id="ten-1", raw_token="tok-oa-p1b")
+        auth.bind_channel(owner_alpha, channel="studio", external_subject="sub-oa-p1b")
+        auth.grant_membership(
+            "proj-alpha", owner_alpha, role=StudioRole.OWNER, granted_by=owner_alpha
+        )
+
+        auth.register_principal(owner_beta, tenant_id="ten-1", raw_token="tok-ob-p1b")
+        auth.bind_channel(owner_beta, channel="studio", external_subject="sub-ob-p1b")
+        auth.grant_membership("proj-beta", owner_beta, role=StudioRole.OWNER, granted_by=owner_beta)
+
+        auth.register_principal(beta_only, tenant_id="ten-1", raw_token="tok-bo-p1b")
+        b_beta_only = auth.bind_channel(beta_only, channel="studio", external_subject="sub-bo-p1b")
+        auth.grant_membership("proj-beta", beta_only, role=StudioRole.EDITOR, granted_by=owner_beta)
+
+        auth.register_principal(shared_user, tenant_id="ten-1", raw_token="tok-su-p1b")
+        b_shared = auth.bind_channel(shared_user, channel="studio", external_subject="sub-su-p1b")
+        auth.grant_membership(
+            "proj-alpha", shared_user, role=StudioRole.EDITOR, granted_by=owner_alpha
+        )
+        auth.grant_membership(
+            "proj-beta", shared_user, role=StudioRole.EDITOR, granted_by=owner_beta
+        )
+        auth.close()
+
+        monkeypatch.setenv("NEXUS_DASHBOARD_TOKEN", "deploy-tok")
+        monkeypatch.setenv("NEXUS_STUDIO_PROJECT_IDS", "proj-alpha,proj-beta")
+        monkeypatch.setenv("NEXUS_STUDIO_WORKSPACE_ROOT", str(ws))
+        monkeypatch.setenv("NEXUS_STUDIO_AUTH_DB", str(auth_db))
+        monkeypatch.setenv("NEXUS_QUEUE_DB_PATH", str(tmp_path / "q.sqlite3"))
+        get_settings.cache_clear()
+        monkeypatch.setattr(app_module, "_creative_registry", None)
+
+        client = TestClient(app_module.app)
+        alpha_h = {
+            "Authorization": "Bearer deploy-tok",
+            "X-Nexus-Principal-Token": "tok-oa-p1b",
+        }
+        # Target only in proj-beta cannot be revoked by proj-alpha owner -> 403.
+        r1 = client.post(
+            f"/api/studio/projects/proj-alpha/principals/{beta_only}/revoke",
+            headers=alpha_h,
+        )
+        assert r1.status_code == 403 and "principal_not_in_project" in r1.text
+        r2 = client.post(
+            f"/api/studio/projects/proj-alpha/principals/{beta_only}/bindings/{b_beta_only}/revoke",
+            headers=alpha_h,
+        )
+        assert r2.status_code == 403 and "principal_not_in_project" in r2.text
+
+        # Shared principal active in proj-beta cannot be globally revoked by proj-alpha -> 403.
+        r3 = client.post(
+            f"/api/studio/projects/proj-alpha/principals/{shared_user}/revoke",
+            headers=alpha_h,
+        )
+        assert r3.status_code == 403 and "principal_active_in_other_projects" in r3.text
+        r4 = client.post(
+            f"/api/studio/projects/proj-alpha/principals/{shared_user}/bindings/{b_shared}/revoke",
+            headers=alpha_h,
+        )
+        assert r4.status_code == 403 and "principal_active_in_other_projects" in r4.text
+
+        # Neither target nor its bindings were revoked.
+        with StudioPrincipalAuthStore(auth_db, now=clock) as check_auth:
+            assert check_auth.authenticate_token("tok-bo-p1b") == beta_only
+            assert check_auth.authenticate_token("tok-su-p1b") == shared_user
+
+    def test_record_consent_propagates_tenant_and_durable_expired_or_revoked_never_falls_back_to_memory(  # noqa: E501
+        self, tmp_path: Path
+    ) -> None:
+        from nexus_ai_agent.nagar.ibpc.session import DurableLiveSessionStore, LiveSessionManager
+
+        clock = _Clock("2026-11-01T00:00:00Z")
+        pstore = DurablePrivacyConsentStore(tmp_path / "priv_p2a.sqlite3")
+        policy = PrivacyPolicy(now=clock, store=pstore, configured_providers=frozenset({"gemini"}))
+        sstore = DurableLiveSessionStore(tmp_path / "sess_p2a.sqlite3")
+        mgr = LiveSessionManager(now=clock, privacy=policy, store=sstore)
+        try:
+            sess = mgr.open_session(
+                tenant_id="ten-p2a",
+                project_id="proj-p2a",
+                principal_id=OWNER_ID,
+                user_id=1,
+                chat_id=1,
+                privacy_mode=PrivacyMode.TRUSTED_CLOUD,
+                consent_scope="transcript",
+            )
+            consents = pstore.list_consents(project_id="proj-p2a")
+            assert len(consents) == 1 and consents[0].tenant_id == "ten-p2a"
+            assert policy.has_consent(
+                PrivacyMode.TRUSTED_CLOUD,
+                principal_id=OWNER_ID,
+                scope="transcript",
+                project_id="proj-p2a",
+                tenant_id="ten-p2a",
+            )
+
+            # Revoke in durable store: has_consent must return False (no memory fallback).
+            pstore.revoke_consent(
+                consents[0].consent_id,
+                revoked_by=OWNER_ID,
+                revoked_at_utc=clock(),
+                reason="test_revoke",
+            )
+            assert not policy.has_consent(
+                PrivacyMode.TRUSTED_CLOUD,
+                principal_id=OWNER_ID,
+                scope="transcript",
+                project_id="proj-p2a",
+                tenant_id="ten-p2a",
+            )
+
+            # Re-enable via set_privacy_mode (with tenant_id propagated), then test durable expiry.
+            rec2 = mgr.set_privacy_mode(
+                sess.session_id,
+                PrivacyMode.TRUSTED_CLOUD,
+                principal_id=OWNER_ID,
+                consent_scope="audio",
+            )
+            assert rec2.tenant_id == "ten-p2a"
+            # Grant expiring consent and advance clock past expiry -> no memory fallback.
+            policy.record_consent(
+                PrivacyMode.TRUSTED_CLOUD,
+                principal_id=OWNER_ID,
+                scope="video",
+                project_id="proj-p2a",
+                tenant_id="ten-p2a",
+                expires_at_utc="2026-11-01T00:05:00Z",
+            )
+            assert policy.has_consent(
+                PrivacyMode.TRUSTED_CLOUD,
+                principal_id=OWNER_ID,
+                scope="video",
+                project_id="proj-p2a",
+                tenant_id="ten-p2a",
+            )
+            clock.current = "2026-11-01T00:10:00Z"
+            assert not policy.has_consent(
+                PrivacyMode.TRUSTED_CLOUD,
+                principal_id=OWNER_ID,
+                scope="video",
+                project_id="proj-p2a",
+                tenant_id="ten-p2a",
+            )
+        finally:
+            sstore.close()
+            pstore.close()
+
+        # Pure in-memory mode also enforces tenant_id & expires_at_utc.
+        mem_clock = _Clock("2026-11-01T00:00:00Z")
+        mem_pol = PrivacyPolicy(now=mem_clock, store=None)
+        mem_pol.record_consent(
+            PrivacyMode.TRUSTED_CLOUD,
+            principal_id=OWNER_ID,
+            scope="audio",
+            tenant_id="ten-1",
+            expires_at_utc="2026-11-01T00:05:00Z",
+        )
+        assert not mem_pol.has_consent(
+            PrivacyMode.TRUSTED_CLOUD,
+            principal_id=OWNER_ID,
+            scope="audio",
+            tenant_id="ten-other",
+        )
+        assert mem_pol.has_consent(
+            PrivacyMode.TRUSTED_CLOUD,
+            principal_id=OWNER_ID,
+            scope="audio",
+            tenant_id="ten-1",
+        )
+        mem_clock.current = "2026-11-01T00:10:00Z"
+        assert not mem_pol.has_consent(
+            PrivacyMode.TRUSTED_CLOUD,
+            principal_id=OWNER_ID,
+            scope="audio",
+            tenant_id="ten-1",
+        )
+
+    def test_project_admin_audit_endpoint_returns_revoke_principal_and_revoke_binding_events(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from nexus_ai_agent.api import app as app_module
+        from nexus_ai_agent.config.settings import get_settings
+
+        clock = _Clock()
+        ws = tmp_path / "ws"
+        ws.mkdir()
+        auth_db = tmp_path / "auth.sqlite3"
+        auth = StudioPrincipalAuthStore(auth_db, now=clock)
+        auth.ensure_project("proj-w3", tenant_id="ten-1")
+        auth.register_principal(OWNER_ID, tenant_id="ten-1", raw_token="tok-owner-p2b")
+        auth.bind_channel(OWNER_ID, channel="studio", external_subject="sub-owner-p2b")
+        auth.grant_membership("proj-w3", OWNER_ID, role=StudioRole.OWNER, granted_by=OWNER_ID)
+
+        target = "prn_" + "e2" * 16
+        auth.register_principal(target, tenant_id="ten-1", raw_token="tok-target-p2b")
+        b_target = auth.bind_channel(target, channel="studio", external_subject="sub-target-p2b")
+        auth.grant_membership("proj-w3", target, role=StudioRole.EDITOR, granted_by=OWNER_ID)
+        auth.close()
+
+        monkeypatch.setenv("NEXUS_DASHBOARD_TOKEN", "deploy-tok")
+        monkeypatch.setenv("NEXUS_STUDIO_PROJECT_IDS", "proj-w3")
+        monkeypatch.setenv("NEXUS_STUDIO_WORKSPACE_ROOT", str(ws))
+        monkeypatch.setenv("NEXUS_STUDIO_AUTH_DB", str(auth_db))
+        monkeypatch.setenv("NEXUS_QUEUE_DB_PATH", str(tmp_path / "q.sqlite3"))
+        get_settings.cache_clear()
+        monkeypatch.setattr(app_module, "_creative_registry", None)
+
+        client = TestClient(app_module.app)
+        owner_h = {
+            "Authorization": "Bearer deploy-tok",
+            "X-Nexus-Principal-Token": "tok-owner-p2b",
+        }
+        assert (
+            client.post(
+                f"/api/studio/projects/proj-w3/principals/{target}/bindings/{b_target}/revoke",
+                headers=owner_h,
+            ).status_code
+            == 200
+        )
+        assert (
+            client.post(
+                f"/api/studio/projects/proj-w3/principals/{target}/revoke",
+                headers=owner_h,
+            ).status_code
+            == 200
+        )
+        r_audit = client.get("/api/studio/projects/proj-w3/admin/audit", headers=owner_h)
+        assert r_audit.status_code == 200
+        rows = r_audit.json()["audit"]
+        revoke_rows = {
+            row["event_type"]: row
+            for row in rows
+            if row["event_type"] in ("REVOKE_CHANNEL_BINDING", "REVOKE_PRINCIPAL")
+        }
+        assert set(revoke_rows) == {"REVOKE_CHANNEL_BINDING", "REVOKE_PRINCIPAL"}
+        for ev in revoke_rows.values():
+            assert ev["project_id"] == "proj-w3"
+            assert ev["actor_id"] == OWNER_ID
+            assert ev["target_principal_id"] == target

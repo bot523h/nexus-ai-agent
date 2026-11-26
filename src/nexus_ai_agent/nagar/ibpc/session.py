@@ -822,6 +822,7 @@ class LiveSessionManager:
                         principal_id=principal_id,
                         scope=consent_scope,
                         project_id=project_id,
+                        tenant_id=tenant_id,
                     )
                 )
             now_utc = self._now()
@@ -908,6 +909,7 @@ class LiveSessionManager:
                 principal_id=principal_id,
                 scope=consent_scope,
                 project_id=session.project_id,
+                tenant_id=session.tenant_id,
             )
             expected_epoch = session.session_epoch
             session.consents.append(record)

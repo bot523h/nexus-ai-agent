@@ -709,21 +709,19 @@ def _authorize_owner_mutation(
     auth_store: StudioPrincipalAuthStore,
     *,
     actor_id: str,
-    actor_tenant: str,
     project_id: str | None,
-) -> None:
-    if project_id is not None:
-        actor_binding = auth_store.default_binding_for(actor_id) or ""
-        _authorize(
-            auth_store,
-            principal_id=actor_id,
-            project_id=project_id,
-            action=StudioAction.MANAGE_MEMBERSHIP,
-            binding_ref=actor_binding,
-        )
-        return
-    if not auth_store.has_owner_role(actor_id, actor_tenant):
-        raise HTTPException(status_code=403, detail="owner_role_required")
+) -> str:
+    if not project_id:
+        raise HTTPException(status_code=403, detail="project_scope_required")
+    actor_binding = auth_store.default_binding_for(actor_id) or ""
+    _authorize(
+        auth_store,
+        principal_id=actor_id,
+        project_id=project_id,
+        action=StudioAction.MANAGE_MEMBERSHIP,
+        binding_ref=actor_binding,
+    )
+    return project_id
 
 
 @router.post("/principals", status_code=201)
@@ -736,10 +734,9 @@ async def register_studio_principal(
     auth_store = get_studio_auth_store()
     try:
         actor_id, actor_tenant = _authenticate_principal(auth_store, x_nexus_principal_token)
-        _authorize_owner_mutation(
+        verified_project = _authorize_owner_mutation(
             auth_store,
             actor_id=actor_id,
-            actor_tenant=actor_tenant,
             project_id=scoped_project,
         )
         if body.tenant_id is not None and body.tenant_id != actor_tenant:
@@ -751,6 +748,7 @@ async def register_studio_principal(
                 raw_token=body.raw_token,
                 display_name=body.display_name,
                 actor_id=actor_id,
+                project_id=verified_project,
             )
         except AuthorizationError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -779,10 +777,9 @@ async def bind_studio_principal_channel(
     auth_store = get_studio_auth_store()
     try:
         actor_id, actor_tenant = _authenticate_principal(auth_store, x_nexus_principal_token)
-        _authorize_owner_mutation(
+        verified_project = _authorize_owner_mutation(
             auth_store,
             actor_id=actor_id,
-            actor_tenant=actor_tenant,
             project_id=scoped_project,
         )
         try:
@@ -801,6 +798,7 @@ async def bind_studio_principal_channel(
                 chat_id=body.chat_id,
                 binding_ref=server_ref,
                 actor_id=actor_id,
+                project_id=verified_project,
             )
         except AuthorizationError as exc:
             if exc.reason == "binding_already_exists":
@@ -830,7 +828,6 @@ async def revoke_project_principal(
         _authorize_owner_mutation(
             auth_store,
             actor_id=actor_id,
-            actor_tenant=actor_tenant,
             project_id=project_id,
         )
         try:
@@ -838,6 +835,7 @@ async def revoke_project_principal(
                 target_principal_id,
                 actor_id=actor_id,
                 expected_tenant_id=actor_tenant,
+                project_id=project_id,
             )
         except AuthorizationError as exc:
             if exc.reason == "principal_not_found":
@@ -871,7 +869,6 @@ async def revoke_project_principal_binding(
         _authorize_owner_mutation(
             auth_store,
             actor_id=actor_id,
-            actor_tenant=actor_tenant,
             project_id=project_id,
         )
         try:
@@ -880,6 +877,7 @@ async def revoke_project_principal_binding(
                 actor_id=actor_id,
                 expected_tenant_id=actor_tenant,
                 expected_principal_id=target_principal_id,
+                project_id=project_id,
             )
         except AuthorizationError as exc:
             if exc.reason == "binding_not_found":

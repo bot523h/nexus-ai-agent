@@ -648,6 +648,8 @@ class ConsentRecord(BaseModel):
     scope: str = Field(min_length=1, max_length=256)
     granted_at: str = Field(min_length=1)
     consent_id: str = Field(default_factory=lambda: _new_id("consent"))
+    tenant_id: str = ""
+    expires_at_utc: str = ""
 
     @property
     def consent_digest(self) -> str:

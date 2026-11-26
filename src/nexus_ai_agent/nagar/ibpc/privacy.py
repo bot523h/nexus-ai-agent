@@ -702,23 +702,30 @@ class PrivacyPolicy:
         principal_id: str,
         scope: str,
         project_id: str = "_session",
-        processing_scope: str = ProcessingScope.EXTERNAL_PROVIDER_DISPATCH.value,
+        processing_scope: str = ProcessingScope.LOCAL_PROCESSING.value,
         data_category: str | None = None,
         expires_at_utc: str = "",
         provider_id: str = "",
+        tenant_id: str = "",
     ) -> ConsentRecord:
         """Record an explicit consent (persisted durably when store is configured)."""
         if not isinstance(mode, PrivacyMode):
             raise PrivacyViolation("invalid_mode", f"unknown privacy mode {mode!r}")
         now_utc = self._now()
         record = ConsentRecord(
-            mode=mode, principal_id=principal_id, scope=scope, granted_at=now_utc
+            mode=mode,
+            principal_id=principal_id,
+            scope=scope,
+            granted_at=now_utc,
+            tenant_id=tenant_id,
+            expires_at_utc=expires_at_utc,
         )
         if self._store is not None:
             category = data_category or scope.upper()
             self._store.grant_consent(
                 consent_id=record.consent_id,
                 project_id=project_id,
+                tenant_id=tenant_id,
                 principal_id=principal_id,
                 mode=mode,
                 processing_scope=processing_scope,
@@ -737,8 +744,9 @@ class PrivacyPolicy:
         principal_id: str,
         scope: str,
         project_id: str = "_session",
-        processing_scope: str = ProcessingScope.EXTERNAL_PROVIDER_DISPATCH.value,
+        processing_scope: str = ProcessingScope.LOCAL_PROCESSING.value,
         tenant_id: str = "",
+        provider_id: str = "",
     ) -> bool:
         if self._store is not None:
             status, _ = self._store.check_consent_status(
@@ -748,14 +756,20 @@ class PrivacyPolicy:
                 processing_scope=processing_scope,
                 data_category=scope.upper(),
                 now_utc=self._now(),
+                provider_id=provider_id,
                 tenant_id=tenant_id,
             )
-            if status == "active":
-                return True
-        return any(
-            c.mode is mode and c.principal_id == principal_id and scope in c.scope
-            for c in self._consents
-        )
+            return status == "active"
+        now_dt = _parse_utc(self._now())
+        for c in self._consents:
+            if c.mode is not mode or c.principal_id != principal_id or scope not in c.scope:
+                continue
+            if tenant_id and c.tenant_id != tenant_id:
+                continue
+            if c.expires_at_utc and now_dt >= _parse_utc(c.expires_at_utc):
+                continue
+            return True
+        return False
 
     def grant_durable_consent(
         self,

@@ -294,6 +294,7 @@ class StudioPrincipalAuthStore(StudioAuthorizerPort, CanonicalAuthorityPort):
         raw_token: str,
         display_name: str = "",
         actor_id: str = "system",
+        project_id: str = "",
     ) -> str:
         if not raw_token or len(raw_token) < 8:
             raise ValueError("principal raw_token must be at least 8 characters")
@@ -332,11 +333,57 @@ class StudioPrincipalAuthStore(StudioAuthorizerPort, CanonicalAuthorityPort):
                 event_type="register_principal",
                 actor_id=actor_id,
                 tenant_id=tenant_id,
+                project_id=project_id,
                 target_principal_id=principal_id,
                 detail=display_name,
                 occurred_at_utc=now_utc,
             )
         return principal_id
+
+    def _assert_project_scoped_revocation_locked(
+        self,
+        *,
+        principal_id: str,
+        actor_id: str,
+        project_id: str,
+    ) -> None:
+        in_project = self._conn.execute(
+            """
+            SELECT 1 FROM nexus_studio_project_memberships
+            WHERE principal_id = ? AND project_id = ?
+            LIMIT 1
+            """,
+            (principal_id, project_id),
+        ).fetchone()
+        if in_project is None:
+            raise AuthorizationError(
+                "principal_not_in_project",
+                f"principal {principal_id!r} has no membership in project {project_id!r}",
+            )
+        other_active = self._conn.execute(
+            """
+            SELECT m.project_id
+            FROM nexus_studio_project_memberships m
+            WHERE m.principal_id = ?
+              AND m.project_id != ?
+              AND m.status = 'ACTIVE'
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM nexus_studio_project_memberships a
+                  WHERE a.project_id = m.project_id
+                    AND a.principal_id = ?
+                    AND a.role = 'OWNER'
+                    AND a.status = 'ACTIVE'
+              )
+            LIMIT 1
+            """,
+            (principal_id, project_id, actor_id),
+        ).fetchone()
+        if other_active is not None:
+            raise AuthorizationError(
+                "principal_active_in_other_projects",
+                f"principal {principal_id!r} is active in other project {other_active[0]!r}",
+            )
 
     def revoke_principal(
         self,
@@ -344,6 +391,7 @@ class StudioPrincipalAuthStore(StudioAuthorizerPort, CanonicalAuthorityPort):
         *,
         actor_id: str = "system",
         expected_tenant_id: str | None = None,
+        project_id: str = "",
     ) -> None:
         now_utc = self._now()
         with self._transaction():
@@ -360,6 +408,12 @@ class StudioPrincipalAuthStore(StudioAuthorizerPort, CanonicalAuthorityPort):
                 raise AuthorizationError(
                     "principal_tenant_mismatch",
                     f"principal {principal_id!r} belongs to tenant {target_tenant!r}",
+                )
+            if project_id:
+                self._assert_project_scoped_revocation_locked(
+                    principal_id=principal_id,
+                    actor_id=actor_id,
+                    project_id=project_id,
                 )
             self._conn.execute(
                 """
@@ -381,6 +435,7 @@ class StudioPrincipalAuthStore(StudioAuthorizerPort, CanonicalAuthorityPort):
                 event_type="REVOKE_PRINCIPAL",
                 actor_id=actor_id,
                 tenant_id=target_tenant,
+                project_id=project_id,
                 target_principal_id=principal_id,
                 occurred_at_utc=now_utc,
             )
@@ -424,6 +479,7 @@ class StudioPrincipalAuthStore(StudioAuthorizerPort, CanonicalAuthorityPort):
         chat_id: int = 0,
         binding_ref: str | None = None,
         actor_id: str = "system",
+        project_id: str | None = None,
     ) -> str:
         ref = binding_ref or _binding_ref_for(channel, external_subject)
         now_utc = self._now()
@@ -442,6 +498,17 @@ class StudioPrincipalAuthStore(StudioAuthorizerPort, CanonicalAuthorityPort):
                     "principal_revoked",
                     f"principal {principal_id!r} is {p_row[1]}",
                 )
+            if project_id:
+                memberships = self._conn.execute(
+                    "SELECT project_id FROM nexus_studio_project_memberships "
+                    "WHERE principal_id = ?",
+                    (principal_id,),
+                ).fetchall()
+                if memberships and project_id not in {str(r[0]) for r in memberships}:
+                    raise AuthorizationError(
+                        "principal_not_in_project",
+                        f"principal {principal_id!r} has no membership in project {project_id!r}",
+                    )
             existing = self._conn.execute(
                 """
                 SELECT binding_ref
@@ -470,6 +537,7 @@ class StudioPrincipalAuthStore(StudioAuthorizerPort, CanonicalAuthorityPort):
                 event_type="bind_channel",
                 actor_id=actor_id,
                 tenant_id=tenant_id,
+                project_id=project_id or "",
                 target_principal_id=principal_id,
                 binding_ref=ref,
                 detail=f"{channel}:{external_subject}",
@@ -484,6 +552,7 @@ class StudioPrincipalAuthStore(StudioAuthorizerPort, CanonicalAuthorityPort):
         actor_id: str = "system",
         expected_tenant_id: str | None = None,
         expected_principal_id: str | None = None,
+        project_id: str = "",
     ) -> None:
         now_utc = self._now()
         with self._transaction():
@@ -512,6 +581,12 @@ class StudioPrincipalAuthStore(StudioAuthorizerPort, CanonicalAuthorityPort):
                     "principal_tenant_mismatch",
                     f"binding {binding_ref!r} belongs to tenant {target_tenant!r}",
                 )
+            if project_id:
+                self._assert_project_scoped_revocation_locked(
+                    principal_id=target_principal,
+                    actor_id=actor_id,
+                    project_id=project_id,
+                )
             self._conn.execute(
                 """
                 UPDATE nexus_studio_channel_bindings
@@ -524,6 +599,7 @@ class StudioPrincipalAuthStore(StudioAuthorizerPort, CanonicalAuthorityPort):
                 event_type="REVOKE_CHANNEL_BINDING",
                 actor_id=actor_id,
                 tenant_id=target_tenant,
+                project_id=project_id,
                 target_principal_id=target_principal,
                 binding_ref=binding_ref,
                 occurred_at_utc=now_utc,
