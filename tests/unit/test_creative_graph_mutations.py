@@ -1,11 +1,13 @@
 """Targeted AST mutation campaign for Durable Creative-Graph invariants (Law R28).
 
-Verifies that 17 surgical AST mutations attacking canonicalization, strict DAG
+Verifies that 20 surgical AST mutations attacking canonicalization, strict DAG
 acyclicity, Lexicographic Kahn uniqueness, epistemic proof gates, keyed HMAC
 key revocation, transitive causal invalidation, terminal state absorption,
 source journal chain validation, logical backup restore checks, historical row
 auditing, append-only hash-chain linkage, boot verification, and sealed
-snapshot integrity are ALL validly killed (0 survived, 0 invalid) under strict
+snapshot integrity — plus the W11X CP-1 hardening (read-only restore source, terminal
+epistemic promotion guard, revision_count/chain parity GRAPH034) — are ALL validly killed
+(0 survived, 0 invalid) under strict
 anti-.pyc hygiene (``sys.dont_write_bytecode = True``,
 ``PYTHONDONTWRITEBYTECODE=1``, ``__pycache__`` purge before/after each mutant,
 and SHA-256-verified byte-exact restore in ``finally``).
@@ -108,6 +110,12 @@ def _is_if_unparsing(node: ast.AST, expected_test: str) -> bool:
 def _weaken_if_to_false(node: ast.AST) -> ast.AST:
     assert isinstance(node, ast.If)
     node.test = ast.Constant(value=False)
+    return node
+
+
+def _downgrade_readonly_uri(node: ast.AST) -> ast.AST:
+    assert isinstance(node, ast.Constant) and node.value == "?mode=ro"
+    node.value = "?mode=rwc"
     return node
 
 
@@ -344,6 +352,42 @@ MUTATIONS: tuple[MutationSpec, ...] = (
         ),
         transform=_weaken_if_to_false,
     ),
+    MutationSpec(
+        mutant_id="M18_epistemic_promotion_allow_terminal_subject",
+        invariant="W11X-1B: promote_epistemic_status refuses a terminal (absorbing) node status",
+        func_name="promote_epistemic_status",
+        test_selector="test_epistemic_promotion_refused_on_terminal_node",
+        expected_error_tokens=("DID NOT RAISE", "GraphStateTransitionError"),
+        predicate=lambda n: _is_if_unparsing(n, "node.status in TERMINAL_STATUSES"),
+        transform=_weaken_if_to_false,
+    ),
+    MutationSpec(
+        mutant_id="M19_restore_source_uri_read_write",
+        invariant="W11X-1A: restore() opens its source read-only and never creates it",
+        func_name="restore",
+        test_selector="test_restore_opens_backup_source_read_only",
+        expected_error_tokens=(
+            "DID NOT RAISE",
+            "Regex pattern did not match",
+            "AssertionError",
+        ),
+        predicate=lambda n: isinstance(n, ast.Constant) and n.value == "?mode=ro",
+        transform=_downgrade_readonly_uri,
+    ),
+    MutationSpec(
+        mutant_id="M20_integrity_skip_revision_count_parity",
+        invariant="W11X-1C: integrity_check() proves revision_count/chain parity (GRAPH034)",
+        func_name="_integrity_check_conn",
+        test_selector="test_revision_count_chain_parity_is_enforced_graph034",
+        expected_error_tokens=(
+            "DID NOT RAISE",
+            "GraphIntegrityError",
+            "GRAPH034",
+            "AssertionError",
+        ),
+        predicate=lambda n: _is_if_unparsing(n, "declared_revisions != observed_revisions"),
+        transform=_weaken_if_to_false,
+    ),
 )
 
 
@@ -444,7 +488,7 @@ def test_creative_graph_ast_mutation_campaign_zero_survived() -> None:
             f"expected {original_sha256}, got {restored_sha256}"
         )
 
-    assert len(MUTATIONS) == 17
+    assert len(MUTATIONS) == 20
     assert invalid == [], f"Invalid mutants ({len(invalid)}): {invalid}"
     assert survived == [], f"Survived mutants ({len(survived)}): {survived}"
     assert len(killed) == len(MUTATIONS)

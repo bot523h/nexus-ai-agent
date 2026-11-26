@@ -1,11 +1,18 @@
-"""Bounded SQLite plan reservations; not an authorization or execution service.
+"""Bounded SQLite plan reservations wired into the durable studio runtime.
+
+Production wiring (two seams, one store): :func:`nexus_ai_agent.creative.studio.bus.
+compose_durable_command_bus` injects an instance into ``CommandBus`` as its
+``DurablePlanDedupePort`` (``reserve_and_start`` gates every command dispatch), and
+:class:`nexus_ai_agent.adapters.durable_studio_runtime.DurableStudioExecutionRuntime`
+constructs and retains that same instance. It is a reservation ledger, not an
+authorization or execution service.
 
 A caller must independently authorize both first execution and redelivery. A
 committed record proves only that its caller recorded a result, not that an
 external effect and the SQLite commit were atomic. An uncertain execution is
-quarantined rather than retried. This adapter is not yet wired to CommandBus.
-Cooperating processes use a POSIX advisory lock; other SQLite clients do not
-participate in that lock, and filesystem paths still require a trusted parent.
+quarantined rather than retried. Cooperating processes use a POSIX advisory lock;
+other SQLite clients do not participate in that lock, and filesystem paths still
+require a trusted parent.
 """
 
 from __future__ import annotations

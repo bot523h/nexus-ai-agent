@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-11-24T09:08:55Z",
+  "updated_at": "2026-11-25T20:48:41Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -682,7 +682,9 @@
         "tests/integration/test_provenance_queue_recording.py",
         "tests/integration/test_provenance_passport_e2e.py",
         "tests/architecture/test_provenance_boundary.py",
-        "docs/architecture/PROVENANCE_LEDGER.md"
+        "docs/architecture/PROVENANCE_LEDGER.md",
+        "tests/unit/test_creative_graph.py",
+        "tests/unit/test_creative_graph_mutations.py"
       ]
     },
     {
@@ -8809,6 +8811,41 @@
       ],
       "note": "",
       "previous_release_reason": "auto-released by gc at 2026-11-24T09:08:55Z (stale active lease)"
+    },
+    {
+      "task": "task-w11x-cp1-provenance-hardening",
+      "title": "W11X CP-1: provenance graph hardening (read-only restore, terminal epistemic guard, revision parity)",
+      "title_fa": "W11X CP-1: سخت‌سازی گراف منشأ (بازیابی فقط‌خواندنی، گارد وضعیت پایانی، تطابق شمارش نسخه‌ها)",
+      "zone": "provenance-ledger",
+      "priority": "P0",
+      "status": "active",
+      "scope": "Three fail-closed fixes in provenance/graph.py: (1A) CreativeGraph.restore() opens the backup source with a read-only URI so a restore can never mutate or create it; (1B) promote_epistemic_status() refuses to promote a node or edge whose lifecycle status is terminal (superseded/invalidated/revoked) because terminal is absorbing; (1C) a new GRAPH034 integrity finding proves every node's revision_count equals the node_create/node_advance chain entries recorded since that node's most recent creation. The mutation campaign is extended 17 -> 20.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "restore() opens the source with file:...?mode=ro and uri=True; a missing source is refused without being created",
+        "promote_epistemic_status() raises GraphStateTransitionError on any terminal node status and on a revoked edge, leaving chain and epistemic status unchanged",
+        "_integrity_check_conn() emits GRAPH034 when revision_count disagrees with the node_create/node_advance chain entries since the last node_create",
+        "each of 1A/1B/1C is proven by a test that fails on the pre-fix code and passes after the fix, and by a killed AST mutant",
+        "the provenance, board, architecture and docs-integrity suites stay green"
+      ],
+      "evidence_required": [
+        "tests/unit/test_creative_graph.py (test_restore_opens_backup_source_read_only, test_epistemic_promotion_refused_on_terminal_node, test_epistemic_promotion_refused_on_revoked_edge, test_revision_count_chain_parity_is_enforced_graph034)",
+        "tests/unit/test_creative_graph_mutations.py (M18/M19/M20, 20/20 killed)",
+        "pytest tests/unit/test_creative_graph.py && pytest tests/unit/test_agent_board.py && pytest tests/architecture/",
+        "ruff check, ruff format --check, mypy --strict on the changed files"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/provenance/graph.py",
+        "tests/unit/test_creative_graph.py",
+        "tests/unit/test_creative_graph_mutations.py"
+      ],
+      "owner_hint": "OpenHands W11X convergence agent on branch openhands/w11x-grand-pr-convergence-20261125.",
+      "agent_branch": "openhands/w11x-grand-pr-convergence-20261125",
+      "claimed_at": "2026-11-25T20:48:41Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": "",
+      "generation": 1
     }
   ],
   "deferred_log": [
