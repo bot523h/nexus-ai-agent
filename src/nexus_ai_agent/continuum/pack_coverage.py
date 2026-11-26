@@ -162,6 +162,10 @@ HOST_LAYER_PACK_IMPORTERS: Mapping[str, str] = {
         "IBPC security closure (nagar.ibpc, host layer): adversarial audio staging + approval "
         "identity isolation; mutation-attacked by scripts/ibpc_security_mutations.py"
     ),
+    "tests/unit/creative/ibpc/test_r2a_voice_intent_gates.py": (
+        "IBPC voice-intent boundary (nagar.ibpc, host layer): authorization/consent ordering "
+        "and durable failure rows; the registry is only the pack lookup it compiles through"
+    ),
     "tests/unit/test_omega_audio_bus.py": (
         "OMEGA audio pack end-to-end through CommandBus with the real engine (host layer): the "
         "pack's own handler coverage stays in its canonical targets"
