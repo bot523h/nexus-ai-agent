@@ -38,8 +38,8 @@ import hmac
 import json
 import os
 import re
-import stat as stat_module
 import sqlite3
+import stat as stat_module
 import threading
 from collections.abc import Iterable, Iterator, Sequence
 from contextlib import contextmanager
