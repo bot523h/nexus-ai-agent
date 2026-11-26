@@ -738,15 +738,13 @@ def _authorize_owner_mutation(
     return project_id
 
 
-@router.post("/principals", status_code=201)
-async def register_studio_principal(
-    body: RegisterPrincipalRequest,
-    project_id: str | None = Query(default=None),
-    x_nexus_principal_token: str | None = Header(default=None, alias="X-Nexus-Principal-Token"),
-) -> dict[str, Any]:
-    body_project = (body.project_id or "").strip()
-    query_project = (project_id or "").strip()
-    if body_project and query_project and body_project != query_project:
+def _resolve_scoped_project_id(
+    body_project_id: str | None,
+    query_project_id: str | None,
+) -> str:
+    b_proj = (body_project_id or "").strip()
+    q_proj = (query_project_id or "").strip()
+    if b_proj and q_proj and b_proj != q_proj:
         raise HTTPException(
             status_code=400,
             detail=(
@@ -754,10 +752,19 @@ async def register_studio_principal(
                 "body.project_id and query project_id must match"
             ),
         )
-    scoped_project = body_project or query_project or None
+    return b_proj or q_proj
+
+
+@router.post("/principals", status_code=201)
+async def register_studio_principal(
+    body: RegisterPrincipalRequest,
+    project_id: str | None = Query(default=None),
+    x_nexus_principal_token: str | None = Header(default=None, alias="X-Nexus-Principal-Token"),
+) -> dict[str, Any]:
     auth_store = get_studio_auth_store()
     try:
         actor_id, actor_tenant = _authenticate_principal(auth_store, x_nexus_principal_token)
+        scoped_project = _resolve_scoped_project_id(body.project_id, project_id)
         verified_project = _authorize_owner_mutation(
             auth_store,
             actor_id=actor_id,
@@ -797,22 +804,12 @@ async def bind_studio_principal_channel(
     project_id: str | None = Query(default=None),
     x_nexus_principal_token: str | None = Header(default=None, alias="X-Nexus-Principal-Token"),
 ) -> dict[str, Any]:
-    if not _ID_RE.fullmatch(target_principal_id):
-        raise HTTPException(status_code=400, detail="invalid principal_id")
-    body_project = (body.project_id or "").strip()
-    query_project = (project_id or "").strip()
-    if body_project and query_project and body_project != query_project:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "conflicting_project_scope_parameters: "
-                "body.project_id and query project_id must match"
-            ),
-        )
-    scoped_project = body_project or query_project or None
     auth_store = get_studio_auth_store()
     try:
         actor_id, actor_tenant = _authenticate_principal(auth_store, x_nexus_principal_token)
+        if not _ID_RE.fullmatch(target_principal_id):
+            raise HTTPException(status_code=400, detail="invalid principal_id")
+        scoped_project = _resolve_scoped_project_id(body.project_id, project_id)
         verified_project = _authorize_owner_mutation(
             auth_store,
             actor_id=actor_id,

@@ -8872,14 +8872,14 @@
       "zone": "nagar-ibpc-wave3-durability",
       "priority": "P0",
       "status": "completed_merged",
-      "scope": "Wave 3 IBPC durability & security closure: SQLite WAL live sessions/turns/contexts, RFC 8785 JCS canonical approval binding hash + key_id rotation/expiry, durable privacy consent ownership & exact-provider egress gating, Studio principal RBAC default & lifecycle/audit APIs, symlink/root containment, deterministic store close, >=98% line/branch coverage, and 39-mutant AST campaign.",
+      "scope": "Wave 3 IBPC durability & security closure: SQLite WAL live sessions/turns/contexts, RFC 8785 JCS canonical approval binding hash + key_id rotation/expiry, durable privacy consent ownership & exact-provider egress gating, Studio principal RBAC default & lifecycle/audit APIs, symlink/root containment, deterministic store close, >=98% line/branch coverage, and 40-mutant AST campaign.",
       "prerequisites": [],
       "acceptance_criteria": [
         "DurableLiveSessionStore enforces WAL pragmas, monotonic turn ordering, idempotency deduplication/conflict rejection, CAS session epoch fencing, and restart hydration.",
         "ApprovalBinding enforces RFC 8785 JCS canonical approval hash, key_id rotation/revocation, scope signature, revision id, and constant-time expiry verification without hardcoded keys.",
         "DurablePrivacyConsentStore enforces project/tenant ownership on revoke, exact provider_id egress matching, and append-only audit.",
         "StudioPrincipalAuthStore + /api/studio/projects/{project_id}/ibpc & /api/studio/principals enforce token auth, tenant isolation, OWNER/EDITOR/VIEWER/AUDITOR RBAC, and append-only admin audit.",
-        "39/39 AST mutants killed (0 survived, 0 invalid), >=98% line/branch coverage across all 10 Wave 3 modules, and all IBPC, Studio, boundary, lint, and strict mypy checks green."
+        "40/40 AST mutants killed (0 survived, 0 invalid), >=98% line/branch coverage across all 10 Wave 3 modules, and all IBPC, Studio, boundary, lint, and strict mypy checks green."
       ],
       "evidence_required": [
         "pytest tests/unit/test_wave3_ibpc_durability.py tests/unit/creative/test_wave3_ibpc_mutations.py",
@@ -8909,7 +8909,7 @@
         "tests/unit/test_wave3_ibpc_durability.py",
         "tests/unit/creative/test_wave3_ibpc_mutations.py"
       ],
-      "note": "PR #365 merged to main as 1a914457 (2026-11-26T18:59:13Z); Wave 3.5 defense-in-depth closure expands AST campaign to 39/39 mutants. Closed and lease released.",
+      "note": "PR #365 merged to main as 1a914457 (2026-11-26T18:59:13Z); Wave 3.5 defense-in-depth closure expands AST campaign to 40/40 mutants. Closed and lease released.",
       "delivered_pr": 365,
       "merge_commit_sha": "1a9144579f490e29b295da50a51a7dc437bfb7a5",
       "reconciled_at": "2026-11-26T19:30:00Z"

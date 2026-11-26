@@ -7713,7 +7713,7 @@ class TestWave3FinalSecurityClosure:
         store = DurablePrivacyConsentStore(tmp_path / "priv_empty_ten.sqlite3")
         try:
             policy = PrivacyPolicy(now=clock, store=store)
-            grant = policy.grant_durable_consent(
+            policy.grant_durable_consent(
                 project_id="proj-alpha",
                 tenant_id="tenant-alpha",
                 principal_id=OWNER_ID,
@@ -7721,7 +7721,7 @@ class TestWave3FinalSecurityClosure:
                 processing_scope=ProcessingScope.LOCAL_PROCESSING,
                 data_category=DataCategory.AUDIO,
             )
-            with pytest.raises(PrivacyViolation, match="consent_tenant_mismatch"):
+            with pytest.raises(PrivacyViolation) as exc_check:
                 store.check_consent_status(
                     project_id="proj-alpha",
                     principal_id=OWNER_ID,
@@ -7731,7 +7731,9 @@ class TestWave3FinalSecurityClosure:
                     now_utc=clock(),
                     tenant_id="",
                 )
-            with pytest.raises(PrivacyViolation, match="consent_tenant_mismatch"):
+            assert exc_check.value.reason == "consent_tenant_mismatch"
+
+            with pytest.raises(PrivacyViolation) as exc_empty:
                 policy.enforce_processing_consent(
                     project_id="proj-alpha",
                     principal_id=OWNER_ID,
@@ -7740,29 +7742,26 @@ class TestWave3FinalSecurityClosure:
                     data_category=DataCategory.AUDIO,
                     tenant_id="",
                 )
+            assert exc_empty.value.reason == "consent_tenant_mismatch"
 
-            # Defense-in-depth inside enforce_processing_consent even if a custom store
-            # returns an active grant without filtering tenant_id.
-            audit_events: list[tuple[str, str]] = []
-
-            class _UnfilteredTenantStore:
-                def check_consent_status(self, **kwargs: object) -> tuple[str, object]:
-                    return "active", grant
-
-                def record_audit_event(self, **kwargs: object) -> None:
-                    audit_events.append((str(kwargs["event_type"]), str(kwargs["reason"])))
-
-            guarded_policy = PrivacyPolicy(now=clock, store=_UnfilteredTenantStore())  # type: ignore[arg-type]
-            with pytest.raises(PrivacyViolation, match="consent_tenant_mismatch"):
-                guarded_policy.enforce_processing_consent(
+            with pytest.raises(PrivacyViolation) as exc_wrong:
+                policy.enforce_processing_consent(
                     project_id="proj-alpha",
                     principal_id=OWNER_ID,
                     mode=PrivacyMode.TRUSTED_CLOUD,
                     processing_scope=ProcessingScope.LOCAL_PROCESSING,
                     data_category=DataCategory.AUDIO,
-                    tenant_id="",
+                    tenant_id="wrong-tenant",
                 )
-            assert audit_events == [("DENIED", "consent_tenant_mismatch")]
+            assert exc_wrong.value.reason == "consent_tenant_mismatch"
+
+            # Real SQLite audit table must persist DENIED entries for both mismatches.
+            denied_entries = [
+                e
+                for e in store.list_audit(project_id="proj-alpha")
+                if e.event_type == "DENIED" and e.reason == "consent_tenant_mismatch"
+            ]
+            assert len(denied_entries) == 2
         finally:
             store.close()
 
@@ -7810,6 +7809,7 @@ class TestWave3FinalSecurityClosure:
         monkeypatch.setenv("NEXUS_APPROVAL_HMAC_KEY_ID", "k1")
         monkeypatch.setenv("NEXUS_APPROVAL_HMAC_KEY", "z" * 32)
         get_settings.cache_clear()
+        unauth_headers = {"Authorization": "Bearer deploy-tok-conflict"}
         headers = {
             "Authorization": "Bearer deploy-tok-conflict",
             "X-Nexus-Principal-Token": "tok-owner-conflict",
@@ -7817,6 +7817,31 @@ class TestWave3FinalSecurityClosure:
         client = TestClient(app_module.app)
 
         new_pid = "prn_" + "8b" * 16
+        # Unauthenticated requests with conflicting project params must return 401, not 400.
+        r_unauth_reg = client.post(
+            "/api/studio/principals?project_id=proj-beta",
+            headers=unauth_headers,
+            json={
+                "principal_id": new_pid,
+                "raw_token": "tok-target-123456",
+                "display_name": "Target",
+                "project_id": "proj-alpha",
+            },
+        )
+        assert r_unauth_reg.status_code == 401
+
+        r_unauth_bind = client.post(
+            f"/api/studio/principals/{OWNER_ID}/bindings?project_id=proj-beta",
+            headers=unauth_headers,
+            json={
+                "channel": "web",
+                "external_subject": "conflict-sub",
+                "project_id": "proj-alpha",
+            },
+        )
+        assert r_unauth_bind.status_code == 401
+
+        # Authenticated owner requests with conflicting body & query project_id return 400.
         r_reg = client.post(
             "/api/studio/principals?project_id=proj-beta",
             headers=headers,

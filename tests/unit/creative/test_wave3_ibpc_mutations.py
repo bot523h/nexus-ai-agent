@@ -728,13 +728,26 @@ WAVE3_MUTANTS: tuple[Wave3MutantSpec, ...] = (
     Wave3MutantSpec(
         name="M39_studio_api_rejects_conflicting_project_scope_params",
         relative_path=Path("api/studio_ibpc.py"),
-        func_name="register_studio_principal",
-        predicate=lambda n: _is_if_with_test_substr(n, "body_project != query_project"),
+        func_name="_resolve_scoped_project_id",
+        predicate=lambda n: _is_if_with_test_substr(n, "b_proj != q_proj"),
         transform=_bypass_if,
         target_test=(
             "tests/unit/test_wave3_ibpc_durability.py::"
             "TestWave3FinalSecurityClosure::"
             "test_studio_api_rejects_conflicting_body_and_query_project_id_with_400"
+        ),
+        expected_tokens=("AssertionError",),
+    ),
+    Wave3MutantSpec(
+        name="M40_enforce_processing_consent_records_durable_tenant_mismatch_audit",
+        relative_path=Path("nagar/ibpc/privacy.py"),
+        func_name="enforce_processing_consent",
+        predicate=lambda n: _is_expr_call_substr(n, "reason=exc.reason"),
+        transform=_replace_with_pass,
+        target_test=(
+            "tests/unit/test_wave3_ibpc_durability.py::"
+            "TestWave3FinalSecurityClosure::"
+            "test_enforce_processing_consent_fails_closed_when_grant_has_tenant_and_caller_omits_tenant"
         ),
         expected_tokens=("AssertionError",),
     ),
