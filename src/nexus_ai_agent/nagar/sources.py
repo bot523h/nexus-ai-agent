@@ -99,6 +99,9 @@ _PACK_MODULES = (
     # operations adapter, so the declaration scan sees the same ids.
     "nexus_ai_agent.creative.packs.portrait.operations",
     "nexus_ai_agent.creative.packs.scene.operations",
+    # Harvested #247: the perception pack declares OPERATION_* in its models and
+    # re-exports them, so the declaration scan and the registry stay pinned.
+    "nexus_ai_agent.creative.packs.perception.operations",
     # Wave 5: the six NAGAR creative-engine capabilities declare their ids as
     # OPERATION_* constants in the engine capability layer, so the declaration
     # scan and the runtime registry stay bidirectionally pinned.

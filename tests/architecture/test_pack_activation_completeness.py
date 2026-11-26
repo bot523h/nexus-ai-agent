@@ -53,6 +53,11 @@ BUILDERS: dict[str, tuple[str, str]] = {
     # pack adapter (fail-closed delegates; kernels live in composition).
     "portrait": ("nexus_ai_agent.creative.packs.portrait.operations", "build_portrait_registry"),
     "scene": ("nexus_ai_agent.creative.packs.scene.operations", "build_scene_registry"),
+    # Harvested #247: the perception pack ships the register_/build_ pair too.
+    "perception": (
+        "nexus_ai_agent.creative.packs.perception.operations",
+        "build_perception_registry",
+    ),
 }
 
 

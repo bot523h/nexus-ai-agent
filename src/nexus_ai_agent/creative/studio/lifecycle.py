@@ -166,6 +166,18 @@ PACK_LIFECYCLE: dict[str, PackLifecycle] = {
     # Dispatch through the runtime requires an injected native kernel
     # (context.portrait_kernel / context.scene_kernel) and fails closed without
     # one; nothing here is production-corroborated.
+    # Harvested from #247: the three operations turn *supplied* measurement
+    # evidence into markers and a loudness recommendation. They are deterministic
+    # and fully tested, but nothing re-decodes an artifact through a verifier, so
+    # the honest ceiling is IMPLEMENTED -- the measurement itself is produced by
+    # the W10X analyzer, not by this pack.
+    "nexus.analysis.perception": PackLifecycle(
+        pack_id="nexus.analysis.perception",
+        state=LifecycleState.AVAILABLE,
+        reason="deterministic evidence->timeline edits, no external kernel needed; "
+        "the measurement itself is supplied by the W10X analyzer, so the evidence "
+        "ceiling stays IMPLEMENTED (no artifact has been verifier-decoded)",
+    ),
     "nexus.portrait.refine": PackLifecycle(
         pack_id="nexus.portrait.refine",
         state=LifecycleState.EXPERIMENTAL,
@@ -203,6 +215,7 @@ PACK_EVIDENCE: dict[str, OperationEvidenceState] = {
     "nexus.vision.scene": OperationEvidenceState.IMPLEMENTED,
     "nexus.portrait.refine": OperationEvidenceState.IMPLEMENTED,
     "nexus.scene.imaging": OperationEvidenceState.IMPLEMENTED,
+    "nexus.analysis.perception": OperationEvidenceState.IMPLEMENTED,
 }
 
 

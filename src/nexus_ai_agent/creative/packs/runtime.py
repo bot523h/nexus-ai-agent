@@ -79,6 +79,14 @@ def _register_slideshow(registry: CapabilityRegistry) -> object:
     return register_slideshow_operations(registry)
 
 
+def _register_perception(registry: CapabilityRegistry) -> object:
+    from nexus_ai_agent.creative.packs.perception.operations import (
+        register_perception_operations,
+    )
+
+    return register_perception_operations(registry)
+
+
 def _register_caption(registry: CapabilityRegistry) -> object:
     from nexus_ai_agent.creative.packs.caption.operations import register_caption_operations
 
@@ -194,6 +202,12 @@ COMPOSITION: tuple[PackComposition, ...] = (
         "nexus.scene.imaging",
         _register_scene,
         "object insertion, inpaint, outpaint, optics, atmosphere (Wave 3)",
+    ),
+    PackComposition(
+        "perception",
+        "nexus.analysis.perception",
+        _register_perception,
+        "measured silence, scene cuts and loudness evidence to timeline edits (harvested #247)",
     ),
 )
 
