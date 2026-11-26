@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-11-25T20:48:41Z",
+  "updated_at": "2026-11-26T07:05:26Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -7001,7 +7001,7 @@
       "title": "Repair existing PR #247: feat(creative): perception lane — measured silence/scene/loudness evidence (free offline FFmpeg)",
       "zone": "pr-repair-campaign",
       "priority": "P1",
-      "status": "queued",
+      "status": "active",
       "scope": "Repair https://github.com/bot523h/nexus-ai-agent/pull/247 on its existing branch feat/analysis-perception-pack, preserving intent and published history. Snapshot head 0c512257692ac971b4c03f8cfbfc37565f08cbe3; re-read live head, base, reviews, checks and all board sources before claiming. Resolve only evidenced defects, conflicts and required-check failures; no merge, force-push, protection changes, or approval fabrication.",
       "prerequisites": [],
       "acceptance_criteria": [
@@ -7043,13 +7043,13 @@
         "tests/unit/test_perception_pack.py",
         "tests/unit/test_perception_parsers.py"
       ],
-      "agent_branch": "",
-      "claimed_at": null,
+      "agent_branch": "openhands/w11x-phase2-forensic-triage-gum-harvest",
+      "claimed_at": "2026-11-26T07:05:26Z",
       "ttl_hours": 24,
       "gates_owner": false,
-      "generation": 0,
+      "generation": 1,
       "owner_hint": "Registered for a future authorized repair session on feat/analysis-perception-pack; not assigned or claimed by this registration.",
-      "note": "Registration only. Existing records and leases remain unchanged. Overlapping queued entries must never be claimed concurrently."
+      "note": ""
     },
     {
       "task": "task-274-langsmith-tracing",
@@ -8744,7 +8744,7 @@
       "title": "W4: authenticated durable CommandBus execution and evidence closure",
       "zone": "nagar-w4-integrated-durable-execution",
       "priority": "P0",
-      "status": "active",
+      "status": "expired",
       "scope": "Complete W4 CP1b through CP4 on PR #355 through the existing registry and CommandBus; no parallel authority and no writes to quarantined paths. Expand exclusive scope only after the multi-source referee passes.",
       "prerequisites": [],
       "acceptance_criteria": [
@@ -8810,7 +8810,8 @@
         "Checkpoint 3B: tests/benchmarks/w4_command_bus_benchmark.py; N=5 independent temporary SQLite WAL scenarios, compile/SHA/IBPC, fenced publication and real subprocess-death PRESENT recovery with nonce replay rejection. Final CI closure pending."
       ],
       "note": "",
-      "previous_release_reason": "auto-released by gc at 2026-11-24T09:08:55Z (stale active lease)"
+      "previous_release_reason": "auto-released by gc at 2026-11-24T09:08:55Z (stale active lease)",
+      "release_reason": "auto-released by gc at 2026-11-26T07:05:03Z (stale active lease)"
     },
     {
       "task": "task-w11x-cp1-provenance-hardening",
