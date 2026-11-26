@@ -197,7 +197,26 @@ and a SHA-256-verified restore. The oracle is strict: `pytest` exit **1** = kill
 killed**, pristine tree GREEN before and after, shipped worktree untouched.
 
 Run it with `python scripts/w3_ibpc_mutations.py` (`--list` prints the catalogue,
-`--only name[,name]` spot-checks a subset).
+`--only name[,name]` spot-checks a subset). CI runs the whole campaign as its own
+required job (`wave3-ibpc-mutations`, 30-minute budget, pinned actions, the same
+minimal 28-package closure the `trust-mutations` job uses) and ends with
+`git diff --exit-code`: the harness mutates only its `/tmp` sandbox, so the
+checkout must stay byte-identical.
+
+A campaign deliberately rewrites tracked files in place, so nothing else may
+`git add`/commit while one is running — a concurrent commit swept a torch-mutant
+leftover into `scripts/ci_install.sh` once, and `tests/unit/test_ci_torch_disk_budget.py`
+caught it in CI. That is the harness working as intended; run one campaign at a time.
+
+#### One guard, not two
+
+The Wave-3 principal-authority gate (`_authorize_principal`) resolves a service
+composed without a durable studio authority through `_resolve_authority` instead
+of re-spelling its own refusal. The `unconfigured_authority_allows` mutant
+survived while both messages existed — the early branch answered first, so the
+deeper guard stopped being load-bearing. Delegation restored the kill
+(`scripts/ibpc_security_mutations.py`: **23/23 killed**) and the closure spec now
+asserts the delegated typed reason (`authority_unconfigured`).
 
 
 
