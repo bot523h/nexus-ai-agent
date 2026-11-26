@@ -171,6 +171,23 @@ def _only_initiating_project_for_audit(node: ast.AST) -> ast.AST:
     )
 
 
+def _implicit_empty_project_bootstrap(node: ast.AST) -> ast.AST:
+    assert isinstance(node, ast.Assign)
+    expr = ast.parse(
+        'actor_id == "system" and (not resolved_project or allow_system_bootstrap)',
+        mode="eval",
+    ).body
+    return ast.copy_location(ast.Assign(targets=node.targets, value=expr), node)
+
+
+def _ignore_omitted_processing_scope(node: ast.AST) -> ast.AST:
+    assert isinstance(node, ast.If)
+    expr = ast.parse(
+        "processing_scope and c.processing_scope != processing_scope", mode="eval"
+    ).body
+    return ast.copy_location(ast.If(test=expr, body=node.body, orelse=node.orelse), node)
+
+
 WAVE3_MUTANTS: tuple[Wave3MutantSpec, ...] = (
     Wave3MutantSpec(
         name="M01_session_epoch_fencing",
@@ -599,6 +616,61 @@ WAVE3_MUTANTS: tuple[Wave3MutantSpec, ...] = (
             "test_multi_project_global_revocation_records_audit_for_all_affected_projects"
         ),
         expected_tokens=("AssertionError", "KeyError"),
+    ),
+    Wave3MutantSpec(
+        name="M33_grant_membership_enforces_in_transaction_owner_auth",
+        relative_path=Path("adapters/studio_principal_auth.py"),
+        func_name="grant_membership",
+        predicate=lambda n: _is_if_with_test_substr(n, "not is_bootstrap_seed"),
+        transform=_bypass_if,
+        target_test=(
+            "tests/unit/test_wave3_ibpc_durability.py::"
+            "TestWave3FinalSecurityClosure::"
+            "test_toctou_actor_downgraded_before_grant_and_revoke_membership_rejected"
+        ),
+        expected_tokens=("AssertionError", "403", "DID NOT RAISE"),
+    ),
+    Wave3MutantSpec(
+        name="M34_register_principal_requires_explicit_bootstrap_opt_in",
+        relative_path=Path("adapters/studio_principal_auth.py"),
+        func_name="register_principal",
+        predicate=lambda n: (
+            isinstance(n, ast.Assign)
+            and any(isinstance(t, ast.Name) and t.id == "is_bootstrap_seed" for t in n.targets)
+        ),
+        transform=_implicit_empty_project_bootstrap,
+        target_test=(
+            "tests/unit/test_wave3_ibpc_durability.py::"
+            "TestWave3FinalSecurityClosure::"
+            "test_register_principal_default_call_without_explicit_bootstrap_flag_rejected"
+        ),
+        expected_tokens=("AuthorizationError", "DID NOT RAISE", "AssertionError"),
+    ),
+    Wave3MutantSpec(
+        name="M35_in_memory_consent_enforces_effective_ps",
+        relative_path=Path("nagar/ibpc/privacy.py"),
+        func_name="has_consent",
+        predicate=lambda n: _is_if_with_test_substr(n, "record_ps != effective_ps"),
+        transform=_ignore_omitted_processing_scope,
+        target_test=(
+            "tests/unit/test_wave3_ibpc_durability.py::"
+            "TestWave3FinalSecurityClosure::"
+            "test_in_memory_consent_omitted_processing_scope_and_substring_category_isolation"
+        ),
+        expected_tokens=("AssertionError",),
+    ),
+    Wave3MutantSpec(
+        name="M36_in_memory_consent_requires_nonempty_provider_for_external_dispatch",
+        relative_path=Path("nagar/ibpc/privacy.py"),
+        func_name="has_consent",
+        predicate=lambda n: _is_if_with_test_substr(n, "not provider_id.strip()"),
+        transform=_bypass_if,
+        target_test=(
+            "tests/unit/test_wave3_ibpc_durability.py::"
+            "TestWave3FinalSecurityClosure::"
+            "test_in_memory_consent_omitted_processing_scope_and_substring_category_isolation"
+        ),
+        expected_tokens=("AssertionError",),
     ),
 )
 

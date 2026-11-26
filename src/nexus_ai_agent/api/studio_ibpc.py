@@ -655,7 +655,11 @@ async def grant_project_membership(
         )
         try:
             membership_id = auth_store.grant_membership(
-                project_id, body.principal_id, role=body.role, granted_by=actor_id
+                project_id,
+                body.principal_id,
+                role=body.role,
+                granted_by=actor_id,
+                tenant_id=_actor_tenant,
             )
         except AuthorizationError as exc:
             raise HTTPException(status_code=403, detail=str(exc)) from exc
@@ -695,7 +699,17 @@ async def revoke_project_membership(
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         if target_tenant != project_tenant or actor_tenant != project_tenant:
             raise HTTPException(status_code=403, detail="cross_tenant_membership_denied")
-        auth_store.revoke_membership(project_id, target_principal_id, revoked_by=actor_id)
+        try:
+            auth_store.revoke_membership(
+                project_id,
+                target_principal_id,
+                revoked_by=actor_id,
+                tenant_id=actor_tenant,
+            )
+        except AuthorizationError as exc:
+            if exc.reason == "membership_not_active":
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
         return {
             "project_id": project_id,
             "principal_id": target_principal_id,

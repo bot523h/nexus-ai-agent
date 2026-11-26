@@ -138,6 +138,7 @@ def _setup_auth_store(
         tenant_id="ten-1",
         raw_token=f"tok-{principal_id}-secret",
         display_name="Owner",
+        allow_system_bootstrap=True,
     )
     bref = store.bind_channel(
         principal_id,
@@ -148,7 +149,9 @@ def _setup_auth_store(
         allow_system_bootstrap=True,
     )
     store.ensure_project(project_id, tenant_id="ten-1", active_revision_id="0")
-    store.grant_membership(project_id, principal_id, role=role, granted_by=principal_id)
+    store.grant_membership(
+        project_id, principal_id, role=role, granted_by="system", allow_system_bootstrap=True
+    )
     return store, bref
 
 
@@ -869,15 +872,28 @@ class TestSlice34StudioPrincipalAuthAndAPI:
                 (VIEWER_ID, StudioRole.VIEWER),
                 (AUDITOR_ID, StudioRole.AUDITOR),
             ):
-                store.register_principal(pid, tenant_id="ten-1", raw_token=f"secret-{pid}")
+                store.register_principal(
+                    pid, tenant_id="ten-1", raw_token=f"secret-{pid}", allow_system_bootstrap=True
+                )
                 store.bind_channel(
                     pid,
                     channel="studio",
                     external_subject=f"sub-{pid}",
                     allow_system_bootstrap=True,
                 )
-                store.grant_membership("proj-1", pid, role=role, granted_by=OWNER_ID)
-            store.register_principal(OUTSIDER_ID, tenant_id="ten-1", raw_token="secret-outsider")
+                store.grant_membership(
+                    "proj-1",
+                    pid,
+                    role=role,
+                    granted_by="system" if pid == OWNER_ID else OWNER_ID,
+                    allow_system_bootstrap=(pid == OWNER_ID),
+                )
+            store.register_principal(
+                OUTSIDER_ID,
+                tenant_id="ten-1",
+                raw_token="secret-outsider",
+                allow_system_bootstrap=True,
+            )
 
             # OWNER: everything allowed.
             assert authorizer.authorize_action(
@@ -941,7 +957,7 @@ class TestSlice34StudioPrincipalAuthAndAPI:
                 )
 
             # Revoked membership / principal / channel binding fail closed.
-            store.revoke_membership("proj-1", EDITOR_ID)
+            store.revoke_membership("proj-1", EDITOR_ID, revoked_by=OWNER_ID)
             with pytest.raises(StudioAuthorizationError, match="membership_revoked"):
                 authorizer.authorize_action(
                     principal_id=EDITOR_ID,
@@ -999,19 +1015,31 @@ class TestSlice34StudioPrincipalAuthAndAPI:
 
         store = StudioPrincipalAuthStore(auth_db, now=clock)
         store.ensure_project("proj-http", tenant_id="ten-1")
-        store.register_principal(OWNER_ID, tenant_id="ten-1", raw_token="tok-owner-123")
+        store.register_principal(
+            OWNER_ID, tenant_id="ten-1", raw_token="tok-owner-123", allow_system_bootstrap=True
+        )
         store.bind_channel(
             OWNER_ID, channel="studio", external_subject="sub-owner", allow_system_bootstrap=True
         )
-        store.grant_membership("proj-http", OWNER_ID, role=StudioRole.OWNER, granted_by=OWNER_ID)
+        store.grant_membership(
+            "proj-http",
+            OWNER_ID,
+            role=StudioRole.OWNER,
+            granted_by="system",
+            allow_system_bootstrap=True,
+        )
 
-        store.register_principal(VIEWER_ID, tenant_id="ten-1", raw_token="tok-viewer-123")
+        store.register_principal(
+            VIEWER_ID, tenant_id="ten-1", raw_token="tok-viewer-123", allow_system_bootstrap=True
+        )
         store.bind_channel(
             VIEWER_ID, channel="studio", external_subject="sub-viewer", allow_system_bootstrap=True
         )
         store.grant_membership("proj-http", VIEWER_ID, role=StudioRole.VIEWER, granted_by=OWNER_ID)
 
-        store.register_principal(AUDITOR_ID, tenant_id="ten-1", raw_token="tok-auditor-123")
+        store.register_principal(
+            AUDITOR_ID, tenant_id="ten-1", raw_token="tok-auditor-123", allow_system_bootstrap=True
+        )
         store.bind_channel(
             AUDITOR_ID,
             channel="studio",
@@ -1686,7 +1714,9 @@ class TestWave3EdgeCasesAndCoverage:
         store = StudioPrincipalAuthStore(auth_db, now=clock)
         try:
             with pytest.raises(ValueError, match="raw_token"):
-                store.register_principal(OWNER_ID, tenant_id="ten-1", raw_token="short")
+                store.register_principal(
+                    OWNER_ID, tenant_id="ten-1", raw_token="short", allow_system_bootstrap=True
+                )
             with pytest.raises(PrincipalAuthenticationError, match="missing_principal_token"):
                 store.authenticate_token(None)
             with pytest.raises(StudioAuthorizationError, match="principal_not_found"):
@@ -1696,11 +1726,19 @@ class TestWave3EdgeCasesAndCoverage:
                     action=StudioAction.READ_SESSION,
                 )
             store.ensure_project("p1", tenant_id="ten-1")
-            store.register_principal(OWNER_ID, tenant_id="ten-1", raw_token="tok-owner-1234")
+            store.register_principal(
+                OWNER_ID, tenant_id="ten-1", raw_token="tok-owner-1234", allow_system_bootstrap=True
+            )
             bref = store.bind_channel(
                 OWNER_ID, channel="studio", external_subject="sub-o", allow_system_bootstrap=True
             )
-            store.grant_membership("p1", OWNER_ID, role=StudioRole.OWNER, granted_by=OWNER_ID)
+            store.grant_membership(
+                "p1",
+                OWNER_ID,
+                role=StudioRole.OWNER,
+                granted_by="system",
+                allow_system_bootstrap=True,
+            )
 
             with pytest.raises(CanonicalAuthorityError, match="missing_binding"):
                 store.resolve_principal(principal_id=OWNER_ID, project_id="p1", binding_ref="")
@@ -1781,17 +1819,29 @@ class TestWave3EdgeCasesAndCoverage:
 
         s = StudioPrincipalAuthStore(http_auth_db, now=clock)
         s.ensure_project("proj-err", tenant_id="ten-1")
-        s.register_principal(OWNER_ID, tenant_id="ten-1", raw_token="tok-owner-err")
+        s.register_principal(
+            OWNER_ID, tenant_id="ten-1", raw_token="tok-owner-err", allow_system_bootstrap=True
+        )
         s.bind_channel(
             OWNER_ID, channel="studio", external_subject="sub-owner", allow_system_bootstrap=True
         )
-        s.grant_membership("proj-err", OWNER_ID, role=StudioRole.OWNER, granted_by=OWNER_ID)
-        s.register_principal(VIEWER_ID, tenant_id="ten-1", raw_token="tok-viewer-err")
+        s.grant_membership(
+            "proj-err",
+            OWNER_ID,
+            role=StudioRole.OWNER,
+            granted_by="system",
+            allow_system_bootstrap=True,
+        )
+        s.register_principal(
+            VIEWER_ID, tenant_id="ten-1", raw_token="tok-viewer-err", allow_system_bootstrap=True
+        )
         s.bind_channel(
             VIEWER_ID, channel="studio", external_subject="sub-viewer", allow_system_bootstrap=True
         )
         s.grant_membership("proj-err", VIEWER_ID, role=StudioRole.VIEWER, granted_by=OWNER_ID)
-        s.register_principal(EDITOR_ID, tenant_id="ten-1", raw_token="tok-editor-err")
+        s.register_principal(
+            EDITOR_ID, tenant_id="ten-1", raw_token="tok-editor-err", allow_system_bootstrap=True
+        )
         s.close()
 
         client = TestClient(app_module.app)
@@ -1920,7 +1970,13 @@ class TestWave3EdgeCasesAndCoverage:
         s.ensure_project("proj-other", tenant_id="ten-1") if False else None
         s2 = StudioPrincipalAuthStore(http_auth_db, now=clock)
         s2.ensure_project("proj-other", tenant_id="ten-1")
-        s2.grant_membership("proj-other", OWNER_ID, role=StudioRole.OWNER, granted_by=OWNER_ID)
+        s2.grant_membership(
+            "proj-other",
+            OWNER_ID,
+            role=StudioRole.OWNER,
+            granted_by="system",
+            allow_system_bootstrap=True,
+        )
         s2.close()
         monkeypatch.setenv("NEXUS_STUDIO_PROJECT_IDS", "proj-err,proj-other")
         r_s = client.post(
@@ -2652,15 +2708,29 @@ class TestWave3SecurityClosureAndCoverage:
         s = StudioPrincipalAuthStore(http_auth, now=clock)
         s.ensure_project("proj-a", tenant_id="ten-1")
         s.ensure_project("proj-b", tenant_id="ten-1")
-        s.register_principal(OWNER_ID, tenant_id="ten-1", raw_token="tok-owner-sec1")
+        s.register_principal(
+            OWNER_ID, tenant_id="ten-1", raw_token="tok-owner-sec1", allow_system_bootstrap=True
+        )
         s.bind_channel(
             OWNER_ID,
             channel="studio",
             external_subject="sub-owner-sec1",
             allow_system_bootstrap=True,
         )
-        s.grant_membership("proj-a", OWNER_ID, role=StudioRole.OWNER, granted_by=OWNER_ID)
-        s.grant_membership("proj-b", OWNER_ID, role=StudioRole.OWNER, granted_by=OWNER_ID)
+        s.grant_membership(
+            "proj-a",
+            OWNER_ID,
+            role=StudioRole.OWNER,
+            granted_by="system",
+            allow_system_bootstrap=True,
+        )
+        s.grant_membership(
+            "proj-b",
+            OWNER_ID,
+            role=StudioRole.OWNER,
+            granted_by="system",
+            allow_system_bootstrap=True,
+        )
         s.close()
 
         client = TestClient(app_module.app)
@@ -2804,16 +2874,32 @@ class TestWave3SecurityClosureAndCoverage:
         auth = StudioPrincipalAuthStore(auth_db, now=clock)
         auth.ensure_project("proj-a", tenant_id="ten-1")
         auth.ensure_project("proj-b", tenant_id="ten-1")
-        auth.register_principal(OWNER_ID, tenant_id="ten-1", raw_token="tok-owner-sec3")
+        auth.register_principal(
+            OWNER_ID, tenant_id="ten-1", raw_token="tok-owner-sec3", allow_system_bootstrap=True
+        )
         bref_owner = auth.bind_channel(
             OWNER_ID,
             channel="studio",
             external_subject="sub-owner-sec3",
             allow_system_bootstrap=True,
         )
-        auth.grant_membership("proj-a", OWNER_ID, role=StudioRole.OWNER, granted_by=OWNER_ID)
-        auth.grant_membership("proj-b", OWNER_ID, role=StudioRole.OWNER, granted_by=OWNER_ID)
-        auth.register_principal(EDITOR_ID, tenant_id="ten-1", raw_token="tok-editor-sec3")
+        auth.grant_membership(
+            "proj-a",
+            OWNER_ID,
+            role=StudioRole.OWNER,
+            granted_by="system",
+            allow_system_bootstrap=True,
+        )
+        auth.grant_membership(
+            "proj-b",
+            OWNER_ID,
+            role=StudioRole.OWNER,
+            granted_by="system",
+            allow_system_bootstrap=True,
+        )
+        auth.register_principal(
+            EDITOR_ID, tenant_id="ten-1", raw_token="tok-editor-sec3", allow_system_bootstrap=True
+        )
         auth.bind_channel(
             EDITOR_ID,
             channel="studio",
@@ -3067,24 +3153,40 @@ class TestWave3SecurityClosureAndCoverage:
         with StudioPrincipalAuthStore(auth_db, now=clock) as store:
             store.ensure_project("proj-t1", tenant_id="ten-1")
             store.ensure_project("proj-t2", tenant_id="ten-2")
-            store.register_principal(OWNER_ID, tenant_id="ten-1", raw_token="tok-t1-owner")
+            store.register_principal(
+                OWNER_ID, tenant_id="ten-1", raw_token="tok-t1-owner", allow_system_bootstrap=True
+            )
             b1 = store.bind_channel(
                 OWNER_ID,
                 channel="studio",
                 external_subject="sub-t1-owner",
                 allow_system_bootstrap=True,
             )
-            store.grant_membership("proj-t1", OWNER_ID, role=StudioRole.OWNER, granted_by=OWNER_ID)
+            store.grant_membership(
+                "proj-t1",
+                OWNER_ID,
+                role=StudioRole.OWNER,
+                granted_by="system",
+                allow_system_bootstrap=True,
+            )
 
             t2_user = "prn_" + "e" * 32
-            store.register_principal(t2_user, tenant_id="ten-2", raw_token="tok-t2-user")
+            store.register_principal(
+                t2_user, tenant_id="ten-2", raw_token="tok-t2-user", allow_system_bootstrap=True
+            )
             store.bind_channel(
                 t2_user,
                 channel="studio",
                 external_subject="sub-t2-user",
                 allow_system_bootstrap=True,
             )
-            store.grant_membership("proj-t2", t2_user, role=StudioRole.OWNER, granted_by=t2_user)
+            store.grant_membership(
+                "proj-t2",
+                t2_user,
+                role=StudioRole.OWNER,
+                granted_by="system",
+                allow_system_bootstrap=True,
+            )
 
             # Cross-tenant membership grant fails closed.
             with pytest.raises(AuthorizationError, match="cross_tenant_membership_denied"):
@@ -3100,7 +3202,7 @@ class TestWave3SecurityClosureAndCoverage:
                 store.grant_membership(
                     "proj-t1", "prn_" + "f" * 32, role=StudioRole.EDITOR, granted_by=OWNER_ID
                 )
-            with pytest.raises(AuthorizationError, match="principal_not_found"):
+            with pytest.raises(AuthorizationError, match="actor_principal_inactive_or_missing"):
                 store.grant_membership(
                     "proj-t1", OWNER_ID, role=StudioRole.EDITOR, granted_by="prn_" + "f" * 32
                 )
@@ -3771,16 +3873,26 @@ class TestWave3SecurityClosureAndCoverage:
         auth_db = tmp_path / "auth.sqlite3"
         auth = StudioPrincipalAuthStore(auth_db, now=clock)
         auth.ensure_project("proj-w3", tenant_id="ten-1")
-        auth.register_principal(OWNER_ID, tenant_id="ten-1", raw_token="tok-owner-life")
+        auth.register_principal(
+            OWNER_ID, tenant_id="ten-1", raw_token="tok-owner-life", allow_system_bootstrap=True
+        )
         auth.bind_channel(
             OWNER_ID,
             channel="studio",
             external_subject="sub-owner-life",
             allow_system_bootstrap=True,
         )
-        auth.grant_membership("proj-w3", OWNER_ID, role=StudioRole.OWNER, granted_by=OWNER_ID)
+        auth.grant_membership(
+            "proj-w3",
+            OWNER_ID,
+            role=StudioRole.OWNER,
+            granted_by="system",
+            allow_system_bootstrap=True,
+        )
 
-        auth.register_principal(EDITOR_ID, tenant_id="ten-1", raw_token="tok-editor-life")
+        auth.register_principal(
+            EDITOR_ID, tenant_id="ten-1", raw_token="tok-editor-life", allow_system_bootstrap=True
+        )
         auth.bind_channel(
             EDITOR_ID,
             channel="studio",
@@ -3790,7 +3902,9 @@ class TestWave3SecurityClosureAndCoverage:
         auth.grant_membership("proj-w3", EDITOR_ID, role=StudioRole.EDITOR, granted_by=OWNER_ID)
 
         t2_owner = "prn_" + "9" * 32
-        auth.register_principal(t2_owner, tenant_id="ten-2", raw_token="tok-t2-life")
+        auth.register_principal(
+            t2_owner, tenant_id="ten-2", raw_token="tok-t2-life", allow_system_bootstrap=True
+        )
         auth.close()
 
         monkeypatch.setenv("NEXUS_DASHBOARD_TOKEN", "deploy-tok")
@@ -4267,21 +4381,37 @@ class TestWave3SecurityClosureAndCoverage:
         auth_cov_db = tmp_path / "auth_cov.sqlite3"
         with StudioPrincipalAuthStore(auth_cov_db, now=clock) as ac:
             ac.ensure_project("proj-cov", tenant_id="ten-1")
-            ac.register_principal(OWNER_ID, tenant_id="ten-1", raw_token="tok-owner-cov")
+            ac.register_principal(
+                OWNER_ID, tenant_id="ten-1", raw_token="tok-owner-cov", allow_system_bootstrap=True
+            )
             ac.bind_channel(
                 OWNER_ID,
                 channel="studio",
                 external_subject="sub-owner-cov",
                 allow_system_bootstrap=True,
             )
-            ac.grant_membership("proj-cov", OWNER_ID, role=StudioRole.OWNER, granted_by=OWNER_ID)
+            ac.grant_membership(
+                "proj-cov",
+                OWNER_ID,
+                role=StudioRole.OWNER,
+                granted_by="system",
+                allow_system_bootstrap=True,
+            )
             ac.ensure_project("proj-t2", tenant_id="ten-2")
             t2_p = "prn_" + "d" * 32
-            ac.register_principal(t2_p, tenant_id="ten-2", raw_token="tok-t2-cov")
+            ac.register_principal(
+                t2_p, tenant_id="ten-2", raw_token="tok-t2-cov", allow_system_bootstrap=True
+            )
             ac.bind_channel(
                 t2_p, channel="studio", external_subject="sub-t2-cov", allow_system_bootstrap=True
             )
-            ac.grant_membership("proj-t2", t2_p, role=StudioRole.OWNER, granted_by=t2_p)
+            ac.grant_membership(
+                "proj-t2",
+                t2_p,
+                role=StudioRole.OWNER,
+                granted_by="system",
+                allow_system_bootstrap=True,
+            )
 
         monkeypatch.setenv("NEXUS_DASHBOARD_TOKEN", "deploy-tok")
         monkeypatch.setenv("NEXUS_STUDIO_PROJECT_IDS", "proj-cov,proj-t2")
@@ -5514,21 +5644,33 @@ class TestWave3FinalSecurityClosure:
         auth_db = tmp_path / "auth.sqlite3"
         auth = StudioPrincipalAuthStore(auth_db, now=clock)
         auth.ensure_project("proj-w3", tenant_id="ten-1")
-        auth.register_principal(OWNER_ID, tenant_id="ten-1", raw_token="tok-owner-p11")
+        auth.register_principal(
+            OWNER_ID, tenant_id="ten-1", raw_token="tok-owner-p11", allow_system_bootstrap=True
+        )
         auth.bind_channel(
             OWNER_ID,
             channel="studio",
             external_subject="sub-owner-p11",
             allow_system_bootstrap=True,
         )
-        auth.grant_membership("proj-w3", OWNER_ID, role=StudioRole.OWNER, granted_by=OWNER_ID)
+        auth.grant_membership(
+            "proj-w3",
+            OWNER_ID,
+            role=StudioRole.OWNER,
+            granted_by="system",
+            allow_system_bootstrap=True,
+        )
 
         victim = "prn_" + "a" * 32
-        auth.register_principal(victim, tenant_id="ten-2", raw_token="tok-victim-secret")
+        auth.register_principal(
+            victim, tenant_id="ten-2", raw_token="tok-victim-secret", allow_system_bootstrap=True
+        )
 
         # Duplicate principal_id across same or different tenant must refuse without overwriting.
         with pytest.raises(AuthorizationError, match="principal_already_exists"):
-            auth.register_principal(victim, tenant_id="ten-1", raw_token="tok-attacker-new")
+            auth.register_principal(
+                victim, tenant_id="ten-1", raw_token="tok-attacker-new", allow_system_bootstrap=True
+            )
         assert auth.get_principal_tenant(victim) == "ten-2"
         assert auth.authenticate_token("tok-victim-secret") == victim
         with pytest.raises(PrincipalAuthenticationError, match="invalid_principal_token"):
@@ -5537,14 +5679,24 @@ class TestWave3FinalSecurityClosure:
         # Duplicate raw_token on a distinct principal_id must refuse.
         other_pid = "prn_" + "b" * 32
         with pytest.raises(AuthorizationError, match="principal_token_conflict"):
-            auth.register_principal(other_pid, tenant_id="ten-1", raw_token="tok-victim-secret")
+            auth.register_principal(
+                other_pid,
+                tenant_id="ten-1",
+                raw_token="tok-victim-secret",
+                allow_system_bootstrap=True,
+            )
 
         # Even revoked principal_id cannot be re-registered to resurrect/hijack identity.
         auth.revoke_principal(
             victim, actor_id="system", expected_tenant_id="ten-2", allow_system_bootstrap=True
         )
         with pytest.raises(AuthorizationError, match="principal_already_exists"):
-            auth.register_principal(victim, tenant_id="ten-1", raw_token="tok-resurrect-999")
+            auth.register_principal(
+                victim,
+                tenant_id="ten-1",
+                raw_token="tok-resurrect-999",
+                allow_system_bootstrap=True,
+            )
         auth.close()
 
         monkeypatch.setenv("NEXUS_DASHBOARD_TOKEN", "deploy-tok")
@@ -5587,17 +5739,27 @@ class TestWave3FinalSecurityClosure:
         auth_db = tmp_path / "auth.sqlite3"
         auth = StudioPrincipalAuthStore(auth_db, now=clock)
         auth.ensure_project("proj-w3", tenant_id="ten-1")
-        auth.register_principal(OWNER_ID, tenant_id="ten-1", raw_token="tok-owner-p12")
+        auth.register_principal(
+            OWNER_ID, tenant_id="ten-1", raw_token="tok-owner-p12", allow_system_bootstrap=True
+        )
         owner_ref = auth.bind_channel(
             OWNER_ID,
             channel="studio",
             external_subject="sub-owner-p12",
             allow_system_bootstrap=True,
         )
-        auth.grant_membership("proj-w3", OWNER_ID, role=StudioRole.OWNER, granted_by=OWNER_ID)
+        auth.grant_membership(
+            "proj-w3",
+            OWNER_ID,
+            role=StudioRole.OWNER,
+            granted_by="system",
+            allow_system_bootstrap=True,
+        )
 
         p2 = "prn_" + "c" * 32
-        auth.register_principal(p2, tenant_id="ten-1", raw_token="tok-p2-p12")
+        auth.register_principal(
+            p2, tenant_id="ten-1", raw_token="tok-p2-p12", allow_system_bootstrap=True
+        )
         # Collision on binding_ref or (channel, external_subject) must refuse without overwrite.
         with pytest.raises(AuthorizationError, match="binding_already_exists"):
             auth.bind_channel(
@@ -5619,7 +5781,9 @@ class TestWave3FinalSecurityClosure:
 
         # Binding to a revoked principal must fail closed.
         p_rev = "prn_" + "d" * 32
-        auth.register_principal(p_rev, tenant_id="ten-1", raw_token="tok-rev-p12")
+        auth.register_principal(
+            p_rev, tenant_id="ten-1", raw_token="tok-rev-p12", allow_system_bootstrap=True
+        )
         auth.revoke_principal(p_rev, allow_system_bootstrap=True)
         with pytest.raises(AuthorizationError, match="principal_revoked"):
             auth.bind_channel(
@@ -5688,17 +5852,27 @@ class TestWave3FinalSecurityClosure:
         auth_db = tmp_path / "auth.sqlite3"
         auth = StudioPrincipalAuthStore(auth_db, now=clock)
         auth.ensure_project("proj-w3", tenant_id="ten-1")
-        auth.register_principal(OWNER_ID, tenant_id="ten-1", raw_token="tok-owner-p21")
+        auth.register_principal(
+            OWNER_ID, tenant_id="ten-1", raw_token="tok-owner-p21", allow_system_bootstrap=True
+        )
         auth.bind_channel(
             OWNER_ID,
             channel="studio",
             external_subject="sub-owner-p21",
             allow_system_bootstrap=True,
         )
-        auth.grant_membership("proj-w3", OWNER_ID, role=StudioRole.OWNER, granted_by=OWNER_ID)
+        auth.grant_membership(
+            "proj-w3",
+            OWNER_ID,
+            role=StudioRole.OWNER,
+            granted_by="system",
+            allow_system_bootstrap=True,
+        )
 
         target = "prn_" + "e" * 32
-        auth.register_principal(target, tenant_id="ten-1", raw_token="tok-target-p21")
+        auth.register_principal(
+            target, tenant_id="ten-1", raw_token="tok-target-p21", allow_system_bootstrap=True
+        )
         b1 = auth.bind_channel(
             target, channel="studio", external_subject="sub-target-1", allow_system_bootstrap=True
         )
@@ -5708,7 +5882,9 @@ class TestWave3FinalSecurityClosure:
         auth.grant_membership("proj-w3", target, role=StudioRole.EDITOR, granted_by=OWNER_ID)
 
         t2_target = "prn_" + "f" * 32
-        auth.register_principal(t2_target, tenant_id="ten-2", raw_token="tok-t2-p21")
+        auth.register_principal(
+            t2_target, tenant_id="ten-2", raw_token="tok-t2-p21", allow_system_bootstrap=True
+        )
         b_t2 = auth.bind_channel(
             t2_target, channel="studio", external_subject="sub-t2-p21", allow_system_bootstrap=True
         )
@@ -5839,14 +6015,22 @@ class TestWave3FinalSecurityClosure:
 
         auth = StudioPrincipalAuthStore(tmp_path / "auth.sqlite3", now=clock)
         auth.ensure_project("proj-a", tenant_id="ten-1")
-        auth.register_principal(OWNER_ID, tenant_id="ten-1", raw_token="tok-owner-p22")
+        auth.register_principal(
+            OWNER_ID, tenant_id="ten-1", raw_token="tok-owner-p22", allow_system_bootstrap=True
+        )
         b_owner = auth.bind_channel(
             OWNER_ID,
             channel="studio",
             external_subject="sub-owner-p22",
             allow_system_bootstrap=True,
         )
-        auth.grant_membership("proj-a", OWNER_ID, role=StudioRole.OWNER, granted_by=OWNER_ID)
+        auth.grant_membership(
+            "proj-a",
+            OWNER_ID,
+            role=StudioRole.OWNER,
+            granted_by="system",
+            allow_system_bootstrap=True,
+        )
 
         class _Q:
             def list_jobs(self, *, project_id: str) -> list[Any]:
@@ -6011,23 +6195,39 @@ class TestWave3FinalSecurityClosure:
 
         owner_b = "prn_" + "1" * 32
         viewer_a = "prn_" + "2" * 32
-        auth.register_principal(owner_b, tenant_id="ten-1", raw_token="tok-owner-b-p23")
+        auth.register_principal(
+            owner_b, tenant_id="ten-1", raw_token="tok-owner-b-p23", allow_system_bootstrap=True
+        )
         auth.bind_channel(
             owner_b,
             channel="studio",
             external_subject="sub-owner-b-p23",
             allow_system_bootstrap=True,
         )
-        auth.grant_membership("proj-b", owner_b, role=StudioRole.OWNER, granted_by=owner_b)
+        auth.grant_membership(
+            "proj-b",
+            owner_b,
+            role=StudioRole.OWNER,
+            granted_by="system",
+            allow_system_bootstrap=True,
+        )
 
-        auth.register_principal(viewer_a, tenant_id="ten-1", raw_token="tok-viewer-a-p23")
+        auth.register_principal(
+            viewer_a, tenant_id="ten-1", raw_token="tok-viewer-a-p23", allow_system_bootstrap=True
+        )
         auth.bind_channel(
             viewer_a,
             channel="studio",
             external_subject="sub-viewer-a-p23",
             allow_system_bootstrap=True,
         )
-        auth.grant_membership("proj-a", viewer_a, role=StudioRole.VIEWER, granted_by=owner_b)
+        auth.grant_membership(
+            "proj-a",
+            viewer_a,
+            role=StudioRole.VIEWER,
+            granted_by="system",
+            allow_system_bootstrap=True,
+        )
 
         assert auth.has_owner_role(owner_b, "ten-1", project_id="proj-b") is True
         assert auth.has_owner_role(owner_b, "ten-1", project_id="proj-a") is False
@@ -6097,7 +6297,9 @@ class TestWave3FinalSecurityClosure:
 
         owner_alpha = "prn_" + "4" * 32
         member_beta = "prn_" + "5" * 32
-        auth.register_principal(owner_alpha, tenant_id="ten-1", raw_token="tok-owner-alpha")
+        auth.register_principal(
+            owner_alpha, tenant_id="ten-1", raw_token="tok-owner-alpha", allow_system_bootstrap=True
+        )
         auth.bind_channel(
             owner_alpha,
             channel="studio",
@@ -6105,12 +6307,22 @@ class TestWave3FinalSecurityClosure:
             allow_system_bootstrap=True,
         )
         auth.grant_membership(
-            "proj-alpha", owner_alpha, role=StudioRole.OWNER, granted_by=owner_alpha
+            "proj-alpha",
+            owner_alpha,
+            role=StudioRole.OWNER,
+            granted_by="system",
+            allow_system_bootstrap=True,
         )
 
-        auth.register_principal(member_beta, tenant_id="ten-1", raw_token="tok-member-beta")
+        auth.register_principal(
+            member_beta, tenant_id="ten-1", raw_token="tok-member-beta", allow_system_bootstrap=True
+        )
         auth.grant_membership(
-            "proj-beta", member_beta, role=StudioRole.EDITOR, granted_by=owner_alpha
+            "proj-beta",
+            member_beta,
+            role=StudioRole.EDITOR,
+            granted_by="system",
+            allow_system_bootstrap=True,
         )
         auth.close()
 
@@ -6172,7 +6384,9 @@ class TestWave3FinalSecurityClosure:
         beta_only = "prn_" + "c1" * 16
         shared_user = "prn_" + "d1" * 16
 
-        auth.register_principal(owner_alpha, tenant_id="ten-1", raw_token="tok-oa-p1b")
+        auth.register_principal(
+            owner_alpha, tenant_id="ten-1", raw_token="tok-oa-p1b", allow_system_bootstrap=True
+        )
         auth.bind_channel(
             owner_alpha,
             channel="studio",
@@ -6180,22 +6394,38 @@ class TestWave3FinalSecurityClosure:
             allow_system_bootstrap=True,
         )
         auth.grant_membership(
-            "proj-alpha", owner_alpha, role=StudioRole.OWNER, granted_by=owner_alpha
+            "proj-alpha",
+            owner_alpha,
+            role=StudioRole.OWNER,
+            granted_by="system",
+            allow_system_bootstrap=True,
         )
 
-        auth.register_principal(owner_beta, tenant_id="ten-1", raw_token="tok-ob-p1b")
+        auth.register_principal(
+            owner_beta, tenant_id="ten-1", raw_token="tok-ob-p1b", allow_system_bootstrap=True
+        )
         auth.bind_channel(
             owner_beta, channel="studio", external_subject="sub-ob-p1b", allow_system_bootstrap=True
         )
-        auth.grant_membership("proj-beta", owner_beta, role=StudioRole.OWNER, granted_by=owner_beta)
+        auth.grant_membership(
+            "proj-beta",
+            owner_beta,
+            role=StudioRole.OWNER,
+            granted_by="system",
+            allow_system_bootstrap=True,
+        )
 
-        auth.register_principal(beta_only, tenant_id="ten-1", raw_token="tok-bo-p1b")
+        auth.register_principal(
+            beta_only, tenant_id="ten-1", raw_token="tok-bo-p1b", allow_system_bootstrap=True
+        )
         b_beta_only = auth.bind_channel(
             beta_only, channel="studio", external_subject="sub-bo-p1b", allow_system_bootstrap=True
         )
         auth.grant_membership("proj-beta", beta_only, role=StudioRole.EDITOR, granted_by=owner_beta)
 
-        auth.register_principal(shared_user, tenant_id="ten-1", raw_token="tok-su-p1b")
+        auth.register_principal(
+            shared_user, tenant_id="ten-1", raw_token="tok-su-p1b", allow_system_bootstrap=True
+        )
         b_shared = auth.bind_channel(
             shared_user,
             channel="studio",
@@ -6383,17 +6613,27 @@ class TestWave3FinalSecurityClosure:
         auth_db = tmp_path / "auth.sqlite3"
         auth = StudioPrincipalAuthStore(auth_db, now=clock)
         auth.ensure_project("proj-w3", tenant_id="ten-1")
-        auth.register_principal(OWNER_ID, tenant_id="ten-1", raw_token="tok-owner-p2b")
+        auth.register_principal(
+            OWNER_ID, tenant_id="ten-1", raw_token="tok-owner-p2b", allow_system_bootstrap=True
+        )
         auth.bind_channel(
             OWNER_ID,
             channel="studio",
             external_subject="sub-owner-p2b",
             allow_system_bootstrap=True,
         )
-        auth.grant_membership("proj-w3", OWNER_ID, role=StudioRole.OWNER, granted_by=OWNER_ID)
+        auth.grant_membership(
+            "proj-w3",
+            OWNER_ID,
+            role=StudioRole.OWNER,
+            granted_by="system",
+            allow_system_bootstrap=True,
+        )
 
         target = "prn_" + "e2" * 16
-        auth.register_principal(target, tenant_id="ten-1", raw_token="tok-target-p2b")
+        auth.register_principal(
+            target, tenant_id="ten-1", raw_token="tok-target-p2b", allow_system_bootstrap=True
+        )
         b_target = auth.bind_channel(
             target, channel="studio", external_subject="sub-target-p2b", allow_system_bootstrap=True
         )
@@ -6454,16 +6694,26 @@ class TestWave3FinalSecurityClosure:
         auth_db = tmp_path / "auth.sqlite3"
         auth = StudioPrincipalAuthStore(auth_db, now=clock)
         auth.ensure_project("proj-alpha", tenant_id="ten-1")
-        auth.register_principal(OWNER_ID, tenant_id="ten-1", raw_token="tok-owner-toctou")
+        auth.register_principal(
+            OWNER_ID, tenant_id="ten-1", raw_token="tok-owner-toctou", allow_system_bootstrap=True
+        )
         auth.bind_channel(
             OWNER_ID,
             channel="studio",
             external_subject="sub-owner-toctou",
             allow_system_bootstrap=True,
         )
-        auth.grant_membership("proj-alpha", OWNER_ID, role=StudioRole.OWNER, granted_by=OWNER_ID)
+        auth.grant_membership(
+            "proj-alpha",
+            OWNER_ID,
+            role=StudioRole.OWNER,
+            granted_by="system",
+            allow_system_bootstrap=True,
+        )
         target = "prn_" + "1a" * 16
-        auth.register_principal(target, tenant_id="ten-1", raw_token="tok-target-toctou")
+        auth.register_principal(
+            target, tenant_id="ten-1", raw_token="tok-target-toctou", allow_system_bootstrap=True
+        )
         b_target = auth.bind_channel(
             target,
             channel="studio",
@@ -6518,7 +6768,13 @@ class TestWave3FinalSecurityClosure:
 
         # Restore OWNER and test bind_channel -> 403 unauthorized_project_owner
         with StudioPrincipalAuthStore(auth_db, now=clock) as s:
-            s.grant_membership("proj-alpha", OWNER_ID, role=StudioRole.OWNER, granted_by=OWNER_ID)
+            s.grant_membership(
+                "proj-alpha",
+                OWNER_ID,
+                role=StudioRole.OWNER,
+                granted_by="system",
+                allow_system_bootstrap=True,
+            )
         r_bind = client.post(
             f"/api/studio/principals/{target}/bindings?project_id=proj-alpha",
             headers=owner_h,
@@ -6528,7 +6784,13 @@ class TestWave3FinalSecurityClosure:
 
         # Restore OWNER and test revoke_channel_binding -> 403 unauthorized_project_owner
         with StudioPrincipalAuthStore(auth_db, now=clock) as s:
-            s.grant_membership("proj-alpha", OWNER_ID, role=StudioRole.OWNER, granted_by=OWNER_ID)
+            s.grant_membership(
+                "proj-alpha",
+                OWNER_ID,
+                role=StudioRole.OWNER,
+                granted_by="system",
+                allow_system_bootstrap=True,
+            )
         r_rb = client.post(
             f"/api/studio/projects/proj-alpha/principals/{target}/bindings/{b_target}/revoke",
             headers=owner_h,
@@ -6547,7 +6809,13 @@ class TestWave3FinalSecurityClosure:
             return verified
 
         with StudioPrincipalAuthStore(auth_db, now=clock) as s:
-            s.grant_membership("proj-alpha", OWNER_ID, role=StudioRole.OWNER, granted_by=OWNER_ID)
+            s.grant_membership(
+                "proj-alpha",
+                OWNER_ID,
+                role=StudioRole.OWNER,
+                granted_by="system",
+                allow_system_bootstrap=True,
+            )
         monkeypatch.setattr(studio_ibpc_module, "_authorize_owner_mutation", _precheck_then_revoke)
         r_rp = client.post(
             f"/api/studio/projects/proj-alpha/principals/{target}/revoke",
@@ -6567,18 +6835,42 @@ class TestWave3FinalSecurityClosure:
         with StudioPrincipalAuthStore(tmp_path / "auth_direct.sqlite3", now=clock) as store:
             store.ensure_project("proj-alpha", tenant_id="ten-1")
             store.ensure_project("proj-other", tenant_id="ten-2")
-            store.register_principal(OWNER_ID, tenant_id="ten-1", raw_token="tok-owner-dir")
-            store.register_principal(EDITOR_ID, tenant_id="ten-1", raw_token="tok-editor-dir")
-            store.register_principal(VIEWER_ID, tenant_id="ten-1", raw_token="tok-viewer-dir")
-            store.register_principal(OUTSIDER_ID, tenant_id="ten-1", raw_token="tok-out-dir")
+            store.register_principal(
+                OWNER_ID, tenant_id="ten-1", raw_token="tok-owner-dir", allow_system_bootstrap=True
+            )
+            store.register_principal(
+                EDITOR_ID,
+                tenant_id="ten-1",
+                raw_token="tok-editor-dir",
+                allow_system_bootstrap=True,
+            )
+            store.register_principal(
+                VIEWER_ID,
+                tenant_id="ten-1",
+                raw_token="tok-viewer-dir",
+                allow_system_bootstrap=True,
+            )
+            store.register_principal(
+                OUTSIDER_ID, tenant_id="ten-1", raw_token="tok-out-dir", allow_system_bootstrap=True
+            )
             t2_actor = "prn_" + "2c" * 16
-            store.register_principal(t2_actor, tenant_id="ten-2", raw_token="tok-t2-dir")
+            store.register_principal(
+                t2_actor, tenant_id="ten-2", raw_token="tok-t2-dir", allow_system_bootstrap=True
+            )
             store.grant_membership(
-                "proj-other", t2_actor, role=StudioRole.OWNER, granted_by=t2_actor
+                "proj-other",
+                t2_actor,
+                role=StudioRole.OWNER,
+                granted_by="system",
+                allow_system_bootstrap=True,
             )
 
             store.grant_membership(
-                "proj-alpha", OWNER_ID, role=StudioRole.OWNER, granted_by=OWNER_ID
+                "proj-alpha",
+                OWNER_ID,
+                role=StudioRole.OWNER,
+                granted_by="system",
+                allow_system_bootstrap=True,
             )
             store.grant_membership(
                 "proj-alpha", EDITOR_ID, role=StudioRole.EDITOR, granted_by=OWNER_ID
@@ -6678,17 +6970,27 @@ class TestWave3FinalSecurityClosure:
         auth = StudioPrincipalAuthStore(auth_db, now=clock)
         auth.ensure_project("proj-alpha", tenant_id="ten-1")
         auth.ensure_project("proj-beta", tenant_id="ten-1")
-        auth.register_principal(OWNER_ID, tenant_id="ten-1", raw_token="tok-owner-revmem")
+        auth.register_principal(
+            OWNER_ID, tenant_id="ten-1", raw_token="tok-owner-revmem", allow_system_bootstrap=True
+        )
         auth.bind_channel(
             OWNER_ID,
             channel="studio",
             external_subject="sub-owner-revmem",
             allow_system_bootstrap=True,
         )
-        auth.grant_membership("proj-alpha", OWNER_ID, role=StudioRole.OWNER, granted_by=OWNER_ID)
+        auth.grant_membership(
+            "proj-alpha",
+            OWNER_ID,
+            role=StudioRole.OWNER,
+            granted_by="system",
+            allow_system_bootstrap=True,
+        )
 
         target = "prn_" + "4e" * 16
-        auth.register_principal(target, tenant_id="ten-1", raw_token="tok-target-revmem")
+        auth.register_principal(
+            target, tenant_id="ten-1", raw_token="tok-target-revmem", allow_system_bootstrap=True
+        )
         b_target = auth.bind_channel(
             target,
             channel="studio",
@@ -6699,7 +7001,13 @@ class TestWave3FinalSecurityClosure:
         auth.grant_membership("proj-alpha", target, role=StudioRole.VIEWER, granted_by=OWNER_ID)
         # Revoke target's membership in proj-alpha while leaving an ACTIVE membership in proj-beta.
         auth.revoke_membership("proj-alpha", target, revoked_by=OWNER_ID)
-        auth.grant_membership("proj-beta", target, role=StudioRole.EDITOR, granted_by=OWNER_ID)
+        auth.grant_membership(
+            "proj-beta",
+            target,
+            role=StudioRole.EDITOR,
+            granted_by="system",
+            allow_system_bootstrap=True,
+        )
 
         with pytest.raises(AuthorizationError, match="principal_not_in_project"):
             auth.revoke_principal(target, actor_id=OWNER_ID, project_id="proj-alpha")
@@ -6735,9 +7043,15 @@ class TestWave3FinalSecurityClosure:
         clock = _Clock()
         with StudioPrincipalAuthStore(tmp_path / "auth_noproj.sqlite3", now=clock) as store:
             store.ensure_project("proj-alpha", tenant_id="ten-1")
-            store.register_principal(OWNER_ID, tenant_id="ten-1", raw_token="tok-owner-np")
+            store.register_principal(
+                OWNER_ID, tenant_id="ten-1", raw_token="tok-owner-np", allow_system_bootstrap=True
+            )
             store.grant_membership(
-                "proj-alpha", OWNER_ID, role=StudioRole.OWNER, granted_by=OWNER_ID
+                "proj-alpha",
+                OWNER_ID,
+                role=StudioRole.OWNER,
+                granted_by="system",
+                allow_system_bootstrap=True,
             )
             with pytest.raises(AuthorizationError, match="project_scope_required"):
                 store.bind_channel(
@@ -6778,18 +7092,34 @@ class TestWave3FinalSecurityClosure:
         auth = StudioPrincipalAuthStore(auth_db, now=clock)
         auth.ensure_project("proj-alpha", tenant_id="ten-1")
         auth.ensure_project("proj-beta", tenant_id="ten-1")
-        auth.register_principal(OWNER_ID, tenant_id="ten-1", raw_token="tok-owner-multi")
+        auth.register_principal(
+            OWNER_ID, tenant_id="ten-1", raw_token="tok-owner-multi", allow_system_bootstrap=True
+        )
         auth.bind_channel(
             OWNER_ID,
             channel="studio",
             external_subject="sub-owner-multi",
             allow_system_bootstrap=True,
         )
-        auth.grant_membership("proj-alpha", OWNER_ID, role=StudioRole.OWNER, granted_by=OWNER_ID)
-        auth.grant_membership("proj-beta", OWNER_ID, role=StudioRole.OWNER, granted_by=OWNER_ID)
+        auth.grant_membership(
+            "proj-alpha",
+            OWNER_ID,
+            role=StudioRole.OWNER,
+            granted_by="system",
+            allow_system_bootstrap=True,
+        )
+        auth.grant_membership(
+            "proj-beta",
+            OWNER_ID,
+            role=StudioRole.OWNER,
+            granted_by="system",
+            allow_system_bootstrap=True,
+        )
 
         target = "prn_" + "5f" * 16
-        auth.register_principal(target, tenant_id="ten-1", raw_token="tok-target-multi")
+        auth.register_principal(
+            target, tenant_id="ten-1", raw_token="tok-target-multi", allow_system_bootstrap=True
+        )
         b_target = auth.bind_channel(
             target,
             channel="studio",
@@ -6962,4 +7292,350 @@ class TestWave3FinalSecurityClosure:
             scope="voice",
             processing_scope=ProcessingScope.EXTERNAL_PROVIDER_DISPATCH.value,
             provider_id="",
+        )
+
+    def test_toctou_actor_downgraded_before_grant_and_revoke_membership_rejected(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from nexus_ai_agent.api import app as app_module
+        from nexus_ai_agent.api import studio_ibpc as studio_ibpc_module
+        from nexus_ai_agent.config.settings import get_settings
+
+        clock = _Clock()
+        ws = tmp_path / "ws"
+        ws.mkdir()
+        auth_db = tmp_path / "auth_mem_toctou.sqlite3"
+        auth = StudioPrincipalAuthStore(auth_db, now=clock)
+        auth.ensure_project("proj-alpha", tenant_id="ten-1")
+        auth.register_principal(
+            OWNER_ID, tenant_id="ten-1", raw_token="tok-owner-mtoctou", allow_system_bootstrap=True
+        )
+        auth.bind_channel(
+            OWNER_ID,
+            channel="studio",
+            external_subject="sub-owner-mtoctou",
+            allow_system_bootstrap=True,
+        )
+        auth.grant_membership(
+            "proj-alpha",
+            OWNER_ID,
+            role=StudioRole.OWNER,
+            granted_by="system",
+            allow_system_bootstrap=True,
+        )
+        target = "prn_" + "6a" * 16
+        other = "prn_" + "6b" * 16
+        auth.register_principal(
+            target, tenant_id="ten-1", raw_token="tok-target-mtoctou", allow_system_bootstrap=True
+        )
+        auth.register_principal(
+            other, tenant_id="ten-1", raw_token="tok-other-mtoctou", allow_system_bootstrap=True
+        )
+        auth.grant_membership("proj-alpha", other, role=StudioRole.EDITOR, granted_by=OWNER_ID)
+        auth.close()
+
+        monkeypatch.setenv("NEXUS_DASHBOARD_TOKEN", "deploy-tok")
+        monkeypatch.setenv("NEXUS_STUDIO_PROJECT_IDS", "proj-alpha")
+        monkeypatch.setenv("NEXUS_STUDIO_WORKSPACE_ROOT", str(ws))
+        monkeypatch.setenv("NEXUS_STUDIO_AUTH_DB", str(auth_db))
+        monkeypatch.setenv("NEXUS_QUEUE_DB_PATH", str(tmp_path / "q.sqlite3"))
+        get_settings.cache_clear()
+        monkeypatch.setattr(app_module, "_creative_registry", None)
+
+        orig_authorize = studio_ibpc_module._authorize
+
+        def _authorize_then_downgrade(
+            store: StudioPrincipalAuthStore,
+            *,
+            principal_id: str,
+            project_id: str,
+            action: StudioAction,
+            binding_ref: str = "",
+        ) -> None:
+            orig_authorize(
+                store,
+                principal_id=principal_id,
+                project_id=project_id,
+                action=action,
+                binding_ref=binding_ref,
+            )
+            store.grant_membership(
+                project_id,
+                principal_id,
+                role=StudioRole.VIEWER,
+                granted_by="system",
+                allow_system_bootstrap=True,
+            )
+
+        monkeypatch.setattr(studio_ibpc_module, "_authorize", _authorize_then_downgrade)
+        client = TestClient(app_module.app)
+        owner_h = {
+            "Authorization": "Bearer deploy-tok",
+            "X-Nexus-Principal-Token": "tok-owner-mtoctou",
+        }
+
+        # Grant membership after TOCTOU downgrade -> 403 unauthorized_project_owner.
+        r_grant = client.post(
+            "/api/studio/projects/proj-alpha/memberships",
+            headers=owner_h,
+            json={"principal_id": target, "role": "OWNER"},
+        )
+        assert r_grant.status_code == 403 and "unauthorized_project_owner" in r_grant.text
+
+        # Restore OWNER and test revoke_membership after TOCTOU revocation -> 403.
+        def _authorize_then_revoke(
+            store: StudioPrincipalAuthStore,
+            *,
+            principal_id: str,
+            project_id: str,
+            action: StudioAction,
+            binding_ref: str = "",
+        ) -> None:
+            orig_authorize(
+                store,
+                principal_id=principal_id,
+                project_id=project_id,
+                action=action,
+                binding_ref=binding_ref,
+            )
+            store.revoke_membership(
+                project_id,
+                principal_id,
+                revoked_by="system",
+                allow_system_bootstrap=True,
+            )
+
+        with StudioPrincipalAuthStore(auth_db, now=clock) as s:
+            s.grant_membership(
+                "proj-alpha",
+                OWNER_ID,
+                role=StudioRole.OWNER,
+                granted_by="system",
+                allow_system_bootstrap=True,
+            )
+        monkeypatch.setattr(studio_ibpc_module, "_authorize", _authorize_then_revoke)
+        r_rev = client.delete(
+            f"/api/studio/projects/proj-alpha/memberships/{other}",
+            headers=owner_h,
+        )
+        assert r_rev.status_code == 403 and "unauthorized_project_owner" in r_rev.text
+
+        # Target & other membership states remain unchanged in SQLite.
+        with StudioPrincipalAuthStore(auth_db, now=clock) as check_auth:
+            m_map = {m["principal_id"]: m for m in check_auth.list_memberships("proj-alpha")}
+            assert target not in m_map
+            assert m_map[other]["status"] == "ACTIVE" and m_map[other]["role"] == "EDITOR"
+
+        # Restore normal _authorize; owner can revoke active membership once (200),
+        # and a second DELETE of the now-REVOKED membership returns 404.
+        monkeypatch.setattr(studio_ibpc_module, "_authorize", orig_authorize)
+        with StudioPrincipalAuthStore(auth_db, now=clock) as s:
+            s.grant_membership(
+                "proj-alpha",
+                OWNER_ID,
+                role=StudioRole.OWNER,
+                granted_by="system",
+                allow_system_bootstrap=True,
+            )
+        r_ok = client.delete(
+            f"/api/studio/projects/proj-alpha/memberships/{other}",
+            headers=owner_h,
+        )
+        assert r_ok.status_code == 200
+        r_dup = client.delete(
+            f"/api/studio/projects/proj-alpha/memberships/{other}",
+            headers=owner_h,
+        )
+        assert r_dup.status_code == 404 and "membership_not_active" in r_dup.text
+
+    def test_direct_store_grant_and_revoke_membership_by_non_owner_rejected(
+        self, tmp_path: Path
+    ) -> None:
+        clock = _Clock()
+        with StudioPrincipalAuthStore(tmp_path / "auth_mem_dir.sqlite3", now=clock) as store:
+            store.ensure_project("proj-alpha", tenant_id="ten-1")
+            store.register_principal(
+                OWNER_ID, tenant_id="ten-1", raw_token="tok-owner-md", allow_system_bootstrap=True
+            )
+            store.register_principal(
+                VIEWER_ID,
+                tenant_id="ten-1",
+                raw_token="tok-viewer-md",
+                allow_system_bootstrap=True,
+            )
+            store.register_principal(
+                EDITOR_ID,
+                tenant_id="ten-1",
+                raw_token="tok-editor-md",
+                allow_system_bootstrap=True,
+            )
+            other = "prn_" + "6c" * 16
+            store.register_principal(
+                other, tenant_id="ten-1", raw_token="tok-other-md", allow_system_bootstrap=True
+            )
+            store.grant_membership(
+                "proj-alpha",
+                OWNER_ID,
+                role=StudioRole.OWNER,
+                granted_by="system",
+                allow_system_bootstrap=True,
+            )
+            store.grant_membership(
+                "proj-alpha", VIEWER_ID, role=StudioRole.VIEWER, granted_by=OWNER_ID
+            )
+            store.grant_membership(
+                "proj-alpha", EDITOR_ID, role=StudioRole.EDITOR, granted_by=OWNER_ID
+            )
+            store.grant_membership("proj-alpha", other, role=StudioRole.VIEWER, granted_by=OWNER_ID)
+
+            for non_owner in (VIEWER_ID, EDITOR_ID):
+                with pytest.raises(AuthorizationError, match="unauthorized_project_owner"):
+                    store.grant_membership(
+                        "proj-alpha",
+                        non_owner,
+                        role=StudioRole.OWNER,
+                        granted_by=non_owner,
+                        tenant_id="ten-1",
+                    )
+                with pytest.raises(AuthorizationError, match="unauthorized_project_owner"):
+                    store.revoke_membership(
+                        "proj-alpha",
+                        other,
+                        revoked_by=non_owner,
+                        tenant_id="ten-1",
+                    )
+
+            # Revoking an already REVOKED membership fails closed with membership_not_active,
+            # and cross-tenant/revoked-target edge cases are also rejected.
+            store.revoke_membership("proj-alpha", other, revoked_by=OWNER_ID)
+            with pytest.raises(AuthorizationError, match="membership_not_active"):
+                store.revoke_membership("proj-alpha", other, revoked_by=OWNER_ID)
+            with pytest.raises(AuthorizationError, match="cross_tenant_membership_denied"):
+                store.grant_membership(
+                    "proj-alpha",
+                    other,
+                    role=StudioRole.VIEWER,
+                    granted_by=OWNER_ID,
+                    tenant_id="ten-other",
+                )
+            with pytest.raises(AuthorizationError, match="project_not_found"):
+                store.revoke_membership("proj-missing", other, revoked_by=OWNER_ID)
+            with pytest.raises(AuthorizationError, match="cross_tenant_membership_denied"):
+                store.revoke_membership(
+                    "proj-alpha", other, revoked_by=OWNER_ID, tenant_id="ten-other"
+                )
+            store.revoke_principal(VIEWER_ID, actor_id=OWNER_ID, project_id="proj-alpha")
+            with pytest.raises(AuthorizationError, match="principal_revoked"):
+                store.grant_membership(
+                    "proj-alpha", VIEWER_ID, role=StudioRole.VIEWER, granted_by=OWNER_ID
+                )
+
+    def test_register_principal_default_call_without_explicit_bootstrap_flag_rejected(
+        self, tmp_path: Path
+    ) -> None:
+        clock = _Clock()
+        with StudioPrincipalAuthStore(tmp_path / "auth_boot.sqlite3", now=clock) as store:
+            store.ensure_project("proj-alpha", tenant_id="ten-1")
+            with pytest.raises(AuthorizationError, match="project_scope_required"):
+                store.register_principal(
+                    "prn_" + "7a" * 16,
+                    tenant_id="ten-1",
+                    raw_token="token-12345678",
+                )
+            with pytest.raises(AuthorizationError, match="actor_principal_inactive_or_missing"):
+                store.grant_membership(
+                    "proj-alpha",
+                    "prn_" + "7a" * 16,
+                    role=StudioRole.OWNER,
+                    granted_by="system",
+                )
+            with pytest.raises(AuthorizationError, match="actor_principal_inactive_or_missing"):
+                store.revoke_membership("proj-alpha", "prn_" + "7a" * 16)
+
+    def test_in_memory_consent_omitted_processing_scope_and_substring_category_isolation(
+        self,
+    ) -> None:
+        clock = _Clock("2026-11-01T00:00:00Z")
+        policy = PrivacyPolicy(now=clock, store=None)
+        policy.record_consent(
+            PrivacyMode.TRUSTED_CLOUD,
+            principal_id="user-1",
+            project_id="proj-alpha",
+            tenant_id="ten-1",
+            scope="voice",
+            processing_scope=ProcessingScope.EXTERNAL_PROVIDER_DISPATCH.value,
+            provider_id="provider-a",
+        )
+        # Omitted processing_scope defaults to LOCAL_PROCESSING, so EXTERNAL grant must NOT match.
+        assert not policy.has_consent(
+            PrivacyMode.TRUSTED_CLOUD,
+            principal_id="user-1",
+            project_id="proj-alpha",
+            tenant_id="ten-1",
+            scope="voice",
+            processing_scope="",
+            provider_id="",
+        )
+        policy_ext_noprov = PrivacyPolicy(now=clock, store=None)
+        policy_ext_noprov.record_consent(
+            PrivacyMode.TRUSTED_CLOUD,
+            principal_id="user-1",
+            project_id="proj-alpha",
+            tenant_id="ten-1",
+            scope="voice",
+            processing_scope=ProcessingScope.EXTERNAL_PROVIDER_DISPATCH.value,
+            provider_id="",
+        )
+        assert not policy_ext_noprov.has_consent(
+            PrivacyMode.TRUSTED_CLOUD,
+            principal_id="user-1",
+            project_id="proj-alpha",
+            tenant_id="ten-1",
+            scope="voice",
+            processing_scope="",
+            provider_id="",
+        )
+        # EXTERNAL_PROVIDER_DISPATCH with empty provider_id must fail closed.
+        assert not policy.has_consent(
+            PrivacyMode.TRUSTED_CLOUD,
+            principal_id="user-1",
+            project_id="proj-alpha",
+            tenant_id="ten-1",
+            scope="voice",
+            processing_scope=ProcessingScope.EXTERNAL_PROVIDER_DISPATCH.value,
+            provider_id="",
+        )
+        # Substring matching ("voice" in "invoice_archive") must fail closed.
+        policy_sub = PrivacyPolicy(now=clock, store=None)
+        policy_sub.record_consent(
+            PrivacyMode.TRUSTED_CLOUD,
+            principal_id="user-1",
+            project_id="proj-alpha",
+            tenant_id="ten-1",
+            scope="invoice_archive",
+            data_category="invoice_archive",
+        )
+        assert not policy_sub.has_consent(
+            PrivacyMode.TRUSTED_CLOUD,
+            principal_id="user-1",
+            project_id="proj-alpha",
+            tenant_id="ten-1",
+            scope="voice",
+        )
+        assert policy_sub.has_consent(
+            PrivacyMode.TRUSTED_CLOUD,
+            principal_id="user-1",
+            project_id="proj-alpha",
+            tenant_id="ten-1",
+            scope="invoice_archive",
+        )
+        # Non-empty mismatched provider_id on LOCAL_PROCESSING must also fail closed.
+        assert not policy_sub.has_consent(
+            PrivacyMode.TRUSTED_CLOUD,
+            principal_id="user-1",
+            project_id="proj-alpha",
+            tenant_id="ten-1",
+            scope="invoice_archive",
+            processing_scope=ProcessingScope.LOCAL_PROCESSING.value,
+            provider_id="provider-other",
         )

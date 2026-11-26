@@ -765,11 +765,14 @@ class PrivacyPolicy:
         tenant_id: str = "",
         provider_id: str = "",
     ) -> bool:
-        effective_ps = processing_scope or (
-            ProcessingScope.EXTERNAL_PROVIDER_DISPATCH.value
-            if provider_id
-            else ProcessingScope.LOCAL_PROCESSING.value
-        )
+        effective_ps = (
+            processing_scope
+            or (
+                ProcessingScope.EXTERNAL_PROVIDER_DISPATCH.value
+                if provider_id
+                else ProcessingScope.LOCAL_PROCESSING.value
+            )
+        ).strip()
         if self._store is not None:
             status, grant = self._store.check_consent_status(
                 project_id=project_id or "_session",
@@ -787,14 +790,29 @@ class PrivacyPolicy:
         now_dt = _parse_utc(self._now())
         is_cloud_or_external = (
             mode is not PrivacyMode.LOCAL_VAULT
-            or processing_scope == ProcessingScope.EXTERNAL_PROVIDER_DISPATCH.value
+            or effective_ps == ProcessingScope.EXTERNAL_PROVIDER_DISPATCH.value
         )
+        requested_cat = (data_category or scope).strip()
         for c in self._consents:
             if c.mode is not mode or c.principal_id != principal_id:
                 continue
-            if data_category and c.data_category != data_category:
+            record_ps = (
+                c.processing_scope
+                or (
+                    ProcessingScope.EXTERNAL_PROVIDER_DISPATCH.value
+                    if c.provider_id
+                    else ProcessingScope.LOCAL_PROCESSING.value
+                )
+            ).strip()
+            if record_ps != effective_ps:
                 continue
-            if not data_category and scope not in c.scope and c.data_category != scope:
+            record_cat = (c.data_category or c.scope).strip()
+            if not (
+                record_cat == requested_cat
+                or (not data_category and c.scope.strip() == scope.strip())
+                or record_cat == "*"
+                or c.scope.strip() == "*"
+            ):
                 continue
             if (project_id or c.project_id) and c.project_id != project_id:
                 continue
@@ -806,13 +824,14 @@ class PrivacyPolicy:
                 and not tenant_id.strip()
             ):
                 continue
-            if processing_scope and c.processing_scope != processing_scope:
-                continue
-            if (
-                (is_cloud_or_external or provider_id or c.provider_id)
-                and (provider_id or c.provider_id)
-                and c.provider_id != provider_id
-            ):
+            if effective_ps == ProcessingScope.EXTERNAL_PROVIDER_DISPATCH.value:
+                if (
+                    not provider_id.strip()
+                    or not c.provider_id.strip()
+                    or c.provider_id != provider_id
+                ):
+                    continue
+            elif (provider_id.strip() or c.provider_id.strip()) and c.provider_id != provider_id:
                 continue
             if c.expires_at_utc and now_dt >= _parse_utc(c.expires_at_utc):
                 continue

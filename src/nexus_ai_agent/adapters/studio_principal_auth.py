@@ -345,9 +345,7 @@ class StudioPrincipalAuthStore(StudioAuthorizerPort, CanonicalAuthorityPort):
         token_sha = _hash_token(raw_token)
         now_utc = self._now()
         resolved_project = (project_id or "").strip()
-        is_bootstrap_seed = actor_id == "system" and (
-            not resolved_project or allow_system_bootstrap
-        )
+        is_bootstrap_seed = actor_id == "system" and allow_system_bootstrap is True
         with self._transaction():
             if not is_bootstrap_seed:
                 ok, reason, _ = self._assert_actor_project_owner_locked(
@@ -465,7 +463,7 @@ class StudioPrincipalAuthStore(StudioAuthorizerPort, CanonicalAuthorityPort):
     ) -> None:
         now_utc = self._now()
         resolved_project = (project_id or "").strip()
-        is_bootstrap = actor_id == "system" and allow_system_bootstrap
+        is_bootstrap = actor_id == "system" and allow_system_bootstrap is True
         with self._transaction():
             actor_tenant = ""
             if not is_bootstrap:
@@ -596,7 +594,7 @@ class StudioPrincipalAuthStore(StudioAuthorizerPort, CanonicalAuthorityPort):
         ref = binding_ref or _binding_ref_for(channel, external_subject)
         now_utc = self._now()
         resolved_project = (project_id or "").strip()
-        is_bootstrap = actor_id == "system" and allow_system_bootstrap
+        is_bootstrap = actor_id == "system" and allow_system_bootstrap is True
         with self._transaction():
             actor_tenant = ""
             if not is_bootstrap:
@@ -695,7 +693,7 @@ class StudioPrincipalAuthStore(StudioAuthorizerPort, CanonicalAuthorityPort):
     ) -> None:
         now_utc = self._now()
         resolved_project = (project_id or "").strip()
-        is_bootstrap = actor_id == "system" and allow_system_bootstrap
+        is_bootstrap = actor_id == "system" and allow_system_bootstrap is True
         with self._transaction():
             actor_tenant = ""
             if not is_bootstrap:
@@ -896,10 +894,13 @@ class StudioPrincipalAuthStore(StudioAuthorizerPort, CanonicalAuthorityPort):
         *,
         role: StudioRole | str,
         granted_by: str,
+        tenant_id: str = "",
+        allow_system_bootstrap: bool = False,
     ) -> str:
         resolved_role = role if isinstance(role, StudioRole) else StudioRole(role)
         now_utc = self._now()
         membership_id = f"mbr_{uuid.uuid4().hex}"
+        is_bootstrap_seed = granted_by == "system" and allow_system_bootstrap is True
         with self._transaction():
             proj_row = self._conn.execute(
                 "SELECT tenant_id FROM nexus_studio_projects WHERE project_id = ?",
@@ -907,22 +908,38 @@ class StudioPrincipalAuthStore(StudioAuthorizerPort, CanonicalAuthorityPort):
             ).fetchone()
             if proj_row is None:
                 raise AuthorizationError("project_not_found", f"unknown project {project_id!r}")
+            project_tenant = str(proj_row[0])
+            if tenant_id.strip() and project_tenant != tenant_id:
+                raise AuthorizationError(
+                    "cross_tenant_membership_denied",
+                    f"project {project_id!r} does not belong to tenant {tenant_id!r}",
+                )
+            if not is_bootstrap_seed:
+                ok, reason, _ = self._assert_actor_project_owner_locked(
+                    self._conn,
+                    actor_principal_id=granted_by,
+                    project_id=project_id,
+                    expected_tenant_id=tenant_id or project_tenant,
+                )
+                if not ok:
+                    raise AuthorizationError(
+                        reason,
+                        f"actor {granted_by!r} cannot grant membership in {project_id!r}",
+                    )
             target_row = self._conn.execute(
-                "SELECT tenant_id FROM nexus_studio_principals WHERE principal_id = ?",
+                "SELECT tenant_id, status FROM nexus_studio_principals WHERE principal_id = ?",
                 (principal_id,),
             ).fetchone()
             if target_row is None:
                 raise AuthorizationError(
                     "principal_not_found", f"unknown principal {principal_id!r}"
                 )
-            granter_row = self._conn.execute(
-                "SELECT tenant_id FROM nexus_studio_principals WHERE principal_id = ?",
-                (granted_by,),
-            ).fetchone()
-            if granter_row is None:
-                raise AuthorizationError("principal_not_found", f"unknown principal {granted_by!r}")
-            project_tenant = str(proj_row[0])
-            if str(target_row[0]) != project_tenant or str(granter_row[0]) != project_tenant:
+            if str(target_row[1]) != "ACTIVE":
+                raise AuthorizationError(
+                    "principal_revoked",
+                    f"principal {principal_id!r} is {target_row[1]}",
+                )
+            if str(target_row[0]) != project_tenant:
                 raise AuthorizationError(
                     "cross_tenant_membership_denied",
                     f"cross-tenant membership grant denied for project {project_id!r}",
@@ -960,27 +977,67 @@ class StudioPrincipalAuthStore(StudioAuthorizerPort, CanonicalAuthorityPort):
         return membership_id
 
     def revoke_membership(
-        self, project_id: str, principal_id: str, *, revoked_by: str = "system"
+        self,
+        project_id: str,
+        principal_id: str,
+        *,
+        revoked_by: str = "system",
+        tenant_id: str = "",
+        allow_system_bootstrap: bool = False,
     ) -> None:
         now_utc = self._now()
+        is_bootstrap_seed = revoked_by == "system" and allow_system_bootstrap is True
         with self._transaction():
             proj_row = self._conn.execute(
                 "SELECT tenant_id FROM nexus_studio_projects WHERE project_id = ?",
                 (project_id,),
             ).fetchone()
-            tenant_id = str(proj_row[0]) if proj_row is not None else ""
+            if proj_row is None:
+                raise AuthorizationError("project_not_found", f"unknown project {project_id!r}")
+            project_tenant = str(proj_row[0])
+            if tenant_id.strip() and project_tenant != tenant_id:
+                raise AuthorizationError(
+                    "cross_tenant_membership_denied",
+                    f"project {project_id!r} does not belong to tenant {tenant_id!r}",
+                )
+            if not is_bootstrap_seed:
+                ok, reason, _ = self._assert_actor_project_owner_locked(
+                    self._conn,
+                    actor_principal_id=revoked_by,
+                    project_id=project_id,
+                    expected_tenant_id=project_tenant,
+                )
+                if not ok:
+                    raise AuthorizationError(
+                        reason,
+                        f"actor {revoked_by!r} cannot revoke membership in {project_id!r}",
+                    )
+            m_row = self._conn.execute(
+                """
+                SELECT status
+                FROM nexus_studio_project_memberships
+                WHERE project_id = ? AND principal_id = ?
+                LIMIT 1
+                """,
+                (project_id, principal_id),
+            ).fetchone()
+            if m_row is None or str(m_row[0]) != "ACTIVE":
+                raise AuthorizationError(
+                    "membership_not_active",
+                    f"principal {principal_id!r} has no active membership in {project_id!r}",
+                )
             self._conn.execute(
                 """
                 UPDATE nexus_studio_project_memberships
                 SET status = 'REVOKED', revoked_at_utc = ?
-                WHERE project_id = ? AND principal_id = ?
+                WHERE project_id = ? AND principal_id = ? AND status = 'ACTIVE'
                 """,
                 (now_utc, project_id, principal_id),
             )
             self._record_admin_event_locked(
                 event_type="revoke_membership",
                 actor_id=revoked_by,
-                tenant_id=tenant_id,
+                tenant_id=project_tenant,
                 project_id=project_id,
                 target_principal_id=principal_id,
                 occurred_at_utc=now_utc,
