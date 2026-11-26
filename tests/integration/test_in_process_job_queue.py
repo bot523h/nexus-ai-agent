@@ -48,7 +48,11 @@ def test_queue_schema_isolated_to_owned_table(tmp_path: Path) -> None:
             "SELECT name FROM sqlite_master WHERE type = 'table'"
         ).fetchall()
 
-    assert tables == [("nexus_job_queue",)]
+    assert {row[0] for row in tables} == {
+        "nexus_job_queue",
+        "nexus_attempt_leases",
+        "provenance_outbox",
+    }
 
 
 @pytest.mark.asyncio
@@ -422,8 +426,11 @@ async def test_pdf_job_extracts_text_with_pypdf(
     assert result["artifact_path"] == str(extracted)
     assert extracted.read_text(encoding="utf-8") == "Hello NEXUS job queue"
     verification = result["artifact_verification"]
+    assert isinstance(verification, dict)
     assert verification["status"] == "verified"
-    assert verification["physical_identity"]["sha256"] == result["content_sha256"]
+    physical_identity = verification["physical_identity"]
+    assert isinstance(physical_identity, dict)
+    assert physical_identity["sha256"] == result["content_sha256"]
     assert captured == {
         "user_id": 7,
         "text": "Hello NEXUS job queue",
@@ -503,5 +510,8 @@ async def test_story_job_executes_through_in_process_queue(tmp_path: Path) -> No
     assert output.is_file()
     assert output.stat().st_size > 0
     verification = result["artifact_verification"]
+    assert isinstance(verification, dict)
     assert verification["status"] == "verified"
-    assert verification["probe"]["format"] == "PNG"
+    probe = verification["probe"]
+    assert isinstance(probe, dict)
+    assert probe["format"] == "PNG"

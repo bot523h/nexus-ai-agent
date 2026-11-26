@@ -8730,8 +8730,8 @@
         "docs/architecture/NAGAR_MATHEMATICAL_ENGINEERING_DOCTRINE.md"
       ],
       "owner_hint": "Stage-A of the MPE-CHRONOS-OMEGA mission; render_jobs.py changes are covered by the task-282-slice-2 claim and were cleared by the referee.",
-      "agent_branch": "arena/288ef95e-nexus-ai-agent",
-      "claimed_at": "2026-11-12T00:00:00Z",
+      "agent_branch": null,
+      "claimed_at": null,
       "generation": 0,
       "ttl_hours": 24,
       "gates_owner": false,
@@ -9008,26 +9008,6 @@
       ]
     },
     {
-      "id": "task-257-queued-cancel-semantics",
-      "priority": "P2",
-      "zone": "execution-core",
-      "title": "Define cancellation semantics for not-yet-owned (pending) requests",
-      "title_fa": "تعریف معنای لغو برای درخواست‌های در صف (بدون مالک)",
-      "why_fa": "لغو امروز فقط attempt در حال پرواز را می‌بندد؛ ردیف pending اصلاً cancellable نیست و این باید قرارداد صریح شود.",
-      "acceptance_criteria": [
-        "explicit contract: cancel(pending) is either a typed refusal or a fenced dequeue — one documented choice",
-        "idempotency + duplicate-cancel matrix extended; no authority bypass",
-        "I1-I10 table updated if a new invariant is introduced"
-      ],
-      "exclusive_paths": [
-        "src/nexus_ai_agent/execution/contract.py",
-        "src/nexus_ai_agent/adapters/native_local_backend.py"
-      ],
-      "prerequisites": [
-        "task-254 merged"
-      ]
-    },
-    {
       "id": "task-259-inflight-started-at-schema-invariant",
       "priority": "P2",
       "zone": "storage-observability",
@@ -9044,26 +9024,6 @@
         "tests/integration/test_in_process_job_queue.py"
       ],
       "prerequisites": []
-    },
-    {
-      "id": "task-260-execution-mutations-ci-job",
-      "priority": "P1",
-      "zone": "ci-quality",
-      "title": "Run scripts/execution_core_mutations.py as a CI mutation job",
-      "title_fa": "اجرای کمپین mutation هستهٔ اجرا به‌عنوان job رسمی CI",
-      "why_fa": "کمپین M1-M17 امروز دستی اجرا می‌شود؛ بدون job رسمی، regression آیندهٔ تست‌ها بی‌صدا می‌میرد.",
-      "acceptance_criteria": [
-        "CI job runs the campaign on PRs touching execution-core paths; red on any surviving mutant",
-        "runtime budgeted (<= ~2 min); parity with the trust-mutations job pattern"
-      ],
-      "exclusive_paths": [
-        ".github/workflows/ci.yml",
-        "scripts/execution_core_mutations.py"
-      ],
-      "prerequisites": [
-        "task-254 merged",
-        "no live ci-quality claim"
-      ]
     },
     {
       "id": "task-261-request-queue-boundary-doc",
@@ -9120,26 +9080,6 @@
       "prerequisites": []
     },
     {
-      "id": "task-264-passport-attempt-id-alignment",
-      "priority": "P3",
-      "zone": "provenance-ledger",
-      "title": "Bind CreativeExecutionPassport attempt ids to the AttemptStaging layout",
-      "title_fa": "اتصال attempt_idهای گذرنامه اجرایی به چیدمان AttemptStaging",
-      "why_fa": "شناسه‌های attempt در passport و staging از یک منبع باید بیایند تا ردیابی artifact یکتا بماند.",
-      "acceptance_criteria": [
-        "one minting function for attempt ids used by both surfaces",
-        "passport evidence paths resolve inside the attempt staging tree; traversal rejected",
-        "provenance suites green"
-      ],
-      "exclusive_paths": [
-        "src/nexus_ai_agent/jobs/creative_passport.py",
-        "tests/unit/test_creative_passport.py"
-      ],
-      "prerequisites": [
-        "task-254 merged"
-      ]
-    },
-    {
       "id": "task-269-cognition-quality-evaluation",
       "priority": "P1",
       "zone": "cognition-quality-evaluation",
@@ -9160,6 +9100,60 @@
         "tests/unit/test_cognition_quality_eval.py"
       ],
       "prerequisites": []
+    },
+    {
+      "id": "task-282-slice-3-provenance-passport-link",
+      "priority": "P1",
+      "zone": "provenance-ledger",
+      "title": "Bind ArtifactPassport and CreativeGraph to exact ProjectRevision and AssetVersion",
+      "title_fa": "اتصال ArtifactPassport و CreativeGraph به ProjectRevision و AssetVersion دقیق",
+      "acceptance_criteria": [
+        "PassportBuilder binds cryptographically to project_id, base_revision_id, accepted_revision_id, input_asset_version_ids, job_id, attempt_id, attempt_epoch, verification_proof_digest, and provenance_node_id",
+        "CreativeGraph.commit_verified_revision and invalidate_downstream propagate causal invalidation deterministically"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/provenance/passport.py",
+        "src/nexus_ai_agent/provenance/graph.py"
+      ],
+      "prerequisites": [
+        "Stage 2-A merged"
+      ]
+    },
+    {
+      "id": "wave2-provenance-outbox-reconciler",
+      "priority": "P1",
+      "zone": "provenance-ledger",
+      "title": "Close Queue-vs-Provenance transaction gap with SQLite ProvenanceOutboxStore and OutboxReconciler",
+      "title_fa": "بستن شکاف تراکنش صف و پیشینه با ProvenanceOutboxStore و OutboxReconciler",
+      "acceptance_criteria": [
+        "provenance_outbox table shares the queue BEGIN IMMEDIATE transaction for milestone transitions",
+        "OutboxReconciler.reconcile_pending deterministically replays unrecovered events into CreativeGraph"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/provenance/outbox.py",
+        "src/nexus_ai_agent/adapters/in_process_job_queue.py"
+      ],
+      "prerequisites": [
+        "Wave 1 execution core wiring"
+      ]
+    },
+    {
+      "id": "wave2-spine-creative-graph-unification",
+      "priority": "P1",
+      "zone": "provenance-ledger",
+      "title": "Unify CreativeGraph authority and convert spine CreativeGraph to planning DTO",
+      "title_fa": "یکسان‌سازی مرجعیت CreativeGraph و تبدیل گراف ستون فقرات به DTO برنامه‌ریزی",
+      "acceptance_criteria": [
+        "provenance/graph.py::CreativeGraph is the sole durable provenance authority",
+        "creative/spine/models.py::CreativeGraph exposes lossless bidirectional conversion"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/creative/spine/models.py",
+        "src/nexus_ai_agent/provenance/graph.py"
+      ],
+      "prerequisites": [
+        "Stage 2-A merged"
+      ]
     }
   ],
   "history": {
@@ -9246,6 +9240,54 @@
         "wave": "PR#219 review closeout — the seven findings of the P1 layer (task-270)",
         "content": "the CodeRabbit review of PR#219 closed as code, each with a failing-first regression test: (1) the PostgreSQL integration test no longer deletes other chats' forcejoinconfig — nonce-scoped statements, a second explicit opt-in (NEXUS_PG_TEST_DESTRUCTIVE, set only by the job that owns the disposable database) and a module-scoped survival assertion, statically enforced by tests/unit/test_pg_integration_safety.py; (2) /referral shows one persistent code — get_referral_stats resolves through get_or_create_code and format_stats renders the link from the code it displays; (3) the moderation gate covers commands and media captions ((TEXT | COMMAND | CAPTION) & ChatType.GROUPS; filters.CAPTION verified present in PTB 21.0, the declared floor) and evaluate_message reads text-or-caption; (4) a caption-only /vision dispatches to vision_cmd via a MessageHandler(PHOTO & CaptionRegex) registered before slideshow_photo, and the question is parsed from the caption (incl. /vision@BotName); (5) sync_engine's read-check-dispose-create-publish sequence is one critical section under a module lock, so racing to_thread workers can no longer publish two engines (proof: 8 threads build 8 engines before, 1 after); (6) api/dashboard publishes joined_at with an explicit UTC offset and the dashboard client normalises an offset-less payload; (7) the TelegramId docs and the b5d8e2f4a917 docstring describe the real named TypeDecorator (impl BigInteger, load_dialect_impl) instead of a with_variant expression. mypy/deptry outcomes are unchanged from the P1 head (chromadb and llama-cpp-python are not installed here) and were re-measured at that head to prove it. Decision record: DECISION_LOG r14 / D-0028.",
         "anchor": "PR#219 review closeout, session arena/525960ca-nexus-ai-agent",
+        "release": "v3.13.0"
+      },
+      {
+        "wave": "V1 (Consolidated Modules + CP4.2 + CP6)",
+        "content": "Consolidated resource_packs, hyper_compiler, personal_cloud_vault, storyboard_compiler, API lifespan, lease ownership & rollback fencing",
+        "anchor": "PR#350 · PR#351 · PR#352",
+        "release": "v3.13.0"
+      },
+      {
+        "wave": "W2 (Transactional Bus + Cinema Audio + Lie Integrity)",
+        "content": "Transactional bus, Lie integrity, cinema audio, Poisson/PID, and AST mutation harness",
+        "anchor": "PR#353",
+        "release": "v3.13.0"
+      },
+      {
+        "wave": "W3-A (Lease Mutation & Memory CI Closure)",
+        "content": "Closed lease mutation and memory CI parity gaps",
+        "anchor": "PR#354",
+        "release": "v3.13.0"
+      },
+      {
+        "wave": "W5 (Secure Blob Publication & Authenticated Backup Drill)",
+        "content": "CP4 secure blob publication and authenticated encrypted backup drill",
+        "anchor": "PR#356 (3ee52c4)",
+        "release": "v3.13.0"
+      },
+      {
+        "wave": "W6 / W6.7 (Photochemistry, Optics, SPD OT, Symplectic + Bytecode-Cache Determinism)",
+        "content": "W6 scientific pipeline + proof gates and W6.7 bytecode-cache deterministic AST mutation harness",
+        "anchor": "PR#357 · PR#358",
+        "release": "v3.13.0"
+      },
+      {
+        "wave": "Stage 2-A (Law R28 Durable CreativeGraph)",
+        "content": "Durable creative-graph DAG, RFC 8785 JCS canonicalization, counterfactual causal impact, and 17-mutant AST campaign",
+        "anchor": "PR#359",
+        "release": "v3.13.0"
+      },
+      {
+        "wave": "W10X (10-Wave Scientific Convergence)",
+        "content": "10-wave scientific convergence and 30-mutant bytecode-cache-safe AST verification harness",
+        "anchor": "PR#360",
+        "release": "v3.13.0"
+      },
+      {
+        "wave": "Wave 0 (Repository Truth Convergence & Provenance Graph P3 Hardening)",
+        "content": "Read-only URI restore(), terminal epistemic promotion refusal, GRAPH032 revision_count parity, and synchronized truth matrix/docs/board (noting PR #355 W4 remains open on GitHub)",
+        "anchor": "Wave 0 on arena/aac14be0-nexus-ai-agent",
         "release": "v3.13.0"
       }
     ],
@@ -9445,6 +9487,63 @@
         "state": "CLOSED",
         "title": "feat(runtime): W1 recovery (task-196)",
         "note": "SUPERSEDED by #113 (ancestor proof: head-112 ancestor of head-113; zero unique files)."
+      },
+      {
+        "pr": 350,
+        "state": "MERGED",
+        "title": "release: consolidate v1 modules (resource_packs, hyper_compiler, personal_cloud_vault, storyboard_compiler, api lifespan)"
+      },
+      {
+        "pr": 351,
+        "state": "MERGED",
+        "title": "CP6: lease ownership state machine and real chunk identity (vault) + finite audio contracts"
+      },
+      {
+        "pr": 352,
+        "state": "MERGED",
+        "title": "CP4.2 (Final V1 Closure): inode-fenced rollback, promotion lock, fail-closed reconcile, IBPC anchor"
+      },
+      {
+        "pr": 353,
+        "state": "MERGED",
+        "title": "Wave 2: transactional bus, Lie integrity, cinema audio, Poisson/PID and AST mutations"
+      },
+      {
+        "pr": 354,
+        "state": "MERGED",
+        "title": "fix(w3a): close lease mutation and memory CI gaps"
+      },
+      {
+        "pr": 355,
+        "state": "OPEN",
+        "title": "feat(w4): integrated durable plan reservation, command bus fencing & IBPC approval",
+        "note": "Open on GitHub (arena/f3f2c5f9-nexus-ai-agent); not yet merged into main."
+      },
+      {
+        "pr": 356,
+        "state": "MERGED",
+        "title": "Wave 5: secure blob publication and authenticated backup drill (CP4)",
+        "note": "Merged as 3ee52c4f4a492ae8573e76026711dffeb1adcd6e."
+      },
+      {
+        "pr": 357,
+        "state": "MERGED",
+        "title": "W6 Science: photochemistry, optics, SPD optimal transport, symplectic pipeline + proof gates"
+      },
+      {
+        "pr": 358,
+        "state": "MERGED",
+        "title": "fix(w6.7): make the W6 mutation harness bytecode-cache deterministic"
+      },
+      {
+        "pr": 359,
+        "state": "MERGED",
+        "title": "feat(provenance): durable creative-graph DAG, RFC 8785 JCS lineage & causal invalidation (Stage 2-A / Law R28)"
+      },
+      {
+        "pr": 360,
+        "state": "MERGED",
+        "title": "feat(w10x): 10-wave scientific convergence & 30-mutant AST verification harness"
       }
     ],
     "incidents": [
