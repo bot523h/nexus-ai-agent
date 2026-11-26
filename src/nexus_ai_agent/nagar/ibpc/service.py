@@ -40,7 +40,12 @@ from nexus_ai_agent.application.ports.caption_engine import CaptionEnginePort
 from nexus_ai_agent.application.ports.job_queue import JobQueuePort, JobStatus
 from nexus_ai_agent.creative.slideshow.ffmpeg import RenderError, sha256_file
 from nexus_ai_agent.creative.studio.capabilities import CapabilityRegistry
-from nexus_ai_agent.nagar.ibpc.approval import ApprovalError, ApprovalIdentity, ApprovalLedger
+from nexus_ai_agent.nagar.ibpc.approval import (
+    ApprovalBindingPayload,
+    ApprovalError,
+    ApprovalIdentity,
+    ApprovalLedger,
+)
 from nexus_ai_agent.nagar.ibpc.approval_mac import (
     ApprovalEnvelope,
     KeyProvider,
@@ -62,6 +67,10 @@ from nexus_ai_agent.nagar.ibpc.intent import (
     Refusal,
     parse_intent,
 )
+from nexus_ai_agent.nagar.ibpc.live_session import (
+    DurableLiveSessionStore,
+    TurnStatus,
+)
 from nexus_ai_agent.nagar.ibpc.models import (
     ApprovalBinding,
     ApprovalState,
@@ -74,7 +83,21 @@ from nexus_ai_agent.nagar.ibpc.models import (
     VerifierReport,
 )
 from nexus_ai_agent.nagar.ibpc.preview import build_preview, render_readback
-from nexus_ai_agent.nagar.ibpc.privacy import PrivacyPolicy
+from nexus_ai_agent.nagar.ibpc.principal_authority import (
+    MembershipRole,
+)
+from nexus_ai_agent.nagar.ibpc.principal_authority import (
+    PrincipalFacts as AuthorizedPrincipalFacts,
+)
+from nexus_ai_agent.nagar.ibpc.principal_authority import (
+    StudioAction as PrincipalStudioAction,
+)
+from nexus_ai_agent.nagar.ibpc.privacy import (
+    ConsentAction,
+    ConsentScope,
+    PrivacyPolicy,
+    PrivacyViolation,
+)
 from nexus_ai_agent.nagar.ibpc.proof import evaluate_proof_gate
 from nexus_ai_agent.nagar.ibpc.session import (
     LiveSessionManager,
@@ -99,6 +122,14 @@ SURFACE_OPERATION = "trim"
 CANONICAL_OPERATION: Literal["timeline.trim"] = "timeline.trim"
 WORKSPACE_PREFIX = "creative_"
 DRAIN_TIMEOUT_S = 300.0
+
+#: Provider id recorded for the LOCAL (in-process) processing lane. Consent for
+#: ``(provider_id, category, LOCAL_PROCESSING)`` is required before any local
+#: model/ffmpeg evidence work runs (Wave 3 slice 3.3).
+LOCAL_PROVIDER_ID = "local"
+
+#: Approval token lifetime (the human decision window) in minutes.
+APPROVAL_TTL_MINUTES = 10
 
 
 class ScopeSignatureMismatchError(ApprovalError):
@@ -150,6 +181,22 @@ class IBPCServiceDeps:
     #: Shared, stable key ring used only for authenticated approval envelopes.
     #: None permits planning but fails closed at approval/admission.
     approval_key_provider: KeyProvider | None = None
+    #: Explicit seam (Wave 3 slice 3.2): the approval ledger instance. When
+    #: supplied (production: a ``DurableCanonicalApprovalLedger``) every approval
+    #: is a canonical RFC 8785 + keyed HMAC-SHA256 binding and consumption is a
+    #: single-use ``BEGIN IMMEDIATE`` compare-and-set across processes.
+    approval_ledger: ApprovalLedger | None = None
+    #: Durable live-session/turn store (Wave 3 slice 3.1). None keeps the
+    #: in-process ``LiveSessionManager`` only (documented, non-durable mode).
+    session_store: DurableLiveSessionStore | None = None
+    #: Durable principal authority (Wave 3 slice 3.4). None refuses every IBPC
+    #: mutation with a typed ``unauthorized_principal`` refusal.
+    principal_authority: Any | None = None
+    #: Durable privacy consent ledger (Wave 3 slice 3.3). None keeps the
+    #: in-memory session policy only.
+    privacy_consent_store: Any | None = None
+    #: Provider id recorded/checked for LOCAL_PROCESSING consent (the local lane).
+    local_provider_id: str = LOCAL_PROVIDER_ID
 
 
 @dataclass(frozen=True)
@@ -206,6 +253,8 @@ class _TurnContext:
     parent_proposal_id: str | None = None
     parent_scope_digest: str | None = None
     delta_spec: dict[str, Any] | None = None
+    #: durable turn index (Wave 3 slice 3.1) when a session store is configured
+    durable_turn_index: int | None = None
 
 
 class IBPCService:
@@ -214,10 +263,17 @@ class IBPCService:
     def __init__(self, deps: IBPCServiceDeps) -> None:
         self._deps = deps
         self._privacy = PrivacyPolicy(now=deps.now)
-        self._approvals = ApprovalLedger(now=deps.now)
+        # Production passes a DurableCanonicalApprovalLedger; the in-memory
+        # default stays available for planning-only/experimental composition.
+        self._approvals = (
+            deps.approval_ledger
+            if deps.approval_ledger is not None
+            else ApprovalLedger(now=deps.now)
+        )
         self._sessions = LiveSessionManager(
             now=deps.now, privacy=self._privacy, on_revoke_turn=self._approvals.revoke_turn
         )
+        self._session_store = deps.session_store
         self._contexts: dict[str, _TurnContext] = {}
         self._context_order = 0
         # serializes the sensitive section of execute() (identity validation ->
@@ -234,6 +290,11 @@ class IBPCService:
     def approvals(self) -> ApprovalLedger:
         return self._approvals
 
+    @property
+    def session_store(self) -> DurableLiveSessionStore | None:
+        """The durable turn store when one is configured (else ``None``)."""
+        return self._session_store
+
     # -- session ------------------------------------------------------------
 
     def open_session(
@@ -247,7 +308,21 @@ class IBPCService:
         privacy_mode: PrivacyMode = PrivacyMode.LOCAL_VAULT,
         consent_scope: str = "",
         current_revision: int = 0,
+        base_revision_id: str | None = None,
+        session_id: str | None = None,
     ) -> str:
+        if self._deps.principal_authority is not None:
+            # Authoritative composition: only a principal with an authenticated
+            # binding and an EDITOR/OWNER role on this project may open a
+            # session. Without a durable principal authority the session opens
+            # for planning only: every mutation is still refused at turn
+            # creation by the injected canonical authority (typed refusal, no
+            # turn fence opened, no job enqueued).
+            self._authorize_principal(
+                principal_id=principal_id,
+                project_id=project_id,
+                action=PrincipalStudioAction.SESSION_START,
+            )
         session = self._sessions.open_session(
             tenant_id=tenant_id,
             project_id=project_id,
@@ -258,6 +333,18 @@ class IBPCService:
             consent_scope=consent_scope,
             current_revision=current_revision,
         )
+        # Wave 3 (3.1): mirror the session into the durable store when one is
+        # configured, so a restart reconstructs the fencing head, not just the
+        # in-memory dict. The revision id is the caller's explicit base when
+        # given, else the session's own revision pinned as ``rev:<n>``.
+        if self._session_store is not None:
+            self._session_store.open_session(
+                session_id=session_id or session.session_id,
+                project_id=project_id,
+                principal_id=principal_id,
+                base_revision_id=base_revision_id or f"rev:{current_revision}",
+                active_revision_id=base_revision_id or f"rev:{current_revision}",
+            )
         return session.session_id
 
     # -- intent → AST → plan → preview → approval ----------------------------
@@ -274,6 +361,19 @@ class IBPCService:
         base_approval_id: str | None = None,
     ) -> PipelineResult | Clarification | Refusal:
         session = self._sessions.get_session(session_id)
+        # Wave 3 (3.4): creating a turn is a Studio action — membership + role
+        # are verified BEFORE the turn fence opens, so an unauthorized caller
+        # cannot even perturb the session's sequence head.
+        try:
+            self._authorize_principal(
+                principal_id=session.principal_id,
+                project_id=session.project_id,
+                action=PrincipalStudioAction.TURN_CREATE,
+            )
+        except ApprovalError as exc:
+            # The refusal happens before ``begin_turn`` so an unauthorized call
+            # cannot perturb the session's sequence head.
+            return Refusal("unauthorized_principal", f"{exc.reason}: {exc.detail}")
         revision = int(self._deps.revision_provider())
         self._sessions.begin_turn(
             session_id, turn_id, sequence_number=sequence_number, project_revision=revision
@@ -297,6 +397,20 @@ class IBPCService:
             return Refusal("unreadable_source", str(exc))
         duration_us = info.duration_us
         source_asset_digest = sha256_file(src)
+        # Wave 3 (3.3): the durable consent gate runs BEFORE any media evidence
+        # work (shadow strip + scope signature decode pixels locally).
+        try:
+            self._require_processing_consent(
+                session_id=session_id,
+                principal_id=session.principal_id,
+                project_id=session.project_id,
+                data_category=ConsentScope.VIDEO,
+                action=ConsentAction.LOCAL_PROCESSING,
+            )
+        except (ApprovalError, PrivacyViolation) as exc:
+            self._sessions.mark_failed(session_id, turn_id)
+            reason = getattr(exc, "reason", "consent_missing")
+            return Refusal(reason, getattr(exc, "detail", "") or str(exc))
 
         parsed: IntentAST | DeltaIntentAST | Clarification | Refusal
         base_scope = None
@@ -430,6 +544,31 @@ class IBPCService:
                 delta_spec=delta_spec,
             ),
         )
+        # Wave 3 (3.1): persist the turn (plan + preview + approval) durably when
+        # a store is configured, keyed idempotently by (session, turn).
+        durable_turn = self._durable_submit_turn(
+            session_id=session_id,
+            turn_id=turn_id,
+            idempotency_key=f"ibpc-turn:{session_id}:{turn_id}",
+            user_utterance=text,
+            base_revision_id=self._session_base_revision(session_id, revision),
+            scope_signature=digest_of(
+                {
+                    "ast": ast.ast_digest,
+                    "plan": plan.plan_digest,
+                    "preview": preview.preview_digest,
+                    "approval": stored.approval_id,
+                }
+            ),
+            plan=plan,
+            preview=preview,
+            approval_id=stored.approval_id,
+            turn_status=TurnStatus.PREVIEW_READY,
+        )
+        if durable_turn is not None:
+            ctx_durable = self._contexts.get(stored.approval_id)
+            if ctx_durable is not None:
+                ctx_durable.durable_turn_index = durable_turn.turn_index
         self._sessions.mark_intent_parsed(session_id, turn_id, intent_digest=parsed.intent_digest)
         self._sessions.mark_plan_preview(session_id, turn_id)
         self._sessions.mark_awaiting_approval(session_id, turn_id, approval_id=stored.approval_id)
@@ -773,8 +912,15 @@ class IBPCService:
         session/turn/approval/context, any identity mismatch, stale revision,
         changed asset or tampered digests. Never changes another turn's state.
         """
-        _session, _turn, ctx, identity = self._resolve_identity(
+        session, turn, ctx, identity = self._resolve_identity(
             session_id, turn_id, approval_id, principal_id=principal_id
+        )
+        # Wave 3 (3.4): approving (which freezes the preview scope) is an
+        # EDITOR/OWNER Studio action on the target project.
+        self._authorize_principal(
+            principal_id=principal_id,
+            project_id=session.project_id,
+            action=PrincipalStudioAction.PREVIEW_GENERATE,
         )
         provider = self._deps.approval_key_provider
         if provider is None:
@@ -793,6 +939,7 @@ class IBPCService:
             turn_is_active=lambda: self._sessions.turn_is_active(session_id, turn_id),
         )
         ctx.scope_signature = self._scope_signature(ctx, identity)
+        self._bind_canonical_approval(ctx, identity, approval_id)
         try:
             issued_at = self._deps.now()
             issue_dt = datetime.fromisoformat(issued_at.replace("Z", "+00:00"))
@@ -812,7 +959,235 @@ class IBPCService:
                 "approval_key_unavailable", "approval envelope could not be issued"
             ) from exc
         self._sessions.mark_approved(session_id, turn_id)
+        self._mark_durable_turn(session_id, turn_id, TurnStatus.APPROVED)
         return binding
+
+    # -- canonical approval binding (Wave 3 slice 3.2) ------------------------
+
+    def _canonical_binding_payload(
+        self, ctx: _TurnContext, identity: ApprovalIdentity
+    ) -> ApprovalBindingPayload:
+        """The nine-field canonical payload this approval is bound to.
+
+        ``base_revision_id`` is the durable session's active revision when a
+        store is configured (the revision the human saw), else ``rev:<n>`` for
+        the frozen binding revision — always derived from verified context,
+        never from caller text.
+        """
+        base_revision = f"rev:{identity.source_revision}"
+        if self._session_store is not None:
+            try:
+                base_revision = self._session_store.get_session(
+                    identity.session_id
+                ).active_revision_id
+            except ValueError:
+                base_revision = f"rev:{identity.source_revision}"
+        expires_at = (
+            datetime.fromisoformat(self._deps.now().replace("Z", "+00:00"))
+            + timedelta(minutes=APPROVAL_TTL_MINUTES)
+        ).strftime("%Y-%m-%dT%H:%M:%SZ")
+        return ApprovalBindingPayload(
+            project_id=identity.project_id,
+            session_id=identity.session_id,
+            turn_id=identity.turn_id,
+            base_revision_id=base_revision,
+            plan_sha256=identity.plan_digest,
+            preview_sha256=identity.preview_digest,
+            scope_signature=ctx.scope_signature or "",
+            principal_id=identity.principal_id,
+            expires_at_utc=expires_at,
+        )
+
+    def _bind_canonical_approval(
+        self, ctx: _TurnContext, identity: ApprovalIdentity, approval_id: str
+    ) -> str | None:
+        """Record the canonical MAC when the ledger supports canonical bindings."""
+        bind = getattr(self._approvals, "bind_canonical", None)
+        if ctx.scope_signature is None or bind is None:
+            return None
+        return str(bind(approval_id, self._canonical_binding_payload(ctx, identity)))
+
+    def _consume_approval(
+        self, approval_id: str, ctx: _TurnContext, identity: ApprovalIdentity
+    ) -> None:
+        """Atomic single-use consume; canonical when the ledger enforces MACs.
+
+        With a ``DurableCanonicalApprovalLedger`` the call verifies expiry, the
+        RFC 8785 binding payload and the keyed HMAC before the compare-and-set,
+        all inside one ``BEGIN IMMEDIATE`` transaction. The in-memory/legacy
+        ledger keeps the identity-bound CAS it already had.
+        """
+        if ctx.scope_signature is None:
+            raise ApprovalError("scope_signature_missing", "no approved execution scope")
+        consume_canonical = getattr(self._approvals, "consume_approval", None)
+        if consume_canonical is None:
+            self._approvals.consume(approval_id, identity=identity)
+            return
+        payload = self._canonical_binding_payload(ctx, identity)
+        consume_canonical(
+            approval_id,
+            identity=identity,
+            payload=payload,
+            job_id=f"ibpc:{approval_id}",
+        )
+
+    def _mark_durable_turn(self, session_id: str, turn_id: str, target: TurnStatus) -> None:
+        """Advance the durable turn row (best-effort mirror of the session fence)."""
+        if self._session_store is None:
+            return
+        try:
+            session = self._session_store.get_session(session_id)
+            if target is TurnStatus.APPROVED:
+                self._session_store.mark_turn_approved(
+                    session_id, turn_id, base_revision_id=session.active_revision_id
+                )
+            elif target is TurnStatus.EXECUTED:
+                self._session_store.mark_turn_executed(
+                    session_id, turn_id, base_revision_id=session.active_revision_id
+                )
+        except ValueError:
+            # A turn that predates the store (or a concurrent termination) must
+            # never convert an already-decided approval into a crash.
+            return
+
+    # -- principal authority + durable consent (Wave 3) -----------------------
+
+    def _authorize_principal(
+        self,
+        *,
+        principal_id: str,
+        project_id: str,
+        action: PrincipalStudioAction,
+    ) -> AuthorizedPrincipalFacts:
+        """Verify principal → binding → membership → action for one mutation.
+
+        Fails closed: a service composed without a durable authority refuses
+        every IBPC mutation with a typed ``ApprovalError`` — never a silent
+        grant, never a cached identity.
+        """
+        authority = self._deps.principal_authority
+        binding_ref = self._deps.channel_binding_ref
+        if not binding_ref:
+            raise ApprovalError("missing_binding", "no canonical channel binding is configured")
+        if authority is None:
+            # One authority, two gates: the durable principal authority is the
+            # richer surface, but the injected canonical authority already
+            # proves principal membership + binding ownership, so it satisfies
+            # this gate too. A service with NO authority at all fails closed.
+            if self._deps.authority is None:
+                raise ApprovalError(
+                    "unauthorized_principal",
+                    "no canonical/principal authority is configured; refusing the mutation",
+                )
+            try:
+                resolved = self._resolve_authority(principal_id, project_id)
+            except CanonicalAuthorityError as exc:
+                raise ApprovalError(f"unauthorized_principal:{exc.reason}", exc.detail) from exc
+            return AuthorizedPrincipalFacts(
+                principal_id=resolved.principal_id,
+                project_id=resolved.project_id,
+                channel_binding_id=resolved.channel_binding_id,
+                role=MembershipRole.OWNER,
+            )
+        try:
+            facts = authority.authorize_action(
+                principal_id=principal_id,
+                project_id=project_id,
+                binding_ref=binding_ref,
+                action=action,
+            )
+        except Exception as exc:  # noqa: BLE001 — every authority refusal is typed
+            reason = getattr(exc, "reason", "unauthorized_principal")
+            detail = getattr(exc, "detail", "") or str(exc)
+            raise ApprovalError(f"unauthorized_principal:{reason}", detail) from exc
+        if facts.principal_id != principal_id or facts.project_id != project_id:
+            raise ApprovalError(
+                "unauthorized_principal:identity_mismatch",
+                "the authority returned a different identity than requested",
+            )
+        return facts
+
+    def _require_processing_consent(
+        self,
+        *,
+        session_id: str,
+        principal_id: str,
+        project_id: str,
+        data_category: ConsentScope,
+        action: ConsentAction,
+        provider_id: str | None = None,
+    ) -> None:
+        """Fail-closed durable consent gate before any local/external processing.
+
+        The in-memory session policy always runs first (LOCAL_VAULT cannot
+        egress).  When a durable consent store is configured, the exact
+        ``(principal, project, provider, category, action)`` grant must be live;
+        a revocation between preview and execution therefore refuses execution.
+        """
+        session = self._sessions.get_session(session_id)
+        mode = session.privacy_mode
+        provider = self._deps.local_provider_id if provider_id is None else provider_id
+        if action is ConsentAction.EXTERNAL_PROVIDER_UPLOAD:
+            self._privacy.check_egress(mode, data_category.value.lower(), consented=True)
+        else:
+            self._privacy.require_local(mode, data_category.value.lower())
+        store = self._deps.privacy_consent_store
+        if store is None:
+            return
+        try:
+            store.evaluate_processing_consent(
+                principal_id=principal_id,
+                project_id=project_id,
+                provider_id=provider,
+                data_category=data_category,
+                action=action,
+            )
+        except PrivacyViolation as exc:
+            raise ApprovalError(f"consent_{exc.reason}", exc.detail or str(exc)) from exc
+
+    def _session_base_revision(self, session_id: str, revision: int) -> str:
+        """The base revision id a turn is filed under.
+
+        With a durable store, the session row is the authority (so a turn is
+        refused as ``stale_revision`` when the session moved on); without one,
+        the provider's revision is pinned as ``rev:<n>``.
+        """
+        if self._session_store is not None:
+            try:
+                return self._session_store.get_session(session_id).active_revision_id
+            except ValueError:
+                return f"rev:{revision}"
+        return f"rev:{revision}"
+
+    def _durable_submit_turn(
+        self,
+        *,
+        session_id: str,
+        turn_id: str,
+        idempotency_key: str,
+        user_utterance: str,
+        base_revision_id: str,
+        scope_signature: str,
+        plan: CompiledPlan,
+        preview: PreviewManifest | None = None,
+        approval_id: str | None = None,
+        turn_status: TurnStatus = TurnStatus.DRAFTED,
+    ) -> Any:
+        """Persist the turn durably when a store is configured (else ``None``)."""
+        if self._session_store is None:
+            return None
+        return self._session_store.submit_turn(
+            session_id=session_id,
+            turn_id=turn_id,
+            idempotency_key=idempotency_key,
+            user_utterance=user_utterance,
+            base_revision_id=base_revision_id,
+            scope_signature=scope_signature,
+            plan=plan,
+            preview=preview,
+            approval_id=approval_id,
+            turn_status=turn_status,
+        )
 
     # -- fenced execution ------------------------------------------------------
 
@@ -994,6 +1369,31 @@ class IBPCService:
             ):
                 error = ScopeSignatureMismatchError()
                 return ExecutionOutcome(status="refused", detail=f"{error.reason}: {error.detail}")
+            # Wave 3 (3.4): consuming an approval is an EDITOR/OWNER action.
+            try:
+                self._authorize_principal(
+                    principal_id=principal_id,
+                    project_id=session.project_id,
+                    action=PrincipalStudioAction.APPROVAL_CONSUME,
+                )
+            except ApprovalError as exc:
+                return ExecutionOutcome(status="refused", detail=f"{exc.reason}: {exc.detail}")
+            # Wave 3 (3.3): consent is re-evaluated at execution — a revocation
+            # between preview and execution must refuse, never proceed.
+            try:
+                await asyncio.to_thread(
+                    self._require_processing_consent,
+                    session_id=session_id,
+                    principal_id=principal_id,
+                    project_id=session.project_id,
+                    data_category=ConsentScope.VIDEO,
+                    action=ConsentAction.LOCAL_PROCESSING,
+                )
+            except (ApprovalError, PrivacyViolation) as exc:
+                reason = getattr(exc, "reason", "consent_missing")
+                return ExecutionOutcome(
+                    status="refused", detail=f"{reason}: {getattr(exc, 'detail', '') or exc}"
+                )
             provider = self._deps.approval_key_provider
             envelope = ctx.approval_envelope
             if (
@@ -1007,7 +1407,7 @@ class IBPCService:
                     status="refused", detail="approval_mac_invalid: envelope verification failed"
                 )
             try:
-                self._approvals.consume(approval_id, identity=identity)
+                self._consume_approval(approval_id, ctx, identity)
             except ApprovalError as exc:
                 return ExecutionOutcome(status="refused", detail=f"{exc.reason}: {exc.detail}")
             if turn.turn_state not in (TurnState.APPROVED, TurnState.EXECUTING):
@@ -1172,6 +1572,7 @@ class IBPCService:
             created_at=self._deps.now(),
         )
         self._sessions.mark_executed(session_id, turn_id)
+        self._mark_durable_turn(session_id, turn_id, TurnStatus.EXECUTED)
         detail = "" if gate.proof_complete else "proof_incomplete: " + ",".join(gate.reasons)
         return ExecutionOutcome(
             status=gate.outcome_status,

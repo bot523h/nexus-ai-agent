@@ -32,14 +32,18 @@ Two storage backends share one transition contract:
 from __future__ import annotations
 
 import contextlib
+import hashlib
+import hmac
 import os
 import sqlite3
 import threading
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 
+from nexus_ai_agent.nagar.ibpc.approval_mac import KeyProvider, KeyProviderError
 from nexus_ai_agent.nagar.ibpc.canonical import digest_of
 from nexus_ai_agent.nagar.ibpc.models import ApprovalBinding, ApprovalState
 
@@ -526,11 +530,420 @@ def durable_approval_ledger_path(workspace: str | Path) -> Path:
     return Path(workspace) / "queue" / "approvals.sqlite3"
 
 
+# --------------------------------------------------------------------------- #
+# Canonical cryptographic binding (Wave 3, slice 3.2)
+# --------------------------------------------------------------------------- #
+#
+# An approval row is *evidence*; the keyed MAC below is what makes the evidence
+# unforgeable and single-use-safe across processes.  The canonical spelling is
+# RFC 8785 JCS (``CanonicalizationScheme.JCS_RFC8785_V2``) — the same
+# canonicalization authority the IBPC scope signature already uses — and the
+# authenticator is a keyed HMAC-SHA256 over
+# ``DOMAIN || canonical_bytes(payload)``.
+#
+# The payload is exactly the nine fields a human decision is bound to.  Any
+# mutation of ``base_revision_id``, ``scope_signature``, ``plan_sha256``,
+# ``preview_sha256`` or ``principal_id`` breaks the MAC (compared with
+# ``hmac.compare_digest``, never ``==``), and an expired token never validates.
+
+#: Domain separation tag: an IBPC approval MAC can never be replayed as another
+#: envelope type (the approval-envelope MAC uses its own tag).
+CANONICAL_BINDING_DOMAIN = b"NAGAR/IBPC/APPROVAL-BINDING/v2\x00"
+
+#: The canonical binding version carried in the payload (fail-closed on drift).
+CANONICAL_BINDING_VERSION = "nexus.ibpc.approval-binding.v2"
+
+#: The exact field set of ``ApprovalBindingPayload`` — order is the JCS sort
+#: order of the keys, and the mapping is built from this tuple only.
+BINDING_FIELDS = (
+    "base_revision_id",
+    "expires_at_utc",
+    "plan_sha256",
+    "preview_sha256",
+    "principal_id",
+    "project_id",
+    "scope_signature",
+    "session_id",
+    "turn_id",
+)
+
+#: Fields whose mutation must be rejected even when the MAC is recomputed.
+_IMMUTABLE_BINDING_FIELDS = (
+    "base_revision_id",
+    "scope_signature",
+    "plan_sha256",
+    "preview_sha256",
+    "principal_id",
+)
+
+
+class ApprovalExpiredError(ApprovalError):
+    """The token's ``expires_at_utc`` is not in the future — fail closed."""
+
+    def __init__(self, detail: str = "") -> None:
+        super().__init__("approval_expired", detail)
+
+
+class ApprovalBindingMismatchError(ApprovalError):
+    """A bound field changed (or the MAC does not verify) — fail closed."""
+
+    def __init__(self, detail: str = "") -> None:
+        super().__init__("approval_binding_mismatch", detail)
+
+
+def _canonical_bytes(payload: dict[str, str]) -> bytes:
+    """RFC 8785 canonical bytes of the binding payload (lazy import)."""
+    from nexus_ai_agent.provenance.canonicalization import (
+        CanonicalizationScheme,
+        canonical_bytes,
+    )
+
+    return canonical_bytes(payload, CanonicalizationScheme.JCS_RFC8785_V2)
+
+
+def canonical_binding_payload(
+    *,
+    project_id: str,
+    session_id: str,
+    turn_id: str,
+    base_revision_id: str,
+    plan_sha256: str,
+    preview_sha256: str,
+    scope_signature: str,
+    principal_id: str,
+    expires_at_utc: str,
+) -> dict[str, str]:
+    """The exact nine-field payload an approval is cryptographically bound to.
+
+    Built from :data:`BINDING_FIELDS` only, so an extra key can never sneak into
+    the signed bytes: the function signature and the constant must agree.
+    """
+    values = {
+        "project_id": project_id,
+        "session_id": session_id,
+        "turn_id": turn_id,
+        "base_revision_id": base_revision_id,
+        "plan_sha256": plan_sha256,
+        "preview_sha256": preview_sha256,
+        "scope_signature": scope_signature,
+        "principal_id": principal_id,
+        "expires_at_utc": expires_at_utc,
+    }
+    for name in BINDING_FIELDS:
+        value = values[name]
+        if not isinstance(value, str) or not value:
+            raise ApprovalBindingMismatchError(f"binding field {name!r} must be a non-empty string")
+    return {name: values[name] for name in BINDING_FIELDS}
+
+
+@dataclass(frozen=True)
+class ApprovalBindingPayload:
+    """Typed, immutable canonical binding (the signed object)."""
+
+    project_id: str
+    session_id: str
+    turn_id: str
+    base_revision_id: str
+    plan_sha256: str
+    preview_sha256: str
+    scope_signature: str
+    principal_id: str
+    expires_at_utc: str
+
+    def as_dict(self) -> dict[str, str]:
+        return canonical_binding_payload(
+            project_id=self.project_id,
+            session_id=self.session_id,
+            turn_id=self.turn_id,
+            base_revision_id=self.base_revision_id,
+            plan_sha256=self.plan_sha256,
+            preview_sha256=self.preview_sha256,
+            scope_signature=self.scope_signature,
+            principal_id=self.principal_id,
+            expires_at_utc=self.expires_at_utc,
+        )
+
+    def canonical_text(self) -> str:
+        return _canonical_bytes(self.as_dict()).decode("utf-8")
+
+    def digest(self) -> str:
+        return "sha256:" + hashlib.sha256(_canonical_bytes(self.as_dict())).hexdigest()
+
+
+def canonical_binding_mac(key: bytes, payload: ApprovalBindingPayload) -> str:
+    """Keyed HMAC-SHA256 over ``DOMAIN || JCS(payload)``; ``hex`` spelling."""
+    if not isinstance(key, (bytes, bytearray)) or not key:
+        raise ApprovalBindingMismatchError("an approval key is required")
+    body = _canonical_bytes(payload.as_dict())
+    return hmac.new(bytes(key), CANONICAL_BINDING_DOMAIN + body, hashlib.sha256).hexdigest()
+
+
+def _utc_instant(value: str) -> datetime:
+    """Parse the repository's ``YYYY-MM-DDTHH:MM:SSZ`` instant (tz-aware)."""
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise ApprovalExpiredError(f"unparsable timestamp {value!r}") from exc
+    if parsed.tzinfo is None:
+        raise ApprovalExpiredError("timestamp must be timezone-aware (UTC)")
+    return parsed.astimezone(timezone.utc)
+
+
+class CanonicalApprovalLedger(ApprovalLedger):
+    """Approval ledger whose every binding carries a canonical keyed MAC.
+
+    Composition with a key provider (see
+    ``nagar.ibpc.composition.build_durable_ibpc_service``) makes ``consume`` an
+    atomic, single-use, tamper-evident operation:
+
+    * replay → :class:`ApprovalAlreadyConsumedError`;
+    * expiry → :class:`ApprovalExpiredError`;
+    * any mutation of ``base_revision_id`` / ``scope_signature`` /
+      ``plan_sha256`` / ``preview_sha256`` / ``principal_id`` →
+      :class:`ApprovalBindingMismatchError`.
+
+    Every check runs inside the inherited ``BEGIN IMMEDIATE`` transaction (the
+    durable subclass) or the inherited re-entrant lock (the in-memory base), so
+    a verify-then-consume pair cannot interleave with a competing writer.
+    """
+
+    def __init__(self, *, key_provider: KeyProvider, now: Callable[[], str]) -> None:
+        super().__init__(now=now)
+        self._key_provider = key_provider
+        self._macs: dict[str, str] = {}
+
+    # -- key access ---------------------------------------------------------
+
+    def _active_key(self) -> bytes:
+        try:
+            key_id = self._key_provider.active_key_id
+            return self._key_provider.key(key_id).material
+        except (AttributeError, KeyError, KeyProviderError, ValueError) as exc:
+            raise ApprovalBindingMismatchError("the approval key is unavailable") from exc
+
+    def _mac_for(self, payload: ApprovalBindingPayload) -> str:
+        return canonical_binding_mac(self._active_key(), payload)
+
+    # -- public contract ----------------------------------------------------
+
+    def bind_canonical(
+        self,
+        approval_id: str,
+        payload: ApprovalBindingPayload,
+    ) -> str:
+        """Record (or re-record) the canonical MAC for one approval id.
+
+        Re-binding to a *different* payload for an id that already has a MAC is
+        refused: the MAC is bound once, exactly like the human decision it
+        authenticates.
+        """
+        mac = self._mac_for(payload)
+        with self._transaction():
+            existing = self._macs.get(approval_id)
+            if existing is not None and not hmac.compare_digest(existing, mac):
+                raise ApprovalBindingMismatchError(
+                    "an approval is bound once and cannot be re-bound"
+                )
+            self._macs[approval_id] = mac
+            self._write_binding_columns(approval_id, payload, mac)
+            return mac
+
+    def binding_mac(self, approval_id: str) -> str:
+        mac = self._macs.get(approval_id)
+        if mac is None:
+            mac = self._fetch_binding_mac(approval_id)
+        if mac is None:
+            raise ApprovalBindingMismatchError(f"approval {approval_id!r} has no canonical binding")
+        return mac
+
+    def binding_payload(self, approval_id: str) -> ApprovalBindingPayload:
+        stored = self._fetch_binding_payload(approval_id)
+        if stored is None:
+            raise ApprovalBindingMismatchError(f"approval {approval_id!r} has no canonical payload")
+        return ApprovalBindingPayload(
+            project_id=stored[0],
+            session_id=stored[1],
+            turn_id=stored[2],
+            base_revision_id=stored[3],
+            plan_sha256=stored[4],
+            preview_sha256=stored[5],
+            scope_signature=stored[6],
+            principal_id=stored[7],
+            expires_at_utc=stored[8],
+        )
+
+    def verify_canonical(
+        self, approval_id: str, *, payload: ApprovalBindingPayload | None = None
+    ) -> ApprovalBindingPayload:
+        """Re-check expiry, immutability and the MAC. Returns the stored payload.
+
+        Raises :class:`ApprovalExpiredError` when the token has expired and
+        :class:`ApprovalBindingMismatchError` on any mutation — the MAC is
+        compared with :func:`hmac.compare_digest`, so a partial match is still
+        a mismatch.
+        """
+        stored = self.binding_payload(approval_id)
+        actual = self.binding_mac(approval_id)
+        expected = self._mac_for(stored)
+        if not hmac.compare_digest(actual, expected):
+            raise ApprovalBindingMismatchError("the stored binding MAC does not verify")
+        if payload is not None:
+            for name in _IMMUTABLE_BINDING_FIELDS:
+                left = getattr(stored, name)
+                right = getattr(payload, name)
+                if not hmac.compare_digest(str(left), str(right)):
+                    raise ApprovalBindingMismatchError(
+                        f"immutable binding field {name!r} changed after approval"
+                    )
+            for name in BINDING_FIELDS:
+                left = getattr(stored, name)
+                right = getattr(payload, name)
+                if not hmac.compare_digest(str(left), str(right)):
+                    raise ApprovalBindingMismatchError(
+                        f"binding field {name!r} differs from the presented payload"
+                    )
+        try:
+            expires = _utc_instant(stored.expires_at_utc)
+            current = _utc_instant(self._now())
+        except ApprovalExpiredError:
+            raise
+        if current >= expires:
+            raise ApprovalExpiredError(
+                f"token expired at {stored.expires_at_utc} (now {self._now()})"
+            )
+        return stored
+
+    def consume_approval(
+        self,
+        approval_id: str,
+        *,
+        identity: ApprovalIdentity,
+        job_id: str | None = None,
+        attempt: int = 1,
+        payload: ApprovalBindingPayload | None = None,
+    ) -> ApprovalBinding:
+        """Atomically verify the canonical binding, then consume exactly once.
+
+        Order inside one transaction: expiry → MAC/immutability → identity →
+        single-use compare-and-set.  A failure at any earlier step leaves the
+        approval unconsumed (a refused request never burns a valid approval).
+        """
+        mac = self.binding_mac(approval_id)
+        stored = self.binding_payload(approval_id)
+        expected = self._mac_for(stored)
+        if not hmac.compare_digest(mac, expected):
+            raise ApprovalBindingMismatchError("the stored binding MAC does not verify")
+        if payload is not None and payload.as_dict() != stored.as_dict():
+            raise ApprovalBindingMismatchError("presented payload differs from the stored binding")
+        expires = _utc_instant(stored.expires_at_utc)
+        if _utc_instant(self._now()) >= expires:
+            raise ApprovalExpiredError(f"token expired at {stored.expires_at_utc}")
+        current = self.get(approval_id)
+        if current.state is ApprovalState.CONSUMED:
+            raise ApprovalAlreadyConsumedError(approval_id)
+        return self.consume(approval_id, identity=identity, job_id=job_id, attempt=attempt)
+
+    # -- storage seam (in-memory default) -----------------------------------
+
+    def _write_binding_columns(
+        self, approval_id: str, payload: ApprovalBindingPayload, mac: str
+    ) -> None:
+        """Base storage keeps the payload beside the MAC (durable overrides)."""
+
+    def _fetch_binding_mac(self, approval_id: str) -> str | None:
+        return None
+
+    def _fetch_binding_payload(self, approval_id: str) -> tuple[str, ...] | None:
+        return None
+
+
+class DurableCanonicalApprovalLedger(CanonicalApprovalLedger, DurableApprovalLedger):
+    """Durable ledger + canonical MACs persisted in the same SQLite file.
+
+    Every canonical read/write runs in the inherited ``BEGIN IMMEDIATE``
+    transaction, so the MAC columns and the state transition commit together.
+    """
+
+    def __init__(
+        self,
+        path: str | Path,
+        *,
+        key_provider: KeyProvider,
+        now: Callable[[], str],
+    ) -> None:
+        DurableApprovalLedger.__init__(self, path, now=now)
+        self._key_provider = key_provider
+        self._macs: dict[str, str] = {}
+        with self._transaction():
+            self._conn.execute(
+                "CREATE TABLE IF NOT EXISTS approval_bindings ("
+                " approval_id TEXT PRIMARY KEY,"
+                " project_id TEXT NOT NULL,"
+                " session_id TEXT NOT NULL,"
+                " turn_id TEXT NOT NULL,"
+                " base_revision_id TEXT NOT NULL,"
+                " plan_sha256 TEXT NOT NULL,"
+                " preview_sha256 TEXT NOT NULL,"
+                " scope_signature TEXT NOT NULL,"
+                " principal_id TEXT NOT NULL,"
+                " expires_at_utc TEXT NOT NULL,"
+                " mac TEXT NOT NULL)"
+            )
+
+    def _write_binding_columns(
+        self, approval_id: str, payload: ApprovalBindingPayload, mac: str
+    ) -> None:
+        self._conn.execute(
+            "INSERT INTO approval_bindings (approval_id, project_id, session_id, turn_id,"
+            " base_revision_id, plan_sha256, preview_sha256, scope_signature, principal_id,"
+            " expires_at_utc, mac) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            " ON CONFLICT(approval_id) DO UPDATE SET mac=excluded.mac",
+            (
+                approval_id,
+                payload.project_id,
+                payload.session_id,
+                payload.turn_id,
+                payload.base_revision_id,
+                payload.plan_sha256,
+                payload.preview_sha256,
+                payload.scope_signature,
+                payload.principal_id,
+                payload.expires_at_utc,
+                mac,
+            ),
+        )
+
+    def _fetch_binding_mac(self, approval_id: str) -> str | None:
+        row = self._conn.execute(
+            "SELECT mac FROM approval_bindings WHERE approval_id = ?", (approval_id,)
+        ).fetchone()
+        return None if row is None else str(row[0])
+
+    def _fetch_binding_payload(self, approval_id: str) -> tuple[str, ...] | None:
+        row = self._conn.execute(
+            "SELECT project_id, session_id, turn_id, base_revision_id, plan_sha256,"
+            " preview_sha256, scope_signature, principal_id, expires_at_utc"
+            " FROM approval_bindings WHERE approval_id = ?",
+            (approval_id,),
+        ).fetchone()
+        return None if row is None else tuple(str(value) for value in row)
+
+
 __all__ = [
+    "BINDING_FIELDS",
+    "CANONICAL_BINDING_DOMAIN",
+    "CANONICAL_BINDING_VERSION",
     "ApprovalAlreadyConsumedError",
+    "ApprovalBindingMismatchError",
+    "ApprovalBindingPayload",
     "ApprovalError",
+    "ApprovalExpiredError",
     "ApprovalIdentity",
     "ApprovalLedger",
+    "CanonicalApprovalLedger",
     "DurableApprovalLedger",
+    "DurableCanonicalApprovalLedger",
+    "canonical_binding_mac",
+    "canonical_binding_payload",
     "durable_approval_ledger_path",
 ]

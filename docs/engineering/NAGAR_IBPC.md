@@ -83,6 +83,11 @@ Logs/records carry transcripts and audio as digests only (`redact_mapping`).
 | `privacy.py` | modes, consent, redaction |
 | `footprint.py` | the ONLY subprocess owner: read-only decode + content-matched verification |
 | `service.py` | IBPCService composing injected ports only (queue/registry/journal/facts/caption) |
+| `live_session.py` | `DurableLiveSessionStore` — SQLite-WAL sessions/turns, monotonic index, idempotency, stale-revision fence, `version_epoch` CAS |
+| `approval_mac.py` | RFC 8785 + keyed HMAC-SHA256 approval envelopes and the key-ring abstraction |
+| `principal_authority.py` | `DurableStudioAuthorizationService` (principal → binding → membership → action) + `IBPCAuthorizationGate` |
+| `composition.py` | `build_durable_ibpc_service(db_path, hmac_secret, …)` — the production composition root |
+| `authority.py` | the canonical authority port (`PrincipalFacts`) the service resolves identity from |
 
 Boundary enforcement: `tests/architecture/test_ibpc_boundary.py` (no imports of adapters/worker/
 render_jobs/bus/pack-runtime; subprocess only in footprint; queue constants pinned against the canonical
@@ -135,7 +140,66 @@ killed** (suite RED per mutant, restored GREEN after), exit 0, verified in the f
 the minimal CI env (28 packages) — same interpreter recipe the `trust-mutations` CI job now uses.
 Worktree unchanged after the run (`git diff --exit-code` in CI).
 
-## Lifecycle & durability (Phase E — honest accounting)
+## Lifecycle & durability (Phase E → Wave 3 — honest accounting)
+
+The table below is the **current** state after Wave 3 (durable IBPC live editing).
+It replaces the Phase E in-memory-only accounting: the four Wave 3 slices turned
+the volatile session/approval/consent/authorization state into SQLite-WAL stores
+with `BEGIN IMMEDIATE` write transactions, `busy_timeout=5000`, `foreign_keys=ON`
+and `synchronous=FULL`.
+
+| Entity | Storage (Wave 3) | After process restart | Multi-process | Claim |
+|---|---|---|---|---|
+| Live sessions / turns | `DurableLiveSessionStore` — `ibpc_sessions` + `ibpc_turns` in `<workspace>/queue/ibpc_live_session.sqlite3` (WAL) | **fully reconstructed** by a fresh store instance (`TestReconstructionAcrossRestart`) | writer-serialized by `BEGIN IMMEDIATE` + `version_epoch` CAS (`ConcurrentSessionMutationError`) | durable, crash-safe sessions *and* turns |
+| Approvals (bindings) | `DurableCanonicalApprovalLedger` — `approvals` + `approval_bindings` + `approval_reservations` (WAL); each binding is a 9-field `ApprovalBindingPayload` under RFC 8785 JCS + keyed HMAC-SHA256 | **consumed stays consumed** (a restart cannot resurrect a token) | single-use compare-and-set inside `BEGIN IMMEDIATE`; the job reservation is the recovery fence | atomic, tamper-evident, single-use |
+| Privacy consent | `DurablePrivacyConsentStore` — `privacy_consents` + hash-chained `privacy_consent_audit_log` (WAL) | grants **and revocations** survive; `verify_audit_chain()` re-verifies every append | revoke/grant is transactional; the gate reads inside a transaction | time-bounded, immediately revocable, digest-only |
+| Studio authority | `DurableStudioAuthorizationService` — `studio_principals`, `studio_channel_bindings`, `studio_memberships` (WAL) | memberships/bindings survive a restart | the same transactional chain guards every process | principal → binding → membership → action, no IDOR |
+| Execution contexts (`_TurnContext`) | in-process dict in `IBPCService` | gone (a consumed/revoked context is unrecoverable by design) | not shared | in-process only — the durable turn row is the recovery anchor |
+| Staged audio files | temp files under the resolved audio dir, 0600, random name | cleaned in `finally` on every path | per-call unique names | no persistence claim |
+| Rendered artifacts / capsules / journal | EXISTING stores (workspace dirs, sqlite journal, job queue) — unchanged | durable via existing ports | via existing queue | existing claims only, no new ones |
+
+Enforcement, per invariant, is by test (no claim without a test):
+
+* **monotonic `turn_index`**, **idempotent submission** (`f(f(x)) = f(x)`),
+  **restart reconstruction**, **stale revision fails closed**
+  (`StaleSessionRevisionError`), **termination invalidates unconsumed preview
+  approvals**, and **concurrent `version_epoch` CAS**
+  (`ConcurrentSessionMutationError`) —
+  `tests/unit/creative/ibpc/test_durable_live_session.py`;
+* **replay / expiry / immutable-field mutation** (`ApprovalAlreadyConsumedError`,
+  `ApprovalExpiredError`, `ApprovalBindingMismatchError`) and the durable factory —
+  `tests/unit/creative/ibpc/test_durable_approval_wiring.py`;
+* **consent revocation + fail-closed gate** —
+  `tests/unit/creative/ibpc/test_durable_privacy_consent.py`;
+* **cross-user / cross-project IDOR** —
+  `tests/unit/creative/ibpc/test_studio_principal_authorization.py`;
+* the service-level wire-up of all four slices (consent before media work, the
+  canonical payload/scope fence at execution, staging digest drift, authority
+  refusals) — `tests/unit/creative/ibpc/test_w3_service_closure.py`.
+
+### Mutation evidence (Wave 3)
+
+`scripts/w3_ibpc_mutations.py` attacks these guards directly: 31 source weakenings
+across `live_session.py`, `approval.py`, `privacy.py`, `principal_authority.py` and
+`service.py` (idempotency lookup disabled, stale-revision fence removed, monotonic
+index broken, CAS conflict ignored, termination not revoking approvals, WAL /
+`synchronous=FULL` / `foreign_keys` turned off, MAC + payload + expiry + single-use
+bypasses, bind-once disabled, naive timestamps accepted, empty binding fields,
+revocation not flipping state, gate ignoring revocation/expiry/provider binding,
+audit chain not verified, role / binding-owner / membership / project-scope checks
+bypassed, service authorization and consent gates short-circuited, canonical
+payload not presented, scope signature not re-checked, approval TTL inflated).
+
+Each mutant runs in an isolated `/tmp` sandbox with a three-layer bytecode purge
+(tree `__pycache__`, a dedicated `PYTHONPYCACHEPREFIX`, `PYTHONDONTWRITEBYTECODE`)
+and a SHA-256-verified restore. The oracle is strict: `pytest` exit **1** = killed,
+`0` = survived, anything else = harness error (never a kill). Result: **31/31
+killed**, pristine tree GREEN before and after, shipped worktree untouched.
+
+Run it with `python scripts/w3_ibpc_mutations.py` (`--list` prints the catalogue,
+`--only name[,name]` spot-checks a subset).
+
+
 
 | Entity | Current storage | After process restart | Multi-process | Production claim |
 |---|---|---|---|---|
@@ -145,6 +209,8 @@ Worktree unchanged after the run (`git diff --exit-code` in CI).
 | Staged audio files | temp files under the resolved audio dir, 0600, random name | cleaned in `finally` on every path; survivors only if the process is SIGKILLed mid-transcribe | per-call unique names; no cross-process delete | no persistence claim |
 | Rendered artifacts / capsules / journal | EXISTING stores (workspace dirs, sqlite journal, job queue) — unchanged | durable via existing ports | via existing queue | existing claims only, no new ones |
 
-NEXT (not done, deliberately): durable approval ledger on the existing sqlite journal; multi-process
-session fencing via the job queue; then re-run the same mutation harness against the durable store.
-No durability, multi-process or production-readiness claim is made for the in-memory IBPC state.
+Deliberately NOT claimed: cross-host replication, distributed locking on a
+network filesystem, or exactly-once *execution* (the queue must still prevent
+overlapping attempts from publishing concurrently — the approval reservation is a
+recovery fence, not a publication lock). The in-memory `ApprovalLedger` /
+`LiveSessionManager` remain the documented, non-durable test path.

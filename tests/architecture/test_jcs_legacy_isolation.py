@@ -10,8 +10,12 @@ This guard is AST-based (it inspects imports, not text), so a comment mentioning
 "JCS" cannot satisfy it and an import cannot hide behind formatting:
 
 * the only modules allowed to reference the JCS surface are
-  ``provenance/jcs.py`` (the definition) and ``provenance/__init__.py`` (the
-  re-export);
+  ``provenance/jcs.py`` (the definition), ``provenance/__init__.py`` (the
+  re-export), ``provenance/canonicalization.py`` (the scheme dispatcher) and one
+  explicitly reviewed *new* consumer, ``nagar/ibpc/approval.py`` (the Wave 3
+  canonical approval binding: a brand-new, domain-separated HMAC over RFC 8785
+  bytes that replaces no legacy digest — see
+  ``test_ibpc_approval_binding_is_a_carefully_scoped_jcs_consumer``);
 * the frozen legacy modules must not reference the JCS names at all.
 """
 
@@ -31,7 +35,15 @@ ALLOWED_JCS_IMPORTERS = {
     Path("provenance/jcs.py"),
     Path("provenance/__init__.py"),
     Path("provenance/canonicalization.py"),
+    # Wave 3 approval bindings are a NEW (schema v2) cryptographic contract:
+    # they sign RFC 8785 bytes with a keyed HMAC under their own domain prefix.
+    # No legacy digest is re-spelled and no frozen ledger is re-hashed, so this
+    # consumer is additive by construction — the test below keeps it narrow.
+    Path("nagar/ibpc/approval.py"),
 }
+
+#: The only JCS names the approved IBPC consumer may touch.
+APPROVAL_JCS_NAMES = {"canonical_bytes", "CanonicalizationScheme"}
 
 #: Frozen legacy modules whose hashes must not move.
 FROZEN_LEGACY_MODULES = [
@@ -111,3 +123,23 @@ def test_legacy_canonical_json_keeps_its_sort_keys_spelling() -> None:
         "provenance.models.canonical_json must keep sort_keys/ensure_ascii/"
         "separators — its bytes are a stored-hash contract"
     )
+
+
+def test_ibpc_approval_binding_is_a_carefully_scoped_jcs_consumer() -> None:
+    """The one non-provenance JCS consumer must stay minimal and indirect."""
+    path = SRC / "nagar" / "ibpc" / "approval.py"
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    imported: set[str] = set()
+    modules: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            if node.module:
+                modules.add(node.module)
+            imported.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.Import):
+            modules.update(alias.name for alias in node.names)
+    # it may only reach JCS through the scheme dispatcher, never the raw module
+    assert "nexus_ai_agent.provenance.jcs" not in modules
+    assert imported & JCS_NAMES <= APPROVAL_JCS_NAMES
+    # and it must not import any digest helper that would re-spell a legacy hash
+    assert not {"jcs_digest", "jcs", "JcsError"} & imported
