@@ -2808,6 +2808,7 @@ class TestWave3SecurityClosureAndCoverage:
                     processing_scope=ProcessingScope.EXTERNAL_PROVIDER_DISPATCH,
                     data_category=DataCategory.TRANSCRIPT,
                     provider_id="gemini",
+                    tenant_id="ten-1",
                 )
             # Also dispatching with empty provider_id fails closed.
             with pytest.raises(PrivacyViolation, match="consent_missing"):
@@ -2818,6 +2819,7 @@ class TestWave3SecurityClosureAndCoverage:
                     processing_scope=ProcessingScope.EXTERNAL_PROVIDER_DISPATCH,
                     data_category=DataCategory.TRANSCRIPT,
                     provider_id="",
+                    tenant_id="ten-1",
                 )
             # Exact provider_id="gemini" grant succeeds.
             store.grant_consent(
@@ -2838,6 +2840,7 @@ class TestWave3SecurityClosureAndCoverage:
                 processing_scope=ProcessingScope.EXTERNAL_PROVIDER_DISPATCH,
                 data_category=DataCategory.TRANSCRIPT,
                 provider_id="gemini",
+                tenant_id="ten-1",
             )
             assert matched is not None and matched.consent_id == "cns_gemini"
             # Local processing under LOCAL_VAULT uses LOCAL_PROCESSING scope.
@@ -4227,6 +4230,7 @@ class TestWave3SecurityClosureAndCoverage:
                 processing_scope=ProcessingScope.EXTERNAL_PROVIDER_DISPATCH,
                 data_category=DataCategory.TRANSCRIPT,
                 provider_id="gemini",
+                tenant_id="ten-1",
             )
         pstore.close()
         pstore.close()
@@ -7639,3 +7643,201 @@ class TestWave3FinalSecurityClosure:
             processing_scope=ProcessingScope.LOCAL_PROCESSING.value,
             provider_id="provider-other",
         )
+
+    def test_durable_consent_non_external_provider_id_mismatch_when_query_omits_provider(
+        self, tmp_path: Path
+    ) -> None:
+        clock = _Clock("2026-11-01T00:00:00Z")
+        store = DurablePrivacyConsentStore(tmp_path / "priv_nonext_prov.sqlite3")
+        try:
+            policy = PrivacyPolicy(now=clock, store=store)
+            policy.grant_durable_consent(
+                project_id="proj-alpha",
+                tenant_id="ten-1",
+                principal_id=OWNER_ID,
+                mode=PrivacyMode.TRUSTED_CLOUD,
+                processing_scope=ProcessingScope.LOCAL_PROCESSING,
+                data_category=DataCategory.AUDIO,
+                provider_id="local-whisper-v3",
+            )
+            status_empty, grant_empty = store.check_consent_status(
+                project_id="proj-alpha",
+                principal_id=OWNER_ID,
+                mode=PrivacyMode.TRUSTED_CLOUD,
+                processing_scope=ProcessingScope.LOCAL_PROCESSING.value,
+                data_category=DataCategory.AUDIO.value,
+                now_utc=clock(),
+                provider_id="",
+                tenant_id="ten-1",
+            )
+            assert status_empty == "missing" and grant_empty is None
+            assert not policy.has_consent(
+                PrivacyMode.TRUSTED_CLOUD,
+                principal_id=OWNER_ID,
+                project_id="proj-alpha",
+                tenant_id="ten-1",
+                scope="audio",
+                processing_scope=ProcessingScope.LOCAL_PROCESSING.value,
+                data_category=DataCategory.AUDIO.value,
+                provider_id="",
+            )
+
+            status_ok, grant_ok = store.check_consent_status(
+                project_id="proj-alpha",
+                principal_id=OWNER_ID,
+                mode=PrivacyMode.TRUSTED_CLOUD,
+                processing_scope=ProcessingScope.LOCAL_PROCESSING.value,
+                data_category=DataCategory.AUDIO.value,
+                now_utc=clock(),
+                provider_id="local-whisper-v3",
+                tenant_id="ten-1",
+            )
+            assert status_ok == "active" and grant_ok is not None
+            assert policy.has_consent(
+                PrivacyMode.TRUSTED_CLOUD,
+                principal_id=OWNER_ID,
+                project_id="proj-alpha",
+                tenant_id="ten-1",
+                scope="audio",
+                processing_scope=ProcessingScope.LOCAL_PROCESSING.value,
+                data_category=DataCategory.AUDIO.value,
+                provider_id="local-whisper-v3",
+            )
+        finally:
+            store.close()
+
+    def test_enforce_processing_consent_fails_closed_when_grant_has_tenant_and_caller_omits_tenant(
+        self, tmp_path: Path
+    ) -> None:
+        clock = _Clock("2026-11-01T00:00:00Z")
+        store = DurablePrivacyConsentStore(tmp_path / "priv_empty_ten.sqlite3")
+        try:
+            policy = PrivacyPolicy(now=clock, store=store)
+            grant = policy.grant_durable_consent(
+                project_id="proj-alpha",
+                tenant_id="tenant-alpha",
+                principal_id=OWNER_ID,
+                mode=PrivacyMode.TRUSTED_CLOUD,
+                processing_scope=ProcessingScope.LOCAL_PROCESSING,
+                data_category=DataCategory.AUDIO,
+            )
+            with pytest.raises(PrivacyViolation, match="consent_tenant_mismatch"):
+                store.check_consent_status(
+                    project_id="proj-alpha",
+                    principal_id=OWNER_ID,
+                    mode=PrivacyMode.TRUSTED_CLOUD,
+                    processing_scope=ProcessingScope.LOCAL_PROCESSING.value,
+                    data_category=DataCategory.AUDIO.value,
+                    now_utc=clock(),
+                    tenant_id="",
+                )
+            with pytest.raises(PrivacyViolation, match="consent_tenant_mismatch"):
+                policy.enforce_processing_consent(
+                    project_id="proj-alpha",
+                    principal_id=OWNER_ID,
+                    mode=PrivacyMode.TRUSTED_CLOUD,
+                    processing_scope=ProcessingScope.LOCAL_PROCESSING,
+                    data_category=DataCategory.AUDIO,
+                    tenant_id="",
+                )
+
+            # Defense-in-depth inside enforce_processing_consent even if a custom store
+            # returns an active grant without filtering tenant_id.
+            audit_events: list[tuple[str, str]] = []
+
+            class _UnfilteredTenantStore:
+                def check_consent_status(self, **kwargs: object) -> tuple[str, object]:
+                    return "active", grant
+
+                def record_audit_event(self, **kwargs: object) -> None:
+                    audit_events.append((str(kwargs["event_type"]), str(kwargs["reason"])))
+
+            guarded_policy = PrivacyPolicy(now=clock, store=_UnfilteredTenantStore())  # type: ignore[arg-type]
+            with pytest.raises(PrivacyViolation, match="consent_tenant_mismatch"):
+                guarded_policy.enforce_processing_consent(
+                    project_id="proj-alpha",
+                    principal_id=OWNER_ID,
+                    mode=PrivacyMode.TRUSTED_CLOUD,
+                    processing_scope=ProcessingScope.LOCAL_PROCESSING,
+                    data_category=DataCategory.AUDIO,
+                    tenant_id="",
+                )
+            assert audit_events == [("DENIED", "consent_tenant_mismatch")]
+        finally:
+            store.close()
+
+    def test_studio_api_rejects_conflicting_body_and_query_project_id_with_400(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from fastapi.testclient import TestClient
+
+        from nexus_ai_agent.api import app as app_module
+        from nexus_ai_agent.config.settings import get_settings
+
+        clock = _Clock()
+        ws = tmp_path / "ws_conflict"
+        ws.mkdir()
+        auth_db = ws / ".nexus" / "studio_auth.sqlite3"
+        auth_db.parent.mkdir(parents=True)
+        with StudioPrincipalAuthStore(auth_db, now=clock) as auth:
+            auth.ensure_project("proj-alpha", tenant_id="ten-1")
+            auth.ensure_project("proj-beta", tenant_id="ten-1")
+            auth.register_principal(
+                OWNER_ID,
+                tenant_id="ten-1",
+                raw_token="tok-owner-conflict",
+                allow_system_bootstrap=True,
+            )
+            auth.grant_membership(
+                "proj-alpha",
+                OWNER_ID,
+                role=StudioRole.OWNER,
+                granted_by="system",
+                allow_system_bootstrap=True,
+            )
+            auth.grant_membership(
+                "proj-beta",
+                OWNER_ID,
+                role=StudioRole.OWNER,
+                granted_by="system",
+                allow_system_bootstrap=True,
+            )
+
+        monkeypatch.setenv("NEXUS_DASHBOARD_TOKEN", "deploy-tok-conflict")
+        monkeypatch.setenv("NEXUS_STUDIO_WORKSPACE_ROOT", str(ws))
+        monkeypatch.setenv("NEXUS_STUDIO_AUTH_DB", str(auth_db))
+        monkeypatch.setenv("NEXUS_QUEUE_DB_PATH", str(tmp_path / "q_conflict.sqlite3"))
+        monkeypatch.setenv("NEXUS_APPROVAL_HMAC_KEY_ID", "k1")
+        monkeypatch.setenv("NEXUS_APPROVAL_HMAC_KEY", "z" * 32)
+        get_settings.cache_clear()
+        headers = {
+            "Authorization": "Bearer deploy-tok-conflict",
+            "X-Nexus-Principal-Token": "tok-owner-conflict",
+        }
+        client = TestClient(app_module.app)
+
+        new_pid = "prn_" + "8b" * 16
+        r_reg = client.post(
+            "/api/studio/principals?project_id=proj-beta",
+            headers=headers,
+            json={
+                "principal_id": new_pid,
+                "raw_token": "tok-target-123456",
+                "display_name": "Target",
+                "project_id": "proj-alpha",
+            },
+        )
+        assert r_reg.status_code == 400
+        assert "conflicting_project_scope_parameters" in r_reg.text
+
+        r_bind = client.post(
+            f"/api/studio/principals/{OWNER_ID}/bindings?project_id=proj-beta",
+            headers=headers,
+            json={
+                "channel": "web",
+                "external_subject": "conflict-sub",
+                "project_id": "proj-alpha",
+            },
+        )
+        assert r_bind.status_code == 400
+        assert "conflicting_project_scope_parameters" in r_bind.text

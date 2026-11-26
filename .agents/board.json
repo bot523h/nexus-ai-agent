@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-11-26T12:00:00Z",
+  "updated_at": "2026-11-26T19:30:00Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -8757,7 +8757,7 @@
       "title": "W4: authenticated durable CommandBus execution and evidence closure",
       "zone": "nagar-w4-integrated-durable-execution",
       "priority": "P0",
-      "status": "active",
+      "status": "completed_merged",
       "scope": "Complete W4 CP1b through CP4 on PR #355 through the existing registry and CommandBus; no parallel authority and no writes to quarantined paths. Expand exclusive scope only after the multi-source referee passes.",
       "prerequisites": [],
       "acceptance_criteria": [
@@ -8807,9 +8807,9 @@
         "src/nexus_ai_agent/adapters/durable_studio_runtime.py",
         "tests/unit/test_w4_cp4_coverage.py"
       ],
-      "owner_hint": "arena/f3f2c5f9-nexus-ai-agent; PR #355",
-      "agent_branch": "arena/f3f2c5f9-nexus-ai-agent",
-      "claimed_at": "2026-11-24T09:08:55Z",
+      "owner_hint": "",
+      "agent_branch": "",
+      "claimed_at": null,
       "generation": 2,
       "ttl_hours": 24,
       "gates_owner": false,
@@ -8822,8 +8822,11 @@
         "Checkpoint 3B: scripts/w4_mutations.py and tests/unit/test_w4_mutations.py; 30/30 deterministic source mutants killed, strict named failure oracle, byte/SHA restoration and cache purge. Campaign wall time remains above the 30-second target.",
         "Checkpoint 3B: tests/benchmarks/w4_command_bus_benchmark.py; N=5 independent temporary SQLite WAL scenarios, compile/SHA/IBPC, fenced publication and real subprocess-death PRESENT recovery with nonce replay rejection. Final CI closure pending."
       ],
-      "note": "",
-      "previous_release_reason": "auto-released by gc at 2026-11-24T09:08:55Z (stale active lease)"
+      "note": "PR #355 merged to main as 428492e2 (2026-11-25T20:33:47Z). Closed and lease released.",
+      "previous_release_reason": "auto-released by gc at 2026-11-24T09:08:55Z (stale active lease)",
+      "delivered_pr": 355,
+      "merge_commit_sha": "428492e2e56bd7f0b4752891c500cd9e48ceca52",
+      "reconciled_at": "2026-11-26T19:30:00Z"
     },
     {
       "task": "task-w11x-cp1-provenance-hardening",
@@ -8831,7 +8834,7 @@
       "title_fa": "W11X CP-1: سخت‌سازی گراف منشأ (بازیابی فقط‌خواندنی، گارد وضعیت پایانی، تطابق شمارش نسخه‌ها)",
       "zone": "provenance-ledger",
       "priority": "P0",
-      "status": "active",
+      "status": "completed_merged",
       "scope": "Three fail-closed fixes in provenance/graph.py: (1A) CreativeGraph.restore() opens the backup source with a read-only URI so a restore can never mutate or create it; (1B) promote_epistemic_status() refuses to promote a node or edge whose lifecycle status is terminal (superseded/invalidated/revoked) because terminal is absorbing; (1C) a new GRAPH034 integrity finding proves every node's revision_count equals the node_create/node_advance chain entries recorded since that node's most recent creation. The mutation campaign is extended 17 -> 20.",
       "prerequisites": [],
       "acceptance_criteria": [
@@ -8852,28 +8855,31 @@
         "tests/unit/test_creative_graph.py",
         "tests/unit/test_creative_graph_mutations.py"
       ],
-      "owner_hint": "OpenHands W11X convergence agent on branch openhands/w11x-grand-pr-convergence-20261125.",
-      "agent_branch": "openhands/w11x-grand-pr-convergence-20261125",
-      "claimed_at": "2026-11-25T20:48:41Z",
+      "owner_hint": "",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 24,
       "gates_owner": false,
-      "note": "",
-      "generation": 1
+      "note": "PR #361 merged to main as bc089847 (2026-11-26T05:48:12Z). Closed and lease released.",
+      "generation": 1,
+      "delivered_pr": 361,
+      "merge_commit_sha": "bc089847f40ff29f81207ad0c9f9d760ff88c9b9",
+      "reconciled_at": "2026-11-26T19:30:00Z"
     },
     {
       "task": "task-w3-ibpc-durability",
       "title": "W3: IBPC durable live sessions, canonical approval binding, privacy consent & Studio principal RBAC",
       "zone": "nagar-ibpc-wave3-durability",
       "priority": "P0",
-      "status": "active_in_review",
-      "scope": "Wave 3 IBPC durability & security closure: SQLite WAL live sessions/turns/contexts, RFC 8785 JCS canonical approval binding hash + key_id rotation/expiry, durable privacy consent ownership & exact-provider egress gating, Studio principal RBAC default & lifecycle/audit APIs, symlink/root containment, deterministic store close, >=98% line/branch coverage, and 36-mutant AST campaign.",
+      "status": "completed_merged",
+      "scope": "Wave 3 IBPC durability & security closure: SQLite WAL live sessions/turns/contexts, RFC 8785 JCS canonical approval binding hash + key_id rotation/expiry, durable privacy consent ownership & exact-provider egress gating, Studio principal RBAC default & lifecycle/audit APIs, symlink/root containment, deterministic store close, >=98% line/branch coverage, and 39-mutant AST campaign.",
       "prerequisites": [],
       "acceptance_criteria": [
         "DurableLiveSessionStore enforces WAL pragmas, monotonic turn ordering, idempotency deduplication/conflict rejection, CAS session epoch fencing, and restart hydration.",
         "ApprovalBinding enforces RFC 8785 JCS canonical approval hash, key_id rotation/revocation, scope signature, revision id, and constant-time expiry verification without hardcoded keys.",
         "DurablePrivacyConsentStore enforces project/tenant ownership on revoke, exact provider_id egress matching, and append-only audit.",
         "StudioPrincipalAuthStore + /api/studio/projects/{project_id}/ibpc & /api/studio/principals enforce token auth, tenant isolation, OWNER/EDITOR/VIEWER/AUDITOR RBAC, and append-only admin audit.",
-        "36/36 AST mutants killed (0 survived, 0 invalid), >=98% line/branch coverage across all 10 Wave 3 modules, and all IBPC, Studio, boundary, lint, and strict mypy checks green."
+        "39/39 AST mutants killed (0 survived, 0 invalid), >=98% line/branch coverage across all 10 Wave 3 modules, and all IBPC, Studio, boundary, lint, and strict mypy checks green."
       ],
       "evidence_required": [
         "pytest tests/unit/test_wave3_ibpc_durability.py tests/unit/creative/test_wave3_ibpc_mutations.py",
@@ -8889,11 +8895,11 @@
         "tests/unit/test_wave3_ibpc_durability.py",
         "tests/unit/creative/test_wave3_ibpc_mutations.py"
       ],
-      "owner_hint": "arena/aac14be0-nexus-ai-agent",
-      "agent_branch": "arena/aac14be0-nexus-ai-agent",
-      "claimed_at": "2026-11-26T12:00:00Z",
+      "owner_hint": "",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 24,
-      "gates_owner": true,
+      "gates_owner": false,
       "delivered": [
         "src/nexus_ai_agent/nagar/ibpc/",
         "src/nexus_ai_agent/adapters/studio_principal_auth.py",
@@ -8903,7 +8909,10 @@
         "tests/unit/test_wave3_ibpc_durability.py",
         "tests/unit/creative/test_wave3_ibpc_mutations.py"
       ],
-      "note": "Active in review on arena/aac14be0-nexus-ai-agent (PR #365) without overlapping task-w4-integrated-durable-execution or task-w11x-cp1-provenance-hardening."
+      "note": "PR #365 merged to main as 1a914457 (2026-11-26T18:59:13Z); Wave 3.5 defense-in-depth closure expands AST campaign to 39/39 mutants. Closed and lease released.",
+      "delivered_pr": 365,
+      "merge_commit_sha": "1a9144579f490e29b295da50a51a7dc437bfb7a5",
+      "reconciled_at": "2026-11-26T19:30:00Z"
     }
   ],
   "deferred_log": [
@@ -9905,6 +9914,114 @@
         "merge_commit_sha": "5ed6d4e10be55f5baf5e9f2a8aa99775577621db",
         "recorded_by": "main",
         "recorded_at": "2026-11-08T06:11:56Z"
+      }
+    },
+    {
+      "kind": "pull_request",
+      "repository": "bot523h/nexus-ai-agent",
+      "number": 355,
+      "state": "merged_into_main",
+      "evidence": {
+        "source": "github_api",
+        "merge_commit_sha": "428492e2e56bd7f0b4752891c500cd9e48ceca52",
+        "recorded_by": "arena/aac14be0-nexus-ai-agent",
+        "recorded_at": "2026-11-25T20:33:47Z"
+      }
+    },
+    {
+      "kind": "pull_request",
+      "repository": "bot523h/nexus-ai-agent",
+      "number": 356,
+      "state": "merged_into_main",
+      "evidence": {
+        "source": "github_api",
+        "merge_commit_sha": "3ee52c4f4a492ae8573e76026711dffeb1adcd6e",
+        "recorded_by": "arena/aac14be0-nexus-ai-agent",
+        "recorded_at": "2026-11-25T19:22:50Z"
+      }
+    },
+    {
+      "kind": "pull_request",
+      "repository": "bot523h/nexus-ai-agent",
+      "number": 357,
+      "state": "merged_into_main",
+      "evidence": {
+        "source": "github_api",
+        "merge_commit_sha": "4facd6b215ad155a065f75cb7c6ecaa8010a6732",
+        "recorded_by": "arena/aac14be0-nexus-ai-agent",
+        "recorded_at": "2026-11-24T09:12:12Z"
+      }
+    },
+    {
+      "kind": "pull_request",
+      "repository": "bot523h/nexus-ai-agent",
+      "number": 358,
+      "state": "merged_into_main",
+      "evidence": {
+        "source": "github_api",
+        "merge_commit_sha": "bc9110846fa96a68a91c3a3dee8cc3dc6564fb2e",
+        "recorded_by": "arena/aac14be0-nexus-ai-agent",
+        "recorded_at": "2026-11-24T14:03:19Z"
+      }
+    },
+    {
+      "kind": "pull_request",
+      "repository": "bot523h/nexus-ai-agent",
+      "number": 359,
+      "state": "merged_into_main",
+      "evidence": {
+        "source": "github_api",
+        "merge_commit_sha": "7ebaf5643fe57577eb985f6cd6c65060724fbb30",
+        "recorded_by": "arena/aac14be0-nexus-ai-agent",
+        "recorded_at": "2026-11-24T21:30:28Z"
+      }
+    },
+    {
+      "kind": "pull_request",
+      "repository": "bot523h/nexus-ai-agent",
+      "number": 360,
+      "state": "merged_into_main",
+      "evidence": {
+        "source": "github_api",
+        "merge_commit_sha": "c30e09b2282306221b3fb97f6aca14b1bc53a518",
+        "recorded_by": "arena/aac14be0-nexus-ai-agent",
+        "recorded_at": "2026-11-25T18:06:49Z"
+      }
+    },
+    {
+      "kind": "pull_request",
+      "repository": "bot523h/nexus-ai-agent",
+      "number": 361,
+      "state": "merged_into_main",
+      "evidence": {
+        "source": "github_api",
+        "merge_commit_sha": "bc089847f40ff29f81207ad0c9f9d760ff88c9b9",
+        "recorded_by": "arena/aac14be0-nexus-ai-agent",
+        "recorded_at": "2026-11-26T05:48:12Z"
+      }
+    },
+    {
+      "kind": "pull_request",
+      "repository": "bot523h/nexus-ai-agent",
+      "number": 362,
+      "state": "merged_into_main",
+      "evidence": {
+        "source": "github_api",
+        "merge_commit_sha": "403cf8346005a268b983be7ad73da77071eab561",
+        "recorded_by": "arena/aac14be0-nexus-ai-agent",
+        "recorded_at": "2026-11-26T08:45:48Z"
+      }
+    },
+    {
+      "kind": "pull_request",
+      "repository": "bot523h/nexus-ai-agent",
+      "number": 365,
+      "state": "merged_into_main",
+      "evidence": {
+        "source": "github_api",
+        "merge_commit_sha": "1a9144579f490e29b295da50a51a7dc437bfb7a5",
+        "recorded_by": "arena/aac14be0-nexus-ai-agent",
+        "recorded_at": "2026-11-26T18:59:13Z"
       }
     }
   ]

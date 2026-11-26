@@ -744,7 +744,17 @@ async def register_studio_principal(
     project_id: str | None = Query(default=None),
     x_nexus_principal_token: str | None = Header(default=None, alias="X-Nexus-Principal-Token"),
 ) -> dict[str, Any]:
-    scoped_project = body.project_id or project_id
+    body_project = (body.project_id or "").strip()
+    query_project = (project_id or "").strip()
+    if body_project and query_project and body_project != query_project:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "conflicting_project_scope_parameters: "
+                "body.project_id and query project_id must match"
+            ),
+        )
+    scoped_project = body_project or query_project or None
     auth_store = get_studio_auth_store()
     try:
         actor_id, actor_tenant = _authenticate_principal(auth_store, x_nexus_principal_token)
@@ -789,7 +799,17 @@ async def bind_studio_principal_channel(
 ) -> dict[str, Any]:
     if not _ID_RE.fullmatch(target_principal_id):
         raise HTTPException(status_code=400, detail="invalid principal_id")
-    scoped_project = body.project_id or project_id
+    body_project = (body.project_id or "").strip()
+    query_project = (project_id or "").strip()
+    if body_project and query_project and body_project != query_project:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "conflicting_project_scope_parameters: "
+                "body.project_id and query project_id must match"
+            ),
+        )
+    scoped_project = body_project or query_project or None
     auth_store = get_studio_auth_store()
     try:
         actor_id, actor_tenant = _authenticate_principal(auth_store, x_nexus_principal_token)
