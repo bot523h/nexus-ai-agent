@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Feature — Wave 4/6 Studio execution closure (session `arena/948924cb-nexus-ai-agent`)
+
+- **Wave 1 — unified Studio identity + worker authority bridge.**
+  `adapters/studio_directory_bridge.py` adds `StudioUnifiedAuthorityBridge`, a
+  single durable adapter over `StudioPrincipalAuthStore` that satisfies **both**
+  `CanonicalAuthorityPort` and `PrincipalRoleAuthority`, so the HTTP surface and
+  the canonical worker validate execution against the same four-way invariant
+  (ACTIVE principal, principal/project/tenant agreement, ACTIVE membership whose
+  role permits the action, ACTIVE binding owned by the principal — explicit ref or
+  the deterministic `studio:{tenant}:{principal}` default). A verification returns
+  a frozen `UnifiedExecutionAuthorityProof` whose `proof_digest` is the RFC 8785
+  JCS SHA-256 of its canonical tuple. The authority vocabulary (`PrincipalStatus`,
+  `MembershipStatus`, `BindingStatus`, `MembershipRole`, `PrincipalRoleFacts`,
+  `PrincipalRoleAuthority`, `AuthorityResolution`) lives in `nagar.ibpc.authority`,
+  and `StudioAction.EXECUTE_APPROVED_PLAN` is declared as an alias member of
+  `EXECUTE_PLAN` so a worker proof and an RBAC decision cannot disagree.
+- **Wave 2 — cryptographic revision & asset-version pinning.**
+  `creative/studio/revision_pinning.py` adds `PinnedRevisionEnvelope` (frozen,
+  self-verifying under RFC 8785 JCS), `AssetVersionPin` (streamed SHA-256 + byte
+  size, symlink and traversal refusal) and `DurableRevisionPinningStore` (SQLite
+  WAL, `BEGIN IMMEDIATE`, per-project revision head with optimistic concurrency,
+  idempotent re-pin, typed drift/asset-pin violations). `verify_worker_execution_pins`
+  is the worker gate: envelope integrity, expected revision/plan digests, the
+  current-head rule, and every on-disk asset (lstat symlink refusal,
+  `is_relative_to`, exact size, `hmac.compare_digest` SHA-256).
+- The two reviewed architecture gates (`test_nagar_studio_isolation`,
+  `test_slideshow_adapter_boundary`) gain an explicit, minimal durable-state
+  allowlist: the new state modules may use SQLite/POSIX locks/paths and the one
+  canonicalization authority, and still may not touch pixels, audio or network.
+
 ### Fix — integrated-tree CI closure (session `arena/750b78f5-nexus-ai-agent`)
 
 - **MORPHEUS's media spine needed its PyAV dependency declared.** The Wave-4/14
