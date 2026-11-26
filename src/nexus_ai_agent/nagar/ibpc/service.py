@@ -69,7 +69,9 @@ from nexus_ai_agent.nagar.ibpc.intent import (
 )
 from nexus_ai_agent.nagar.ibpc.live_session import (
     DurableLiveSessionStore,
+    StaleSessionRevisionError,
     TurnStatus,
+    TurnStoreError,
 )
 from nexus_ai_agent.nagar.ibpc.models import (
     ApprovalBinding,
@@ -386,16 +388,12 @@ class IBPCService:
         # Wave 3 (3.4): creating a turn is a Studio action — membership + role
         # are verified BEFORE the turn fence opens, so an unauthorized caller
         # cannot even perturb the session's sequence head.
-        try:
-            self._authorize_principal(
-                principal_id=session.principal_id,
-                project_id=session.project_id,
-                action=PrincipalStudioAction.TURN_CREATE,
-            )
-        except ApprovalError as exc:
-            # The refusal happens before ``begin_turn`` so an unauthorized call
-            # cannot perturb the session's sequence head.
-            return Refusal("unauthorized_principal", f"{exc.reason}: {exc.detail}")
+        # Shared with the voice boundary: the refusal happens before
+        # ``begin_turn`` so an unauthorized call cannot perturb the session's
+        # sequence head.
+        refusal = self._authorize_turn_creation(session)
+        if refusal is not None:
+            return refusal
         revision = int(self._deps.revision_provider())
         self._sessions.begin_turn(
             session_id, turn_id, sequence_number=sequence_number, project_revision=revision
@@ -421,18 +419,10 @@ class IBPCService:
         source_asset_digest = sha256_file(src)
         # Wave 3 (3.3): the durable consent gate runs BEFORE any media evidence
         # work (shadow strip + scope signature decode pixels locally).
-        try:
-            self._require_processing_consent(
-                session_id=session_id,
-                principal_id=session.principal_id,
-                project_id=session.project_id,
-                data_category=ConsentScope.VIDEO,
-                action=ConsentAction.LOCAL_PROCESSING,
-            )
-        except (ApprovalError, PrivacyViolation) as exc:
+        refusal = self._require_media_consent(session, ConsentScope.VIDEO)
+        if refusal is not None:
             self._sessions.mark_failed(session_id, turn_id)
-            reason = getattr(exc, "reason", "consent_missing")
-            return Refusal(reason, getattr(exc, "detail", "") or str(exc))
+            return refusal
 
         parsed: IntentAST | DeltaIntentAST | Clarification | Refusal
         base_scope = None
@@ -628,6 +618,15 @@ class IBPCService:
         if engine is None or not engine.is_available():
             return Refusal("caption_profile_unavailable", "no local caption engine configured")
         session = self._sessions.get_session(session_id)
+        # Wave 3-R2a: the voice boundary runs the SAME gates as the text one —
+        # authorization before the turn fence opens, then the durable AUDIO
+        # consent before a single audio byte reaches the transcription engine.
+        refusal = self._authorize_turn_creation(session)
+        if refusal is not None:
+            return refusal
+        refusal = self._require_media_consent(session, ConsentScope.AUDIO)
+        if refusal is not None:
+            return refusal
         self._sessions.assert_local_processing(session_id, "audio")
         if audio_dir is None:
             audio_dir = self._deps.workspace_root / "audio" / session.session_id
@@ -641,6 +640,15 @@ class IBPCService:
             )
         except Exception as exc:  # noqa: BLE001 — typed failure, turn marked failed
             self._sessions.mark_failed(session_id, turn_id)
+            # the raw audio/transcript is never persisted; the digest-only turn
+            # row carries the typed refusal so a restart sees the attempt
+            self._record_failed_durable_turn(
+                session,
+                turn_id,
+                user_utterance="",
+                reason=f"transcription_failed: {type(exc).__name__}",
+                revision=revision,
+            )
             return Refusal("transcription_failed", str(exc))
         transcript = self._sessions.transcript_text(session_id, turn.turn_id)
         # The parse/preview/approval body probes the media and hashes it with
@@ -673,12 +681,39 @@ class IBPCService:
         src = Path(source_path)
         if not src.is_file():
             self._sessions.mark_failed(session_id, turn_id)
+            self._record_failed_durable_turn(
+                session,
+                turn_id,
+                user_utterance=text,
+                reason="missing_source",
+                revision=turn.project_revision,
+            )
             return Refusal("missing_source", f"source media not found: {source_path!r}")
+        # Wave 3-R2a: a voice-initiated turn needs the durable VIDEO consent
+        # before any decode/preview evidence is produced from the target media.
+        refusal = self._require_media_consent(session, ConsentScope.VIDEO)
+        if refusal is not None:
+            self._sessions.mark_failed(session_id, turn_id)
+            self._record_failed_durable_turn(
+                session,
+                turn_id,
+                user_utterance=text,
+                reason=f"voice_preview_refused: {refusal.reason}",
+                revision=turn.project_revision,
+            )
+            return refusal
         try:
             info, fps = probe_media(src, binary=self._deps.verifier_binary)
         except (RenderError, FootprintVerifyError) as exc:
             # an unreadable/corrupt source is a typed refusal, never a crash
             self._sessions.mark_failed(session_id, turn_id)
+            self._record_failed_durable_turn(
+                session,
+                turn_id,
+                user_utterance=text,
+                reason="unreadable_source",
+                revision=turn.project_revision,
+            )
             return Refusal("unreadable_source", str(exc))
         parsed = parse_intent(
             text,
@@ -750,6 +785,32 @@ class IBPCService:
                 media_signature=media_signature,
             ),
         )
+        # Wave 3-R2a: a voice turn is persisted durably with the same contract
+        # as a text turn (monotonic index, idempotency key, digest-only
+        # utterance), so a restart reconstructs it instead of losing it.
+        durable_turn = self._durable_submit_turn(
+            session_id=session_id,
+            turn_id=turn_id,
+            idempotency_key=f"ibpc-turn:{session_id}:{turn_id}",
+            user_utterance=text,
+            base_revision_id=self._session_base_revision(session_id, turn.project_revision),
+            scope_signature=digest_of(
+                {
+                    "ast": ast.ast_digest,
+                    "plan": plan.plan_digest,
+                    "preview": preview.preview_digest,
+                    "approval": stored.approval_id,
+                }
+            ),
+            plan=plan,
+            preview=preview,
+            approval_id=stored.approval_id,
+            turn_status=TurnStatus.PREVIEW_READY,
+        )
+        if durable_turn is not None:
+            ctx_durable = self._contexts.get(stored.approval_id)
+            if ctx_durable is not None:
+                ctx_durable.durable_turn_index = durable_turn.turn_index
         self._sessions.mark_intent_parsed(session_id, turn_id, intent_digest=parsed.intent_digest)
         self._sessions.mark_plan_preview(session_id, turn_id)
         self._sessions.mark_awaiting_approval(session_id, turn_id, approval_id=stored.approval_id)
@@ -1189,6 +1250,76 @@ class IBPCService:
                 "the authority returned a different identity than requested",
             )
         return facts
+
+    def _authorize_turn_creation(self, session: Any) -> Refusal | None:
+        """Authorize ``TURN_CREATE`` for this session's principal, or refuse.
+
+        Shared by the text and the voice boundary so neither path can open a
+        turn fence (or spend a transcription) without the same membership + role
+        proof (Wave 3-R2a).
+        """
+        try:
+            self._authorize_principal(
+                principal_id=session.principal_id,
+                project_id=session.project_id,
+                action=PrincipalStudioAction.TURN_CREATE,
+            )
+        except ApprovalError as exc:
+            return Refusal("unauthorized_principal", f"{exc.reason}: {exc.detail}")
+        return None
+
+    def _require_media_consent(self, session: Any, data_category: ConsentScope) -> Refusal | None:
+        """Durable consent gate for one data category, or a typed refusal.
+
+        Runs *before* any media work: before transcription for ``AUDIO`` and
+        before any decode/preview evidence for ``VIDEO`` (Wave 3-R2a).
+        """
+        try:
+            self._require_processing_consent(
+                session_id=session.session_id,
+                principal_id=session.principal_id,
+                project_id=session.project_id,
+                data_category=data_category,
+                action=ConsentAction.LOCAL_PROCESSING,
+            )
+        except (ApprovalError, PrivacyViolation) as exc:
+            reason = getattr(exc, "reason", "consent_missing")
+            return Refusal(reason, getattr(exc, "detail", "") or str(exc))
+        return None
+
+    def _record_failed_durable_turn(
+        self,
+        session: Any,
+        turn_id: str,
+        *,
+        user_utterance: str,
+        reason: str,
+        revision: int,
+    ) -> None:
+        """Record a pre-plan failure durably (REJECTED, digest-only utterance).
+
+        Voice turns are transcribed before they are planned, so a transcription
+        or media refusal has no compiled plan to store. The row is still a real
+        turn — monotonic index, idempotent key, typed refusal — so a restart can
+        see that the turn happened and never replays it (Wave 3-R2a).
+        """
+        if self._session_store is None:
+            return
+        try:
+            self._session_store.record_failed_turn(
+                session_id=session.session_id,
+                turn_id=turn_id,
+                idempotency_key=f"ibpc-turn:{session.session_id}:{turn_id}",
+                user_utterance=user_utterance,
+                base_revision_id=self._session_base_revision(session.session_id, revision),
+                refusal_reason=reason,
+            )
+        except (TurnStoreError, StaleSessionRevisionError) as exc:
+            # A concurrent termination may already have superseded this turn; the
+            # refusal itself is still returned to the caller, never swallowed
+            # into a crash.
+            if getattr(exc, "reason", "") not in {"session_terminated", "invalid_transition"}:
+                raise
 
     def _require_processing_consent(
         self,

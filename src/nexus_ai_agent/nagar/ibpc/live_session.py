@@ -151,7 +151,7 @@ _SESSION_COLUMNS = (
 _TURN_COLUMNS = (
     "turn_id, session_id, turn_index, idempotency_key, user_utterance, base_revision_id,"
     " scope_signature, compiled_plan_json, compiled_plan_sha256, preview_manifest_json,"
-    " preview_sha256, approval_id, turn_status, created_at_utc"
+    " preview_sha256, approval_id, turn_status, created_at_utc, refusal_reason"
 )
 
 _SCHEMA = (
@@ -182,6 +182,9 @@ _SCHEMA = (
     " turn_status TEXT NOT NULL CHECK(turn_status IN"
     " ('DRAFTED', 'PREVIEW_READY', 'APPROVED', 'EXECUTED', 'REJECTED', 'SUPERSEDED')),"
     " created_at_utc TEXT NOT NULL,"
+    # a turn that failed BEFORE a plan existed keeps an empty plan document and
+    # names its typed refusal here (Wave 3-R2a: failed voice turns are durable)
+    " refusal_reason TEXT,"
     " UNIQUE(session_id, turn_index))",
     "CREATE INDEX IF NOT EXISTS idx_ibpc_turns_session ON ibpc_turns(session_id, turn_index)",
 )
@@ -253,8 +256,12 @@ class TurnRecord:
     approval_id: str | None
     turn_status: TurnStatus
     created_at_utc: str
+    #: Present only for a plan-less row: why the turn failed before a plan existed.
+    refusal_reason: str | None = None
 
     def compiled_plan(self) -> CompiledPlan:
+        if self.refusal_reason is not None:
+            raise TurnStoreError("no_plan", f"turn {self.turn_id} failed before a plan existed")
         return CompiledPlan.model_validate_json(self.compiled_plan_json)
 
     def preview_manifest(self) -> PreviewManifest | None:
@@ -282,6 +289,11 @@ class DurableLiveSessionStore:
         with self._transaction():
             for statement in _SCHEMA:
                 self._conn.execute(statement)
+            turn_columns = {row[1] for row in self._conn.execute("PRAGMA table_info(ibpc_turns)")}
+            if "refusal_reason" not in turn_columns:
+                # Additive, backwards-compatible: every existing row keeps NULL,
+                # which means "this turn reached a compiled plan".
+                self._conn.execute("ALTER TABLE ibpc_turns ADD COLUMN refusal_reason TEXT")
         with contextlib.suppress(OSError):
             os.chmod(self._path, 0o600)
 
@@ -401,24 +413,28 @@ class DurableLiveSessionStore:
             raise TurnStoreError("unknown_session", session_id)
         return record
 
+    def list_sessions(self, *statuses: SessionStatus) -> tuple[SessionRecord, ...]:
+        """Every session (optionally filtered by status), oldest first.
+
+        The recovery seam: a new process enumerates what it must reconstruct
+        instead of trusting its own empty in-memory maps.
+        """
+        allowed = [status.value for status in statuses]
+        query = f"SELECT {_SESSION_COLUMNS} FROM ibpc_sessions"
+        params: tuple[Any, ...] = ()
+        if allowed:
+            query += f" WHERE status IN ({', '.join('?' for _ in allowed)})"
+            params = tuple(allowed)
+        rows = self._conn.execute(query + " ORDER BY created_at_utc, rowid", params).fetchall()
+        return tuple(_session_record(row) for row in rows)
+
     def _fetch_session(self, session_id: str) -> SessionRecord | None:
         row = self._conn.execute(
             f"SELECT {_SESSION_COLUMNS} FROM ibpc_sessions WHERE session_id = ?", (session_id,)
         ).fetchone()
         if row is None:
             return None
-        return SessionRecord(
-            row[0],
-            row[1],
-            row[2],
-            row[3],
-            row[4],
-            SessionStatus(row[5]),
-            int(row[6]),
-            int(row[7]),
-            row[8],
-            row[9],
-        )
+        return _session_record(row)
 
     def advance_revision(self, session_id: str, *, revision_id: str) -> SessionRecord:
         """Move the session to a new active revision (epoch compare-and-swap)."""
@@ -685,6 +701,90 @@ class DurableLiveSessionStore:
             session_id, turn_id, TurnStatus.EXECUTED, base_revision_id=base_revision_id
         )
 
+    def record_failed_turn(
+        self,
+        *,
+        session_id: str,
+        turn_id: str,
+        idempotency_key: str,
+        user_utterance: str,
+        base_revision_id: str,
+        refusal_reason: str,
+        scope_signature: str = "",
+    ) -> TurnRecord:
+        """Record a turn that failed **before** a compiled plan existed.
+
+        Voice turns are transcribed before they are planned, so a transcription
+        or media refusal has no ``CompiledPlan`` to store. The row is still a
+        first-class, monotonic, idempotent turn: ``turn_status = REJECTED`` with
+        an empty plan document and the typed ``refusal_reason`` beside it
+        (``TurnRecord.compiled_plan()`` refuses to invent one). Raw audio and the
+        raw transcript are never written — only the utterance digest.
+        """
+        if not idempotency_key:
+            raise TurnStoreError("invalid_idempotency_key", "an idempotency key is required")
+        if not refusal_reason:
+            raise TurnStoreError("invalid_refusal", "a typed refusal reason is required")
+        plan_json, plan_sha = _encode({})
+        signature = scope_signature or _json_digest({"refused": refusal_reason})
+        with self._transaction():
+            prior = self._fetch_turn_by_key(idempotency_key)
+            if prior is not None:
+                if prior.session_id != session_id or prior.turn_id != turn_id:
+                    raise TurnStoreError(
+                        "idempotency_conflict",
+                        "the idempotency key is already bound to another turn",
+                    )
+                return prior
+            same_turn = self._fetch_turn(session_id, turn_id)
+            if same_turn is not None:
+                return same_turn
+            session = self.get_session(session_id)
+            self._require_open(session)
+            if base_revision_id != session.active_revision_id:
+                raise StaleSessionRevisionError(
+                    "stale_revision",
+                    f"turn base {base_revision_id!r} != active {session.active_revision_id!r}",
+                )
+            index = session.last_turn_index + 1
+            stamp = self._now()
+            self._cas_session(session, "last_turn_index = ?", (index,), "turn_alloc_conflict")
+            try:
+                self._conn.execute(
+                    "INSERT INTO ibpc_turns (turn_id, session_id, turn_index, idempotency_key,"
+                    " user_utterance, base_revision_id, scope_signature, compiled_plan_json,"
+                    " compiled_plan_sha256, preview_manifest_json, preview_sha256, approval_id,"
+                    " turn_status, created_at_utc, refusal_reason)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?, ?, ?)",
+                    (
+                        turn_id,
+                        session_id,
+                        index,
+                        idempotency_key,
+                        utterance_digest(user_utterance),
+                        base_revision_id,
+                        signature,
+                        plan_json,
+                        plan_sha,
+                        TurnStatus.REJECTED.value,
+                        stamp,
+                        refusal_reason,
+                    ),
+                )
+            except sqlite3.IntegrityError as exc:
+                raise ConcurrentSessionMutationError(
+                    "turn_index_conflict", "another writer allocated this turn index"
+                ) from exc
+            record = self._fetch_turn(session_id, turn_id)
+        assert record is not None
+        return record
+
+    def supersede_turn(self, session_id: str, turn_id: str, *, base_revision_id: str) -> TurnRecord:
+        """APPROVED → SUPERSEDED: the human approved, but it never executed."""
+        return self._transition_turn(
+            session_id, turn_id, TurnStatus.SUPERSEDED, base_revision_id=base_revision_id
+        )
+
     def reject_turn(self, session_id: str, turn_id: str, *, base_revision_id: str) -> TurnRecord:
         return self._transition_turn(
             session_id, turn_id, TurnStatus.REJECTED, base_revision_id=base_revision_id
@@ -756,4 +856,20 @@ def _turn_record(row: tuple[Any, ...]) -> TurnRecord:
         row[11],
         TurnStatus(row[12]),
         row[13],
+        row[14],
+    )
+
+
+def _session_record(row: tuple[Any, ...]) -> SessionRecord:
+    return SessionRecord(
+        row[0],
+        row[1],
+        row[2],
+        row[3],
+        row[4],
+        SessionStatus(row[5]),
+        int(row[6]),
+        int(row[7]),
+        row[8],
+        row[9],
     )
