@@ -30,10 +30,9 @@ from nexus_ai_agent.provenance.graph import (
     CreativeGraph,
     EpistemicProof,
     EpistemicStatus,
-    canonical_graph_digest,
-    canonical_graph_json,
     node_identity,
 )
+from nexus_ai_agent.provenance.models import canonical_json, digest_of
 
 OUTBOX_EVENT_ATTEMPT_RESERVED = "ATTEMPT_RESERVED"
 OUTBOX_EVENT_ATTEMPT_SUPERSEDED = "ATTEMPT_SUPERSEDED"
@@ -97,8 +96,8 @@ def insert_outbox_event_tx(
     if isinstance(attempt_epoch, bool) or attempt_epoch < 0:
         raise ValueError("attempt_epoch must be a non-negative integer")
     outbox_id = make_outbox_id(job_id, attempt_epoch, event_type)
-    payload_json = canonical_graph_json(payload)
-    payload_digest = canonical_graph_digest(payload)
+    payload_json = canonical_json(payload)
+    payload_digest = digest_of(payload)
     ts = created_at or _utc_iso()
     connection.execute(
         """
@@ -307,7 +306,7 @@ class OutboxReconciler:
                 payload = json.loads(event.payload_json)
                 if not isinstance(payload, dict):
                     raise ValueError("outbox payload_json is not a JSON object")
-                if canonical_graph_digest(payload) != event.payload_digest:
+                if digest_of(payload) != event.payload_digest:
                     raise ValueError("outbox payload_digest mismatch (tampered payload)")
                 self._apply_event(event, payload)
                 if self._outbox.mark_applied(event.outbox_id):

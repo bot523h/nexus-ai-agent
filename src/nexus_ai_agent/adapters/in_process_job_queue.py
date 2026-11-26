@@ -585,6 +585,7 @@ class InProcessJobQueue:
         self._promotion_path_lock_refs: dict[str, int] = {}
         self._held_promotion_locks: dict[str, int] = {}
         self._db_lock = threading.Lock()
+        self._tx_hook_local = threading.local()
         # In-flight artifact publications.  ``asyncio.to_thread`` hands the
         # work to a ThreadPoolExecutor thread; cancelling the awaiting task
         # does NOT interrupt that thread, so shutdown must explicitly *drain*
@@ -4122,8 +4123,7 @@ class InProcessJobQueue:
     def _mark_pending(self, claim: ExecutionClaim) -> bool:
         """PROCESSING/VERIFYING → PENDING for OUR execution only (fenced CAS)."""
         try:
-            now = _now()
-            with self._db_lock, self._write_connection() as connection:
+            with self._db_lock, self._connection() as connection:
                 row = connection.execute(
                     """
                     SELECT attempt_history_json FROM nexus_job_queue
@@ -4138,6 +4138,7 @@ class InProcessJobQueue:
                 ).fetchone()
                 if row is None:
                     return False
+                now = _now()
                 history = self._decode_attempt_history(str(row["attempt_history_json"] or "[]"))
                 attempt = next(
                     (entry for entry in history if self._attempt_number(entry) == claim.attempt),
@@ -4351,8 +4352,9 @@ class InProcessJobQueue:
                 created_at=ts,
             )
 
+        self._tx_hook_local.hook = _sync_completed_lease
         result_json = canonical_json(result)
-        with self._db_lock, self._write_connection(on_commit=_sync_completed_lease) as connection:
+        with self._db_lock, self._connection() as connection:
             row = connection.execute(
                 """
                 SELECT attempt_history_json FROM nexus_job_queue
@@ -4425,8 +4427,7 @@ class InProcessJobQueue:
         result payload — the ``error`` text is the failure reason.
         """
         result_json = canonical_json(result) if result is not None else None
-        now = _now()
-        with self._db_lock, self._write_connection() as connection:
+        with self._db_lock, self._connection() as connection:
             row = connection.execute(
                 """
                 SELECT attempt_history_json FROM nexus_job_queue
@@ -4454,6 +4455,7 @@ class InProcessJobQueue:
             if attempt is None:
                 return False
             attempt["status"] = status.value
+            now = _now()
             attempt["finished_at"] = now
             attempt["error"] = error
             if result_json is not None:
@@ -4848,10 +4850,16 @@ class InProcessJobQueue:
 
     @contextmanager
     def _connection(self) -> Iterator[sqlite3.Connection]:
+        hook: Callable[[sqlite3.Connection], None] | None = getattr(
+            self._tx_hook_local, "hook", None
+        )
+        self._tx_hook_local.hook = None
         if self._memory_connection is not None:
             try:
                 self._enable_durable_sqlite_sync(self._memory_connection)
                 yield self._memory_connection
+                if hook is not None:
+                    hook(self._memory_connection)
             except Exception:
                 self._memory_connection.rollback()
                 raise
@@ -4864,6 +4872,8 @@ class InProcessJobQueue:
         try:
             self._enable_durable_sqlite_sync(connection)
             yield connection
+            if hook is not None:
+                hook(connection)
         except Exception:
             connection.rollback()
             raise

@@ -145,9 +145,7 @@ MUTATIONS: tuple[MutationSpec, ...] = (
         func_name="reconcile_pending",
         test_selector="test_outbox_reconciler_rejects_tampered_payload_fail_closed",
         expected_error_tokens=("AssertionError", "assert 1 == 0"),
-        predicate=lambda n: _is_if_unparsing(
-            n, "canonical_graph_digest(payload) != event.payload_digest"
-        ),
+        predicate=lambda n: _is_if_unparsing(n, "digest_of(payload) != event.payload_digest"),
         transform=_weaken_if_to_false,
     ),
     MutationSpec(
