@@ -22,6 +22,10 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from nexus_ai_agent.nagar.ibpc.canonical import digest_of
+from nexus_ai_agent.provenance.canonicalization import (
+    CanonicalizationScheme,
+    canonical_digest,
+)
 
 CAPSULE_VERSION: Literal["1"] = "1"
 AST_SCHEMA_ID: Literal["nexus.ibpc.ast.v2"] = "nexus.ibpc.ast.v2"
@@ -369,6 +373,54 @@ class ApprovalState(str, Enum):
     REVOKED = "REVOKED"
 
 
+def canonical_approval_payload(
+    *,
+    project_id: str,
+    revision_id: str,
+    plan_digest: str,
+    preview_digest: str,
+    scope_signature: str,
+    principal_id: str,
+    expires_at_utc: str,
+) -> dict[str, str]:
+    """Build the canonical payload bound by an IBPC approval hash."""
+    return {
+        "project_id": project_id,
+        "revision_id": revision_id,
+        "plan_digest": plan_digest,
+        "preview_digest": preview_digest,
+        "scope_signature": scope_signature,
+        "principal_id": principal_id,
+        "expires_at_utc": expires_at_utc,
+    }
+
+
+def compute_canonical_approval_hash(
+    *,
+    project_id: str,
+    revision_id: str,
+    plan_digest: str,
+    preview_digest: str,
+    scope_signature: str,
+    principal_id: str,
+    expires_at_utc: str,
+) -> str:
+    """RFC 8785 JCS SHA-256 binding over approval target, scope, principal, and expiry."""
+    payload = canonical_approval_payload(
+        project_id=project_id,
+        revision_id=revision_id,
+        plan_digest=plan_digest,
+        preview_digest=preview_digest,
+        scope_signature=scope_signature,
+        principal_id=principal_id,
+        expires_at_utc=expires_at_utc,
+    )
+    return canonical_digest(payload, CanonicalizationScheme.JCS_RFC8785_V2)
+
+
+compute_approval_hash = compute_canonical_approval_hash
+
+
 class ApprovalBinding(BaseModel):
     """One human approval bound to exact digests, one revision, one turn.
 
@@ -398,6 +450,24 @@ class ApprovalBinding(BaseModel):
     nonce: str = Field(default_factory=lambda: uuid.uuid4().hex)
     created_at: str = ""
     decided_at: str = ""
+    revision_id: str = ""
+    scope_signature: str = ""
+    expires_at_utc: str = ""
+    approval_hash: str = ""
+    key_id: str = ""
+
+    @property
+    def canonical_binding_digest(self) -> str:
+        """Canonical binding digest over project, revision, plan, preview, scope, principal, exp."""
+        return compute_canonical_approval_hash(
+            project_id=self.project_id,
+            revision_id=self.revision_id or str(self.source_revision),
+            plan_digest=self.plan_digest,
+            preview_digest=self.preview_digest,
+            scope_signature=self.scope_signature,
+            principal_id=self.principal_id,
+            expires_at_utc=self.expires_at_utc,
+        )
 
     @property
     def identity_digest(self) -> str:
@@ -547,6 +617,26 @@ class PrivacyMode(str, Enum):
     EXPERIMENTAL_CLOUD = "EXPERIMENTAL_CLOUD"
 
 
+class SessionStatus(str, Enum):
+    ACTIVE = "ACTIVE"
+    PAUSED = "PAUSED"
+    CLOSED = "CLOSED"
+    ABORTED = "ABORTED"
+
+
+class ProcessingScope(str, Enum):
+    LOCAL_PROCESSING = "LOCAL_PROCESSING"
+    EXTERNAL_PROVIDER_DISPATCH = "EXTERNAL_PROVIDER_DISPATCH"
+
+
+class DataCategory(str, Enum):
+    VIDEO = "VIDEO"
+    AUDIO = "AUDIO"
+    IMAGE = "IMAGE"
+    TRANSCRIPT = "TRANSCRIPT"
+    BIOMETRIC_FACE_ROI = "BIOMETRIC_FACE_ROI"
+
+
 class ConsentRecord(BaseModel):
     """An explicit, recorded consent for one privacy mode. Digest-only: the
     record never contains transcript or audio content."""
@@ -558,10 +648,63 @@ class ConsentRecord(BaseModel):
     scope: str = Field(min_length=1, max_length=256)
     granted_at: str = Field(min_length=1)
     consent_id: str = Field(default_factory=lambda: _new_id("consent"))
+    project_id: str = ""
+    tenant_id: str = ""
+    processing_scope: str = ""
+    data_category: str = ""
+    provider_id: str = ""
+    expires_at_utc: str = ""
 
     @property
     def consent_digest(self) -> str:
         return digest_of(self.model_dump(mode="json"))
+
+    def to_dict(self) -> dict[str, Any]:
+        return self.model_dump(mode="json")
+
+
+class DurableConsentGrant(BaseModel):
+    """Durable, revocable, time-bounded privacy consent record (digest-only)."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    consent_id: str = Field(default_factory=lambda: _new_id("consent"))
+    project_id: str = Field(min_length=1, max_length=128)
+    tenant_id: str = ""
+    principal_id: str = Field(min_length=1, max_length=128)
+    mode: PrivacyMode
+    processing_scope: str = Field(min_length=1, max_length=64)
+    data_category: str = Field(min_length=1, max_length=64)
+    provider_id: str = ""
+    granted_at_utc: str = Field(min_length=1)
+    expires_at_utc: str = ""
+    revoked_at_utc: str = ""
+    revoked_by: str = ""
+    revoke_reason: str = ""
+
+    @property
+    def consent_digest(self) -> str:
+        return digest_of(self.model_dump(mode="json"))
+
+
+class PrivacyConsentAuditEntry(BaseModel):
+    """Append-only privacy consent audit entry (strictly digest/metadata only)."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    audit_id: int = Field(ge=1)
+    consent_id: str
+    event_type: Literal["GRANTED", "REVOKED", "DENIED", "EXPIRED"]
+    project_id: str
+    principal_id: str
+    mode: str
+    processing_scope: str
+    data_category: str
+    provider_id: str = ""
+    actor_id: str
+    reason: str = ""
+    occurred_at_utc: str
+    metadata_digest: str = ""
 
 
 __all__ = [
@@ -578,17 +721,25 @@ __all__ = [
     "CheckVerdict",
     "CompiledPlan",
     "ConsentRecord",
+    "DataCategory",
+    "DurableConsentGrant",
     "FootprintCheck",
     "IBPCCapsule",
     "PlannedStep",
+    "PrivacyConsentAuditEntry",
     "PrivacyMode",
+    "ProcessingScope",
     "PreviewManifest",
     "Readback",
+    "SessionStatus",
     "ShadowKeyframe",
     "ShadowPreviewManifest",
     "TypedCreativeAST",
     "VerifierReport",
     "VideoTimeRange",
     "VideoTimeScope",
+    "canonical_approval_payload",
+    "compute_approval_hash",
+    "compute_canonical_approval_hash",
     "worst_verdict",
 ]
