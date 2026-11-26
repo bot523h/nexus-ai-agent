@@ -16,13 +16,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from nexus_ai_agent.creative.packs import runtime as packs_runtime
 from nexus_ai_agent.creative.packs.registry import PackRegistry
-from nexus_ai_agent.creative.packs.runtime import (
-    build_pack_registry as _build_pack_registry,
-)
-from nexus_ai_agent.creative.packs.runtime import (
-    build_runtime_registry as _build_runtime_registry,
-)
 from nexus_ai_agent.creative.studio.capabilities import CapabilityRegistry
 from nexus_ai_agent.creative.verification.perception_gate import gate_perception
 
@@ -35,7 +30,11 @@ def build_production_registry(
     compositions: Any | None = None,
 ) -> CapabilityRegistry:
     """Every builtin pack's operations, with the perception gate bound."""
-    return _build_runtime_registry(
+    # Resolved through the module, not a bound name: the truth-gate mutation
+    # probes patch `packs.runtime.build_runtime_registry` to prove the
+    # projection is not self-certifying, and a copied reference would swallow
+    # the mutation.
+    return packs_runtime.build_runtime_registry(
         tone_library=tone_library,
         compositions=compositions,
         perception_gate=gate_perception,
@@ -49,7 +48,7 @@ def build_production_pack_registry(
     compositions: Any | None = None,
 ) -> PackRegistry:
     """The :class:`PackRegistry` over :func:`build_production_registry`."""
-    return _build_pack_registry(
+    return packs_runtime.build_pack_registry(
         current_version=current_version,
         tone_library=tone_library,
         compositions=compositions,

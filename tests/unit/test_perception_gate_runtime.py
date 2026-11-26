@@ -235,17 +235,24 @@ def test_the_gate_record_is_part_of_every_operation_output() -> None:
 
 
 def _calls(path: Path, name: str) -> list[ast.Call]:
+    """Calls to *name*, whether bare (`f()`) or reached through a module (`m.f()`)."""
+
     tree = ast.parse(path.read_text(encoding="utf-8"))
-    return [
-        node
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == name
-    ]
+    found: list[ast.Call] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if isinstance(func, ast.Name) and func.id == name:
+            found.append(node)
+        elif isinstance(func, ast.Attribute) and func.attr == name:
+            found.append(node)
+    return found
 
 
 def test_the_composition_root_passes_the_gate() -> None:
     root = REPO_ROOT / "src/nexus_ai_agent/creative/production_runtime.py"
-    calls = _calls(root, "_build_runtime_registry")
+    calls = _calls(root, "build_runtime_registry")
     assert calls, "creative/production_runtime.py no longer builds the runtime registry"
     assert all(
         any(keyword.arg == "perception_gate" for keyword in call.keywords) for call in calls
