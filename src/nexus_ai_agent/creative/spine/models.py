@@ -314,9 +314,9 @@ class CreativeGraph:
         if self._children.get(node_id):
             raise GraphError(f"cannot remove a node that still has children: {node_id!r}")
         for parent in node.parents:
-            siblings = self._children.get(parent)
-            if siblings is not None:
-                self._children[parent] = [child for child in siblings if child != node_id]
+            self._children[parent] = [
+                child for child in self._children.get(parent, ()) if child != node_id
+            ]
         del self._nodes[node_id]
 
     def nodes(self) -> tuple[GraphNode, ...]:

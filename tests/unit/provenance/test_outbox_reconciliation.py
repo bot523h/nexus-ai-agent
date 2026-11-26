@@ -366,7 +366,8 @@ def test_outbox_store_validation_memory_and_error_paths(tmp_path: Path) -> None:
     assert bad_report.failed == 1
     assert mem_store.mark_applied(bad_oid) is False
 
-    # Direct disk rollback test.
+    # Direct disk rollback + read-only list_pending + already_applied
+    # + terminal supersede + no-digest complete.
     disk_store = ProvenanceOutboxStore(tmp_path / "disk_rb.sqlite3")
     with pytest.raises(RuntimeError), disk_store._connection(write=True) as conn:
         insert_outbox_event_tx(
@@ -379,7 +380,55 @@ def test_outbox_store_validation_memory_and_error_paths(tmp_path: Path) -> None:
         )
         raise RuntimeError("disk abort")
     assert disk_store.list_all() == []
+    assert disk_store.list_pending() == []
     assert disk_store.record_failure("missing", error="none") is False
+
+    # Terminal supersede + JOB_COMPLETED without artifact_digest + already_applied race.
+    from nexus_ai_agent.provenance.outbox import (
+        OUTBOX_EVENT_ATTEMPT_SUPERSEDED,
+        OUTBOX_EVENT_JOB_COMPLETED,
+    )
+
+    sup_id = mem_store.enqueue(
+        event_type=OUTBOX_EVENT_ATTEMPT_SUPERSEDED,
+        job_id="j-fail",
+        attempt_id="a-1",
+        attempt_epoch=1,
+        payload={"superseded_by": "a-2"},
+    )
+    comp_no_dig = mem_store.enqueue(
+        event_type=OUTBOX_EVENT_JOB_COMPLETED,
+        job_id="j-nodig",
+        attempt_id="a-1",
+        attempt_epoch=1,
+        payload={},
+    )
+    assert sup_id and comp_no_dig
+    extra_rep = reconciler.reconcile_pending()
+    assert extra_rep.applied == 2
+
+    # Concurrent mark_applied race during reconcile_pending -> already_applied == 1.
+    race_oid = mem_store.enqueue(
+        event_type=OUTBOX_EVENT_JOB_COMPLETED,
+        job_id="j-race",
+        attempt_id="a-1",
+        attempt_epoch=1,
+        payload={},
+    )
+    orig_mark = mem_store.mark_applied
+
+    def _raced_mark(outbox_id: str, *, applied_at: str | None = None) -> bool:
+        if outbox_id == race_oid:
+            orig_mark(outbox_id, applied_at=applied_at)
+            return False
+        return orig_mark(outbox_id, applied_at=applied_at)
+
+    mem_store.mark_applied = _raced_mark  # type: ignore[method-assign]
+    try:
+        race_rep = reconciler.reconcile_pending()
+        assert race_rep.already_applied == 1
+    finally:
+        mem_store.mark_applied = orig_mark  # type: ignore[method-assign]
 
 
 def test_graph_commit_verified_revision_type_guard_and_revoked_project_filter(
