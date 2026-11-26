@@ -271,25 +271,26 @@ class TestCanonicalAuthorityRefusals:
         assert type(result).__name__ == "Refusal"
         assert "missing_binding" in result.detail
 
-    def test_an_unconfigured_canonical_authority_refuses_after_the_studio_gate(
+    def test_an_unconfigured_canonical_authority_refuses_before_the_fence(
         self, harness, studio
     ) -> None:
-        # the studio gate passes (OWNER) but no canonical authority is wired, so
-        # the turn is admitted and then terminalised by the typed refusal.
+        # Wave 3-R2b: when a role authority is present the service also requires
+        # the canonical authority to confirm the identity/binding, so the refusal
+        # now happens BEFORE the turn fence opens — a stricter, still typed
+        # refusal (no half-open turn to terminalise).
         service = harness.build(
             authority=None,
             principal_authority=studio.service,
             channel_binding_ref=studio.binding,
         )
-        session_id = _session(service)
-        result = _submit(service, harness.clip, session_id)
-        assert type(result).__name__ == "Refusal"
-        assert result.reason == "unauthorized_principal"
-        assert "authority_unconfigured" in result.detail
-        assert service._contexts == {}
-        assert (
-            service._sessions.get_session(session_id).turns["turn-1"].turn_state.value == "FAILED"
-        )
+        # the two authorities must agree: with the studio gate satisfied but no
+        # canonical authority, even opening a session is refused (typed, no
+        # fence opened, nothing persisted).
+        with pytest.raises(ApprovalError) as exc:
+            _session(service)
+        assert exc.value.reason == "unauthorized_principal:authority_unconfigured"
+        assert service._deps.queue.enqueued == []
+        assert service._sessions._sessions == {}
 
     def test_a_typed_authority_refusal_is_surfaced_verbatim(self, harness, studio) -> None:
         authority = _Authority(error=CanonicalAuthorityError("not_a_member", "no membership"))
@@ -298,13 +299,14 @@ class TestCanonicalAuthorityRefusals:
             principal_authority=studio.service,
             channel_binding_ref=studio.binding,
         )
-        session_id = _session(service)
-        result = _submit(service, harness.clip, session_id)
-        assert result.reason == "unauthorized_principal"
-        assert "not_a_member" in result.detail
-        # the turn was terminalised, never left half-open
-        turn = service._sessions.get_session(session_id).turns["turn-1"]
-        assert turn.turn_state.value == "FAILED"
+        # Wave 3-R2b: the canonical authority's typed refusal is surfaced
+        # verbatim at the session boundary, before any fence or context exists.
+        with pytest.raises(ApprovalError) as exc:
+            _session(service)
+        assert exc.value.reason == "unauthorized_principal:not_a_member"
+        assert "no membership" in exc.value.detail
+        assert service._contexts == {}
+        assert service._deps.queue.enqueued == []
 
     def test_an_identity_mismatch_from_the_authority_is_refused(self, harness) -> None:
         class _DriftingStudio:

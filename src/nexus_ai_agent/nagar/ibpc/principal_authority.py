@@ -59,6 +59,8 @@ from nexus_ai_agent.nagar.ibpc.models import ApprovalBinding
 from nexus_ai_agent.nagar.ibpc.privacy import ConsentAction, ConsentScope, PrivacyViolation
 
 __all__ = [
+    "ACTION_ROLES",
+    "AuthorizationRefusalError",
     "MEMBERSHIP_ROLES",
     "PROJECT_GOVERNANCE_ROLES",
     "DurableStudioAuthorizationService",
@@ -81,6 +83,16 @@ class StudioAuthorizationError(PermissionError):
         super().__init__(f"{reason}: {detail}".strip(": "))
         self.reason = reason
         self.detail = detail
+
+
+class AuthorizationRefusalError(StudioAuthorizationError):
+    """Typed refusal: role authority is required but could not be established.
+
+    Raised by the composition root when a durable service is built without a
+    principal authority, and by the service when a role-gated action is attempted
+    with no verified role (Wave 3-R2b).  It is a
+    :class:`StudioAuthorizationError`, so every existing ``except`` keeps working.
+    """
 
 
 class MembershipRole(str, Enum):

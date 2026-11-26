@@ -14,6 +14,7 @@ from nexus_ai_agent.nagar.ibpc.approval_mac import (
     StaticKeyRing,
 )
 from nexus_ai_agent.nagar.ibpc.live_session import DurableLiveSessionStore
+from nexus_ai_agent.nagar.ibpc.principal_authority import AuthorizationRefusalError
 from nexus_ai_agent.nagar.ibpc.privacy import DurablePrivacyConsentStore
 from nexus_ai_agent.nagar.ibpc.service import (
     IBPCService,
@@ -57,6 +58,7 @@ def build_durable_ibpc_service(
     key_provider: KeyProvider | None = None,
     principal_authority: object | None = None,
     with_consent_ledger: bool = True,
+    require_role_authority: bool = True,
 ) -> IBPCService:
     """Production composition: durable sessions, canonical approvals, consent.
 
@@ -75,13 +77,30 @@ def build_durable_ibpc_service(
     ``principal_authority`` is the durable Studio authorization service
     (slice 3.4). It is threaded into the deps so every session start, turn
     creation, approval and consume verifies membership and role on the target
-    project. Passing ``None`` composes a service that still fails closed at
-    turn creation through ``deps.authority``.
+    project.
+
+    Wave 3-R2b: ``require_role_authority`` defaults to ``True``, and the factory
+    raises :class:`AuthorizationRefusalError` when no principal authority is
+    supplied.  ``CanonicalAuthorityPort`` proves *identity* (principal, project,
+    channel binding) but never a **role**, so a service composed without a role
+    authority cannot be allowed to fall back to a synthesized ``OWNER`` — that
+    granted ``REVISION_RESTORE`` without any proof of ownership.  Pass
+    ``require_role_authority=False`` only for a composition that provably never
+    performs a role-gated action (tests and planning-only wiring).
     """
-    base = Path(db_path)
-    base.mkdir(parents=True, exist_ok=True)
     if not isinstance(hmac_secret, (bytes, bytearray)) or len(hmac_secret) != 32:
         raise KeyProviderError("hmac_secret must be exactly 256 bits (32 bytes)")
+    if principal_authority is None and require_role_authority:
+        # Wave 3-R2b: a durable service without a role authority has no way to
+        # prove a Studio role; refusing here is the only alternative to
+        # synthesizing OWNER later.
+        raise AuthorizationRefusalError(
+            "role_authority_required",
+            "build_durable_ibpc_service requires a principal authority; identity alone "
+            "proves no Studio role, and no role may be synthesized",
+        )
+    base = Path(db_path)
+    base.mkdir(parents=True, exist_ok=True)
     provider = (
         key_provider
         if key_provider is not None
@@ -108,6 +127,7 @@ def build_durable_ibpc_service(
         session_store=sessions,
         principal_authority=principal_authority,
         privacy_consent_store=consent,
+        require_role_authority=require_role_authority,
     )
     return IBPCService(composed)
 

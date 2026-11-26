@@ -41,6 +41,7 @@ from nexus_ai_agent.nagar.ibpc.approval_mac import KeyProviderError, StaticKeyRi
 from nexus_ai_agent.nagar.ibpc.canonical import digest_of, sha256_bytes
 from nexus_ai_agent.nagar.ibpc.composition import build_durable_ibpc_service
 from nexus_ai_agent.nagar.ibpc.models import ApprovalBinding, ApprovalState
+from nexus_ai_agent.nagar.ibpc.principal_authority import DurableStudioAuthorizationService
 from nexus_ai_agent.nagar.ibpc.service import IBPCService, IBPCServiceDeps
 from nexus_ai_agent.provenance.canonicalization import (
     CanonicalizationScheme,
@@ -382,6 +383,11 @@ class TestInMemoryCanonicalLedger:
 
 
 class TestCompositionFactory:
+    @staticmethod
+    def _authz(tmp_path: Path) -> DurableStudioAuthorizationService:
+        """The production factory requires a role authority (Wave 3-R2b)."""
+        return DurableStudioAuthorizationService(tmp_path / "authz.sqlite3", now=NOW)
+
     def _deps(self, tmp_path: Path) -> IBPCServiceDeps:
         return IBPCServiceDeps(
             queue=object(),  # type: ignore[arg-type]
@@ -391,7 +397,12 @@ class TestCompositionFactory:
         )
 
     def test_factory_builds_the_durable_canonical_ledger(self, tmp_path: Path) -> None:
-        service = build_durable_ibpc_service(tmp_path / "w3", KEY, deps=self._deps(tmp_path))
+        service = build_durable_ibpc_service(
+            tmp_path / "w3",
+            KEY,
+            deps=self._deps(tmp_path),
+            principal_authority=self._authz(tmp_path),
+        )
         assert isinstance(service, IBPCService)
         assert isinstance(service.approvals, DurableCanonicalApprovalLedger)
         assert service.session_store is not None
@@ -400,18 +411,31 @@ class TestCompositionFactory:
 
     def test_factory_rejects_a_short_hmac_secret(self, tmp_path: Path) -> None:
         with pytest.raises(KeyProviderError):
-            build_durable_ibpc_service(tmp_path / "w3", b"short", deps=self._deps(tmp_path))
+            build_durable_ibpc_service(
+                tmp_path / "w3",
+                b"short",
+                deps=self._deps(tmp_path),
+                principal_authority=self._authz(tmp_path),
+            )
 
     def test_factory_can_omit_the_consent_ledger(self, tmp_path: Path) -> None:
         service = build_durable_ibpc_service(
-            tmp_path / "w3", KEY, deps=self._deps(tmp_path), with_consent_ledger=False
+            tmp_path / "w3",
+            KEY,
+            deps=self._deps(tmp_path),
+            principal_authority=self._authz(tmp_path),
+            with_consent_ledger=False,
         )
         assert service._deps.privacy_consent_store is None
 
     def test_factory_honours_an_explicit_key_provider(self, tmp_path: Path) -> None:
         provider = _ring(key_id="rotated")
         service = build_durable_ibpc_service(
-            tmp_path / "w3", KEY, deps=self._deps(tmp_path), key_provider=provider
+            tmp_path / "w3",
+            KEY,
+            deps=self._deps(tmp_path),
+            key_provider=provider,
+            principal_authority=self._authz(tmp_path),
         )
         assert service._deps.approval_key_provider is provider
 
@@ -925,6 +949,9 @@ class TestFactoryKeyProviderContract:
                     now=NOW,
                 ),
                 key_provider=_BrokenProvider(),  # type: ignore[arg-type]
+                principal_authority=DurableStudioAuthorizationService(
+                    tmp_path / "authz.sqlite3", now=NOW
+                ),
             )
 
     def test_a_provider_without_a_key_surface_is_refused(self, tmp_path: Path) -> None:
@@ -940,4 +967,7 @@ class TestFactoryKeyProviderContract:
                     now=NOW,
                 ),
                 key_provider=object(),  # type: ignore[arg-type]
+                principal_authority=DurableStudioAuthorizationService(
+                    tmp_path / "authz.sqlite3", now=NOW
+                ),
             )

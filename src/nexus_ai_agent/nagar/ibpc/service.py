@@ -86,6 +86,7 @@ from nexus_ai_agent.nagar.ibpc.models import (
 )
 from nexus_ai_agent.nagar.ibpc.preview import build_preview, render_readback
 from nexus_ai_agent.nagar.ibpc.principal_authority import (
+    ACTION_ROLES,
     MembershipRole,
 )
 from nexus_ai_agent.nagar.ibpc.principal_authority import (
@@ -132,6 +133,12 @@ LOCAL_PROVIDER_ID = "local"
 
 #: Approval token lifetime (the human decision window) in minutes.
 APPROVAL_TTL_MINUTES = 10
+
+#: Studio actions that ONLY a proven OWNER may perform.  Derived from the same
+#: matrix the role authority enforces, so the two can never drift.
+_OWNER_ONLY_ACTIONS = frozenset(
+    action for action, roles in ACTION_ROLES.items() if roles == frozenset({MembershipRole.OWNER})
+)
 
 
 class ScopeSignatureMismatchError(ApprovalError):
@@ -214,6 +221,10 @@ class IBPCServiceDeps:
     privacy_consent_store: Any | None = None
     #: Provider id recorded/checked for LOCAL_PROCESSING consent (the local lane).
     local_provider_id: str = LOCAL_PROVIDER_ID
+    #: Wave 3-R2b: when True, a mutation is refused unless the acting principal's
+    #: Studio role was verified by a role authority. Production composition
+    #: (``build_durable_ibpc_service``) sets this; identity alone is never a grant.
+    require_role_authority: bool = False
 
 
 @dataclass(frozen=True)
@@ -335,13 +346,16 @@ class IBPCService:
         base_revision_id: str | None = None,
         session_id: str | None = None,
     ) -> str:
-        if self._deps.principal_authority is not None:
+        if self._deps.principal_authority is not None or self._deps.require_role_authority:
             # Authoritative composition: only a principal with an authenticated
             # binding and an EDITOR/OWNER role on this project may open a
-            # session. Without a durable principal authority the session opens
-            # for planning only: every mutation is still refused at turn
-            # creation by the injected canonical authority (typed refusal, no
-            # turn fence opened, no job enqueued).
+            # session.  ``require_role_authority`` (Wave 3-R2b) makes that gate
+            # mandatory even when no role authority was injected — it then fails
+            # closed rather than opening a session it could never authorize.
+            # Without either, the session opens for planning only: every
+            # mutation is still refused at turn creation by the injected
+            # canonical authority (typed refusal, no turn fence opened, no job
+            # enqueued).
             self._authorize_principal(
                 principal_id=principal_id,
                 project_id=project_id,
@@ -1203,12 +1217,17 @@ class IBPCService:
         principal_id: str,
         project_id: str,
         action: PrincipalStudioAction,
-    ) -> AuthorizedPrincipalFacts:
+    ) -> AuthorizedPrincipalFacts | None:
         """Verify principal → binding → membership → action for one mutation.
 
         Fails closed: a service composed without a durable authority refuses
         every IBPC mutation with a typed ``ApprovalError`` — never a silent
-        grant, never a cached identity.
+        grant, never a cached identity, and never a synthesized role.
+
+        Returns the verified facts, or ``None`` **only** for the legacy
+        ``CanonicalAuthorityPort``-only composition whose authority confirms the
+        identity but carries no role: no caller may read that as a grant
+        (Wave 3-R2b).  Every role-gated action refuses in that mode.
         """
         authority = self._deps.principal_authority
         binding_ref = self._deps.channel_binding_ref
@@ -1227,12 +1246,35 @@ class IBPCService:
                 resolved = self._resolve_authority(principal_id, project_id)
             except CanonicalAuthorityError as exc:
                 raise ApprovalError(f"unauthorized_principal:{exc.reason}", exc.detail) from exc
-            return AuthorizedPrincipalFacts(
-                principal_id=resolved.principal_id,
-                project_id=resolved.project_id,
-                channel_binding_id=resolved.channel_binding_id,
-                role=MembershipRole.OWNER,
-            )
+            # Wave 3-R2b: the canonical port proves IDENTITY, never a ROLE. A
+            # synthesized OWNER used to be handed back here, which silently
+            # granted the OWNER-only ``REVISION_RESTORE`` to any member.
+            role = getattr(resolved, "role", None)
+            if isinstance(role, MembershipRole):
+                allowed = ACTION_ROLES[action]
+                if role not in allowed:
+                    raise ApprovalError(
+                        "unauthorized_principal:insufficient_role",
+                        f"{action.value} requires one of "
+                        f"{sorted(r.value for r in allowed)}, principal holds {role.value}",
+                    )
+                return AuthorizedPrincipalFacts(
+                    principal_id=resolved.principal_id,
+                    project_id=resolved.project_id,
+                    channel_binding_id=resolved.channel_binding_id,
+                    role=role,
+                )
+            # No verified role: an OWNER-only action, or a composition that
+            # requires role authority, fails closed here — never a synthetic grant.
+            if self._deps.require_role_authority or action in _OWNER_ONLY_ACTIONS:
+                raise ApprovalError(
+                    "unauthorized_principal:role_verification_required",
+                    f"{action.value} needs a verified Studio role and no role authority "
+                    "is configured",
+                )
+            # Identity is verified, the role is NOT: return nothing a caller
+            # could mistake for a role grant.
+            return None
         try:
             facts = authority.authorize_action(
                 principal_id=principal_id,
@@ -1248,6 +1290,27 @@ class IBPCService:
             raise ApprovalError(
                 "unauthorized_principal:identity_mismatch",
                 "the authority returned a different identity than requested",
+            )
+        # Wave 3-R2b: the role authority is the ONLY role source when it is
+        # present, and the identity it verified must agree with the canonical
+        # port's own view of the binding.
+        try:
+            resolved = self._resolve_authority(principal_id, project_id)
+        except CanonicalAuthorityError as exc:
+            raise ApprovalError(f"unauthorized_principal:{exc.reason}", exc.detail) from exc
+        if (
+            getattr(resolved, "channel_binding_id", None) is not None
+            and resolved.channel_binding_id != facts.channel_binding_id
+        ):
+            raise ApprovalError(
+                "unauthorized_principal:binding_inconsistent",
+                "the role authority and the canonical authority disagree on the binding",
+            )
+        role = getattr(facts, "role", None)
+        if not isinstance(role, MembershipRole):
+            raise ApprovalError(
+                "unauthorized_principal:role_verification_required",
+                "the role authority returned no verified Studio role",
             )
         return facts
 
