@@ -397,9 +397,9 @@ WAVE3_MUTANTS: tuple[Wave3MutantSpec, ...] = (
     ),
     Wave3MutantSpec(
         name="M20_studio_ibpc_cross_tenant_binding_guard",
-        relative_path=Path("api/studio_ibpc.py"),
-        func_name="bind_studio_principal_channel",
-        predicate=lambda n: _is_if_with_test_substr(n, "target_tenant != actor_tenant"),
+        relative_path=Path("adapters/studio_principal_auth.py"),
+        func_name="bind_channel",
+        predicate=lambda n: _is_if_with_test_substr(n, "tenant_id != actor_tenant"),
         transform=_bypass_if,
         target_test=(
             "tests/unit/test_wave3_ibpc_durability.py::"
@@ -476,7 +476,7 @@ WAVE3_MUTANTS: tuple[Wave3MutantSpec, ...] = (
         name="M26_revoke_principal_blocks_other_project_active_target",
         relative_path=Path("adapters/studio_principal_auth.py"),
         func_name="_assert_project_scoped_revocation_locked",
-        predicate=lambda n: _is_if_with_test_substr(n, "other_active is not None"),
+        predicate=lambda n: _is_if_with_test_substr(n, "not ok"),
         transform=_bypass_if,
         target_test=(
             "tests/unit/test_wave3_ibpc_durability.py::"

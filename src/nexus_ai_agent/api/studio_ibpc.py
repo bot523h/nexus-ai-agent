@@ -751,7 +751,9 @@ async def register_studio_principal(
                 project_id=verified_project,
             )
         except AuthorizationError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
+            if exc.reason in {"principal_already_exists", "principal_token_conflict"}:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {
@@ -782,12 +784,6 @@ async def bind_studio_principal_channel(
             actor_id=actor_id,
             project_id=scoped_project,
         )
-        try:
-            target_tenant = auth_store.get_principal_tenant(target_principal_id)
-        except AuthorizationError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-        if target_tenant != actor_tenant:
-            raise HTTPException(status_code=403, detail="cross_tenant_binding_denied")
         server_ref = body.binding_ref or f"bind-{uuid.uuid4().hex[:16]}"
         try:
             binding_ref = auth_store.bind_channel(
@@ -803,6 +799,8 @@ async def bind_studio_principal_channel(
         except AuthorizationError as exc:
             if exc.reason == "binding_already_exists":
                 raise HTTPException(status_code=409, detail=str(exc)) from exc
+            if exc.reason == "principal_not_found":
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
             raise HTTPException(status_code=403, detail=str(exc)) from exc
         return {
             "binding_ref": binding_ref,

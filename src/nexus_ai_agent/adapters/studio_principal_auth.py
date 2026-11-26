@@ -12,6 +12,7 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import hmac
+import json
 import os
 import sqlite3
 import uuid
@@ -286,6 +287,47 @@ class StudioPrincipalAuthStore(StudioAuthorizerPort, CanonicalAuthorityPort):
             raise
         self._conn.execute("COMMIT")
 
+    def _assert_actor_project_owner_locked(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        actor_principal_id: str,
+        project_id: str,
+        expected_tenant_id: str = "",
+    ) -> tuple[bool, str, str]:
+        if not project_id.strip():
+            return False, "project_scope_required", ""
+        if not actor_principal_id.strip():
+            return False, "actor_principal_required", ""
+        actor_row = conn.execute(
+            "SELECT tenant_id, status FROM nexus_studio_principals WHERE principal_id = ?",
+            (actor_principal_id,),
+        ).fetchone()
+        if actor_row is None or str(actor_row[1]) != "ACTIVE":
+            return False, "actor_principal_inactive_or_missing", ""
+        actor_tenant = str(actor_row[0])
+        if expected_tenant_id.strip() and actor_tenant != expected_tenant_id:
+            return False, "cross_tenant_principal_access", ""
+        m_row = conn.execute(
+            """
+            SELECT m.role, m.status, p.tenant_id
+            FROM nexus_studio_project_memberships m
+            JOIN nexus_studio_projects p ON p.project_id = m.project_id
+            WHERE m.principal_id = ? AND m.project_id = ?
+            LIMIT 1
+            """,
+            (actor_principal_id, project_id),
+        ).fetchone()
+        if (
+            m_row is None
+            or str(m_row[2]) != actor_tenant
+            or str(m_row[1]) != "ACTIVE"
+            or str(m_row[0]) != StudioRole.OWNER.value
+            or StudioAction.MANAGE_MEMBERSHIP not in ROLE_ACTIONS[StudioRole.OWNER]
+        ):
+            return False, "unauthorized_project_owner", ""
+        return True, "authorized", actor_tenant
+
     def register_principal(
         self,
         principal_id: str,
@@ -295,13 +337,30 @@ class StudioPrincipalAuthStore(StudioAuthorizerPort, CanonicalAuthorityPort):
         display_name: str = "",
         actor_id: str = "system",
         project_id: str = "",
+        allow_system_bootstrap: bool = False,
     ) -> str:
         if not raw_token or len(raw_token) < 8:
             raise ValueError("principal raw_token must be at least 8 characters")
         PrincipalId(principal_id)
         token_sha = _hash_token(raw_token)
         now_utc = self._now()
+        resolved_project = (project_id or "").strip()
+        is_bootstrap_seed = actor_id == "system" and (
+            not resolved_project or allow_system_bootstrap
+        )
         with self._transaction():
+            if not is_bootstrap_seed:
+                ok, reason, _ = self._assert_actor_project_owner_locked(
+                    self._conn,
+                    actor_principal_id=actor_id,
+                    project_id=resolved_project,
+                    expected_tenant_id=tenant_id,
+                )
+                if not ok:
+                    raise AuthorizationError(
+                        reason,
+                        f"actor {actor_id!r} cannot register principal in {resolved_project!r}",
+                    )
             existing = self._conn.execute(
                 "SELECT tenant_id, status FROM nexus_studio_principals WHERE principal_id = ?",
                 (principal_id,),
@@ -333,7 +392,7 @@ class StudioPrincipalAuthStore(StudioAuthorizerPort, CanonicalAuthorityPort):
                 event_type="register_principal",
                 actor_id=actor_id,
                 tenant_id=tenant_id,
-                project_id=project_id,
+                project_id=resolved_project,
                 target_principal_id=principal_id,
                 detail=display_name,
                 occurred_at_utc=now_utc,
@@ -346,44 +405,54 @@ class StudioPrincipalAuthStore(StudioAuthorizerPort, CanonicalAuthorityPort):
         principal_id: str,
         actor_id: str,
         project_id: str,
-    ) -> None:
+        tenant_id: str,
+    ) -> tuple[str, ...]:
         in_project = self._conn.execute(
             """
-            SELECT 1 FROM nexus_studio_project_memberships
-            WHERE principal_id = ? AND project_id = ?
+            SELECT 1
+            FROM nexus_studio_project_memberships m
+            JOIN nexus_studio_projects p ON p.project_id = m.project_id
+            WHERE m.principal_id = ?
+              AND m.project_id = ?
+              AND p.tenant_id = ?
+              AND m.status = 'ACTIVE'
             LIMIT 1
             """,
-            (principal_id, project_id),
+            (principal_id, project_id, tenant_id),
         ).fetchone()
         if in_project is None:
             raise AuthorizationError(
                 "principal_not_in_project",
-                f"principal {principal_id!r} has no membership in project {project_id!r}",
+                f"principal {principal_id!r} has no active membership in project {project_id!r}",
             )
-        other_active = self._conn.execute(
+        active_rows = self._conn.execute(
             """
-            SELECT m.project_id
+            SELECT DISTINCT m.project_id
             FROM nexus_studio_project_memberships m
+            JOIN nexus_studio_projects p ON p.project_id = m.project_id
             WHERE m.principal_id = ?
-              AND m.project_id != ?
+              AND p.tenant_id = ?
               AND m.status = 'ACTIVE'
-              AND NOT EXISTS (
-                  SELECT 1
-                  FROM nexus_studio_project_memberships a
-                  WHERE a.project_id = m.project_id
-                    AND a.principal_id = ?
-                    AND a.role = 'OWNER'
-                    AND a.status = 'ACTIVE'
-              )
-            LIMIT 1
+            ORDER BY m.project_id ASC
             """,
-            (principal_id, project_id, actor_id),
-        ).fetchone()
-        if other_active is not None:
-            raise AuthorizationError(
-                "principal_active_in_other_projects",
-                f"principal {principal_id!r} is active in other project {other_active[0]!r}",
+            (principal_id, tenant_id),
+        ).fetchall()
+        active_project_ids = [str(r[0]) for r in active_rows]
+        for other_project_id in active_project_ids:
+            if other_project_id == project_id:
+                continue
+            ok, _reason, _ = self._assert_actor_project_owner_locked(
+                self._conn,
+                actor_principal_id=actor_id,
+                project_id=other_project_id,
+                expected_tenant_id=tenant_id,
             )
+            if not ok:
+                raise AuthorizationError(
+                    "principal_active_in_other_projects",
+                    f"principal {principal_id!r} is active in other project {other_project_id!r}",
+                )
+        return tuple(sorted({project_id, *active_project_ids}))
 
     def revoke_principal(
         self,
@@ -392,9 +461,25 @@ class StudioPrincipalAuthStore(StudioAuthorizerPort, CanonicalAuthorityPort):
         actor_id: str = "system",
         expected_tenant_id: str | None = None,
         project_id: str = "",
+        allow_system_bootstrap: bool = False,
     ) -> None:
         now_utc = self._now()
+        resolved_project = (project_id or "").strip()
+        is_bootstrap = actor_id == "system" and allow_system_bootstrap
         with self._transaction():
+            actor_tenant = ""
+            if not is_bootstrap:
+                ok, reason, actor_tenant = self._assert_actor_project_owner_locked(
+                    self._conn,
+                    actor_principal_id=actor_id,
+                    project_id=resolved_project,
+                    expected_tenant_id=expected_tenant_id or "",
+                )
+                if not ok:
+                    raise AuthorizationError(
+                        reason,
+                        f"actor {actor_id!r} cannot revoke principal in {resolved_project!r}",
+                    )
             p_row = self._conn.execute(
                 "SELECT tenant_id FROM nexus_studio_principals WHERE principal_id = ?",
                 (principal_id,),
@@ -409,11 +494,18 @@ class StudioPrincipalAuthStore(StudioAuthorizerPort, CanonicalAuthorityPort):
                     "principal_tenant_mismatch",
                     f"principal {principal_id!r} belongs to tenant {target_tenant!r}",
                 )
-            if project_id:
-                self._assert_project_scoped_revocation_locked(
+            if not is_bootstrap and target_tenant != actor_tenant:
+                raise AuthorizationError(
+                    "principal_tenant_mismatch",
+                    f"principal {principal_id!r} belongs to tenant {target_tenant!r}",
+                )
+            affected_projects: tuple[str, ...] = ()
+            if not is_bootstrap or resolved_project:
+                affected_projects = self._assert_project_scoped_revocation_locked(
                     principal_id=principal_id,
                     actor_id=actor_id,
-                    project_id=project_id,
+                    project_id=resolved_project,
+                    tenant_id=target_tenant,
                 )
             self._conn.execute(
                 """
@@ -431,14 +523,33 @@ class StudioPrincipalAuthStore(StudioAuthorizerPort, CanonicalAuthorityPort):
                 """,
                 (now_utc, principal_id),
             )
-            self._record_admin_event_locked(
-                event_type="REVOKE_PRINCIPAL",
-                actor_id=actor_id,
-                tenant_id=target_tenant,
-                project_id=project_id,
-                target_principal_id=principal_id,
-                occurred_at_utc=now_utc,
-            )
+            if affected_projects:
+                detail_json = json.dumps(
+                    {
+                        "initiating_project_id": resolved_project,
+                        "affected_projects": list(affected_projects),
+                    },
+                    sort_keys=True,
+                )
+                for affected_pid in affected_projects:
+                    self._record_admin_event_locked(
+                        event_type="REVOKE_PRINCIPAL",
+                        actor_id=actor_id,
+                        tenant_id=target_tenant,
+                        project_id=affected_pid,
+                        target_principal_id=principal_id,
+                        detail=detail_json,
+                        occurred_at_utc=now_utc,
+                    )
+            else:
+                self._record_admin_event_locked(
+                    event_type="REVOKE_PRINCIPAL",
+                    actor_id=actor_id,
+                    tenant_id=target_tenant,
+                    project_id=resolved_project,
+                    target_principal_id=principal_id,
+                    occurred_at_utc=now_utc,
+                )
 
     def authenticate_principal_context(self, raw_token: str | None) -> tuple[str, str]:
         if not isinstance(raw_token, str) or not raw_token.strip():
@@ -479,11 +590,26 @@ class StudioPrincipalAuthStore(StudioAuthorizerPort, CanonicalAuthorityPort):
         chat_id: int = 0,
         binding_ref: str | None = None,
         actor_id: str = "system",
-        project_id: str | None = None,
+        project_id: str | None = "",
+        allow_system_bootstrap: bool = False,
     ) -> str:
         ref = binding_ref or _binding_ref_for(channel, external_subject)
         now_utc = self._now()
+        resolved_project = (project_id or "").strip()
+        is_bootstrap = actor_id == "system" and allow_system_bootstrap
         with self._transaction():
+            actor_tenant = ""
+            if not is_bootstrap:
+                ok, reason, actor_tenant = self._assert_actor_project_owner_locked(
+                    self._conn,
+                    actor_principal_id=actor_id,
+                    project_id=resolved_project,
+                )
+                if not ok:
+                    raise AuthorizationError(
+                        reason,
+                        f"actor {actor_id!r} cannot bind channel in {resolved_project!r}",
+                    )
             p_row = self._conn.execute(
                 "SELECT tenant_id, status FROM nexus_studio_principals WHERE principal_id = ?",
                 (principal_id,),
@@ -493,21 +619,33 @@ class StudioPrincipalAuthStore(StudioAuthorizerPort, CanonicalAuthorityPort):
                     "principal_not_found", f"unknown principal {principal_id!r}"
                 )
             tenant_id = str(p_row[0])
+            if not is_bootstrap and tenant_id != actor_tenant:
+                raise AuthorizationError(
+                    "cross_tenant_principal_access",
+                    f"principal {principal_id!r} belongs to tenant {tenant_id!r}",
+                )
             if str(p_row[1]) != "ACTIVE":
                 raise AuthorizationError(
                     "principal_revoked",
                     f"principal {principal_id!r} is {p_row[1]}",
                 )
-            if project_id:
-                memberships = self._conn.execute(
-                    "SELECT project_id FROM nexus_studio_project_memberships "
-                    "WHERE principal_id = ?",
+            if resolved_project:
+                active_rows = self._conn.execute(
+                    """
+                    SELECT m.project_id, p.tenant_id
+                    FROM nexus_studio_project_memberships m
+                    JOIN nexus_studio_projects p ON p.project_id = m.project_id
+                    WHERE m.principal_id = ? AND m.status = 'ACTIVE'
+                    """,
                     (principal_id,),
                 ).fetchall()
-                if memberships and project_id not in {str(r[0]) for r in memberships}:
+                if active_rows and not any(
+                    str(r[0]) == resolved_project and str(r[1]) == tenant_id for r in active_rows
+                ):
                     raise AuthorizationError(
                         "principal_not_in_project",
-                        f"principal {principal_id!r} has no membership in project {project_id!r}",
+                        f"principal {principal_id!r} has no active membership "
+                        f"in project {resolved_project!r}",
                     )
             existing = self._conn.execute(
                 """
@@ -537,7 +675,7 @@ class StudioPrincipalAuthStore(StudioAuthorizerPort, CanonicalAuthorityPort):
                 event_type="bind_channel",
                 actor_id=actor_id,
                 tenant_id=tenant_id,
-                project_id=project_id or "",
+                project_id=resolved_project,
                 target_principal_id=principal_id,
                 binding_ref=ref,
                 detail=f"{channel}:{external_subject}",
@@ -553,9 +691,25 @@ class StudioPrincipalAuthStore(StudioAuthorizerPort, CanonicalAuthorityPort):
         expected_tenant_id: str | None = None,
         expected_principal_id: str | None = None,
         project_id: str = "",
+        allow_system_bootstrap: bool = False,
     ) -> None:
         now_utc = self._now()
+        resolved_project = (project_id or "").strip()
+        is_bootstrap = actor_id == "system" and allow_system_bootstrap
         with self._transaction():
+            actor_tenant = ""
+            if not is_bootstrap:
+                ok, reason, actor_tenant = self._assert_actor_project_owner_locked(
+                    self._conn,
+                    actor_principal_id=actor_id,
+                    project_id=resolved_project,
+                    expected_tenant_id=expected_tenant_id or "",
+                )
+                if not ok:
+                    raise AuthorizationError(
+                        reason,
+                        f"actor {actor_id!r} cannot revoke binding in {resolved_project!r}",
+                    )
             row = self._conn.execute(
                 """
                 SELECT b.principal_id, p.tenant_id
@@ -581,11 +735,18 @@ class StudioPrincipalAuthStore(StudioAuthorizerPort, CanonicalAuthorityPort):
                     "principal_tenant_mismatch",
                     f"binding {binding_ref!r} belongs to tenant {target_tenant!r}",
                 )
-            if project_id:
-                self._assert_project_scoped_revocation_locked(
+            if not is_bootstrap and target_tenant != actor_tenant:
+                raise AuthorizationError(
+                    "principal_tenant_mismatch",
+                    f"binding {binding_ref!r} belongs to tenant {target_tenant!r}",
+                )
+            affected_projects: tuple[str, ...] = ()
+            if not is_bootstrap or resolved_project:
+                affected_projects = self._assert_project_scoped_revocation_locked(
                     principal_id=target_principal,
                     actor_id=actor_id,
-                    project_id=project_id,
+                    project_id=resolved_project,
+                    tenant_id=target_tenant,
                 )
             self._conn.execute(
                 """
@@ -595,15 +756,35 @@ class StudioPrincipalAuthStore(StudioAuthorizerPort, CanonicalAuthorityPort):
                 """,
                 (now_utc, binding_ref),
             )
-            self._record_admin_event_locked(
-                event_type="REVOKE_CHANNEL_BINDING",
-                actor_id=actor_id,
-                tenant_id=target_tenant,
-                project_id=project_id,
-                target_principal_id=target_principal,
-                binding_ref=binding_ref,
-                occurred_at_utc=now_utc,
-            )
+            if affected_projects:
+                detail_json = json.dumps(
+                    {
+                        "initiating_project_id": resolved_project,
+                        "affected_projects": list(affected_projects),
+                    },
+                    sort_keys=True,
+                )
+                for affected_pid in affected_projects:
+                    self._record_admin_event_locked(
+                        event_type="REVOKE_CHANNEL_BINDING",
+                        actor_id=actor_id,
+                        tenant_id=target_tenant,
+                        project_id=affected_pid,
+                        target_principal_id=target_principal,
+                        binding_ref=binding_ref,
+                        detail=detail_json,
+                        occurred_at_utc=now_utc,
+                    )
+            else:
+                self._record_admin_event_locked(
+                    event_type="REVOKE_CHANNEL_BINDING",
+                    actor_id=actor_id,
+                    tenant_id=target_tenant,
+                    project_id=resolved_project,
+                    target_principal_id=target_principal,
+                    binding_ref=binding_ref,
+                    occurred_at_utc=now_utc,
+                )
 
     def ensure_project(
         self, project_id: str, *, tenant_id: str, active_revision_id: str = "0"
