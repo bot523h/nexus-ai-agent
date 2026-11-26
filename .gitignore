@@ -10,6 +10,9 @@ dist/
 *.egg-info/
 .venv/
 .pytest_cache/
+# Coverage artifacts are per-run evidence, never tree state.
+.coverage
+.coverage.*
 # Disposable local gate output; never treat old reports as current evidence.
 /*_report.txt
 /test_story.png

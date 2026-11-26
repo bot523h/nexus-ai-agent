@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-11-26T15:25:56Z",
+  "updated_at": "2026-11-26T12:00:00Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -1297,6 +1297,19 @@
         "src/nexus_ai_agent/creative/studio/runtime.py",
         "src/nexus_ai_agent/adapters/durable_studio_runtime.py",
         "tests/unit/test_w4_cp4_coverage.py"
+      ]
+    },
+    {
+      "id": "nagar-ibpc-wave3-durability",
+      "description": "Wave 3 IBPC durable live sessions, canonical approval binding, durable privacy consent, Studio principal auth & RBAC",
+      "paths": [
+        "src/nexus_ai_agent/nagar/ibpc/",
+        "src/nexus_ai_agent/adapters/studio_principal_auth.py",
+        "src/nexus_ai_agent/api/app.py",
+        "src/nexus_ai_agent/api/studio.py",
+        "src/nexus_ai_agent/api/studio_ibpc.py",
+        "tests/unit/test_wave3_ibpc_durability.py",
+        "tests/unit/creative/test_wave3_ibpc_mutations.py"
       ]
     }
   ],
@@ -7001,7 +7014,7 @@
       "title": "Repair existing PR #247: feat(creative): perception lane — measured silence/scene/loudness evidence (free offline FFmpeg)",
       "zone": "pr-repair-campaign",
       "priority": "P1",
-      "status": "active",
+      "status": "queued",
       "scope": "Repair https://github.com/bot523h/nexus-ai-agent/pull/247 on its existing branch feat/analysis-perception-pack, preserving intent and published history. Snapshot head 0c512257692ac971b4c03f8cfbfc37565f08cbe3; re-read live head, base, reviews, checks and all board sources before claiming. Resolve only evidenced defects, conflicts and required-check failures; no merge, force-push, protection changes, or approval fabrication.",
       "prerequisites": [],
       "acceptance_criteria": [
@@ -7043,13 +7056,13 @@
         "tests/unit/test_perception_pack.py",
         "tests/unit/test_perception_parsers.py"
       ],
-      "agent_branch": "openhands/w11x-phase2-forensic-triage-gum-harvest",
-      "claimed_at": "2026-11-26T07:05:26Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 24,
       "gates_owner": false,
-      "generation": 1,
+      "generation": 0,
       "owner_hint": "Registered for a future authorized repair session on feat/analysis-perception-pack; not assigned or claimed by this registration.",
-      "note": ""
+      "note": "Registration only. Existing records and leases remain unchanged. Overlapping queued entries must never be claimed concurrently."
     },
     {
       "task": "task-274-langsmith-tracing",
@@ -8744,7 +8757,7 @@
       "title": "W4: authenticated durable CommandBus execution and evidence closure",
       "zone": "nagar-w4-integrated-durable-execution",
       "priority": "P0",
-      "status": "expired",
+      "status": "active",
       "scope": "Complete W4 CP1b through CP4 on PR #355 through the existing registry and CommandBus; no parallel authority and no writes to quarantined paths. Expand exclusive scope only after the multi-source referee passes.",
       "prerequisites": [],
       "acceptance_criteria": [
@@ -8810,8 +8823,7 @@
         "Checkpoint 3B: tests/benchmarks/w4_command_bus_benchmark.py; N=5 independent temporary SQLite WAL scenarios, compile/SHA/IBPC, fenced publication and real subprocess-death PRESENT recovery with nonce replay rejection. Final CI closure pending."
       ],
       "note": "",
-      "previous_release_reason": "auto-released by gc at 2026-11-24T09:08:55Z (stale active lease)",
-      "release_reason": "auto-released by gc at 2026-11-26T07:05:03Z (stale active lease)"
+      "previous_release_reason": "auto-released by gc at 2026-11-24T09:08:55Z (stale active lease)"
     },
     {
       "task": "task-w11x-cp1-provenance-hardening",
@@ -8847,6 +8859,51 @@
       "gates_owner": false,
       "note": "",
       "generation": 1
+    },
+    {
+      "task": "task-w3-ibpc-durability",
+      "title": "W3: IBPC durable live sessions, canonical approval binding, privacy consent & Studio principal RBAC",
+      "zone": "nagar-ibpc-wave3-durability",
+      "priority": "P0",
+      "status": "active_in_review",
+      "scope": "Wave 3 IBPC durability & security closure: SQLite WAL live sessions/turns/contexts, RFC 8785 JCS canonical approval binding hash + key_id rotation/expiry, durable privacy consent ownership & exact-provider egress gating, Studio principal RBAC default & lifecycle/audit APIs, symlink/root containment, deterministic store close, >=98% line/branch coverage, and 36-mutant AST campaign.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "DurableLiveSessionStore enforces WAL pragmas, monotonic turn ordering, idempotency deduplication/conflict rejection, CAS session epoch fencing, and restart hydration.",
+        "ApprovalBinding enforces RFC 8785 JCS canonical approval hash, key_id rotation/revocation, scope signature, revision id, and constant-time expiry verification without hardcoded keys.",
+        "DurablePrivacyConsentStore enforces project/tenant ownership on revoke, exact provider_id egress matching, and append-only audit.",
+        "StudioPrincipalAuthStore + /api/studio/projects/{project_id}/ibpc & /api/studio/principals enforce token auth, tenant isolation, OWNER/EDITOR/VIEWER/AUDITOR RBAC, and append-only admin audit.",
+        "36/36 AST mutants killed (0 survived, 0 invalid), >=98% line/branch coverage across all 10 Wave 3 modules, and all IBPC, Studio, boundary, lint, and strict mypy checks green."
+      ],
+      "evidence_required": [
+        "pytest tests/unit/test_wave3_ibpc_durability.py tests/unit/creative/test_wave3_ibpc_mutations.py",
+        "pytest tests/unit/test_ibpc_*.py tests/integration/test_ibpc_e2e.py tests/architecture/test_ibpc_boundary.py",
+        "ruff check, ruff format --check, mypy --strict"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/nagar/ibpc/",
+        "src/nexus_ai_agent/adapters/studio_principal_auth.py",
+        "src/nexus_ai_agent/api/app.py",
+        "src/nexus_ai_agent/api/studio.py",
+        "src/nexus_ai_agent/api/studio_ibpc.py",
+        "tests/unit/test_wave3_ibpc_durability.py",
+        "tests/unit/creative/test_wave3_ibpc_mutations.py"
+      ],
+      "owner_hint": "arena/aac14be0-nexus-ai-agent",
+      "agent_branch": "arena/aac14be0-nexus-ai-agent",
+      "claimed_at": "2026-11-26T12:00:00Z",
+      "ttl_hours": 24,
+      "gates_owner": true,
+      "delivered": [
+        "src/nexus_ai_agent/nagar/ibpc/",
+        "src/nexus_ai_agent/adapters/studio_principal_auth.py",
+        "src/nexus_ai_agent/api/app.py",
+        "src/nexus_ai_agent/api/studio.py",
+        "src/nexus_ai_agent/api/studio_ibpc.py",
+        "tests/unit/test_wave3_ibpc_durability.py",
+        "tests/unit/creative/test_wave3_ibpc_mutations.py"
+      ],
+      "note": "Active in review on arena/aac14be0-nexus-ai-agent (PR #365) without overlapping task-w4-integrated-durable-execution or task-w11x-cp1-provenance-hardening."
     }
   ],
   "deferred_log": [
@@ -9618,11 +9675,6 @@
         "rev": 3,
         "date": "2026-10-06",
         "note": "truth reconcile after the spine stack + owner-gate fix merged: merged claims moved to done; AGENTS.md sections 4/6 refreshed; #126/#183/#128/#184 MERGED, #127/#112 SUPERSEDED."
-      },
-      {
-        "rev": 4,
-        "date": "2026-11-26",
-        "note": "W11X phase-2 truth sync (PR #363): the GUM arithmetic corrections (JS bin coverage, two-block propagation, level-aware loudness variance, spectral condition number, construction-time PSD) and the perception admission gate binding at creative/production_runtime.py are recorded as MODULE_MAP R31 + DECISION_LOG D-0042/D-0043; the W11X mutation campaign is 22/22 killed and OPERATION_TRUTH.json was regenerated at this HEAD."
       }
     ]
   },
