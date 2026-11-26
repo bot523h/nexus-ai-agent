@@ -11,9 +11,9 @@ Universe: **114** operations — catalogue 70, runtime 91, overlap 47, missing 2
 
 | operation | id | flag | product | contract | registry | capability | | surface | command | execution | artifact | proof | L | UX modes | pack | | locality | registrar |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| analysis.assess_loudness | NOT_AVAILABLE | RUNTIME_ONLY | MISSING | PRESENT | PRESENT | PRESENT | MISSING | MISSING | MISSING | MISSING | MISSING | L1 | moment+manual | LOCAL PACK | LOCAL_ONLY | nexus.analysis.perception |
-| analysis.mark_scene_cuts | NOT_AVAILABLE | RUNTIME_ONLY | MISSING | PRESENT | PRESENT | PRESENT | MISSING | MISSING | MISSING | MISSING | MISSING | L1 | moment+manual | LOCAL PACK | LOCAL_ONLY | nexus.analysis.perception |
-| analysis.mark_silences | NOT_AVAILABLE | RUNTIME_ONLY | MISSING | PRESENT | PRESENT | PRESENT | MISSING | MISSING | MISSING | MISSING | MISSING | L1 | moment+manual | LOCAL PACK | LOCAL_ONLY | nexus.analysis.perception |
+| analysis.assess_loudness | NOT_AVAILABLE | RUNTIME_ONLY | MISSING | PRESENT | PRESENT | PRESENT | MISSING | MISSING | MISSING | MISSING | PROVEN | L1 | moment+manual | LOCAL PACK | LOCAL_ONLY | nexus.analysis.perception |
+| analysis.mark_scene_cuts | NOT_AVAILABLE | RUNTIME_ONLY | MISSING | PRESENT | PRESENT | PRESENT | MISSING | MISSING | MISSING | MISSING | PROVEN | L1 | moment+manual | LOCAL PACK | LOCAL_ONLY | nexus.analysis.perception |
+| analysis.mark_silences | NOT_AVAILABLE | RUNTIME_ONLY | MISSING | PRESENT | PRESENT | PRESENT | MISSING | MISSING | MISSING | MISSING | PROVEN | L1 | moment+manual | LOCAL PACK | LOCAL_ONLY | nexus.analysis.perception |
 | audio.align_music | T49 | REGISTERED | PRESENT | PRESENT | PRESENT | PRESENT | MISSING | MISSING | MISSING | MISSING | PROVEN | L1 | all three | LOCAL PACK | LOCAL_ONLY | nexus.audio.studio |
 | audio.beat_sync_cut | T42 | REGISTERED | PRESENT | PRESENT | PRESENT | PRESENT | MISSING | MISSING | MISSING | MISSING | PROVEN | L1 | all three | LOCAL PACK | LOCAL_ONLY | nexus.audio.studio |
 | audio.deess | T48 | REGISTERED | PRESENT | PRESENT | PRESENT | PRESENT | MISSING | MISSING | MISSING | MISSING | PROVEN | L1 | all three | LOCAL PACK | LOCAL_ONLY | nexus.audio.studio |

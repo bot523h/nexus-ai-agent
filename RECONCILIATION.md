@@ -16,7 +16,7 @@ recomputed on every run. No number on this page is hand-maintained.
 | runtime-only | 44 | registry − catalogue |
 | universe | 114 | catalogue ∪ registry |
 | surface-reachable | 12 | allow-list ∪ slideshow entrypoint |
-| suite-executed | 82 | tests AST execution probe |
+| suite-executed | 85 | tests AST execution probe |
 
 ## Missing (catalogue rows no registrar ships)
 

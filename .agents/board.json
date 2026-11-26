@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-11-26T07:05:26Z",
+  "updated_at": "2026-11-26T15:25:56Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -9618,6 +9618,11 @@
         "rev": 3,
         "date": "2026-10-06",
         "note": "truth reconcile after the spine stack + owner-gate fix merged: merged claims moved to done; AGENTS.md sections 4/6 refreshed; #126/#183/#128/#184 MERGED, #127/#112 SUPERSEDED."
+      },
+      {
+        "rev": 4,
+        "date": "2026-11-26",
+        "note": "W11X phase-2 truth sync (PR #363): the GUM arithmetic corrections (JS bin coverage, two-block propagation, level-aware loudness variance, spectral condition number, construction-time PSD) and the perception admission gate binding at creative/production_runtime.py are recorded as MODULE_MAP R31 + DECISION_LOG D-0042/D-0043; the W11X mutation campaign is 22/22 killed and OPERATION_TRUTH.json was regenerated at this HEAD."
       }
     ]
   },

@@ -25,8 +25,8 @@
       }
     ],
     "generation_command": "python -m nexus_ai_agent.nagar",
-    "source_revision": "1896485736c86354ba7eab1a54a9299fbdd299c3",
-    "generated_at": "2026-11-26T09:31:57Z",
+    "source_revision": "0719e0aa9d39939a6de35bad6ed79f08ea77dd79",
+    "generated_at": "2026-11-26T15:19:41Z",
     "deterministic_fields": [
       "reconciliation",
       "operations[*].pipeline",
@@ -70,7 +70,7 @@
     "runtime_only_count": 44,
     "universe_count": 114,
     "surface_count": 12,
-    "suite_executed_count": 82,
+    "suite_executed_count": 85,
     "missing_by_category": {
       "color": 3,
       "portrait": 10,
@@ -257,6 +257,30 @@
   "proof": {
     "suite_probe_rule": "operation id (string literal or imported OPERATION_* constant) in a test module that also calls .dispatch/._dispatch/.handler or a slideshow service entrypoint; the truth engine's own test files are excluded (they observe the engine, they do not evidence operations)",
     "suite_executed": {
+      "analysis.assess_loudness": {
+        "kinds": [
+          "dispatch"
+        ],
+        "files": [
+          "tests/unit/test_perception_gate_runtime.py"
+        ]
+      },
+      "analysis.mark_scene_cuts": {
+        "kinds": [
+          "dispatch"
+        ],
+        "files": [
+          "tests/unit/test_perception_gate_runtime.py"
+        ]
+      },
+      "analysis.mark_silences": {
+        "kinds": [
+          "dispatch"
+        ],
+        "files": [
+          "tests/unit/test_perception_gate_runtime.py"
+        ]
+      },
       "audio.align_music": {
         "kinds": [
           "dispatch",
@@ -1934,7 +1958,7 @@
         "command": "MISSING",
         "execution": "MISSING",
         "artifact": "MISSING",
-        "proof": "MISSING"
+        "proof": "PROVEN"
       },
       "maturity": {
         "level": 1,
@@ -1942,8 +1966,12 @@
         "definition": "code: registered in build_runtime_registry() and domain-ready (typed input model with extra=\"forbid\", a named non-lambda handler, deterministic=True)"
       },
       "evidence": {
-        "suite_execution_kinds": [],
-        "suite_reference_files": [],
+        "suite_execution_kinds": [
+          "dispatch"
+        ],
+        "suite_reference_files": [
+          "tests/unit/test_perception_gate_runtime.py"
+        ],
         "recorded_execution_proof": false,
         "recorded_artifact_proof": false,
         "recorded_proofs": [],
@@ -1984,7 +2012,7 @@
         "command": "MISSING",
         "execution": "MISSING",
         "artifact": "MISSING",
-        "proof": "MISSING"
+        "proof": "PROVEN"
       },
       "maturity": {
         "level": 1,
@@ -1992,8 +2020,12 @@
         "definition": "code: registered in build_runtime_registry() and domain-ready (typed input model with extra=\"forbid\", a named non-lambda handler, deterministic=True)"
       },
       "evidence": {
-        "suite_execution_kinds": [],
-        "suite_reference_files": [],
+        "suite_execution_kinds": [
+          "dispatch"
+        ],
+        "suite_reference_files": [
+          "tests/unit/test_perception_gate_runtime.py"
+        ],
         "recorded_execution_proof": false,
         "recorded_artifact_proof": false,
         "recorded_proofs": [],
@@ -2034,7 +2066,7 @@
         "command": "MISSING",
         "execution": "MISSING",
         "artifact": "MISSING",
-        "proof": "MISSING"
+        "proof": "PROVEN"
       },
       "maturity": {
         "level": 1,
@@ -2042,8 +2074,12 @@
         "definition": "code: registered in build_runtime_registry() and domain-ready (typed input model with extra=\"forbid\", a named non-lambda handler, deterministic=True)"
       },
       "evidence": {
-        "suite_execution_kinds": [],
-        "suite_reference_files": [],
+        "suite_execution_kinds": [
+          "dispatch"
+        ],
+        "suite_reference_files": [
+          "tests/unit/test_perception_gate_runtime.py"
+        ],
         "recorded_execution_proof": false,
         "recorded_artifact_proof": false,
         "recorded_proofs": [],
