@@ -84,7 +84,8 @@ def _register_perception(registry: CapabilityRegistry) -> object:
         register_perception_operations,
     )
 
-    return register_perception_operations(registry)
+    register_perception_operations(registry)
+    return registry
 
 
 def _register_caption(registry: CapabilityRegistry) -> object:

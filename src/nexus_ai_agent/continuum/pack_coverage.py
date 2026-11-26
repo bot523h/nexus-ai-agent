@@ -95,6 +95,13 @@ PACK_TEST_TARGETS: Mapping[str, tuple[str, ...]] = {
         "tests/creative/audio_engine/test_cinema_kernels.py",
         "tests/architecture/test_audio_pack_boundary.py",
     ),
+    "perception": (
+        # Harvested #247: the pack's own suite plus the parser suite and the
+        # boundary gate are its evidence (the same shape as the audio pack).
+        "tests/unit/test_perception_pack.py",
+        "tests/unit/test_perception_parsers.py",
+        "tests/architecture/test_perception_boundary.py",
+    ),
     "caption": (
         "tests/unit/test_caption_pack.py",
         "tests/unit/test_caption_ass.py",
