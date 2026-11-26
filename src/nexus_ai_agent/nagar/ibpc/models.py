@@ -369,6 +369,30 @@ class ApprovalState(str, Enum):
     REVOKED = "REVOKED"
 
 
+def compute_canonical_approval_hash(
+    *,
+    project_id: str,
+    revision_id: str,
+    plan_digest: str,
+    preview_digest: str,
+    scope_signature: str,
+    principal_id: str,
+    expires_at_utc: str,
+) -> str:
+    """Canonical SHA-256 binding over approval target, scope, principal, and expiry."""
+    return digest_of(
+        {
+            "project_id": project_id,
+            "revision_id": revision_id,
+            "plan_digest": plan_digest,
+            "preview_digest": preview_digest,
+            "scope_signature": scope_signature,
+            "principal_id": principal_id,
+            "expires_at_utc": expires_at_utc,
+        }
+    )
+
+
 class ApprovalBinding(BaseModel):
     """One human approval bound to exact digests, one revision, one turn.
 
@@ -398,6 +422,23 @@ class ApprovalBinding(BaseModel):
     nonce: str = Field(default_factory=lambda: uuid.uuid4().hex)
     created_at: str = ""
     decided_at: str = ""
+    revision_id: str = ""
+    scope_signature: str = ""
+    expires_at_utc: str = ""
+    approval_hash: str = ""
+
+    @property
+    def canonical_binding_digest(self) -> str:
+        """Canonical binding digest over project, revision, plan, preview, scope, principal, exp."""
+        return compute_canonical_approval_hash(
+            project_id=self.project_id,
+            revision_id=self.revision_id or str(self.source_revision),
+            plan_digest=self.plan_digest,
+            preview_digest=self.preview_digest,
+            scope_signature=self.scope_signature,
+            principal_id=self.principal_id,
+            expires_at_utc=self.expires_at_utc,
+        )
 
     @property
     def identity_digest(self) -> str:
@@ -547,6 +588,26 @@ class PrivacyMode(str, Enum):
     EXPERIMENTAL_CLOUD = "EXPERIMENTAL_CLOUD"
 
 
+class SessionStatus(str, Enum):
+    ACTIVE = "ACTIVE"
+    PAUSED = "PAUSED"
+    CLOSED = "CLOSED"
+    ABORTED = "ABORTED"
+
+
+class ProcessingScope(str, Enum):
+    LOCAL_PROCESSING = "LOCAL_PROCESSING"
+    EXTERNAL_PROVIDER_DISPATCH = "EXTERNAL_PROVIDER_DISPATCH"
+
+
+class DataCategory(str, Enum):
+    VIDEO = "VIDEO"
+    AUDIO = "AUDIO"
+    IMAGE = "IMAGE"
+    TRANSCRIPT = "TRANSCRIPT"
+    BIOMETRIC_FACE_ROI = "BIOMETRIC_FACE_ROI"
+
+
 class ConsentRecord(BaseModel):
     """An explicit, recorded consent for one privacy mode. Digest-only: the
     record never contains transcript or audio content."""
@@ -564,6 +625,49 @@ class ConsentRecord(BaseModel):
         return digest_of(self.model_dump(mode="json"))
 
 
+class DurableConsentGrant(BaseModel):
+    """Durable, revocable, time-bounded privacy consent record (digest-only)."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    consent_id: str = Field(default_factory=lambda: _new_id("consent"))
+    project_id: str = Field(min_length=1, max_length=128)
+    principal_id: str = Field(min_length=1, max_length=128)
+    mode: PrivacyMode
+    processing_scope: str = Field(min_length=1, max_length=64)
+    data_category: str = Field(min_length=1, max_length=64)
+    provider_id: str = ""
+    granted_at_utc: str = Field(min_length=1)
+    expires_at_utc: str = ""
+    revoked_at_utc: str = ""
+    revoked_by: str = ""
+    revoke_reason: str = ""
+
+    @property
+    def consent_digest(self) -> str:
+        return digest_of(self.model_dump(mode="json"))
+
+
+class PrivacyConsentAuditEntry(BaseModel):
+    """Append-only privacy consent audit entry (strictly digest/metadata only)."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    audit_id: int = Field(ge=1)
+    consent_id: str
+    event_type: Literal["GRANTED", "REVOKED", "DENIED", "EXPIRED"]
+    project_id: str
+    principal_id: str
+    mode: str
+    processing_scope: str
+    data_category: str
+    provider_id: str = ""
+    actor_id: str
+    reason: str = ""
+    occurred_at_utc: str
+    metadata_digest: str = ""
+
+
 __all__ = [
     "APPROVAL_SCHEMA_ID",
     "AST_SCHEMA_ID",
@@ -578,17 +682,23 @@ __all__ = [
     "CheckVerdict",
     "CompiledPlan",
     "ConsentRecord",
+    "DataCategory",
+    "DurableConsentGrant",
     "FootprintCheck",
     "IBPCCapsule",
     "PlannedStep",
+    "PrivacyConsentAuditEntry",
     "PrivacyMode",
+    "ProcessingScope",
     "PreviewManifest",
     "Readback",
+    "SessionStatus",
     "ShadowKeyframe",
     "ShadowPreviewManifest",
     "TypedCreativeAST",
     "VerifierReport",
     "VideoTimeRange",
     "VideoTimeScope",
+    "compute_canonical_approval_hash",
     "worst_verdict",
 ]

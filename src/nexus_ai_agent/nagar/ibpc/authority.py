@@ -18,7 +18,10 @@ composition root passes in.  It deliberately imports neither
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import Enum
 from typing import Protocol, runtime_checkable
+
+from pydantic import BaseModel, ConfigDict
 
 from nexus_ai_agent.application.principal import PrincipalId
 
@@ -27,7 +30,71 @@ __all__ = [
     "CanonicalAuthorityPort",
     "DirectoryAuthority",
     "PrincipalFacts",
+    "StudioAction",
+    "StudioAuthorizationDecision",
+    "StudioAuthorizationError",
+    "StudioAuthorizerPort",
+    "StudioRole",
 ]
+
+
+class StudioRole(str, Enum):
+    OWNER = "OWNER"
+    EDITOR = "EDITOR"
+    VIEWER = "VIEWER"
+    AUDITOR = "AUDITOR"
+
+
+class StudioAction(str, Enum):
+    READ_SESSION = "READ_SESSION"
+    READ_JOB = "READ_JOB"
+    READ_AUDIT = "READ_AUDIT"
+    SUBMIT_INTENT = "SUBMIT_INTENT"
+    APPROVE_PLAN = "APPROVE_PLAN"
+    EXECUTE_PLAN = "EXECUTE_PLAN"
+    MANAGE_CONSENT = "MANAGE_CONSENT"
+    MANAGE_MEMBERSHIP = "MANAGE_MEMBERSHIP"
+    CLOSE_SESSION = "CLOSE_SESSION"
+
+
+class StudioAuthorizationDecision(BaseModel):
+    """Typed, auditable authorization decision produced by Studio principal RBAC."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    allowed: bool
+    principal_id: str
+    project_id: str
+    role: str
+    action: str
+    reason: str
+    binding_ref: str = ""
+    decided_at_utc: str = ""
+
+
+class StudioAuthorizationError(PermissionError):
+    """Fail-closed authorization refusal carrying the full structured decision."""
+
+    def __init__(self, decision: StudioAuthorizationDecision) -> None:
+        super().__init__(
+            f"{decision.reason}: principal={decision.principal_id} action={decision.action}"
+        )
+        self.decision = decision
+        self.reason = decision.reason
+
+
+@runtime_checkable
+class StudioAuthorizerPort(Protocol):
+    """Port for enforcing project membership + role authorization in Studio/IBPC."""
+
+    def authorize_action(
+        self,
+        *,
+        principal_id: str,
+        project_id: str,
+        action: StudioAction,
+        binding_ref: str = "",
+    ) -> StudioAuthorizationDecision: ...
 
 
 class CanonicalAuthorityError(ValueError):

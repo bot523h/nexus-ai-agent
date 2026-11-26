@@ -32,12 +32,14 @@ Two storage backends share one transition contract:
 from __future__ import annotations
 
 import contextlib
+import hmac
 import os
 import sqlite3
 import threading
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 
 from nexus_ai_agent.nagar.ibpc.canonical import digest_of
@@ -76,6 +78,9 @@ class ApprovalIdentity:
     ast_digest: str
     plan_digest: str
     preview_digest: str
+    revision_id: str | None = None
+    scope_signature: str | None = None
+    expires_at_utc: str | None = None
 
     def as_dict(self) -> dict[str, object]:
         return {name: getattr(self, name) for name in _IDENTITY_FIELDS}
@@ -189,6 +194,23 @@ class ApprovalLedger:
         return binding
 
     @staticmethod
+    def _parse_utc(ts: str) -> datetime:
+        try:
+            dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise ApprovalError("invalid_timestamp", str(exc)) from exc
+        if dt.tzinfo is None:
+            raise ApprovalError("invalid_timestamp", "timestamp must be timezone-aware")
+        return dt.astimezone(timezone.utc)
+
+    def _check_expiry(self, binding: ApprovalBinding) -> None:
+        if binding.expires_at_utc:
+            now_dt = self._parse_utc(self._now())
+            exp_dt = self._parse_utc(binding.expires_at_utc)
+            if now_dt >= exp_dt:
+                raise ApprovalError("expired", f"approval expired at {binding.expires_at_utc}")
+
+    @staticmethod
     def _check_identity(binding: ApprovalBinding, identity: ApprovalIdentity) -> None:
         """Fail-closed full identity comparison. Every field must match; the
         first mismatch raises a typed error naming the field. The immutable
@@ -213,8 +235,34 @@ class ApprovalLedger:
                 **identity.as_dict(),
             }
         )
-        if expected != binding.identity_digest:
+        if not hmac.compare_digest(expected, binding.identity_digest):
             raise ApprovalError("identity_digest_mismatch", "immutable identity digest differs")
+        # Constant-time checks for canonical Wave 3 binding fields when present.
+        if binding.approval_hash and not hmac.compare_digest(
+            binding.approval_hash, binding.canonical_binding_digest
+        ):
+            raise ApprovalError("approval_hash_mismatch", "canonical approval hash differs")
+        if identity.scope_signature is not None and (
+            not binding.scope_signature
+            or not hmac.compare_digest(binding.scope_signature, identity.scope_signature)
+        ):
+            raise ApprovalError("scope_signature_mismatch", "scope signature differs")
+        if identity.revision_id is not None and not hmac.compare_digest(
+            binding.revision_id or str(binding.source_revision), identity.revision_id
+        ):
+            raise ApprovalError("revision_id_mismatch", "revision id differs")
+        if identity.expires_at_utc is not None and not hmac.compare_digest(
+            binding.expires_at_utc, identity.expires_at_utc
+        ):
+            raise ApprovalError("expires_at_mismatch", "expiry timestamp differs")
+        if not hmac.compare_digest(binding.principal_id, identity.principal_id):
+            raise ApprovalError("identity_mismatch_principal_id", "principal id differs")
+        if not hmac.compare_digest(binding.project_id, identity.project_id):
+            raise ApprovalError("identity_mismatch_project_id", "project id differs")
+        if not hmac.compare_digest(binding.plan_digest, identity.plan_digest):
+            raise ApprovalError("identity_mismatch_plan_digest", "plan digest differs")
+        if not hmac.compare_digest(binding.preview_digest, identity.preview_digest):
+            raise ApprovalError("identity_mismatch_preview_digest", "preview digest differs")
 
     def approve(
         self,
@@ -232,6 +280,7 @@ class ApprovalLedger:
                 raise ApprovalError("revoked", "approval was revoked (interrupt/cancel/stale)")
             if binding.state is not ApprovalState.PENDING:
                 raise ApprovalError("invalid_state", f"cannot approve from {binding.state.value}")
+            self._check_expiry(binding)
             if not turn_is_active():
                 raise ApprovalError("turn_inactive", "the turn is no longer active")
             self._check_identity(binding, identity)
@@ -293,6 +342,7 @@ class ApprovalLedger:
                 raise ApprovalError("revoked", "approval was revoked")
             if binding.state is not ApprovalState.APPROVED:
                 raise ApprovalError("not_approved", f"cannot consume from {binding.state.value}")
+            self._check_expiry(binding)
             self._check_identity(binding, identity)
             consumed = binding.model_copy(update={"state": ApprovalState.CONSUMED})
             self._store(consumed)
@@ -388,6 +438,18 @@ class ApprovalLedger:
                     out.append(self.revoke(binding.approval_id))
             return tuple(out)
 
+    def revoke_session(self, session_id: str) -> tuple[ApprovalBinding, ...]:
+        """Revoke every non-terminal binding of one session (close/pause/abort)."""
+        with self._transaction():
+            out: list[ApprovalBinding] = []
+            for binding in self._all():
+                if binding.session_id == session_id and binding.state in (
+                    ApprovalState.PENDING,
+                    ApprovalState.APPROVED,
+                ):
+                    out.append(self.revoke(binding.approval_id))
+            return tuple(out)
+
 
 class DurableApprovalLedger(ApprovalLedger):
     """The same single-use ledger, persisted in a SQLite file.
@@ -408,6 +470,9 @@ class DurableApprovalLedger(ApprovalLedger):
             str(self._path), isolation_level=None, check_same_thread=False, timeout=30.0
         )
         self._conn.execute("PRAGMA journal_mode=WAL")
+        self._conn.execute("PRAGMA busy_timeout=5000")
+        self._conn.execute("PRAGMA foreign_keys=ON")
+        self._conn.execute("PRAGMA synchronous=FULL")
         # Serialize schema inspection and migration across concurrent
         # processes: every backend opens the same file, so the reservation
         # table (and its ``last_attempt`` fencing column) must exist exactly

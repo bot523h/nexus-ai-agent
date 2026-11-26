@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-11-25T20:48:41Z",
+  "updated_at": "2026-11-26T12:00:00Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -1297,6 +1297,19 @@
         "src/nexus_ai_agent/creative/studio/runtime.py",
         "src/nexus_ai_agent/adapters/durable_studio_runtime.py",
         "tests/unit/test_w4_cp4_coverage.py"
+      ]
+    },
+    {
+      "id": "nagar-ibpc-wave3-durability",
+      "description": "Wave 3 IBPC durable live sessions, canonical approval binding, durable privacy consent, Studio principal auth & RBAC",
+      "paths": [
+        "src/nexus_ai_agent/nagar/ibpc/",
+        "src/nexus_ai_agent/adapters/studio_principal_auth.py",
+        "src/nexus_ai_agent/api/app.py",
+        "src/nexus_ai_agent/api/studio.py",
+        "src/nexus_ai_agent/api/studio_ibpc.py",
+        "tests/unit/test_wave3_ibpc_durability.py",
+        "tests/unit/creative/test_wave3_ibpc_mutations.py"
       ]
     }
   ],
@@ -8846,6 +8859,51 @@
       "gates_owner": false,
       "note": "",
       "generation": 1
+    },
+    {
+      "task": "task-w3-ibpc-durability",
+      "title": "W3: IBPC durable live sessions, canonical approval binding, privacy consent & Studio principal RBAC",
+      "zone": "nagar-ibpc-wave3-durability",
+      "priority": "P0",
+      "status": "done",
+      "scope": "Durable SQLite WAL stores for IBPC live sessions/turns/contexts, canonical approval binding hash + expiry, durable privacy consent & append-only audit, Studio principal token auth + project RBAC store, /api/studio/{project_id}/ibpc & membership routes, durability suite, and 10-mutant AST campaign.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "DurableLiveSessionStore enforces WAL pragmas, monotonic turn ordering, idempotency deduplication/conflict rejection, CAS session epoch fencing, and restart hydration.",
+        "ApprovalBinding enforces canonical approval hash, scope signature, revision id, and constant-time expiry verification.",
+        "DurablePrivacyConsentStore enforces grant/revoke/expiry fail-closed egress gating with append-only audit.",
+        "StudioPrincipalAuthStore + /api/studio/projects/{project_id}/ibpc enforce token auth and OWNER/EDITOR/VIEWER/AUDITOR RBAC matrix.",
+        "10/10 AST mutants killed (0 survived, 0 invalid) and all IBPC, Studio, boundary, lint, and strict mypy checks green."
+      ],
+      "evidence_required": [
+        "pytest tests/unit/test_wave3_ibpc_durability.py tests/unit/creative/test_wave3_ibpc_mutations.py",
+        "pytest tests/unit/test_ibpc_*.py tests/integration/test_ibpc_e2e.py tests/architecture/test_ibpc_boundary.py",
+        "ruff check, ruff format --check, mypy --strict"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/nagar/ibpc/",
+        "src/nexus_ai_agent/adapters/studio_principal_auth.py",
+        "src/nexus_ai_agent/api/app.py",
+        "src/nexus_ai_agent/api/studio.py",
+        "src/nexus_ai_agent/api/studio_ibpc.py",
+        "tests/unit/test_wave3_ibpc_durability.py",
+        "tests/unit/creative/test_wave3_ibpc_mutations.py"
+      ],
+      "owner_hint": "arena/aac14be0-nexus-ai-agent",
+      "agent_branch": "",
+      "claimed_at": null,
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "delivered": [
+        "src/nexus_ai_agent/nagar/ibpc/",
+        "src/nexus_ai_agent/adapters/studio_principal_auth.py",
+        "src/nexus_ai_agent/api/app.py",
+        "src/nexus_ai_agent/api/studio.py",
+        "src/nexus_ai_agent/api/studio_ibpc.py",
+        "tests/unit/test_wave3_ibpc_durability.py",
+        "tests/unit/creative/test_wave3_ibpc_mutations.py"
+      ],
+      "note": "Completed on arena/aac14be0-nexus-ai-agent without overlapping task-w4-integrated-durable-execution or task-w11x-cp1-provenance-hardening."
     }
   ],
   "deferred_log": [

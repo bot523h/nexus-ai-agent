@@ -53,6 +53,41 @@ def _configured_projects() -> frozenset[str]:
     )
 
 
+def _enforce_optional_principal_rbac(project_id: str, request: Request) -> None:
+    """Enforce durable principal membership RBAC when principal auth is enabled or presented."""
+    principal_token = request.headers.get("x-nexus-principal-token")
+    require_principal = os.getenv("NEXUS_STUDIO_REQUIRE_PRINCIPAL", "").strip() == "1"
+    if not principal_token and not require_principal:
+        return
+    from nexus_ai_agent.adapters.studio_principal_auth import (
+        PrincipalAuthenticationError,
+        ProjectMembershipAuthorizer,
+    )
+    from nexus_ai_agent.api.studio_ibpc import get_studio_auth_store
+    from nexus_ai_agent.nagar.ibpc.authority import StudioAction, StudioAuthorizationError
+
+    auth_store = get_studio_auth_store()
+    try:
+        try:
+            principal_id = auth_store.authenticate_token(principal_token)
+        except PrincipalAuthenticationError as exc:
+            raise HTTPException(status_code=401, detail=str(exc)) from exc
+        method = str(request.scope.get("method", "GET")).upper()
+        action = StudioAction.SUBMIT_INTENT if method == "POST" else StudioAction.READ_JOB
+        binding_ref = auth_store.default_binding_for(principal_id) or ""
+        try:
+            ProjectMembershipAuthorizer(auth_store).authorize_action(
+                principal_id=principal_id,
+                project_id=project_id,
+                action=action,
+                binding_ref=binding_ref,
+            )
+        except StudioAuthorizationError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+    finally:
+        auth_store.close()
+
+
 def require_studio_project(
     project_id: str,
     request: Request,
@@ -68,6 +103,7 @@ def require_studio_project(
         # No project existence oracle: both unconfigured and unauthorized projects
         # are indistinguishable to the caller.
         raise HTTPException(status_code=404, detail="studio project not found")
+    _enforce_optional_principal_rbac(project_id, request)
 
 
 @router.get(
