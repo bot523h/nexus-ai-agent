@@ -323,3 +323,163 @@ def test_bridge_gates_a_burn_rate_against_a_budget() -> None:
 def test_bridge_rejects_an_unusable_coverage_factor() -> None:
     with pytest.raises(GUMInputError, match="coverage_factor"):
         ScientificVerificationBridge(coverage_factor=0.0)
+
+
+# ---------------------------------------------------------------------------
+# Wave A corrections: the arithmetic the audit found wrong
+# ---------------------------------------------------------------------------
+
+
+def test_disjoint_histograms_are_maximally_different() -> None:
+    """One-hot histograms on different bins: JS = 1 bit, not 0."""
+    budget = scene_cut_uncertainty((1.0, 0.0), (0.0, 1.0), samples_per_histogram=1_000)
+    assert budget.js_divergence == pytest.approx(1.0, rel=1e-12)
+
+
+def test_identical_histograms_have_zero_divergence() -> None:
+    budget = scene_cut_uncertainty((0.5, 0.5), (0.5, 0.5), samples_per_histogram=1_000)
+    assert budget.js_divergence == pytest.approx(0.0, abs=1e-15)
+    assert budget.standard == pytest.approx(0.0, abs=1e-15)
+
+
+def test_a_noisier_after_histogram_costs_more_uncertainty() -> None:
+    """Both blocks propagate: the after sample count is not decoration."""
+    fine = scene_cut_uncertainty(
+        (0.9, 0.1),
+        (0.1, 0.9),
+        samples_per_histogram=1_000,
+        samples_per_histogram_after=1_000,
+    )
+    coarse_after = scene_cut_uncertainty(
+        (0.9, 0.1),
+        (0.1, 0.9),
+        samples_per_histogram=1_000,
+        samples_per_histogram_after=1,
+    )
+    assert coarse_after.standard > 10.0 * fine.standard
+
+
+def test_the_scene_cut_budget_matches_the_closed_form_two_block_propagation() -> None:
+    """Independent re-derivation of u_c(JSD) from both multinomial blocks.
+
+    Sigma_P, Sigma_Q and both gradients are rebuilt by hand from
+    J = 0.5 KL(p||m) + 0.5 KL(q||m), then fed through the same GUM law. Any change
+    to either gradient or to the block assembly breaks the equality, which is
+    what makes the W12/W16/W17 mutants non-vacuous.
+    """
+    from nexus_ai_agent.creative.verification.uncertainty_gum import (
+        UncertaintyInput,
+        combine,
+    )
+
+    first, second, samples_p, samples_q = (0.9, 0.1), (0.1, 0.9), 1_000, 37
+    midpoint = tuple(0.5 * (p + q) for p, q in zip(first, second, strict=True))
+
+    def covariance(values: tuple[float, ...], samples: int) -> list[list[float]]:
+        size = len(values)
+        return [
+            [
+                (
+                    values[row] * (1.0 - values[row])
+                    if row == column
+                    else -values[row] * values[column]
+                )
+                / samples
+                for column in range(size)
+            ]
+            for row in range(size)
+        ]
+
+    gradient_p = tuple(
+        0.5 * math.log(p / m) / math.log(2.0) for p, m in zip(first, midpoint, strict=True)
+    )
+    gradient_q = tuple(
+        0.5 * math.log(q / m) / math.log(2.0) for q, m in zip(second, midpoint, strict=True)
+    )
+    sigma_p = covariance(first, samples_p)
+    sigma_q = covariance(second, samples_q)
+    size = len(first)
+    # diag(Sigma_P, Sigma_Q): the two histograms are estimated independently.
+    matrix = [
+        [sigma_p[row][column] for column in range(size)] + [0.0] * size for row in range(size)
+    ] + [[0.0] * size + [sigma_q[row][column] for column in range(size)] for row in range(size)]
+    closed_form = combine(
+        gradient_p + gradient_q,
+        UncertaintyInput.from_covariance((0.0,) * (2 * size), matrix),
+    )
+
+    budget = scene_cut_uncertainty(
+        first, second, samples_per_histogram=samples_p, samples_per_histogram_after=samples_q
+    )
+    assert budget.standard == pytest.approx(closed_form.standard, rel=1e-12)
+    assert budget.standard > 0.0
+
+
+def test_the_chromophore_condition_number_is_the_spectral_ratio() -> None:
+    """kappa_2 of [[1, rho], [rho, 1]] is (1 + rho)/(1 - rho), never 1.0."""
+    rho = 0.9
+    estimate = SkinChromophoreEstimate(
+        melanin=0.3,
+        hemoglobin=0.2,
+        residual_norm=0.01,
+        reconstructed_optical_density=(0.3,),
+        clamped=False,
+    )
+    budget = chromophore_uncertainty(
+        estimate,
+        reflectance_sigma=0.01,
+        melanin_extinction=(1.0, 0.0),
+        hemoglobin_extinction=(rho, math.sqrt(1.0 - rho * rho)),
+        ridge=0.0,
+    )
+    assert budget.condition_number == pytest.approx((1.0 + rho) / (1.0 - rho), rel=1e-12)
+
+
+def test_a_parallel_gramian_fails_closed_before_the_condition_is_reported() -> None:
+    estimate = SkinChromophoreEstimate(
+        melanin=0.3,
+        hemoglobin=0.2,
+        residual_norm=0.01,
+        reconstructed_optical_density=(0.3,),
+        clamped=False,
+    )
+    with pytest.raises(GUMInputError, match="linearly dependent"):
+        chromophore_uncertainty(
+            estimate,
+            reflectance_sigma=0.01,
+            melanin_extinction=(1.0, 0.0),
+            hemoglobin_extinction=(1.0, 0.0),
+            ridge=0.0,
+        )
+
+
+def test_a_nearly_parallel_gramian_reports_a_large_finite_condition_number() -> None:
+    estimate = SkinChromophoreEstimate(
+        melanin=0.3,
+        hemoglobin=0.2,
+        residual_norm=0.01,
+        reconstructed_optical_density=(0.3,),
+        clamped=False,
+    )
+    rho = 1.0 - 1e-6
+    budget = chromophore_uncertainty(
+        estimate,
+        reflectance_sigma=0.01,
+        melanin_extinction=(1.0, 0.0),
+        hemoglobin_extinction=(rho, math.sqrt(1.0 - rho * rho)),
+        ridge=0.0,
+    )
+    assert 1e5 < budget.condition_number < 1e7
+
+
+def test_the_loudness_budget_is_level_dependent() -> None:
+    """u(L) grows as the programme gets quieter; the old model had no level term."""
+    quiet = loudness_uncertainty(_audio(-40.0)).combined.standard
+    loud = loudness_uncertainty(_audio(-10.0)).combined.standard
+    # 30 dB of level is 1000x the mean square, i.e. sqrt(1000) in u(L).
+    assert quiet > 30.0 * loud > 0.0
+
+
+def test_digital_silence_is_refused_instead_of_dividing_by_zero() -> None:
+    with pytest.raises(GUMInputError, match="positive mean square"):
+        loudness_uncertainty(_audio(-math.inf))
