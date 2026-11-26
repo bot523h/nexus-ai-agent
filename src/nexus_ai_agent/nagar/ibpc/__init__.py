@@ -33,6 +33,7 @@ from nexus_ai_agent.nagar.ibpc import (  # noqa: F401 — reachability (law R20)
     compiler,
     composition,
     delta,
+    execution_outbox,
     footprint,
     intent,
     models,
@@ -73,6 +74,11 @@ from nexus_ai_agent.nagar.ibpc.authority import (
 )
 from nexus_ai_agent.nagar.ibpc.compiler import CompilationRefused, compile_ast
 from nexus_ai_agent.nagar.ibpc.composition import build_ibpc_service, create_default_key_provider
+from nexus_ai_agent.nagar.ibpc.execution_outbox import (
+    DurableExecutionOutboxStore,
+    ExecutionOutboxCoordinator,
+    ExecutionOutboxState,
+)
 from nexus_ai_agent.nagar.ibpc.intent import (
     Clarification,
     IntentAST,
@@ -206,7 +212,11 @@ __all__ = [
     "create_default_key_provider",
     "compiler",
     "delta",
+    "DurableExecutionOutboxStore",
     "evaluate_proof_gate",
+    "ExecutionOutboxCoordinator",
+    "ExecutionOutboxState",
+    "execution_outbox",
     "footprint",
     "intent",
     "models",
