@@ -28,6 +28,7 @@ from nexus_ai_agent.nagar.ibpc.live_session import (
     DurableLiveSessionStore,
     SessionStatus,
     TurnStatus,
+    TurnStoreError,
 )
 from nexus_ai_agent.nagar.ibpc.models import CheckVerdict, ShadowPreviewManifest
 from nexus_ai_agent.nagar.ibpc.service import (
@@ -45,6 +46,7 @@ PRINCIPAL = "prn_" + "7" * 32
 PROJECT = "project-r3"
 BINDING_REF = "cbn_" + "a" * 64
 SHADOW_DIGEST = "sha256:" + "2" * 64
+TTL_INSTANT = "2026-11-25T00:10:00Z"
 
 
 class _Queue:
@@ -513,6 +515,102 @@ class TestClosingAndAbortingFenceEverything:
             _shutdown(second)
 
 
+class TestTheEdgesOfTheTerminationAndRecoveryPaths:
+    def test_a_benign_context_miss_is_logged_not_raised(
+        self, media, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        service = _service(media.root)
+        try:
+            session_id = _open(service)
+            proposal = _preview(service, media.clip, session_id)
+            ctx = service._contexts[proposal.approval_id]
+            ctx.turn_id = "turn-never-stored"
+            with caplog.at_level("WARNING", logger="nexus_ai_agent.nagar.ibpc.service"):
+                service._persist_context(ctx)
+            assert "ibpc.durable_context_skipped" in caplog.text
+        finally:
+            _shutdown(service)
+
+    def test_recovery_takes_the_expiry_from_the_row_when_the_context_lacks_it(self, media) -> None:
+        first = _service(media.root)
+        session_id = _open(first)
+        proposal = _preview(first, media.clip, session_id)
+        store = first._session_store
+        assert store is not None
+        # an APPROVED row whose context predates the expiry field
+        context = json.loads(first._serialize_context(first._contexts[proposal.approval_id]))
+        context["issued_expires_at_utc"] = None
+        store.mark_turn_approved(
+            session_id,
+            "turn-1",
+            base_revision_id="rev:7",
+            execution_context_json=json.dumps(context),
+            issued_expires_at_utc=TTL_INSTANT,
+        )
+        _shutdown(first)
+
+        second = _service(media.root)
+        try:
+            assert second.recover_from_durable_state()["contexts"] == 1
+            rebuilt = second._contexts[proposal.approval_id]
+            assert rebuilt.issued_expires_at_utc == TTL_INSTANT
+        finally:
+            _shutdown(second)
+
+    def test_termination_fences_the_in_memory_turns_without_a_store(self, media) -> None:
+        service = _service(media.root, session_store=None)
+        session_id = _open(service)
+        _preview(service, media.clip, session_id)
+        assert service.close_session(session_id) is None
+        assert service._sessions.get_session(session_id).turns["turn-1"].turn_state in {
+            TurnState.CANCELLED,
+            TurnState.INTERRUPTED,
+        }
+
+    def test_terminating_an_unknown_session_is_a_typed_refusal(self, media) -> None:
+        service = _service(media.root)
+        try:
+            with pytest.raises(TurnStoreError) as exc:
+                service.close_session("sess_does_not_exist")
+            assert exc.value.reason == "unknown_session"
+        finally:
+            _shutdown(service)
+
+    def test_an_executing_turn_is_not_cancelled_out_from_under_the_reservation(self, media) -> None:
+        """close() must not fight a turn that already reserved the consume."""
+        service = _service(media.root)
+        try:
+            session_id = _open(service)
+            proposal = _preview(service, media.clip, session_id)
+            service.approve(session_id, "turn-1", proposal.approval_id, principal_id=PRINCIPAL)
+            service._sessions.mark_executing(session_id, "turn-1")
+            record = service.close_session(session_id)
+            assert record.status is SessionStatus.CLOSED
+            # the in-flight turn keeps its executing state; the approval is dead
+            assert service._sessions.get_session(session_id).turns["turn-1"].turn_state in {
+                TurnState.EXECUTING,
+                TurnState.INTERRUPTED,
+            }
+            assert service._deps.approval_ledger.get(proposal.approval_id).state.value == "REVOKED"
+        finally:
+            _shutdown(service)
+
+    def test_closing_an_aborted_session_leaves_its_terminal_turns_alone(self, media) -> None:
+        service = _service(media.root)
+        try:
+            session_id = _open(service)
+            _preview(service, media.clip, session_id)
+            service.abort_session(session_id)
+            before = service._sessions.get_session(session_id).turns["turn-1"].turn_state
+            record = service.close_session(session_id)
+            after = service._sessions.get_session(session_id).turns["turn-1"].turn_state
+            # a terminal status is never overwritten: the session stays ABORTED
+            assert record.status is SessionStatus.ABORTED
+            assert before is after is TurnState.INTERRUPTED
+        finally:
+            _shutdown(service)
+
+
 class TestTheTurnMirrorIsNoLongerSilent:
     def test_an_unknown_turn_is_skipped_with_its_typed_reason(
         self, media, caplog: pytest.LogCaptureFixture
@@ -524,6 +622,26 @@ class TestTheTurnMirrorIsNoLongerSilent:
             with caplog.at_level("WARNING", logger="nexus_ai_agent.nagar.ibpc.service"):
                 service._mark_durable_turn(session_id, "turn-unknown", TurnStatus.EXECUTED)
             assert "ibpc.durable_turn_mirror_skipped" in caplog.text
+        finally:
+            _shutdown(service)
+
+    def test_a_context_write_failure_propagates(self, media, monkeypatch) -> None:
+        service = _service(media.root)
+        try:
+            session_id = _open(service)
+            proposal = _preview(service, media.clip, session_id)
+            ctx = service._contexts[proposal.approval_id]
+            # a terminal turn cannot take a new context: that is a real lifecycle
+            # divergence, so it must be typed, not skipped as a benign miss
+            service._session_store.mark_turn_approved(
+                session_id, "turn-1", base_revision_id="rev:7"
+            )
+            service._session_store.mark_turn_executed(
+                session_id, "turn-1", base_revision_id="rev:7"
+            )
+            with pytest.raises(ApprovalError) as exc:
+                service._persist_context(ctx)
+            assert exc.value.reason == "durable_context_not_persisted:turn_terminal"
         finally:
             _shutdown(service)
 

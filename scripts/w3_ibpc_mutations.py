@@ -97,12 +97,14 @@ MUTATIONS: tuple[Mutation, ...] = (
         IBPC / "live_session.py",
         (
             (
-                "            session = self.get_session(session_id)\n"
-                "            self._require_open(session)\n"
-                "            if base_revision_id != session.active_revision_id:",
-                "            session = self.get_session(session_id)\n"
-                "            self._require_open(session)\n"
-                "            if False:",
+                "            if base_revision_id != session.active_revision_id:\n"
+                "                raise StaleSessionRevisionError(\n"
+                '                    "stale_revision",\n'
+                '                    f"edit base {base_revision_id!r} != active {session.active_revision_id!r}",',
+                "            if False:  # mutation: a stale base revision is accepted\n"
+                "                raise StaleSessionRevisionError(\n"
+                '                    "stale_revision",\n'
+                '                    f"edit base {base_revision_id!r} != active {session.active_revision_id!r}",',
             ),
         ),
         "a preview attached to a stale base revision must fail closed",
@@ -223,8 +225,8 @@ MUTATIONS: tuple[Mutation, ...] = (
         IBPC / "approval.py",
         (
             (
-                "        if current.state is ApprovalState.CONSUMED:\n            raise ApprovalAlreadyConsumedError(approval_id)",
-                "        if False:  # mutation: an approval may be consumed twice\n            raise ApprovalAlreadyConsumedError(approval_id)",
+                "            if binding.state is ApprovalState.CONSUMED:\n                reservation = self._read_reservation(approval_id)",
+                "            if False:  # mutation: an approval may be consumed twice\n                reservation = self._read_reservation(approval_id)",
             ),
         ),
         "an approval is single-use: replay raises ApprovalAlreadyConsumedError",
@@ -397,8 +399,8 @@ MUTATIONS: tuple[Mutation, ...] = (
         IBPC / "service.py",
         (
             (
-                "        payload = self._canonical_binding_payload(ctx, identity)",
-                "        payload = None  # mutation: the canonical binding is not presented",
+                "        payload = self._issued_binding_payload(ctx)\n        consume_canonical(",
+                "        payload = None  # mutation: the canonical binding is not presented\n        consume_canonical(",
             ),
         ),
         "execution must present the exact canonical payload it is bound to",
@@ -419,11 +421,137 @@ MUTATIONS: tuple[Mutation, ...] = (
         IBPC / "service.py",
         (
             (
-                "            + timedelta(minutes=APPROVAL_TTL_MINUTES)",
-                "            + timedelta(minutes=APPROVAL_TTL_MINUTES * 100000)  # mutation",
+                "            expires_at = (issued_at_dt + timedelta(minutes=APPROVAL_TTL_MINUTES)).strftime(",
+                "            expires_at = (issued_at_dt + timedelta(minutes=APPROVAL_TTL_MINUTES * 100000)).strftime(  # mutation",
             ),
         ),
         "an approval token is short-lived: an expired binding refuses execution",
+    ),
+    # -- R1a: the issuance instant is minted once and never recomputed ------
+    Mutation(
+        "issuance_instant_not_persisted",
+        IBPC / "service.py",
+        (
+            (
+                "            ctx.issued_expires_at_utc = expires_at",
+                "            ctx.issued_expires_at_utc = None  # mutation: TTL instant dropped",
+            ),
+        ),
+        "the expiry minted at issuance is persisted with the context and compared at consume",
+    ),
+    Mutation(
+        "ttl_compared_against_a_fresh_clock",
+        IBPC / "service.py",
+        (
+            (
+                "        expires = _parse_instant(ctx.issued_expires_at_utc)\n        if current >= expires:",
+                "        expires = _parse_instant(self._deps.now()) + timedelta(days=3650)  # mutation: the window slides\n        if current >= expires:",
+            ),
+        ),
+        "an approval is judged against the instant it was ISSUED at, not against consume-time",
+    ),
+    # -- R1b: verification uses the stored key id --------------------------
+    Mutation(
+        "key_id_not_looked_up",
+        IBPC / "approval.py",
+        (
+            (
+                "            return self._key_provider.key(key_id).material",
+                "            return self._key_provider.key(self._key_provider.active_key_id).material  # mutation: rotation unsafe",
+            ),
+        ),
+        "the MAC is verified with the key the row was issued under (rotation-safe)",
+    ),
+    # -- R2a: the voice lane goes through the same boundary ----------------
+    Mutation(
+        "voice_intent_skips_the_consent_gate",
+        IBPC / "service.py",
+        (
+            (
+                "        refusal = self._require_media_consent(session, ConsentScope.AUDIO)\n        if refusal is not None:\n            return refusal",
+                "        refusal = None  # mutation: audio processed without a consent grant\n        if refusal is not None:\n            return refusal",
+            ),
+        ),
+        "no audio is transcribed without a durable AUDIO consent grant",
+    ),
+    Mutation(
+        "voice_intent_skips_turn_authorization",
+        IBPC / "service.py",
+        (
+            (
+                "        refusal = self._authorize_turn_creation(session)\n        if refusal is not None:\n            return refusal\n        refusal = self._require_media_consent(session, ConsentScope.AUDIO)",
+                "        refusal = None  # mutation: any member may open a voice turn\n        if refusal is not None:\n            return refusal\n        refusal = self._require_media_consent(session, ConsentScope.AUDIO)",
+            ),
+        ),
+        "creating a turn is an EDITOR/OWNER action, re-verified on every turn",
+    ),
+    # -- R2b: identity never becomes a role -------------------------------
+    Mutation(
+        "synthetic_owner_reinstated",
+        IBPC / "service.py",
+        (
+            (
+                "            if self._deps.require_role_authority or action in _OWNER_ONLY_ACTIONS:",
+                "            return AuthorizedPrincipalFacts(  # mutation: identity is treated as OWNER\n                principal_id=resolved.principal_id,\n                project_id=resolved.project_id,\n                channel_binding_id=resolved.channel_binding_id,\n                role=MembershipRole.OWNER,\n            )\n            if self._deps.require_role_authority or action in _OWNER_ONLY_ACTIONS:",
+            ),
+        ),
+        "a verified identity is not a role: the OWNER-only action is refused without a role proof",
+    ),
+    # -- R3: a second process can rebuild and execute the approval ---------
+    Mutation(
+        "recovery_disabled",
+        IBPC / "service.py",
+        (
+            (
+                "    def recover_from_durable_state(self, *, force: bool = False) -> dict[str, Any]:",
+                "    def recover_from_durable_state(self, *, force: bool = False) -> dict[str, Any]:\n        if not force:  # mutation: restart recovery disabled\n            return {'sessions': 0, 'turns': 0, 'contexts': 0, 'revoked': 0}",
+            ),
+        ),
+        "Service B reconstructs the session, turn and executable context of Service A",
+    ),
+    Mutation(
+        "recovered_contexts_overwrite_the_live_one",
+        IBPC / "service.py",
+        (
+            (
+                "                        if turn.approval_id in self._contexts:",
+                "                        if False:  # mutation: a rebuilt context replaces the live one",
+            ),
+        ),
+        "recovery never replaces the context the approval was signed over",
+    ),
+    Mutation(
+        "terminated_session_approvals_never_reconciled",
+        IBPC / "service.py",
+        (
+            (
+                "                revoked = self._revoke_session_approvals(terminal.session_id)",
+                "                revoked = ()  # mutation: a terminated session keeps live approvals",
+            ),
+        ),
+        "a crash between the two stores cannot leave an approval executable after recovery",
+    ),
+    Mutation(
+        "mirror_swallows_lifecycle_divergence",
+        IBPC / "service.py",
+        (
+            (
+                '        except TurnStoreError as exc:\n            if exc.reason not in _BENIGN_TURN_MIRROR_MISSES:\n                raise ApprovalError(f"durable_turn_not_mirrored:{exc.reason}", exc.detail) from exc',
+                '        except TurnStoreError as exc:\n            if False:  # mutation: every lifecycle divergence is swallowed\n                raise ApprovalError(f"durable_turn_not_mirrored:{exc.reason}", exc.detail) from exc',
+            ),
+        ),
+        "a durable lifecycle divergence between the stores is surfaced, not swallowed",
+    ),
+    Mutation(
+        "context_write_failure_swallowed",
+        IBPC / "service.py",
+        (
+            (
+                '        except TurnStoreError as exc:\n            if exc.reason not in _BENIGN_TURN_MIRROR_MISSES:\n                raise ApprovalError(\n                    f"durable_context_not_persisted:{exc.reason}", exc.detail\n                ) from exc',
+                '        except TurnStoreError as exc:\n            return  # mutation: an unwritable context is ignored\n            raise ApprovalError(\n                f"durable_context_not_persisted:{exc.reason}", exc.detail\n            ) from exc',
+            ),
+        ),
+        "a context that cannot be persisted is a typed failure, never a silent skip",
     ),
 )
 
