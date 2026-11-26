@@ -245,6 +245,20 @@ class PassportBuilder:
             }
             payload = facts.payload
             status = self._status(facts, subject, findings)
+            lineage_binding: dict[str, Any] = self._lineage_binding(facts)
+        if facts is None:
+            lineage_binding = {
+                "project_id": None,
+                "base_revision_id": None,
+                "accepted_revision_id": None,
+                "input_asset_version_ids": [],
+                "output_asset_version_id": None,
+                "job_id": job_id,
+                "attempt_id": None,
+                "attempt_epoch": None,
+                "verification_proof_digest": None,
+                "provenance_node_id": None,
+            }
 
         passport_content: dict[str, Any] = {
             "_type": PASSPORT_TYPE,
@@ -254,6 +268,7 @@ class PassportBuilder:
                 "job": predicate_job,
                 "authority": self._authority(payload),
                 "verification": verification,
+                "lineage_binding": lineage_binding,
                 "chain": {
                     "record_count_for_job": len(records),
                     "chain_ok": chain.ok,
@@ -305,6 +320,105 @@ class PassportBuilder:
             "actor": actor,
             "basis": "dispatch payload durable in the authoritative job row "
             "(surface gate + payload schema validation ran before enqueue)",
+        }
+
+    @staticmethod
+    def _lineage_binding(facts: JobFacts) -> dict[str, Any]:
+        """Derive revision, asset-version, attempt, and provenance bindings from durable facts."""
+        payload = facts.payload if isinstance(facts.payload, dict) else {}
+        result = facts.result if isinstance(facts.result, dict) else {}
+        binding = result.get("artifact_binding")
+        binding_dict = binding if isinstance(binding, dict) else {}
+        cp = facts.artifact_passport if isinstance(facts.artifact_passport, dict) else {}
+
+        project_id = (
+            binding_dict.get("project_id")
+            or result.get("project_id")
+            or payload.get("project_id")
+            or cp.get("project_id")
+        )
+        base_revision_id = (
+            result.get("base_revision_id")
+            or binding_dict.get("revision_id")
+            or payload.get("base_revision_id")
+            or payload.get("revision_id")
+        )
+        accepted_revision_id = (
+            result.get("accepted_revision_id")
+            or binding_dict.get("accepted_revision_id")
+            or binding_dict.get("revision_id")
+        )
+        raw_inputs = (
+            result.get("input_asset_version_ids")
+            or binding_dict.get("input_asset_version_ids")
+            or payload.get("input_asset_version_ids")
+            or payload.get("asset_version_ids")
+        )
+        input_asset_version_ids: list[str] = []
+        if isinstance(raw_inputs, (list, tuple)):
+            input_asset_version_ids = [str(v) for v in raw_inputs if isinstance(v, str) and v]
+        elif isinstance(payload.get("asset_version_id"), str) and payload["asset_version_id"]:
+            input_asset_version_ids = [str(payload["asset_version_id"])]
+
+        output_asset_version_id = (
+            result.get("asset_version_id")
+            or binding_dict.get("artifact_version_id")
+            or (
+                cp.get("artifact", {}).get("asset_id")
+                if isinstance(cp.get("artifact"), dict)
+                else None
+            )
+        )
+
+        attempt_id_val = result.get("attempt_id") or binding_dict.get("attempt_id")
+        if not attempt_id_val and facts.attempt_history:
+            for entry in facts.attempt_history:
+                if isinstance(entry, dict) and entry.get("attempt") == facts.attempt:
+                    attempt_id_val = entry.get("attempt_id")
+                    break
+
+        verification_proof_digest = result.get("verification_proof_digest")
+        if verification_proof_digest is None and isinstance(facts.verification, dict):
+            verification_proof_digest = digest_of(facts.verification)
+
+        provenance_node_id = result.get("provenance_node_id") or binding_dict.get(
+            "provenance_node_id"
+        )
+        if provenance_node_id is None:
+            sha = PassportBuilder._first(
+                facts.verification, ("physical_identity",), _SHA_KEYS
+            ) or PassportBuilder._first(facts.result, (), _SHA_KEYS)
+            if isinstance(sha, str) and sha and facts.attempt >= 1:
+                from nexus_ai_agent.provenance.graph import node_identity
+
+                provenance_node_id = node_identity(
+                    "ARTIFACT",
+                    {
+                        "job_id": facts.job_id,
+                        "attempt_epoch": facts.attempt,
+                        "content_digest": sha,
+                    },
+                )
+
+        return {
+            "project_id": str(project_id) if project_id is not None else None,
+            "base_revision_id": str(base_revision_id) if base_revision_id is not None else None,
+            "accepted_revision_id": (
+                str(accepted_revision_id) if accepted_revision_id is not None else None
+            ),
+            "input_asset_version_ids": input_asset_version_ids,
+            "output_asset_version_id": (
+                str(output_asset_version_id) if output_asset_version_id is not None else None
+            ),
+            "job_id": facts.job_id,
+            "attempt_id": str(attempt_id_val) if attempt_id_val is not None else None,
+            "attempt_epoch": facts.attempt,
+            "verification_proof_digest": (
+                str(verification_proof_digest) if verification_proof_digest is not None else None
+            ),
+            "provenance_node_id": (
+                str(provenance_node_id) if provenance_node_id is not None else None
+            ),
         }
 
     def _subject(self, facts: JobFacts) -> tuple[dict[str, Any] | None, list[Finding]]:

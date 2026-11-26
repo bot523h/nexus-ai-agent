@@ -2916,3 +2916,31 @@ is never claimed.
 FIFO before inspecting its type, deleting unexpected local entries, and treating
 any post-error S3 object as the caller's write are all rejected because each can
 turn observation or ambiguity into authority over another writer's lease.
+
+## D-0041 — Wave 0 repository truth convergence and `CreativeGraph` P3 hardening
+
+**Context.** Following the landings of PRs #350–#354 and #356–#360 on `main`
+(`3ee52c4`), `.agents/board.json`, `OPERATION_TRUTH.json`, and the architecture
+truth matrix still reflected pre-#351 baselines (`d6876ab3`), carried a stale
+active claim for `task-330` (delivered in PR #337), and `provenance/graph.py`
+lacked three defense-in-depth P3 checks: read-only URI backup opening during
+`restore()`, refusal of epistemic promotion on terminal nodes/edges, and
+`GRAPH032` parity between `revision_count` and `nexus_graph_chain`
+`node_create`/`node_advance` transitions. Meanwhile, PR #355 (`feat(w4)`
+including `adapters/durable_plan_dedupe.py`) remains open on GitHub and is not
+yet merged into `main`.
+
+**Decision.** Synchronized `.agents/board.json`, regenerated
+`OPERATION_TRUTH.json` via `python -m nexus_ai_agent.nagar --docs`, updated
+`NAGAR_ONE_TRUTH_MATRIX.md`, `PROVENANCE_LEDGER.md`, `MODULE_MAP.md` (adding
+`R30`), and applied the three P3 hardening invariants to
+`src/nexus_ai_agent/provenance/graph.py` with dedicated unit tests in
+`tests/unit/test_creative_graph.py`. Open PR #355 is recorded truthfully as
+`OPEN` rather than claimed merged.
+
+**Evidence.** `tests/unit/test_creative_graph.py` (23/23),
+`tests/unit/test_creative_graph_mutations.py` (17/17 killed),
+`tests/architecture/test_repo_truth_consistency.py`,
+`tests/unit/test_docs_integrity.py`, `scripts/check_board_integrity.py`, and
+`python -m nexus_ai_agent.nagar --check`.
+
