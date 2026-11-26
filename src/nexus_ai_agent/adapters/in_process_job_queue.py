@@ -65,6 +65,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import math
 import os
 import sqlite3
 import threading
@@ -125,6 +126,16 @@ from nexus_ai_agent.provenance.models import (
     sha256_hex,
 )
 from nexus_ai_agent.provenance.observer import CausalObserver
+from nexus_ai_agent.provenance.outbox import (
+    OUTBOX_EVENT_ATTEMPT_RESERVED,
+    OUTBOX_EVENT_ATTEMPT_SUPERSEDED,
+    OUTBOX_EVENT_ATTEMPT_VERIFIED,
+    OUTBOX_EVENT_JOB_COMPLETED,
+    OUTBOX_EVENT_JOB_FAILED,
+    ProvenanceOutboxStore,
+    ensure_outbox_schema,
+    insert_outbox_event_tx,
+)
 
 JobHandler = Callable[[dict[str, object]], Awaitable[dict[str, object]]]
 JobCompletionHook = Callable[["JobCompletion"], Awaitable[None]]
@@ -187,6 +198,43 @@ class QueueOwnershipError(RuntimeError):
     A second process attempting to acquire the same lock receives this error
     and must not start recovery or execute anything.
     """
+
+
+class InvalidHeartbeatStateError(RuntimeError):
+    """Raised when heartbeat or lease-TTL state is invalid or clock rolled back."""
+
+
+class StaleAttemptOwnershipError(RuntimeError):
+    """Raised when takeover is refused (missing, non-RUNNING, or still fresh)."""
+
+
+class FencedAttemptCommitError(RuntimeError):
+    """Raised when a superseded or non-owning worker attempts publication or commit."""
+
+
+@dataclass(frozen=True)
+class AttemptLeaseRecord:
+    """Durable attempt lease and monotonic epoch record."""
+
+    job_id: str
+    attempt_id: str
+    attempt_epoch: int
+    worker_id: str
+    status: str
+    heartbeat_at_s: float | None
+    lease_ttl_s: float
+    started_at: str
+    updated_at: str
+
+
+def _validate_finite_positive(value: object, *, name: str) -> float:
+    """Require a finite positive float for epoch/TTL timing values (fail closed)."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise InvalidHeartbeatStateError(f"{name} must be a finite positive number, got {value!r}")
+    numeric = float(value)
+    if not math.isfinite(numeric) or numeric <= 0.0:
+        raise InvalidHeartbeatStateError(f"{name} must be finite and > 0.0, got {value!r}")
+    return numeric
 
 
 #: Suffix of the rendezvous file that backs the queue's exclusive lock.
@@ -478,11 +526,18 @@ class InProcessJobQueue:
         artifact_verifiers: Mapping[str, ArtifactVerifier] | None = None,
         artifact_publications: Mapping[str, ArtifactPublication] | None = None,
         causal_observer: CausalObserver | None = None,
+        worker_id: str | None = None,
+        lease_ttl_s: float = 30.0,
     ) -> None:
         self.db_path = Path(db_path)
         self._sqlite_path = str(db_path)
         self._artifact_root = Path(f"{self._sqlite_path}.artifacts")
         self._on_job_finished = on_job_finished
+        self._lease_ttl_s = _validate_finite_positive(lease_ttl_s, name="lease_ttl_s")
+        resolved_worker = worker_id if worker_id is not None else f"worker-{os.getpid()}-{id(self)}"
+        if not isinstance(resolved_worker, str) or not resolved_worker.strip():
+            raise ValueError("worker_id must be a non-empty string")
+        self._worker_id = resolved_worker.strip()
         # task-231-provenance-ledger: optional observer for durable transitions
         # recorded AFTER commit into the causal journal (the Project Graph
         # ledger). It has no authority: it receives facts, never decisions,
@@ -530,6 +585,7 @@ class InProcessJobQueue:
         self._promotion_path_lock_refs: dict[str, int] = {}
         self._held_promotion_locks: dict[str, int] = {}
         self._db_lock = threading.Lock()
+        self._tx_hook_local = threading.local()
         # In-flight artifact publications.  ``asyncio.to_thread`` hands the
         # work to a ThreadPoolExecutor thread; cancelling the awaiting task
         # does NOT interrupt that thread, so shutdown must explicitly *drain*
@@ -731,6 +787,13 @@ class InProcessJobQueue:
     def owns_process_lock(self) -> bool:
         """Whether this instance currently holds the exclusive process lock."""
         return self._lock_fd is not None
+
+    def assert_single_owner(self) -> None:
+        """Fail closed if a file-backed queue does not hold its exclusive OS lock."""
+        if self._sqlite_path != ":memory:" and self._lock_fd is None:
+            raise QueueOwnershipError(
+                f"queue does not hold exclusive single-owner lock for {self._sqlite_path}"
+            )
 
     def _release_flock(self) -> None:
         """Release the exclusive process lock (idempotent, safe to double-call).
@@ -1495,7 +1558,9 @@ class InProcessJobQueue:
     def _refresh_heartbeat(self, claim: ExecutionClaim) -> bool:
         """Attempt-scoped CAS for activity evidence, not a new operation."""
         now = _utc_now()
-        with self._db_lock, self._connection() as connection:
+        now_iso = now.isoformat()
+        now_epoch_s = now.timestamp()
+        with self._db_lock, self._write_connection() as connection:
             row = connection.execute(
                 """
                 SELECT heartbeat_at FROM nexus_job_queue
@@ -1519,7 +1584,7 @@ class InProcessJobQueue:
                 WHERE id = ? AND status IN (?, ?) AND attempt = ? AND heartbeat_at = ?
                 """,
                 (
-                    now.isoformat(),
+                    now_iso,
                     claim.job_id,
                     JobStatus.PROCESSING.value,
                     JobStatus.VERIFYING.value,
@@ -1527,7 +1592,17 @@ class InProcessJobQueue:
                     row["heartbeat_at"],
                 ),
             )
-            return cursor.rowcount == 1
+            if cursor.rowcount != 1:
+                return False
+            connection.execute(
+                """
+                UPDATE nexus_attempt_leases
+                SET heartbeat_at_s = ?, updated_at = ?
+                WHERE job_id = ? AND attempt_epoch = ? AND status IN ('RUNNING', 'VERIFYING')
+                """,
+                (now_epoch_s, now_iso, claim.job_id, claim.attempt),
+            )
+            return True
 
     @staticmethod
     def _is_typed_render_preflight_error(exc: BaseException) -> bool:
@@ -2422,6 +2497,8 @@ class InProcessJobQueue:
         publish_context = dict(result)
         publish_context["_queue_job_id"] = claim.job_id
         publish_context["_queue_attempt"] = claim.attempt
+        publish_context["_queue_attempt_epoch"] = claim.attempt
+        publish_context["_queue_attempt_id"] = creative_attempt_id(claim.job_id, claim.attempt)
         # The publication adapter performs this authoritative CAS read at the
         # last responsible moment, after it has staged and hashed private bytes.
         publish_context["_queue_fence_check"] = lambda: self._owns_execution(
@@ -2429,6 +2506,21 @@ class InProcessJobQueue:
         )
         try:
             patch = await self._publish_in_thread(publication, payload, publish_context)
+        except FencedAttemptCommitError as exc:
+            logger.warning("artifact publish fenced out job_id=%s reason=%s", claim.job_id, exc)
+            return (
+                result,
+                VerificationOutcome(
+                    ok=False,
+                    reason_code="stale_execution",
+                    summary={
+                        "status": "failed",
+                        "reason_code": "stale_execution",
+                        "detail": str(exc),
+                    },
+                ),
+                False,
+            )
         except Exception as exc:  # noqa: BLE001 - publication failure is a refusal
             logger.warning("artifact publish failed; keeping staged temp retracted: %s", exc)
             return (
@@ -2488,6 +2580,8 @@ class InProcessJobQueue:
         if claim is not None:
             finalize_context["_queue_job_id"] = claim.job_id
             finalize_context["_queue_attempt"] = claim.attempt
+            finalize_context["_queue_attempt_epoch"] = claim.attempt
+            finalize_context["_queue_attempt_id"] = creative_attempt_id(claim.job_id, claim.attempt)
         try:
             await asyncio.to_thread(publication.finalize, payload, finalize_context)
         except Exception:  # noqa: BLE001 - the job is already durably COMPLETED
@@ -3215,6 +3309,39 @@ class InProcessJobQueue:
                 "CREATE UNIQUE INDEX IF NOT EXISTS idx_nexus_job_queue_transaction_id "
                 "ON nexus_job_queue(transaction_id)"
             )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS nexus_attempt_leases (
+                    job_id TEXT NOT NULL,
+                    attempt_id TEXT NOT NULL,
+                    attempt_epoch INTEGER NOT NULL CHECK(attempt_epoch >= 1),
+                    worker_id TEXT NOT NULL,
+                    status TEXT NOT NULL CHECK(
+                        status IN (
+                            'RUNNING',
+                            'VERIFYING',
+                            'COMPLETED',
+                            'FAILED',
+                            'SUPERSEDED',
+                            'CANCELLED'
+                        )
+                    ),
+                    heartbeat_at_s REAL,
+                    lease_ttl_s REAL NOT NULL CHECK(lease_ttl_s > 0.0),
+                    started_at TEXT NOT NULL CHECK(length(trim(started_at)) > 0),
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY (job_id, attempt_epoch)
+                )
+                """
+            )
+            connection.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_nexus_attempt_leases_single_active
+                ON nexus_attempt_leases(job_id)
+                WHERE status IN ('RUNNING', 'VERIFYING')
+                """
+            )
+            ensure_outbox_schema(connection)
             self._backfill_request_identities(connection)
             self._backfill_legacy_attempts(connection)
 
@@ -3759,6 +3886,15 @@ class InProcessJobQueue:
                     )
                     if cursor.rowcount != 1:
                         continue
+                    connection.execute(
+                        """
+                        UPDATE nexus_attempt_leases
+                        SET status = 'SUPERSEDED', updated_at = ?
+                        WHERE job_id = ? AND attempt_epoch = ?
+                          AND status IN ('RUNNING', 'VERIFYING')
+                        """,
+                        (now.isoformat(), job_id, current_attempt),
+                    )
                     selected.append((job_id, job_type, current_attempt or None))
                 else:
                     selected.append((job_id, job_type, None))
@@ -3799,8 +3935,10 @@ class InProcessJobQueue:
         the attempt value this reservation minted) or ``None`` if the CAS
         did not commit.
         """
-        now = _now()
-        with self._db_lock, self._connection() as connection:
+        now_dt = _utc_now()
+        now = now_dt.isoformat()
+        now_epoch_s = now_dt.timestamp()
+        with self._db_lock, self._write_connection() as connection:
             cursor = connection.execute(
                 """
                 UPDATE nexus_job_queue
@@ -3849,6 +3987,59 @@ class InProcessJobQueue:
             )
             if ledger_cursor.rowcount != 1:
                 raise RuntimeError("reservation lost before its attempt ledger could be appended")
+            connection.execute(
+                """
+                UPDATE nexus_attempt_leases
+                SET status = 'SUPERSEDED', updated_at = ?
+                WHERE job_id = ? AND attempt_epoch < ? AND status IN ('RUNNING', 'VERIFYING')
+                """,
+                (now, job_id, attempt_number),
+            )
+            connection.execute(
+                """
+                INSERT INTO nexus_attempt_leases (
+                    job_id, attempt_id, attempt_epoch, worker_id, status,
+                    heartbeat_at_s, lease_ttl_s, started_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, 'RUNNING', ?, ?, ?, ?)
+                """,
+                (
+                    job_id,
+                    identifier,
+                    attempt_number,
+                    self._worker_id,
+                    now_epoch_s,
+                    self._lease_ttl_s,
+                    now,
+                    now,
+                ),
+            )
+            q_meta = connection.execute(
+                "SELECT job_type, payload_json FROM nexus_job_queue WHERE id = ?",
+                (job_id,),
+            ).fetchone()
+            outbox_payload: dict[str, object] = {
+                "job_type": str(q_meta["job_type"]) if q_meta is not None else "unknown",
+                "worker_id": self._worker_id,
+            }
+            if q_meta is not None:
+                try:
+                    parsed_p = json.loads(str(q_meta["payload_json"]))
+                    if isinstance(parsed_p, dict):
+                        for k in ("project_id", "revision_id"):
+                            if parsed_p.get(k) is not None:
+                                outbox_payload[k] = str(parsed_p[k])
+                except ValueError:
+                    pass
+            insert_outbox_event_tx(
+                connection,
+                event_type=OUTBOX_EVENT_ATTEMPT_RESERVED,
+                job_id=job_id,
+                attempt_id=identifier,
+                attempt_epoch=attempt_number,
+                payload=outbox_payload,
+                created_at=now,
+            )
             return ExecutionClaim(job_id=job_id, attempt=attempt_number)
 
     def _owns_execution(self, claim: ExecutionClaim, expected: JobStatus) -> bool:
@@ -3866,7 +4057,10 @@ class InProcessJobQueue:
     def _mark_verifying(self, claim: ExecutionClaim) -> bool:
         """PROCESSING → VERIFYING, atomically advancing the attempt ledger."""
         try:
-            with self._db_lock, self._connection() as connection:
+            now_dt = _utc_now()
+            now = now_dt.isoformat()
+            now_epoch_s = now_dt.timestamp()
+            with self._db_lock, self._write_connection() as connection:
                 cursor = connection.execute(
                     """
                     UPDATE nexus_job_queue SET status = ?, heartbeat_at = ?
@@ -3874,7 +4068,7 @@ class InProcessJobQueue:
                     """,
                     (
                         JobStatus.VERIFYING.value,
-                        _now(),
+                        now,
                         claim.job_id,
                         JobStatus.PROCESSING.value,
                         claim.attempt,
@@ -3899,7 +4093,7 @@ class InProcessJobQueue:
                 if attempt is None:
                     raise _AttemptTransitionError("missing processing attempt ledger record")
                 attempt["status"] = "verifying"
-                attempt["verifying_at"] = _now()
+                attempt["verifying_at"] = now
                 ledger_cursor = connection.execute(
                     """
                     UPDATE nexus_job_queue SET attempt_history_json = ?
@@ -3914,6 +4108,14 @@ class InProcessJobQueue:
                 )
                 if ledger_cursor.rowcount != 1:
                     raise _AttemptTransitionError("attempt history transition lost its fence")
+                connection.execute(
+                    """
+                    UPDATE nexus_attempt_leases
+                    SET status = 'VERIFYING', heartbeat_at_s = ?, updated_at = ?
+                    WHERE job_id = ? AND attempt_epoch = ? AND status = 'RUNNING'
+                    """,
+                    (now_epoch_s, now, claim.job_id, claim.attempt),
+                )
                 return True
         except _AttemptTransitionError:
             return False
@@ -3936,6 +4138,7 @@ class InProcessJobQueue:
                 ).fetchone()
                 if row is None:
                     return False
+                now = _now()
                 history = self._decode_attempt_history(str(row["attempt_history_json"] or "[]"))
                 attempt = next(
                     (entry for entry in history if self._attempt_number(entry) == claim.attempt),
@@ -3945,7 +4148,7 @@ class InProcessJobQueue:
                     raise _AttemptTransitionError("missing live attempt ledger record")
                 if attempt.get("status") in {"processing", "verifying"}:
                     attempt["status"] = "interrupted"
-                    attempt["finished_at"] = _now()
+                    attempt["finished_at"] = now
                     attempt["error"] = attempt.get("error") or "worker_cancelled"
                 elif attempt.get("status") != "verified":
                     raise _AttemptTransitionError("attempt is not recoverable")
@@ -3965,7 +4168,17 @@ class InProcessJobQueue:
                         claim.attempt,
                     ),
                 )
-                return cursor.rowcount == 1
+                if cursor.rowcount != 1:
+                    return False
+                connection.execute(
+                    """
+                    UPDATE nexus_attempt_leases
+                    SET status = 'CANCELLED', updated_at = ?
+                    WHERE job_id = ? AND attempt_epoch = ? AND status IN ('RUNNING', 'VERIFYING')
+                    """,
+                    (now, claim.job_id, claim.attempt),
+                )
+                return True
         except _AttemptTransitionError:
             return False
 
@@ -3981,7 +4194,7 @@ class InProcessJobQueue:
         result_json = canonical_json(result)
         verification_json = canonical_json(verification)
         execution_evidence_json = canonical_json(execution_evidence)
-        with self._db_lock, self._connection() as connection:
+        with self._db_lock, self._write_connection() as connection:
             row = connection.execute(
                 """
                 SELECT attempt_history_json FROM nexus_job_queue
@@ -4003,10 +4216,11 @@ class InProcessJobQueue:
             )
             if attempt is None:
                 return False
+            now = _now()
             attempt.update(
                 {
                     "status": "verified",
-                    "verified_at": _now(),
+                    "verified_at": now,
                     "execution_result_json": result_json,
                     "verification_json": verification_json,
                     "execution_evidence_json": execution_evidence_json,
@@ -4027,7 +4241,27 @@ class InProcessJobQueue:
                     claim.attempt,
                 ),
             )
-            return cursor.rowcount == 1
+            if cursor.rowcount != 1:
+                return False
+            ver_digest = "sha256:" + hashlib.sha256(verification_json.encode("utf-8")).hexdigest()
+            verified_payload: dict[str, object] = {
+                "verification_proof_digest": ver_digest,
+                "evidence_digest": ver_digest,
+            }
+            if isinstance(result.get("sha256"), str):
+                verified_payload["artifact_digest"] = str(result["sha256"])
+            if isinstance(result.get("artifact_path"), str):
+                verified_payload["artifact_path"] = str(result["artifact_path"])
+            insert_outbox_event_tx(
+                connection,
+                event_type=OUTBOX_EVENT_ATTEMPT_VERIFIED,
+                job_id=claim.job_id,
+                attempt_id=creative_attempt_id(claim.job_id, claim.attempt),
+                attempt_epoch=claim.attempt,
+                payload=verified_payload,
+                created_at=now,
+            )
+            return True
 
     def _mark_completed(
         self,
@@ -4044,6 +4278,81 @@ class InProcessJobQueue:
             stored_passport is None or reconciled_from_attempt_id is None
         ):
             raise ValueError("reconciliation requires a persisted passport and source attempt")
+
+        def _sync_completed_lease(conn: sqlite3.Connection) -> None:
+            q_row = conn.execute(
+                "SELECT job_type, payload_json FROM nexus_job_queue "
+                "WHERE id = ? AND status = ? AND attempt = ?",
+                (claim.job_id, JobStatus.COMPLETED.value, claim.attempt),
+            ).fetchone()
+            if q_row is None:
+                return
+            ts = _now()
+            conn.execute(
+                """
+                UPDATE nexus_attempt_leases
+                SET status = 'COMPLETED', updated_at = ?
+                WHERE job_id = ? AND attempt_epoch = ? AND status IN ('RUNNING', 'VERIFYING')
+                """,
+                (ts, claim.job_id, claim.attempt),
+            )
+            completed_payload: dict[str, object] = {
+                "job_type": str(q_row["job_type"]),
+                "worker_id": self._worker_id,
+            }
+            try:
+                parsed_p = json.loads(str(q_row["payload_json"]))
+            except ValueError:
+                parsed_p = {}
+            binding = result.get("artifact_binding")
+            binding_dict = binding if isinstance(binding, dict) else {}
+            project_id = binding_dict.get("project_id") or (
+                parsed_p.get("project_id") if isinstance(parsed_p, dict) else None
+            )
+            if isinstance(project_id, str) and project_id:
+                completed_payload["project_id"] = project_id
+            base_rev = binding_dict.get("revision_id") or (
+                parsed_p.get("revision_id") if isinstance(parsed_p, dict) else None
+            )
+            if isinstance(base_rev, str) and base_rev:
+                completed_payload["base_revision_id"] = base_rev
+                completed_payload["accepted_revision_id"] = str(
+                    result.get("accepted_revision_id") or base_rev
+                )
+            art_sha = (
+                binding_dict.get("artifact_id")
+                or result.get("sha256")
+                or result.get("content_sha256")
+            )
+            if isinstance(art_sha, str) and art_sha:
+                completed_payload["artifact_digest"] = art_sha
+            if isinstance(result.get("artifact_path"), str):
+                completed_payload["artifact_path"] = str(result["artifact_path"])
+            out_ver = result.get("asset_version_id") or binding_dict.get("artifact_version_id")
+            if isinstance(out_ver, str) and out_ver:
+                completed_payload["output_asset_version_id"] = out_ver
+            in_vers = result.get("input_asset_version_ids") or (
+                parsed_p.get("input_asset_version_ids") if isinstance(parsed_p, dict) else None
+            )
+            if isinstance(in_vers, (list, tuple)) and in_vers:
+                completed_payload["input_asset_version_ids"] = [str(v) for v in in_vers]
+            ver_block = result.get(VERIFICATION_RESULT_KEY)
+            if isinstance(ver_block, dict):
+                completed_payload["verification_proof_digest"] = (
+                    "sha256:"
+                    + hashlib.sha256(canonical_json(ver_block).encode("utf-8")).hexdigest()
+                )
+            insert_outbox_event_tx(
+                conn,
+                event_type=OUTBOX_EVENT_JOB_COMPLETED,
+                job_id=claim.job_id,
+                attempt_id=creative_attempt_id(claim.job_id, claim.attempt),
+                attempt_epoch=claim.attempt,
+                payload=completed_payload,
+                created_at=ts,
+            )
+
+        self._tx_hook_local.hook = _sync_completed_lease
         result_json = canonical_json(result)
         with self._db_lock, self._connection() as connection:
             row = connection.execute(
@@ -4146,7 +4455,8 @@ class InProcessJobQueue:
             if attempt is None:
                 return False
             attempt["status"] = status.value
-            attempt["finished_at"] = _now()
+            now = _now()
+            attempt["finished_at"] = now
             attempt["error"] = error
             if result_json is not None:
                 attempt["execution_result_json"] = result_json
@@ -4162,14 +4472,356 @@ class InProcessJobQueue:
                     error,
                     result_json,
                     canonical_json(history),
-                    _now(),
+                    now,
                     claim.job_id,
                     JobStatus.PROCESSING.value,
                     JobStatus.VERIFYING.value,
                     claim.attempt,
                 ),
             )
-            return cursor.rowcount == 1
+            if cursor.rowcount != 1:
+                return False
+            connection.execute(
+                """
+                UPDATE nexus_attempt_leases
+                SET status = 'FAILED', updated_at = ?
+                WHERE job_id = ? AND attempt_epoch = ? AND status IN ('RUNNING', 'VERIFYING')
+                """,
+                (now, claim.job_id, claim.attempt),
+            )
+            insert_outbox_event_tx(
+                connection,
+                event_type=OUTBOX_EVENT_JOB_FAILED,
+                job_id=claim.job_id,
+                attempt_id=creative_attempt_id(claim.job_id, claim.attempt),
+                attempt_epoch=claim.attempt,
+                payload={"error": error, "status": status.value},
+                created_at=now,
+            )
+            return True
+
+    def outbox_store(self) -> ProvenanceOutboxStore:
+        """Return a :class:`ProvenanceOutboxStore` bound to this queue's SQLite DB."""
+        if self._memory_connection is not None:
+            return ProvenanceOutboxStore(memory_connection=self._memory_connection)
+        return ProvenanceOutboxStore(self.db_path)
+
+    @staticmethod
+    def _lease_from_row(row: sqlite3.Row) -> AttemptLeaseRecord:
+        hb_raw = row["heartbeat_at_s"]
+        return AttemptLeaseRecord(
+            job_id=str(row["job_id"]),
+            attempt_id=str(row["attempt_id"]),
+            attempt_epoch=int(row["attempt_epoch"]),
+            worker_id=str(row["worker_id"]),
+            status=str(row["status"]),
+            heartbeat_at_s=float(hb_raw) if hb_raw is not None else None,
+            lease_ttl_s=float(row["lease_ttl_s"]),
+            started_at=str(row["started_at"]),
+            updated_at=str(row["updated_at"]),
+        )
+
+    def get_attempt_lease(
+        self, job_id: str, attempt_epoch: int | None = None
+    ) -> AttemptLeaseRecord | None:
+        """Return the latest (or specified epoch) attempt lease row for ``job_id``."""
+        with self._db_lock, self._connection() as connection:
+            if attempt_epoch is None:
+                row = connection.execute(
+                    """
+                    SELECT * FROM nexus_attempt_leases
+                    WHERE job_id = ?
+                    ORDER BY attempt_epoch DESC
+                    LIMIT 1
+                    """,
+                    (job_id,),
+                ).fetchone()
+            else:
+                row = connection.execute(
+                    """
+                    SELECT * FROM nexus_attempt_leases
+                    WHERE job_id = ? AND attempt_epoch = ?
+                    """,
+                    (job_id, attempt_epoch),
+                ).fetchone()
+        return None if row is None else self._lease_from_row(row)
+
+    def list_attempt_leases(self, job_id: str) -> list[AttemptLeaseRecord]:
+        """Return all durable attempt lease rows for ``job_id``, oldest epoch first."""
+        with self._db_lock, self._connection() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM nexus_attempt_leases
+                WHERE job_id = ?
+                ORDER BY attempt_epoch ASC
+                """,
+                (job_id,),
+            ).fetchall()
+        return [self._lease_from_row(row) for row in rows]
+
+    def assert_attempt_owner(
+        self,
+        job_id: str,
+        attempt_epoch: int,
+        *,
+        worker_id: str | None = None,
+    ) -> AttemptLeaseRecord:
+        """Fail closed with :class:`FencedAttemptCommitError` if attempt is superseded."""
+        with self._db_lock, self._connection() as connection:
+            q_row = connection.execute(
+                "SELECT status, attempt FROM nexus_job_queue WHERE id = ?",
+                (job_id,),
+            ).fetchone()
+            if q_row is None:
+                raise FencedAttemptCommitError(f"job {job_id} does not exist")
+            current_epoch = int(q_row["attempt"])
+            if attempt_epoch < current_epoch:
+                raise FencedAttemptCommitError(
+                    f"stale attempt epoch {attempt_epoch} < current DB epoch "
+                    f"{current_epoch} for {job_id}"
+                )
+            if attempt_epoch != current_epoch or str(q_row["status"]) not in (
+                JobStatus.PROCESSING.value,
+                JobStatus.VERIFYING.value,
+            ):
+                raise FencedAttemptCommitError(
+                    f"attempt epoch {attempt_epoch} is not active owner of {job_id} "
+                    f"(status={q_row['status']}, current_epoch={current_epoch})"
+                )
+            lease_row = connection.execute(
+                """
+                SELECT * FROM nexus_attempt_leases
+                WHERE job_id = ? AND attempt_epoch = ?
+                """,
+                (job_id, attempt_epoch),
+            ).fetchone()
+            if lease_row is None:
+                raise FencedAttemptCommitError(
+                    f"no durable attempt lease found for {job_id} epoch={attempt_epoch}"
+                )
+            lease = self._lease_from_row(lease_row)
+            if lease.status not in ("RUNNING", "VERIFYING"):
+                raise FencedAttemptCommitError(
+                    f"attempt lease status {lease.status} cannot commit for {job_id}"
+                )
+            if worker_id is not None and lease.worker_id != worker_id:
+                raise FencedAttemptCommitError(
+                    f"worker {worker_id!r} does not own {job_id} epoch={attempt_epoch} "
+                    f"(owned by {lease.worker_id!r})"
+                )
+            return lease
+
+    def takeover_stale_attempt(
+        self,
+        job_id: str,
+        *,
+        new_worker_id: str,
+        now_epoch_s: float | None = None,
+        lease_ttl_s: float | None = None,
+    ) -> AttemptLeaseRecord:
+        """Atomically supersede a stale RUNNING attempt under BEGIN IMMEDIATE.
+
+        Takeover predicate (fail closed on every violation):
+        1. Active attempt must exist and have status ``RUNNING``.
+        2. Stored ``heartbeat_at_s`` and ``lease_ttl_s`` must be finite and ``> 0.0``.
+        3. ``now_epoch_s`` must be finite, ``> 0.0``, and ``>= heartbeat_at_s`` (no rollback).
+        4. ``now_epoch_s >= heartbeat_at_s + lease_ttl_s`` (fresh heartbeat refused).
+        5. Monotonically mint ``new_attempt_epoch = attempt_epoch + 1`` and mark old ``SUPERSEDED``.
+        """
+        if not isinstance(new_worker_id, str) or not new_worker_id.strip():
+            raise ValueError("new_worker_id must be a non-empty string")
+        normalized_worker = new_worker_id.strip()
+        effective_ttl = (
+            self._lease_ttl_s
+            if lease_ttl_s is None
+            else _validate_finite_positive(lease_ttl_s, name="lease_ttl_s")
+        )
+        effective_now = (
+            _utc_now().timestamp()
+            if now_epoch_s is None
+            else _validate_finite_positive(now_epoch_s, name="now_epoch_s")
+        )
+        now_iso = datetime.fromtimestamp(effective_now, tz=timezone.utc).isoformat()
+        with self._db_lock, self._write_connection() as connection:
+            lease_row = connection.execute(
+                """
+                SELECT * FROM nexus_attempt_leases
+                WHERE job_id = ?
+                ORDER BY attempt_epoch DESC
+                LIMIT 1
+                """,
+                (job_id,),
+            ).fetchone()
+            if lease_row is None:
+                raise StaleAttemptOwnershipError(f"no attempt lease exists for job {job_id}")
+            current_status = str(lease_row["status"])
+            if current_status != "RUNNING":
+                raise StaleAttemptOwnershipError(
+                    f"takeover refused for {job_id}: "
+                    f"attempt status is {current_status}, not RUNNING"
+                )
+            hb_s = _validate_finite_positive(lease_row["heartbeat_at_s"], name="heartbeat_at_s")
+            row_ttl_s = _validate_finite_positive(
+                lease_row["lease_ttl_s"], name="stored lease_ttl_s"
+            )
+            if effective_now < hb_s:
+                raise InvalidHeartbeatStateError(
+                    f"clock rollback refused for {job_id}: "
+                    f"now_epoch_s={effective_now} < heartbeat_at_s={hb_s}"
+                )
+            if effective_now < hb_s + row_ttl_s:
+                raise StaleAttemptOwnershipError(
+                    f"heartbeat is still fresh for {job_id}: "
+                    f"now={effective_now} < deadline={hb_s + row_ttl_s}"
+                )
+            old_epoch = int(lease_row["attempt_epoch"])
+            q_row = connection.execute(
+                """
+                SELECT status, attempt, attempt_history_json FROM nexus_job_queue
+                WHERE id = ? AND status = ? AND attempt = ?
+                """,
+                (job_id, JobStatus.PROCESSING.value, old_epoch),
+            ).fetchone()
+            if q_row is None:
+                raise StaleAttemptOwnershipError(
+                    f"queue row for {job_id} epoch={old_epoch} is no longer PROCESSING"
+                )
+            superseded_cur = connection.execute(
+                """
+                UPDATE nexus_attempt_leases
+                SET status = 'SUPERSEDED', updated_at = ?
+                WHERE job_id = ? AND attempt_epoch = ? AND status = 'RUNNING'
+                """,
+                (now_iso, job_id, old_epoch),
+            )
+            if superseded_cur.rowcount != 1:
+                raise StaleAttemptOwnershipError(
+                    f"concurrent takeover superseded {job_id} epoch={old_epoch}"
+                )
+            new_epoch = old_epoch + 1
+            new_attempt_id = creative_attempt_id(job_id, new_epoch)
+            history = self._decode_attempt_history(str(q_row["attempt_history_json"] or "[]"))
+            for entry in history:
+                if self._attempt_number(entry) == old_epoch and entry.get("status") in {
+                    "processing",
+                    "verifying",
+                }:
+                    entry["status"] = "interrupted"
+                    entry["finished_at"] = now_iso
+                    entry["error"] = entry.get("error") or "lease_expired_takeover"
+            history.append(
+                {
+                    "attempt": new_epoch,
+                    "attempt_id": new_attempt_id,
+                    "status": "processing",
+                    "started_at": now_iso,
+                    "verifying_at": None,
+                    "verified_at": None,
+                    "finished_at": None,
+                    "error": None,
+                    "execution_result_json": None,
+                    "verification_json": None,
+                    "execution_evidence_json": None,
+                    "passport_json": None,
+                    "reconciled_from_attempt_id": None,
+                }
+            )
+            q_cur = connection.execute(
+                """
+                UPDATE nexus_job_queue
+                SET attempt = ?, started_at = ?, heartbeat_at = ?, attempt_history_json = ?
+                WHERE id = ? AND status = ? AND attempt = ?
+                """,
+                (
+                    new_epoch,
+                    now_iso,
+                    now_iso,
+                    canonical_json(history),
+                    job_id,
+                    JobStatus.PROCESSING.value,
+                    old_epoch,
+                ),
+            )
+            if q_cur.rowcount != 1:
+                raise StaleAttemptOwnershipError(
+                    f"queue CAS lost during takeover of {job_id} epoch={old_epoch}"
+                )
+            connection.execute(
+                """
+                INSERT INTO nexus_attempt_leases (
+                    job_id, attempt_id, attempt_epoch, worker_id, status,
+                    heartbeat_at_s, lease_ttl_s, started_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, 'RUNNING', ?, ?, ?, ?)
+                """,
+                (
+                    job_id,
+                    new_attempt_id,
+                    new_epoch,
+                    normalized_worker,
+                    effective_now,
+                    effective_ttl,
+                    now_iso,
+                    now_iso,
+                ),
+            )
+            insert_outbox_event_tx(
+                connection,
+                event_type=OUTBOX_EVENT_ATTEMPT_SUPERSEDED,
+                job_id=job_id,
+                attempt_id=str(lease_row["attempt_id"]),
+                attempt_epoch=old_epoch,
+                payload={"superseded_by": new_attempt_id, "new_worker_id": normalized_worker},
+                created_at=now_iso,
+            )
+            insert_outbox_event_tx(
+                connection,
+                event_type=OUTBOX_EVENT_ATTEMPT_RESERVED,
+                job_id=job_id,
+                attempt_id=new_attempt_id,
+                attempt_epoch=new_epoch,
+                payload={"worker_id": normalized_worker, "supersedes_epoch": old_epoch},
+                created_at=now_iso,
+            )
+            new_row = connection.execute(
+                """
+                SELECT * FROM nexus_attempt_leases
+                WHERE job_id = ? AND attempt_epoch = ?
+                """,
+                (job_id, new_epoch),
+            ).fetchone()
+            assert new_row is not None
+            return self._lease_from_row(new_row)
+
+    def fenced_commit_completion(
+        self,
+        *,
+        job_id: str,
+        attempt_id: str,
+        attempt_epoch: int,
+        result: dict[str, object],
+        stored_passport: str | None = None,
+        worker_id: str | None = None,
+    ) -> AttemptLeaseRecord:
+        """Verify ownership and commit completion, raising FencedAttemptCommitError if stale."""
+        lease = self.assert_attempt_owner(job_id, attempt_epoch, worker_id=worker_id)
+        if lease.attempt_id != attempt_id:
+            raise FencedAttemptCommitError(
+                f"attempt_id mismatch for {job_id}: "
+                f"expected {lease.attempt_id!r}, got {attempt_id!r}"
+            )
+        committed = self._mark_completed(
+            ExecutionClaim(job_id=job_id, attempt=attempt_epoch),
+            result,
+            stored_passport=stored_passport,
+        )
+        if not committed:
+            raise FencedAttemptCommitError(
+                f"fenced completion CAS rejected for {job_id} epoch={attempt_epoch}"
+            )
+        updated = self.get_attempt_lease(job_id, attempt_epoch)
+        assert updated is not None
+        return updated
 
     def _fail_unclaimed(self, job_id: str, error: str, status: JobStatus) -> bool:
         """PENDING → FAILED_* (claim-time structural failure; unowned CAS).
@@ -4198,10 +4850,16 @@ class InProcessJobQueue:
 
     @contextmanager
     def _connection(self) -> Iterator[sqlite3.Connection]:
+        hook: Callable[[sqlite3.Connection], None] | None = getattr(
+            self._tx_hook_local, "hook", None
+        )
+        self._tx_hook_local.hook = None
         if self._memory_connection is not None:
             try:
                 self._enable_durable_sqlite_sync(self._memory_connection)
                 yield self._memory_connection
+                if hook is not None:
+                    hook(self._memory_connection)
             except Exception:
                 self._memory_connection.rollback()
                 raise
@@ -4214,11 +4872,47 @@ class InProcessJobQueue:
         try:
             self._enable_durable_sqlite_sync(connection)
             yield connection
+            if hook is not None:
+                hook(connection)
         except Exception:
             connection.rollback()
             raise
         else:
             connection.commit()
+        finally:
+            connection.close()
+
+    @contextmanager
+    def _write_connection(
+        self, *, on_commit: Callable[[sqlite3.Connection], None] | None = None
+    ) -> Iterator[sqlite3.Connection]:
+        """Serialized write transaction using BEGIN IMMEDIATE on disk SQLite."""
+        if self._memory_connection is not None:
+            try:
+                self._enable_durable_sqlite_sync(self._memory_connection)
+                yield self._memory_connection
+                if on_commit is not None:
+                    on_commit(self._memory_connection)
+            except Exception:
+                self._memory_connection.rollback()
+                raise
+            else:
+                self._memory_connection.commit()
+            return
+
+        connection = sqlite3.connect(self._sqlite_path, timeout=30, isolation_level=None)
+        connection.row_factory = sqlite3.Row
+        try:
+            self._enable_durable_sqlite_sync(connection)
+            connection.execute("BEGIN IMMEDIATE")
+            yield connection
+            if on_commit is not None:
+                on_commit(connection)
+        except Exception:
+            connection.execute("ROLLBACK")
+            raise
+        else:
+            connection.execute("COMMIT")
         finally:
             connection.close()
 

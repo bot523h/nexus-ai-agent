@@ -1394,13 +1394,19 @@ async def creative_render_binding_confirm(
                 fence_check=fence_check,
             )
             result["asset_version_id"] = registration.asset_version_id
+            result["base_revision_id"] = revision_id
+            result["accepted_revision_id"] = registration.binding.revision_id
+            result["verification_proof_digest"] = verifier_digest
             intent["artifact_version_id"] = registration.asset_version_id
+            intent["base_revision_id"] = revision_id
+            intent["accepted_revision_id"] = registration.binding.revision_id
+            intent["verification_proof_digest"] = verifier_digest
             intent["derived_receipt_ref"] = registration.binding.derived_receipt_ref
         else:
             # Compatibility for payload schemas that carry no persisted
             # ArtifactPassport: those keep the established revision binding and
             # are never presented as first-class AssetVersion lineage.
-            await store.bind(
+            bound = await store.bind(
                 project_id=project_id,
                 revision_id=revision_id,
                 artifact_id=measured,
@@ -1410,6 +1416,28 @@ async def creative_render_binding_confirm(
                 artifact_version_id=intent.get("artifact_version_id") or None,
                 attempt=fencing_token,
             )
+            result["base_revision_id"] = revision_id
+            result["accepted_revision_id"] = bound.revision_id
+            intent["base_revision_id"] = revision_id
+            intent["accepted_revision_id"] = bound.revision_id
+        from nexus_ai_agent.provenance.graph import node_identity
+
+        raw_inputs = payload.get("input_asset_version_ids") or result.get("input_asset_version_ids")
+        if isinstance(raw_inputs, (list, tuple)):
+            in_vers = [str(v) for v in raw_inputs if isinstance(v, str) and v]
+            result["input_asset_version_ids"] = in_vers
+            intent["input_asset_version_ids"] = in_vers
+        if job_id and fencing_token >= 1:
+            prov_node_id = node_identity(
+                "ARTIFACT",
+                {
+                    "job_id": job_id,
+                    "attempt_epoch": fencing_token,
+                    "content_digest": measured,
+                },
+            )
+            result["provenance_node_id"] = prov_node_id
+            intent["provenance_node_id"] = prov_node_id
     except Exception as exc:  # noqa: BLE001 - every binding failure must be typed
         raise CreativeRenderError(
             "artifact_binding_failed", f"{type(exc).__name__}: {exc}"
@@ -1658,7 +1686,13 @@ def _publication_layout(staging: AttemptStaging, staged_name: str) -> tuple[Path
 
 
 def _write_sidecar(
-    sidecar: Path, *, job_id: str, attempt: str | None, content_digest: str | None = None
+    sidecar: Path,
+    *,
+    job_id: str,
+    attempt: str | None,
+    content_digest: str | None = None,
+    attempt_id: str | None = None,
+    attempt_epoch: int | None = None,
 ) -> None:
     """Atomically record who owns this destination — **before** mutating it.
 
@@ -1682,6 +1716,10 @@ def _write_sidecar(
     }
     if content_digest is not None:
         document["content_digest"] = content_digest
+    if attempt_id is not None:
+        document["attempt_id"] = attempt_id
+    if attempt_epoch is not None:
+        document["attempt_epoch"] = attempt_epoch
     payload = json.dumps(document)
     tmp = sidecar.with_name(sidecar.name + f".tmp.{os.getpid()}")
     tmp.write_text(payload + "\n", encoding="utf-8")
@@ -1711,7 +1749,13 @@ def _read_claim(sidecar: Path) -> dict[str, object] | None:
 
 
 def _refresh_sidecar_digest(
-    sidecar: Path, *, job_id: str, attempt: str | None, content_digest: str
+    sidecar: Path,
+    *,
+    job_id: str,
+    attempt: str | None,
+    content_digest: str,
+    attempt_id: str | None = None,
+    attempt_epoch: int | None = None,
 ) -> None:
     """Add the **measured** digest to an ownership sidecar that already exists.
 
@@ -1733,7 +1777,14 @@ def _refresh_sidecar_digest(
         document.get("attempt")
     ) != _parse_attempt(attempt):
         raise RuntimeError("publish: ownership sidecar does not belong to this job and attempt")
-    _write_sidecar(sidecar, job_id=job_id, attempt=attempt, content_digest=content_digest)
+    _write_sidecar(
+        sidecar,
+        job_id=job_id,
+        attempt=attempt,
+        content_digest=content_digest,
+        attempt_id=attempt_id,
+        attempt_epoch=attempt_epoch,
+    )
 
 
 def _parse_attempt(value: object) -> int | None:
@@ -1838,6 +1889,27 @@ def creative_render_publication_callback(
     data = artifact_path.read_bytes()
     staging.write(staged_name, data)
 
+    # 1b) Fence stale/superseded workers before touching any published path.
+    fence_check = result.get("_queue_fence_check")
+    if callable(fence_check) and not fence_check():
+        from nexus_ai_agent.adapters.in_process_job_queue import FencedAttemptCommitError
+        from nexus_ai_agent.execution.staging import (
+            QuarantineRetention,
+            QuarantineRetentionPolicy,
+        )
+
+        staging.quarantine(reason="stale_attempt_fenced")
+        QuarantineRetention(
+            artifact_root / _STAGING_SUBDIR,
+            policy=QuarantineRetentionPolicy(
+                max_age_seconds=7 * 86400,
+                max_total_bytes=512 * 1024 * 1024,
+            ),
+        ).prune()
+        raise FencedAttemptCommitError(
+            f"stale worker fenced out before publication for job={staging.job_id} attempt={_qatt}"
+        )
+
     job_dir, published_path, backup_path, sidecar_path = _publication_layout(staging, staged_name)
     try:
         job_dir.mkdir(parents=True, exist_ok=True)
@@ -1845,6 +1917,15 @@ def creative_render_publication_callback(
         raise RuntimeError(f"publish: job namespace unavailable: {exc}") from exc
 
     attempt_component = str(_qatt) if isinstance(_qatt, (int, str)) else None
+    parsed_epoch = _parse_attempt(_qatt)
+    raw_attempt_id = payload.get("_queue_attempt_id") or result.get("_queue_attempt_id")
+    attempt_id_value: str | None = (
+        raw_attempt_id if isinstance(raw_attempt_id, str) and raw_attempt_id else None
+    )
+    if attempt_id_value is None and isinstance(_qjid, str) and _qjid and parsed_epoch is not None:
+        from nexus_ai_agent.jobs.creative_passport import attempt_id as creative_attempt_id
+
+        attempt_id_value = creative_attempt_id(_qjid, parsed_epoch)
 
     # 2) Claim the destination before touching it.
     _write_sidecar(sidecar_path, job_id=staging.job_id, attempt=attempt_component)
@@ -1869,10 +1950,15 @@ def creative_render_publication_callback(
         content_digest=content_address_of_file(published_bytes),
     )
 
-    return {
+    patch: dict[str, object] = {
         "artifact_path": str(resolved),
         "artifact_backup": str(backup_path) if backup_path.exists() else None,
     }
+    if attempt_id_value is not None:
+        patch["attempt_id"] = attempt_id_value
+    if parsed_epoch is not None:
+        patch["attempt_epoch"] = parsed_epoch
+    return patch
 
 
 def creative_render_retract_callback(

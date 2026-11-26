@@ -180,7 +180,17 @@ class EvidenceRecord(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-NodeKind = Literal["intent", "capability", "artifact", "evidence", "reference", "decision"]
+NodeKind = Literal[
+    "intent",
+    "creative_ir",
+    "compiled_plan",
+    "command_dag",
+    "capability",
+    "artifact",
+    "evidence",
+    "reference",
+    "decision",
+]
 
 
 class GraphNode(BaseModel):
@@ -195,13 +205,69 @@ class GraphNode(BaseModel):
     parents: tuple[str, ...] = ()
 
 
-class CreativeGraph:
-    """Append-only creative graph: the project's durable memory.
+class ProvenanceNodeSpec(BaseModel):
+    """Immutable bridge DTO mapping a planning node to durable CreativeGraph."""
 
-    A node records what happened (an intent, the capability chosen, the artifact
-    produced, its evidence) and points at its parents. Nothing is ever mutated
-    in place, so the lineage of any artifact is the transitive closure of its
-    parent edges -- the basis for "which artifacts does this change invalidate".
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    spine_node_id: str
+    project_id: str
+    kind: NodeKind
+    label: str
+    logical_entity_id: str
+    revision_id: str
+    payload: dict[str, Any] = Field(default_factory=dict)
+    parent_spine_ids: tuple[str, ...] = ()
+    epistemic_status: Literal["HYPOTHESIS", "MEASURED_EVIDENCE", "VERIFIED_COMMIT"] = "HYPOTHESIS"
+
+
+class CreativePlanGraph(BaseModel):
+    """Immutable compile-time planning DTO (non-authoritative projection)."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    project_id: str
+    nodes: tuple[GraphNode, ...] = ()
+    intent: Intent | None = None
+    compiled_intent: CompiledIntent | None = None
+    plan_digest: str
+
+
+@runtime_checkable
+class DurableGraphPort(Protocol):
+    """Structural protocol satisfied by ``provenance.graph.CreativeGraph``."""
+
+    def put_node(
+        self,
+        *,
+        kind: str,
+        identity: dict[str, Any],
+        payload: dict[str, Any],
+        logical_entity_id: str | None = None,
+        revision_id: str | None = None,
+        source: str = "creative_spine",
+    ) -> Any: ...
+
+    def put_edge(
+        self,
+        *,
+        relation: str,
+        src: str,
+        dst: str,
+        payload: dict[str, Any] | None = None,
+        source: str = "creative_spine",
+    ) -> Any: ...
+
+    def nodes_for_project(self, project_id: str) -> list[Any]: ...
+
+
+class CreativeGraph:
+    """Compile-time planning graph DTO; durable authority lives in provenance.graph.
+
+    A node records planning lineage (intent, typed creative IR, compiled plan,
+    command DAG, capability, artifact, evidence) and points at its parents.
+    Use :meth:`to_provenance_records` and :meth:`sync_to_durable_graph` to
+    persist into the single durable :class:`provenance.graph.CreativeGraph`.
     """
 
     def __init__(self, project_id: str) -> None:
@@ -248,9 +314,9 @@ class CreativeGraph:
         if self._children.get(node_id):
             raise GraphError(f"cannot remove a node that still has children: {node_id!r}")
         for parent in node.parents:
-            siblings = self._children.get(parent)
-            if siblings is not None:
-                self._children[parent] = [child for child in siblings if child != node_id]
+            self._children[parent] = [
+                child for child in self._children.get(parent, ()) if child != node_id
+            ]
         del self._nodes[node_id]
 
     def nodes(self) -> tuple[GraphNode, ...]:
@@ -274,3 +340,162 @@ class CreativeGraph:
             seen.append(current)
             queue.extend(self._children.get(current, ()))
         return tuple(seen)
+
+    def to_plan_graph(
+        self,
+        *,
+        intent: Intent | None = None,
+        compiled_intent: CompiledIntent | None = None,
+    ) -> CreativePlanGraph:
+        """Freeze this planning graph into an immutable compile-time DTO."""
+        nodes = tuple(self._nodes.values())
+        digest = _content_hash(
+            {
+                "project_id": self._project_id,
+                "nodes": [n.model_dump(mode="json") for n in nodes],
+                "intent": intent.model_dump(mode="json") if intent is not None else None,
+                "compiled_intent": (
+                    compiled_intent.model_dump(mode="json") if compiled_intent is not None else None
+                ),
+            }
+        )
+        return CreativePlanGraph(
+            project_id=self._project_id,
+            nodes=nodes,
+            intent=intent,
+            compiled_intent=compiled_intent,
+            plan_digest=digest,
+        )
+
+    def to_provenance_records(self) -> tuple[ProvenanceNodeSpec, ...]:
+        """Convert planning nodes into deterministic provenance-ready records."""
+        records: list[ProvenanceNodeSpec] = []
+        for node in self._nodes.values():
+            payload = dict(node.data)
+            payload["project_id"] = self._project_id
+            payload["label"] = node.label
+            payload["spine_node_id"] = node.node_id
+            records.append(
+                ProvenanceNodeSpec(
+                    spine_node_id=node.node_id,
+                    project_id=self._project_id,
+                    kind=node.kind,
+                    label=node.label,
+                    logical_entity_id=f"{node.kind}:{self._project_id}:{node.node_id}",
+                    revision_id=node.node_id,
+                    payload=payload,
+                    parent_spine_ids=node.parents,
+                    epistemic_status="HYPOTHESIS",
+                )
+            )
+        return tuple(records)
+
+    def sync_to_durable_graph(
+        self,
+        durable_graph: DurableGraphPort,
+        *,
+        source: str = "creative_spine",
+    ) -> dict[str, str]:
+        """Persist planning nodes and parent edges into the durable CreativeGraph."""
+        kind_map: dict[str, str] = {
+            "intent": "INTENT",
+            "creative_ir": "REVISION",
+            "compiled_plan": "PLAN",
+            "capability": "PLAN",
+            "command_dag": "COMMAND",
+            "artifact": "ARTIFACT",
+            "evidence": "EVIDENCE",
+            "decision": "DECISION",
+            "reference": "DECISION",
+        }
+        relation_map: dict[tuple[str, str], str] = {
+            ("INTENT", "REVISION"): "INTENT_COMPILED_TO_REVISION",
+            ("REVISION", "PLAN"): "REVISION_HAS_PLAN",
+            ("PLAN", "COMMAND"): "PLAN_EMITS_COMMAND",
+            ("COMMAND", "ARTIFACT"): "EXECUTION_PRODUCED_ARTIFACT",
+            ("ARTIFACT", "EVIDENCE"): "ARTIFACT_VERIFIED_BY",
+            ("DECISION", "ARTIFACT"): "DECISION_AFFECTS",
+        }
+        id_map: dict[str, str] = {}
+        durable_kinds: dict[str, str] = {}
+        for spec in self.to_provenance_records():
+            durable_kind = kind_map.get(spec.kind, "DECISION")
+            payload = dict(spec.payload)
+            payload["spine_kind"] = spec.kind
+            result = durable_graph.put_node(
+                kind=durable_kind,
+                identity={
+                    "project_id": spec.project_id,
+                    "spine_node_id": spec.spine_node_id,
+                },
+                payload=payload,
+                logical_entity_id=spec.logical_entity_id,
+                revision_id=spec.revision_id,
+                source=source,
+            )
+            node_obj = (
+                result.node if hasattr(result, "node") and result.node is not None else result
+            )
+            durable_id = str(node_obj.node_id)
+            id_map[spec.spine_node_id] = durable_id
+            durable_kinds[spec.spine_node_id] = durable_kind
+        for spec in self.to_provenance_records():
+            dst_id = id_map[spec.spine_node_id]
+            dst_kind = durable_kinds[spec.spine_node_id]
+            for parent_spine_id in spec.parent_spine_ids:
+                src_id = id_map[parent_spine_id]
+                src_kind = durable_kinds[parent_spine_id]
+                relation = relation_map.get((src_kind, dst_kind), "ARTIFACT_DERIVED_FROM")
+                durable_graph.put_edge(
+                    relation=relation,
+                    src=src_id,
+                    dst=dst_id,
+                    payload={"project_id": self._project_id},
+                    source=source,
+                )
+        return id_map
+
+    @classmethod
+    def from_durable_graph(
+        cls, durable_graph: DurableGraphPort, *, project_id: str
+    ) -> CreativeGraph:
+        """Project durable CreativeGraph nodes for ``project_id`` as a planning DTO."""
+        graph = cls(project_id)
+        allowed_kinds = {
+            "intent",
+            "creative_ir",
+            "compiled_plan",
+            "command_dag",
+            "capability",
+            "artifact",
+            "evidence",
+            "reference",
+            "decision",
+        }
+        reverse_kind_map = {
+            "INTENT": "intent",
+            "REVISION": "creative_ir",
+            "PLAN": "compiled_plan",
+            "COMMAND": "command_dag",
+            "ARTIFACT": "artifact",
+            "EVIDENCE": "evidence",
+            "DECISION": "decision",
+        }
+        for durable_node in durable_graph.nodes_for_project(project_id):
+            raw_payload = getattr(durable_node, "payload", {})
+            payload = dict(raw_payload) if isinstance(raw_payload, dict) else {}
+            raw_kind = str(
+                payload.get("spine_kind")
+                or reverse_kind_map.get(str(getattr(durable_node, "kind", "")), "decision")
+            )
+            kind: NodeKind = raw_kind if raw_kind in allowed_kinds else "decision"  # type: ignore[assignment]
+            label = str(payload.get("label") or getattr(durable_node, "logical_entity_id", ""))
+            node = GraphNode(
+                node_id=str(durable_node.node_id),
+                kind=kind,
+                label=label[:500],
+                data=payload,
+                parents=(),
+            )
+            graph._nodes[node.node_id] = node
+        return graph

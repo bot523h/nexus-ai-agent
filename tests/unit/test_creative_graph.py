@@ -31,6 +31,7 @@ from nexus_ai_agent.provenance import (
     ALLOWED_NODE_STATUS_TRANSITIONS,
     CANONICAL_ENCODING_VERSION,
     GRAPH_CHAIN_GENESIS,
+    TERMINAL_STATUSES,
     CanonicalValueError,
     CausalEvent,
     CausalJournal,
@@ -1889,3 +1890,184 @@ def test_concurrent_writers_preserve_chain_and_dag_integrity(tmp_path: Path) -> 
         evidence_digest=_sha256(b"e"),
         issued_at_utc="2026-11-24T00:00:00Z",
     ).startswith("hmac-sha256:")
+
+
+def test_p3_restore_uses_readonly_mode_without_mutating_backup_or_sidecars(
+    tmp_path: Path,
+) -> None:
+    """Refinement 1A: restore() opens source via SQLite mode=ro URI without sidecars."""
+    src_graph = CreativeGraph(tmp_path / "src.sqlite")
+    proj = src_graph.put_node("PROJECT", {"id": "p-ro"}).node
+    assert proj is not None
+    backup_path = tmp_path / "readonly_backup.sqlite"
+    src_graph.backup(backup_path)
+    with sqlite3.connect(backup_path) as bak_conn:
+        bak_conn.execute("PRAGMA journal_mode = DELETE")
+        bak_conn.commit()
+    before_bytes = backup_path.read_bytes()
+    backup_path.chmod(0o444)
+    try:
+        dst_graph = CreativeGraph(tmp_path / "dst.sqlite")
+        dst_graph.restore(backup_path)
+        assert dst_graph.get_node(proj.node_id) is not None
+        assert backup_path.read_bytes() == before_bytes
+        assert not (tmp_path / "readonly_backup.sqlite-wal").exists()
+        assert not (tmp_path / "readonly_backup.sqlite-shm").exists()
+    finally:
+        backup_path.chmod(0o644)
+
+    missing = tmp_path / "does_not_exist_ro.sqlite"
+    with pytest.raises(GraphStateError, match="not a readable database"):
+        dst_graph.restore(missing)
+    assert not missing.exists()
+
+
+def test_p3_promote_epistemic_status_rejects_terminal_nodes_and_edges(
+    tmp_path: Path,
+) -> None:
+    """Refinement 1B: promote_epistemic_status refuses nodes/edges in terminal status."""
+    graph = CreativeGraph(
+        tmp_path / "promote_terminal.sqlite", proof_verification_keys=_TEST_KEY_RING
+    )
+    for idx, terminal_status in enumerate(("superseded", "invalidated", "revoked")):
+        res = graph.put_node(
+            "INTENT",
+            {"id": f"intent-{idx}"},
+            {"goal": f"g-{idx}"},
+            epistemic_status=EpistemicStatus.HYPOTHESIS,
+        )
+        assert res.node is not None
+        graph.set_status(res.node.node_id, terminal_status)
+        with pytest.raises(GraphStateTransitionError, match="terminal is absorbing"):
+            graph.promote_epistemic_status(
+                res.node.node_id,
+                EpistemicStatus.MEASURED_EVIDENCE,
+                evidence_digest=_sha256(b"ev"),
+            )
+
+    p = graph.put_node("PROJECT", {"id": "p-edge"}).node
+    i = graph.put_node("INTENT", {"id": "i-edge"}).node
+    assert p is not None and i is not None
+    edge = graph.put_edge(
+        "PROJECT_HAS_INTENT",
+        p.node_id,
+        i.node_id,
+        epistemic_status=EpistemicStatus.HYPOTHESIS,
+    ).edge
+    assert edge is not None
+    graph.revoke_edge(edge.edge_id)
+    with pytest.raises(GraphStateTransitionError, match="terminal is absorbing"):
+        graph.promote_epistemic_status(
+            edge.edge_id,
+            EpistemicStatus.MEASURED_EVIDENCE,
+            evidence_digest=_sha256(b"ev"),
+            is_edge=True,
+        )
+
+
+# --------------------------------------------------------------------------- #
+# 12. W11X CP-1 hardening: read-only restore, terminal epistemic guard,
+#     and revision_count <-> chain parity (GRAPH034)
+# --------------------------------------------------------------------------- #
+def test_restore_opens_backup_source_read_only(tmp_path: Path) -> None:
+    source = CreativeGraph(tmp_path / "restore_source.sqlite")
+    source.put_node("PROJECT", {"id": "p1"}, {"v": 1})
+    backup_path = source.backup(tmp_path / "restore_backup.sqlite")
+    before_digest = hashlib.sha256(backup_path.read_bytes()).hexdigest()
+    before_mtime = backup_path.stat().st_mtime_ns
+
+    target = CreativeGraph(tmp_path / "restore_target.sqlite")
+    target.restore(backup_path)
+    assert target.counts()["nodes"] == 1
+
+    # 1A: the backup file itself is never mutated by a restore. SQLite may attach
+    # read-only -shm/-wal companions because the backup keeps its WAL header, but
+    # the database bytes and mtime must be byte-for-byte unchanged.
+    assert hashlib.sha256(backup_path.read_bytes()).hexdigest() == before_digest
+    assert backup_path.stat().st_mtime_ns == before_mtime
+
+    # A write-protected backup still restores: the source is opened with mode=ro.
+    backup_path.chmod(0o444)
+    try:
+        other = CreativeGraph(tmp_path / "restore_target_ro.sqlite")
+        other.restore(backup_path)
+        assert other.counts()["nodes"] == 1
+    finally:
+        backup_path.chmod(0o644)
+
+    # A read-write connection would CREATE a missing source as an empty database.
+    # Read-only mode refuses instead, so a typo'd path can never leave a stub file.
+    missing = tmp_path / "does_not_exist.sqlite"
+    with pytest.raises(GraphStateError, match="not a readable database"):
+        target.restore(missing)
+    assert not missing.exists()
+
+
+@pytest.mark.parametrize("terminal_status", sorted(TERMINAL_STATUSES))
+def test_epistemic_promotion_refused_on_terminal_node(tmp_path: Path, terminal_status: str) -> None:
+    graph = CreativeGraph(tmp_path / f"terminal_{terminal_status}.sqlite")
+    node = graph.put_node("PROJECT", {"id": "p1"}, {"v": 1}).node
+    assert node is not None
+    graph.set_status(node.node_id, terminal_status)
+
+    with pytest.raises(GraphStateTransitionError, match="terminal is absorbing"):
+        graph.promote_epistemic_status(
+            node.node_id,
+            EpistemicStatus.MEASURED_EVIDENCE,
+            evidence_digest=_sha256(b"evidence"),
+        )
+    # The refusal is fail-closed: the node keeps its epistemic status and the
+    # append-only chain gained no entry.
+    reloaded = graph.get_node(node.node_id)
+    assert reloaded is not None
+    assert reloaded.epistemic_status is EpistemicStatus.HYPOTHESIS
+    assert graph.verify_chain() == []
+    assert graph.integrity_check().ok
+
+
+def test_epistemic_promotion_refused_on_revoked_edge(tmp_path: Path) -> None:
+    graph = CreativeGraph(tmp_path / "revoked_edge.sqlite")
+    src = graph.put_node("PROJECT", {"id": "p1"}).node
+    dst = graph.put_node("INTENT", {"id": "i1"}).node
+    assert src is not None and dst is not None
+    edge = graph.put_edge("PROJECT_HAS_INTENT", src.node_id, dst.node_id, {"w": 1}).edge
+    assert edge is not None
+    graph.revoke_edge(edge.edge_id)
+
+    with pytest.raises(GraphStateTransitionError, match="terminal is absorbing"):
+        graph.promote_epistemic_status(
+            edge.edge_id, EpistemicStatus.MEASURED_EVIDENCE, is_edge=True
+        )
+    assert graph.integrity_check().ok
+
+
+def test_revision_count_chain_parity_is_enforced_graph034(tmp_path: Path) -> None:
+    graph = CreativeGraph(tmp_path / "parity.sqlite")
+    node = graph.put_node("PROJECT", {"id": "p1"}, {"v": 1}).node
+    assert node is not None
+    graph.put_node("PROJECT", {"id": "p1"}, {"v": 2})
+    graph.put_node("PROJECT", {"id": "p1"}, {"v": 3})
+    reloaded = graph.get_node(node.node_id)
+    assert reloaded is not None
+    assert reloaded.revision_count == 3
+
+    # A consistent graph reports no parity finding.
+    clean = graph.integrity_check()
+    assert clean.ok
+    assert "GRAPH034" not in {f.code for f in clean.findings}
+
+    # 1C: revision_count is not covered by the hash chain, so a direct-SQL drift
+    # is invisible to chain verification and must be caught by parity alone.
+    for delta in (1, -1):
+        tampered = tmp_path / f"parity_tampered_{delta}.sqlite"
+        graph.backup(tampered)
+        with sqlite3.connect(str(tampered)) as conn:
+            conn.execute(
+                "UPDATE nexus_graph_node SET revision_count = revision_count + ? WHERE node_id = ?",
+                (delta, node.node_id),
+            )
+            conn.commit()
+        report = CreativeGraph(tampered, verify_on_open=False).integrity_check()
+        codes = {f.code for f in report.findings}
+        assert "GRAPH034" in codes
+        assert report.ok is False

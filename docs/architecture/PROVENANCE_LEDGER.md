@@ -154,4 +154,26 @@ without touching any producer.
 | Exactly-once / dedupe / crash survive | VERIFIED | `tests/unit/test_provenance_journal.py` |
 | Queue records every durable edge, fail-safe | VERIFIED | `tests/integration/test_provenance_queue_recording.py` |
 | Passport over the real FFmpeg artifact | ARTIFACT-PROVEN | `tests/integration/test_provenance_passport_e2e.py` (+ CI run on the exact head SHA) |
+| Durable CreativeGraph DAG + P3 hardening | VERIFIED | `provenance/graph.py`, `tests/unit/test_creative_graph.py`, `tests/unit/test_creative_graph_mutations.py` (17/17 killed) |
 | Production behavior at scale | NOT CLAIMED | no live-bot soak yet — do not upgrade this status without one |
+
+## 8. Durable CreativeGraph DAG Projection (Stage 2-A / Wave 0 P3 Hardening)
+
+`provenance/graph.py::CreativeGraph` provides the durable, indexed, strictly
+acyclic causal lineage DAG built on RFC 8785 JCS canonicalization, explicit
+ontology triples (`logical_entity_id`, `revision_id`, `content_digest`),
+`EpistemicStatus` tiers (`HYPOTHESIS`, `MEASURED_EVIDENCE`, `VERIFIED_COMMIT`
+with keyed HMAC-SHA256 `EpistemicProof`), counterfactual downstream causal impact
+propagation, and an internal hash-chained mutation log (`nexus_graph_chain`).
+
+Wave 0 P3 hardening adds three fail-closed invariants:
+1. `restore()` opens backup sources strictly via SQLite read-only URI mode
+   (`file:<path>?mode=ro`, `uri=True`, `timeout=30.0`), never mutating backup
+   source bytes.
+2. `promote_epistemic_status()` refuses nodes and edges in terminal lifecycle
+   status (`superseded`, `invalidated`, `revoked`) with
+   `GraphStateTransitionError`.
+3. `_integrity_check_conn()` cross-checks every node's `revision_count`
+   against `nexus_graph_chain` `node_create`/`node_advance` transitions and
+   emits `GRAPH032` on any discrepancy.
+

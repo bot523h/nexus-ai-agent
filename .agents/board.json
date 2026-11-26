@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-11-12T15:52:33Z",
+  "updated_at": "2026-11-25T20:48:41Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -682,7 +682,9 @@
         "tests/integration/test_provenance_queue_recording.py",
         "tests/integration/test_provenance_passport_e2e.py",
         "tests/architecture/test_provenance_boundary.py",
-        "docs/architecture/PROVENANCE_LEDGER.md"
+        "docs/architecture/PROVENANCE_LEDGER.md",
+        "tests/unit/test_creative_graph.py",
+        "tests/unit/test_creative_graph_mutations.py"
       ]
     },
     {
@@ -1255,6 +1257,46 @@
         "tests/unit/test_audio_pack_evidence_paths.py",
         "tests/unit/omega_media.py",
         "docs/architecture/NAGAR_MATHEMATICAL_ENGINEERING_DOCTRINE.md"
+      ]
+    },
+    {
+      "id": "nagar-w4-integrated-durable-execution",
+      "description": "W4 integrated durable CommandBus execution, evidence and bounded checkpoint closure; no parallel authority.",
+      "paths": [
+        "src/nexus_ai_agent/adapters/durable_plan_dedupe.py",
+        "src/nexus_ai_agent/creative/studio/bus.py",
+        "src/nexus_ai_agent/creative/studio/capabilities.py",
+        "src/nexus_ai_agent/creative/studio/durable_dedupe.py",
+        "src/nexus_ai_agent/creative/studio/plan_identifiers.py",
+        "src/nexus_ai_agent/creative/studio/plan_ir.py",
+        "src/nexus_ai_agent/creative/studio/plan_execution.py",
+        "src/nexus_ai_agent/creative/render_jobs.py",
+        "src/nexus_ai_agent/creative/slideshow/service.py",
+        "src/nexus_ai_agent/creative/storyboard_render.py",
+        "src/nexus_ai_agent/creative/storyboard_jobs.py",
+        "src/nexus_ai_agent/creative/studio/catalog_l4_convergence.py",
+        "OPERATION_TRUTH.json",
+        "scripts/w4_mutations.py",
+        "tests/benchmarks/w4_command_bus_benchmark.py",
+        "tests/unit/test_w4_approval_contracts.py",
+        "tests/unit/test_w4_atomic_acquisition.py",
+        "tests/unit/test_w4_bus_approval_preflight.py",
+        "tests/unit/test_w4_compensation_journal.py",
+        "tests/unit/test_w4_durable_bus_and_dedupe.py",
+        "tests/unit/test_w4_plan_ir.py",
+        "tests/unit/test_w4_storyboard_pipeline.py",
+        "tests/unit/test_w4_catalog_convergence.py",
+        "tests/unit/test_w4_mutations.py",
+        "tests/integration/test_w4_durable_execution.py",
+        "tests/integration/test_w4_e2e.py",
+        "tests/integration/test_w4_ingress_e2e.py",
+        "src/nexus_ai_agent/adapters/fenced_filesystem_destination.py",
+        "src/nexus_ai_agent/adapters/ibpc_plan_approval.py",
+        "tests/integration/test_w4_fenced_filesystem_destination.py",
+        "tests/unit/test_w4_cp1_durable_dedupe_and_approvals.py",
+        "src/nexus_ai_agent/creative/studio/runtime.py",
+        "src/nexus_ai_agent/adapters/durable_studio_runtime.py",
+        "tests/unit/test_w4_cp4_coverage.py"
       ]
     }
   ],
@@ -8659,7 +8701,7 @@
       "title": "OMEGA STAGE-A forensic hardening of 6915d32: verify-before-publish, recipe identity, cancellation, ffprobe JSON, lag-k tempo, loudness ordering",
       "zone": "nagar-omega-audio-engine",
       "priority": "P0",
-      "status": "active",
+      "status": "expired",
       "scope": "Close the P0/P1 defects an independent forensic audit of commit 6915d32 found in the audio execution plane: (1) _derive published the artifact BEFORE verifying it; (2) the artifact-reuse cache keyed only on output_asset_id so a different recipe (strength 0.2 vs 0.9) returned the earlier file with reused_existing=True; (3) _derive hard-coded cancel=None into the builder so cancellation never reached FFmpeg; (4) probe parsed `ffmpeg -i` stderr instead of fail-closed ffprobe JSON; (5) _interval_candidates used np.diff(x, n=k) (a k-th finite difference, always 0 for even onsets) instead of the mean k-lag gap (t[i+k]-t[i])/k, leaving steps 2..4 dead code and octave ambiguity unmanaged; (6) loudness pass-1 measured the source before canonical channel conversion. No parallel authority is introduced: RuntimeWorkspace stays the single workspace for the engine, and DB/attempt fencing stays owned by task-282.",
       "acceptance_criteria": [
         "A published-but-unverified byte sequence can never be observed at the final path: verify runs on staged bytes and the destination is only created by an atomic rename after the verifier agrees.",
@@ -8688,13 +8730,122 @@
         "docs/architecture/NAGAR_MATHEMATICAL_ENGINEERING_DOCTRINE.md"
       ],
       "owner_hint": "Stage-A of the MPE-CHRONOS-OMEGA mission; render_jobs.py changes are covered by the task-282-slice-2 claim and were cleared by the referee.",
-      "agent_branch": "arena/288ef95e-nexus-ai-agent",
-      "claimed_at": "2026-11-12T00:00:00Z",
+      "agent_branch": null,
+      "claimed_at": null,
       "generation": 0,
       "ttl_hours": 24,
       "gates_owner": false,
       "delivered": [],
-      "note": "Board has no create command, so the claim is registered directly by appending a schema-2 claim record."
+      "note": "Board has no create command, so the claim is registered directly by appending a schema-2 claim record.",
+      "release_reason": "auto-released by gc at 2026-11-23T08:51:03Z (stale active lease)"
+    },
+    {
+      "task": "task-w4-integrated-durable-execution",
+      "title": "W4: authenticated durable CommandBus execution and evidence closure",
+      "zone": "nagar-w4-integrated-durable-execution",
+      "priority": "P0",
+      "status": "active",
+      "scope": "Complete W4 CP1b through CP4 on PR #355 through the existing registry and CommandBus; no parallel authority and no writes to quarantined paths. Expand exclusive scope only after the multi-source referee passes.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "CP1b: real composition-root to authenticated and approval-bound CommandBus, atomic nonce and fenced durable execution, deadline/cancellation, intent, handler, verification, receipt and safe compensation recovery; uncertain effects fail closed.",
+        "CP2: versioned typed bounded DAG, deterministic topology and digest, plus actual rendering and admission integrations.",
+        "CP3: registry-backed capabilities with validated authorization, preconditions, idempotency, postconditions and verifiable evidence; no unproven L4 claims.",
+        "CP4: real supported ingress E2E, all 30 W4 mutations killed, five reproducible benchmark samples, critical-module line and branch coverage and all required gates green on final pushed SHA."
+      ],
+      "evidence_required": [
+        "Real SQLite and subprocess crash integration tests; explicitly label external mocks and never claim destination-side exactly-once without support.",
+        "Per checkpoint: focused command lines with exit codes, diff --check, local and remote SHAs, board referee exit 0 and updated PR description.",
+        "Final: W4 mutations with node-specific valid kills and restoration hashes; N=5 raw measurements; critical-module line and branch coverage; architecture/governance results and live GitHub CI on exact final SHA."
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/adapters/durable_plan_dedupe.py",
+        "src/nexus_ai_agent/adapters/fenced_filesystem_destination.py",
+        "src/nexus_ai_agent/adapters/ibpc_plan_approval.py",
+        "src/nexus_ai_agent/creative/studio/bus.py",
+        "src/nexus_ai_agent/creative/studio/capabilities.py",
+        "src/nexus_ai_agent/creative/studio/durable_dedupe.py",
+        "src/nexus_ai_agent/creative/studio/plan_identifiers.py",
+        "src/nexus_ai_agent/creative/studio/plan_ir.py",
+        "src/nexus_ai_agent/creative/studio/plan_execution.py",
+        "src/nexus_ai_agent/creative/render_jobs.py",
+        "src/nexus_ai_agent/creative/slideshow/service.py",
+        "src/nexus_ai_agent/creative/storyboard_render.py",
+        "src/nexus_ai_agent/creative/storyboard_jobs.py",
+        "src/nexus_ai_agent/creative/studio/catalog_l4_convergence.py",
+        "OPERATION_TRUTH.json",
+        "scripts/w4_mutations.py",
+        "tests/benchmarks/w4_command_bus_benchmark.py",
+        "tests/unit/test_w4_approval_contracts.py",
+        "tests/unit/test_w4_atomic_acquisition.py",
+        "tests/unit/test_w4_bus_approval_preflight.py",
+        "tests/unit/test_w4_compensation_journal.py",
+        "tests/unit/test_w4_cp1_durable_dedupe_and_approvals.py",
+        "tests/unit/test_w4_durable_bus_and_dedupe.py",
+        "tests/unit/test_w4_plan_ir.py",
+        "tests/unit/test_w4_storyboard_pipeline.py",
+        "tests/unit/test_w4_catalog_convergence.py",
+        "tests/unit/test_w4_mutations.py",
+        "tests/integration/test_w4_fenced_filesystem_destination.py",
+        "tests/integration/test_w4_durable_execution.py",
+        "tests/integration/test_w4_e2e.py",
+        "tests/integration/test_w4_ingress_e2e.py",
+        "src/nexus_ai_agent/creative/studio/runtime.py",
+        "src/nexus_ai_agent/adapters/durable_studio_runtime.py",
+        "tests/unit/test_w4_cp4_coverage.py"
+      ],
+      "owner_hint": "arena/f3f2c5f9-nexus-ai-agent; PR #355",
+      "agent_branch": "arena/f3f2c5f9-nexus-ai-agent",
+      "claimed_at": "2026-11-24T09:08:55Z",
+      "generation": 2,
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "delivered": [
+        "Wave 2: StudioExecutionPort and public command parse/fingerprint boundary; runtime has no concrete bus or private-store dependency.",
+        "Wave 2: explicit fenced UTF-8 artifact operation with declared pre/postcondition contracts, independent byte-level verification, durable ingress and unchanged-file cold replay.",
+        "Wave 2: credential-authenticated project:repair scope, one-use recovery evidence, PRESENT acknowledgement/compensation and ABSENT takeover after real subprocess os._exit(73).",
+        "Wave 2: PR #355 GraphQL review audit: all seven Sourcery threads already resolved; no duplicate replies or resolution calls.",
+        "Checkpoint 3A: accepted 720-test suite; >=98% lines and branches independently on all 11 W4 modules (f318b04c).",
+        "Checkpoint 3B: scripts/w4_mutations.py and tests/unit/test_w4_mutations.py; 30/30 deterministic source mutants killed, strict named failure oracle, byte/SHA restoration and cache purge. Campaign wall time remains above the 30-second target.",
+        "Checkpoint 3B: tests/benchmarks/w4_command_bus_benchmark.py; N=5 independent temporary SQLite WAL scenarios, compile/SHA/IBPC, fenced publication and real subprocess-death PRESENT recovery with nonce replay rejection. Final CI closure pending."
+      ],
+      "note": "",
+      "previous_release_reason": "auto-released by gc at 2026-11-24T09:08:55Z (stale active lease)"
+    },
+    {
+      "task": "task-w11x-cp1-provenance-hardening",
+      "title": "W11X CP-1: provenance graph hardening (read-only restore, terminal epistemic guard, revision parity)",
+      "title_fa": "W11X CP-1: سخت‌سازی گراف منشأ (بازیابی فقط‌خواندنی، گارد وضعیت پایانی، تطابق شمارش نسخه‌ها)",
+      "zone": "provenance-ledger",
+      "priority": "P0",
+      "status": "active",
+      "scope": "Three fail-closed fixes in provenance/graph.py: (1A) CreativeGraph.restore() opens the backup source with a read-only URI so a restore can never mutate or create it; (1B) promote_epistemic_status() refuses to promote a node or edge whose lifecycle status is terminal (superseded/invalidated/revoked) because terminal is absorbing; (1C) a new GRAPH034 integrity finding proves every node's revision_count equals the node_create/node_advance chain entries recorded since that node's most recent creation. The mutation campaign is extended 17 -> 20.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "restore() opens the source with file:...?mode=ro and uri=True; a missing source is refused without being created",
+        "promote_epistemic_status() raises GraphStateTransitionError on any terminal node status and on a revoked edge, leaving chain and epistemic status unchanged",
+        "_integrity_check_conn() emits GRAPH034 when revision_count disagrees with the node_create/node_advance chain entries since the last node_create",
+        "each of 1A/1B/1C is proven by a test that fails on the pre-fix code and passes after the fix, and by a killed AST mutant",
+        "the provenance, board, architecture and docs-integrity suites stay green"
+      ],
+      "evidence_required": [
+        "tests/unit/test_creative_graph.py (test_restore_opens_backup_source_read_only, test_epistemic_promotion_refused_on_terminal_node, test_epistemic_promotion_refused_on_revoked_edge, test_revision_count_chain_parity_is_enforced_graph034)",
+        "tests/unit/test_creative_graph_mutations.py (M18/M19/M20, 20/20 killed)",
+        "pytest tests/unit/test_creative_graph.py && pytest tests/unit/test_agent_board.py && pytest tests/architecture/",
+        "ruff check, ruff format --check, mypy --strict on the changed files"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/provenance/graph.py",
+        "tests/unit/test_creative_graph.py",
+        "tests/unit/test_creative_graph_mutations.py"
+      ],
+      "owner_hint": "OpenHands W11X convergence agent on branch openhands/w11x-grand-pr-convergence-20261125.",
+      "agent_branch": "openhands/w11x-grand-pr-convergence-20261125",
+      "claimed_at": "2026-11-25T20:48:41Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": "",
+      "generation": 1
     }
   ],
   "deferred_log": [
@@ -8857,26 +9008,6 @@
       ]
     },
     {
-      "id": "task-257-queued-cancel-semantics",
-      "priority": "P2",
-      "zone": "execution-core",
-      "title": "Define cancellation semantics for not-yet-owned (pending) requests",
-      "title_fa": "تعریف معنای لغو برای درخواست‌های در صف (بدون مالک)",
-      "why_fa": "لغو امروز فقط attempt در حال پرواز را می‌بندد؛ ردیف pending اصلاً cancellable نیست و این باید قرارداد صریح شود.",
-      "acceptance_criteria": [
-        "explicit contract: cancel(pending) is either a typed refusal or a fenced dequeue — one documented choice",
-        "idempotency + duplicate-cancel matrix extended; no authority bypass",
-        "I1-I10 table updated if a new invariant is introduced"
-      ],
-      "exclusive_paths": [
-        "src/nexus_ai_agent/execution/contract.py",
-        "src/nexus_ai_agent/adapters/native_local_backend.py"
-      ],
-      "prerequisites": [
-        "task-254 merged"
-      ]
-    },
-    {
       "id": "task-259-inflight-started-at-schema-invariant",
       "priority": "P2",
       "zone": "storage-observability",
@@ -8893,26 +9024,6 @@
         "tests/integration/test_in_process_job_queue.py"
       ],
       "prerequisites": []
-    },
-    {
-      "id": "task-260-execution-mutations-ci-job",
-      "priority": "P1",
-      "zone": "ci-quality",
-      "title": "Run scripts/execution_core_mutations.py as a CI mutation job",
-      "title_fa": "اجرای کمپین mutation هستهٔ اجرا به‌عنوان job رسمی CI",
-      "why_fa": "کمپین M1-M17 امروز دستی اجرا می‌شود؛ بدون job رسمی، regression آیندهٔ تست‌ها بی‌صدا می‌میرد.",
-      "acceptance_criteria": [
-        "CI job runs the campaign on PRs touching execution-core paths; red on any surviving mutant",
-        "runtime budgeted (<= ~2 min); parity with the trust-mutations job pattern"
-      ],
-      "exclusive_paths": [
-        ".github/workflows/ci.yml",
-        "scripts/execution_core_mutations.py"
-      ],
-      "prerequisites": [
-        "task-254 merged",
-        "no live ci-quality claim"
-      ]
     },
     {
       "id": "task-261-request-queue-boundary-doc",
@@ -8969,26 +9080,6 @@
       "prerequisites": []
     },
     {
-      "id": "task-264-passport-attempt-id-alignment",
-      "priority": "P3",
-      "zone": "provenance-ledger",
-      "title": "Bind CreativeExecutionPassport attempt ids to the AttemptStaging layout",
-      "title_fa": "اتصال attempt_idهای گذرنامه اجرایی به چیدمان AttemptStaging",
-      "why_fa": "شناسه‌های attempt در passport و staging از یک منبع باید بیایند تا ردیابی artifact یکتا بماند.",
-      "acceptance_criteria": [
-        "one minting function for attempt ids used by both surfaces",
-        "passport evidence paths resolve inside the attempt staging tree; traversal rejected",
-        "provenance suites green"
-      ],
-      "exclusive_paths": [
-        "src/nexus_ai_agent/jobs/creative_passport.py",
-        "tests/unit/test_creative_passport.py"
-      ],
-      "prerequisites": [
-        "task-254 merged"
-      ]
-    },
-    {
       "id": "task-269-cognition-quality-evaluation",
       "priority": "P1",
       "zone": "cognition-quality-evaluation",
@@ -9009,6 +9100,60 @@
         "tests/unit/test_cognition_quality_eval.py"
       ],
       "prerequisites": []
+    },
+    {
+      "id": "task-282-slice-3-provenance-passport-link",
+      "priority": "P1",
+      "zone": "provenance-ledger",
+      "title": "Bind ArtifactPassport and CreativeGraph to exact ProjectRevision and AssetVersion",
+      "title_fa": "اتصال ArtifactPassport و CreativeGraph به ProjectRevision و AssetVersion دقیق",
+      "acceptance_criteria": [
+        "PassportBuilder binds cryptographically to project_id, base_revision_id, accepted_revision_id, input_asset_version_ids, job_id, attempt_id, attempt_epoch, verification_proof_digest, and provenance_node_id",
+        "CreativeGraph.commit_verified_revision and invalidate_downstream propagate causal invalidation deterministically"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/provenance/passport.py",
+        "src/nexus_ai_agent/provenance/graph.py"
+      ],
+      "prerequisites": [
+        "Stage 2-A merged"
+      ]
+    },
+    {
+      "id": "wave2-provenance-outbox-reconciler",
+      "priority": "P1",
+      "zone": "provenance-ledger",
+      "title": "Close Queue-vs-Provenance transaction gap with SQLite ProvenanceOutboxStore and OutboxReconciler",
+      "title_fa": "بستن شکاف تراکنش صف و پیشینه با ProvenanceOutboxStore و OutboxReconciler",
+      "acceptance_criteria": [
+        "provenance_outbox table shares the queue BEGIN IMMEDIATE transaction for milestone transitions",
+        "OutboxReconciler.reconcile_pending deterministically replays unrecovered events into CreativeGraph"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/provenance/outbox.py",
+        "src/nexus_ai_agent/adapters/in_process_job_queue.py"
+      ],
+      "prerequisites": [
+        "Wave 1 execution core wiring"
+      ]
+    },
+    {
+      "id": "wave2-spine-creative-graph-unification",
+      "priority": "P1",
+      "zone": "provenance-ledger",
+      "title": "Unify CreativeGraph authority and convert spine CreativeGraph to planning DTO",
+      "title_fa": "یکسان‌سازی مرجعیت CreativeGraph و تبدیل گراف ستون فقرات به DTO برنامه‌ریزی",
+      "acceptance_criteria": [
+        "provenance/graph.py::CreativeGraph is the sole durable provenance authority",
+        "creative/spine/models.py::CreativeGraph exposes lossless bidirectional conversion"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/creative/spine/models.py",
+        "src/nexus_ai_agent/provenance/graph.py"
+      ],
+      "prerequisites": [
+        "Stage 2-A merged"
+      ]
     }
   ],
   "history": {
@@ -9095,6 +9240,54 @@
         "wave": "PR#219 review closeout — the seven findings of the P1 layer (task-270)",
         "content": "the CodeRabbit review of PR#219 closed as code, each with a failing-first regression test: (1) the PostgreSQL integration test no longer deletes other chats' forcejoinconfig — nonce-scoped statements, a second explicit opt-in (NEXUS_PG_TEST_DESTRUCTIVE, set only by the job that owns the disposable database) and a module-scoped survival assertion, statically enforced by tests/unit/test_pg_integration_safety.py; (2) /referral shows one persistent code — get_referral_stats resolves through get_or_create_code and format_stats renders the link from the code it displays; (3) the moderation gate covers commands and media captions ((TEXT | COMMAND | CAPTION) & ChatType.GROUPS; filters.CAPTION verified present in PTB 21.0, the declared floor) and evaluate_message reads text-or-caption; (4) a caption-only /vision dispatches to vision_cmd via a MessageHandler(PHOTO & CaptionRegex) registered before slideshow_photo, and the question is parsed from the caption (incl. /vision@BotName); (5) sync_engine's read-check-dispose-create-publish sequence is one critical section under a module lock, so racing to_thread workers can no longer publish two engines (proof: 8 threads build 8 engines before, 1 after); (6) api/dashboard publishes joined_at with an explicit UTC offset and the dashboard client normalises an offset-less payload; (7) the TelegramId docs and the b5d8e2f4a917 docstring describe the real named TypeDecorator (impl BigInteger, load_dialect_impl) instead of a with_variant expression. mypy/deptry outcomes are unchanged from the P1 head (chromadb and llama-cpp-python are not installed here) and were re-measured at that head to prove it. Decision record: DECISION_LOG r14 / D-0028.",
         "anchor": "PR#219 review closeout, session arena/525960ca-nexus-ai-agent",
+        "release": "v3.13.0"
+      },
+      {
+        "wave": "V1 (Consolidated Modules + CP4.2 + CP6)",
+        "content": "Consolidated resource_packs, hyper_compiler, personal_cloud_vault, storyboard_compiler, API lifespan, lease ownership & rollback fencing",
+        "anchor": "PR#350 · PR#351 · PR#352",
+        "release": "v3.13.0"
+      },
+      {
+        "wave": "W2 (Transactional Bus + Cinema Audio + Lie Integrity)",
+        "content": "Transactional bus, Lie integrity, cinema audio, Poisson/PID, and AST mutation harness",
+        "anchor": "PR#353",
+        "release": "v3.13.0"
+      },
+      {
+        "wave": "W3-A (Lease Mutation & Memory CI Closure)",
+        "content": "Closed lease mutation and memory CI parity gaps",
+        "anchor": "PR#354",
+        "release": "v3.13.0"
+      },
+      {
+        "wave": "W5 (Secure Blob Publication & Authenticated Backup Drill)",
+        "content": "CP4 secure blob publication and authenticated encrypted backup drill",
+        "anchor": "PR#356 (3ee52c4)",
+        "release": "v3.13.0"
+      },
+      {
+        "wave": "W6 / W6.7 (Photochemistry, Optics, SPD OT, Symplectic + Bytecode-Cache Determinism)",
+        "content": "W6 scientific pipeline + proof gates and W6.7 bytecode-cache deterministic AST mutation harness",
+        "anchor": "PR#357 · PR#358",
+        "release": "v3.13.0"
+      },
+      {
+        "wave": "Stage 2-A (Law R28 Durable CreativeGraph)",
+        "content": "Durable creative-graph DAG, RFC 8785 JCS canonicalization, counterfactual causal impact, and 17-mutant AST campaign",
+        "anchor": "PR#359",
+        "release": "v3.13.0"
+      },
+      {
+        "wave": "W10X (10-Wave Scientific Convergence)",
+        "content": "10-wave scientific convergence and 30-mutant bytecode-cache-safe AST verification harness",
+        "anchor": "PR#360",
+        "release": "v3.13.0"
+      },
+      {
+        "wave": "Wave 0 (Repository Truth Convergence & Provenance Graph P3 Hardening)",
+        "content": "Read-only URI restore(), terminal epistemic promotion refusal, GRAPH032 revision_count parity, and synchronized truth matrix/docs/board (noting PR #355 W4 remains open on GitHub)",
+        "anchor": "Wave 0 on arena/aac14be0-nexus-ai-agent",
         "release": "v3.13.0"
       }
     ],
@@ -9294,6 +9487,63 @@
         "state": "CLOSED",
         "title": "feat(runtime): W1 recovery (task-196)",
         "note": "SUPERSEDED by #113 (ancestor proof: head-112 ancestor of head-113; zero unique files)."
+      },
+      {
+        "pr": 350,
+        "state": "MERGED",
+        "title": "release: consolidate v1 modules (resource_packs, hyper_compiler, personal_cloud_vault, storyboard_compiler, api lifespan)"
+      },
+      {
+        "pr": 351,
+        "state": "MERGED",
+        "title": "CP6: lease ownership state machine and real chunk identity (vault) + finite audio contracts"
+      },
+      {
+        "pr": 352,
+        "state": "MERGED",
+        "title": "CP4.2 (Final V1 Closure): inode-fenced rollback, promotion lock, fail-closed reconcile, IBPC anchor"
+      },
+      {
+        "pr": 353,
+        "state": "MERGED",
+        "title": "Wave 2: transactional bus, Lie integrity, cinema audio, Poisson/PID and AST mutations"
+      },
+      {
+        "pr": 354,
+        "state": "MERGED",
+        "title": "fix(w3a): close lease mutation and memory CI gaps"
+      },
+      {
+        "pr": 355,
+        "state": "OPEN",
+        "title": "feat(w4): integrated durable plan reservation, command bus fencing & IBPC approval",
+        "note": "Open on GitHub (arena/f3f2c5f9-nexus-ai-agent); not yet merged into main."
+      },
+      {
+        "pr": 356,
+        "state": "MERGED",
+        "title": "Wave 5: secure blob publication and authenticated backup drill (CP4)",
+        "note": "Merged as 3ee52c4f4a492ae8573e76026711dffeb1adcd6e."
+      },
+      {
+        "pr": 357,
+        "state": "MERGED",
+        "title": "W6 Science: photochemistry, optics, SPD optimal transport, symplectic pipeline + proof gates"
+      },
+      {
+        "pr": 358,
+        "state": "MERGED",
+        "title": "fix(w6.7): make the W6 mutation harness bytecode-cache deterministic"
+      },
+      {
+        "pr": 359,
+        "state": "MERGED",
+        "title": "feat(provenance): durable creative-graph DAG, RFC 8785 JCS lineage & causal invalidation (Stage 2-A / Law R28)"
+      },
+      {
+        "pr": 360,
+        "state": "MERGED",
+        "title": "feat(w10x): 10-wave scientific convergence & 30-mutant AST verification harness"
       }
     ],
     "incidents": [

@@ -124,6 +124,9 @@ LINEAGE_ATTACHMENTS: tuple[str, ...] = ("ARTIFACT_VERIFIED_BY", "ARTIFACT_HAS_PA
 STATUSES: tuple[str, ...] = ("active", "superseded", "invalidated", "revoked")
 TERMINAL_STATUSES: frozenset[str] = frozenset({"superseded", "invalidated", "revoked"})
 
+#: Chain operations that each advance a node's ``revision_count`` by exactly one.
+REVISION_CHAIN_OPS: frozenset[str] = frozenset({"node_create", "node_advance"})
+
 #: Explicit finite-state transition matrix (F01): terminal statuses are absorbing
 #: and can NEVER be resurrected to ``active`` or rewritten to another terminal state.
 ALLOWED_NODE_STATUS_TRANSITIONS: dict[str, frozenset[str]] = {
@@ -1480,6 +1483,11 @@ class CreativeGraph:
                 edge = self._edge(connection, target_id)
                 if edge is None:
                     raise GraphStateError(f"unknown edge {target_id}")
+                if edge.status in TERMINAL_STATUSES:
+                    raise GraphStateTransitionError(
+                        f"cannot promote epistemic status of edge {target_id}: "
+                        f"edge is {edge.status} (terminal is absorbing)"
+                    )
                 if _EPISTEMIC_RANK[target_epistemic] < _EPISTEMIC_RANK[edge.epistemic_status]:
                     raise EpistemicProofError(
                         f"cannot demote edge {target_id} from "
@@ -1523,6 +1531,11 @@ class CreativeGraph:
             node = self._node(connection, target_id)
             if node is None:
                 raise GraphStateError(f"unknown node {target_id}")
+            if node.status in TERMINAL_STATUSES:
+                raise GraphStateTransitionError(
+                    f"cannot promote epistemic status of {target_id}: "
+                    f"node is {node.status} (terminal is absorbing)"
+                )
             if _EPISTEMIC_RANK[target_epistemic] < _EPISTEMIC_RANK[node.epistemic_status]:
                 raise EpistemicProofError(
                     f"cannot demote node {target_id} from "
@@ -2190,6 +2203,134 @@ class CreativeGraph:
             "impact_digest": impact.impact_digest,
         }
 
+    def commit_verified_revision(
+        self,
+        *,
+        node_id: str,
+        verification_proof: EpistemicProof,
+        evidence_digest: str | None = None,
+    ) -> GraphNode:
+        """Promote a node to ``VERIFIED_COMMIT`` iff ``verification_proof`` verifies."""
+        if not isinstance(verification_proof, EpistemicProof):
+            raise EpistemicProofError("commit_verified_revision requires a valid EpistemicProof")
+        promoted = self.promote_epistemic_status(
+            node_id,
+            EpistemicStatus.VERIFIED_COMMIT,
+            proof=verification_proof,
+            evidence_digest=evidence_digest or verification_proof.evidence_digest,
+            is_edge=False,
+        )
+        assert isinstance(promoted, GraphNode)
+        return promoted
+
+    def invalidate_downstream(
+        self, node_id: str, *, reason: str = "upstream_invalidated", apply: bool = True
+    ) -> CausalImpactResult:
+        """Propagate causal invalidation to all active downstream descendants."""
+        return self.propagate_invalidation(node_id, reason=reason, apply=apply)
+
+    def record_planning_lineage(
+        self,
+        *,
+        project_id: str,
+        intent_id: str,
+        intent_payload: dict[str, Any],
+        creative_ir_id: str,
+        creative_ir_payload: dict[str, Any],
+        compiled_plan_id: str,
+        compiled_plan_payload: dict[str, Any],
+        command_dag_id: str,
+        command_dag_payload: dict[str, Any],
+        source: str = "creative_spine",
+    ) -> dict[str, str]:
+        """Persist Intent -> Typed IR -> Compiled Plan -> Command DAG lineage."""
+        intent_res = self.put_node(
+            kind="INTENT",
+            identity={"project_id": project_id, "intent_id": intent_id},
+            payload={"project_id": project_id, "stage": "intent", **intent_payload},
+            logical_entity_id=f"intent:{project_id}:{intent_id}",
+            revision_id=intent_id,
+            source=source,
+        )
+        ir_res = self.put_node(
+            kind="REVISION",
+            identity={"project_id": project_id, "creative_ir_id": creative_ir_id},
+            payload={"project_id": project_id, "stage": "creative_ir", **creative_ir_payload},
+            logical_entity_id=f"creative_ir:{project_id}:{creative_ir_id}",
+            revision_id=creative_ir_id,
+            source=source,
+        )
+        plan_res = self.put_node(
+            kind="PLAN",
+            identity={"project_id": project_id, "compiled_plan_id": compiled_plan_id},
+            payload={"project_id": project_id, "stage": "compiled_plan", **compiled_plan_payload},
+            logical_entity_id=f"compiled_plan:{project_id}:{compiled_plan_id}",
+            revision_id=compiled_plan_id,
+            source=source,
+        )
+        dag_res = self.put_node(
+            kind="COMMAND",
+            identity={"project_id": project_id, "command_dag_id": command_dag_id},
+            payload={"project_id": project_id, "stage": "command_dag", **command_dag_payload},
+            logical_entity_id=f"command_dag:{project_id}:{command_dag_id}",
+            revision_id=command_dag_id,
+            source=source,
+        )
+        assert intent_res.node is not None
+        assert ir_res.node is not None
+        assert plan_res.node is not None
+        assert dag_res.node is not None
+        self.put_edge(
+            relation="INTENT_COMPILED_TO_REVISION",
+            src=intent_res.node.node_id,
+            dst=ir_res.node.node_id,
+            payload={"project_id": project_id},
+            source=source,
+        )
+        self.put_edge(
+            relation="REVISION_HAS_PLAN",
+            src=ir_res.node.node_id,
+            dst=plan_res.node.node_id,
+            payload={"project_id": project_id},
+            source=source,
+        )
+        self.put_edge(
+            relation="PLAN_EMITS_COMMAND",
+            src=plan_res.node.node_id,
+            dst=dag_res.node.node_id,
+            payload={"project_id": project_id},
+            source=source,
+        )
+        return {
+            "intent": intent_res.node.node_id,
+            "creative_ir": ir_res.node.node_id,
+            "compiled_plan": plan_res.node.node_id,
+            "command_dag": dag_res.node.node_id,
+        }
+
+    def nodes_for_project(self, project_id: str) -> list[GraphNode]:
+        """Return all non-revoked durable nodes carrying ``project_id``."""
+        target = _validate_non_empty(project_id, field_name="project_id")
+        with self._lock, self._connection() as connection:
+            rows = connection.execute(
+                "SELECT node_id, kind, identity_json, logical_entity_id, revision_id,"
+                " content_digest, payload_json, payload_digest, epistemic_status,"
+                " evidence_digest, proof_json, status, superseded_by, source,"
+                " source_seq, revision_count, created_at, updated_at"
+                " FROM nexus_graph_node ORDER BY created_at ASC, node_id ASC"
+            ).fetchall()
+        matched: list[GraphNode] = []
+        for row in rows:
+            node = self._node_from_row(row)
+            if node.status == "revoked":
+                continue
+            if (
+                node.identity.get("project_id") == target
+                or node.payload.get("project_id") == target
+            ):
+                matched.append(node)
+        return matched
+
     def project_history(self, project_node_id: str) -> list[dict[str, Any]]:
         return self.descendants(project_node_id)
 
@@ -2275,7 +2416,8 @@ class CreativeGraph:
         nodes = connection.execute(
             "SELECT node_id, kind, payload_json, payload_digest, status, identity_json,"
             " identity_digest, logical_entity_id, revision_id, content_digest,"
-            " epistemic_status, evidence_digest, proof_json FROM nexus_graph_node"
+            " epistemic_status, evidence_digest, proof_json, revision_count"
+            " FROM nexus_graph_node"
         ).fetchall()
         edges = connection.execute(
             "SELECT edge_id, relation, src, dst, payload_json, payload_digest,"
@@ -2298,10 +2440,12 @@ class CreativeGraph:
 
         known = {str(row[0]) for row in nodes}
         node_live_state: dict[str, tuple[str, str, str, str]] = {}
+        revision_count_by_node: dict[str, int] = {}
         for row in nodes:
             node_id = str(row[0])
             kind = str(row[1])
             node_live_state[node_id] = (str(row[8]), str(row[9]), str(row[3]), str(row[4]))
+            revision_count_by_node[node_id] = int(row[13])
             if kind not in NODE_KINDS:
                 report.findings.append(
                     IntegrityFinding("GRAPH010", "error", "unknown node kind", node_id)
@@ -2422,10 +2566,23 @@ class CreativeGraph:
             {"node_create", "node_advance", "node_status", "node_epistemic_promote"}
         )
         chain_count_by_node: dict[str, int] = {}
+        # Parity is measured from the node's most recent ``node_create``: a
+        # replace-rebuild re-creates a projected node (revision_count restarts at 1)
+        # while the append-only chain keeps the entries of the deleted projection.
+        last_create_seq_by_node: dict[str, int] = {}
         for chain_row in chain:
-            if str(chain_row[1]) in node_chain_ops:
-                tid = str(chain_row[2])
+            if str(chain_row[1]) == "node_create":
+                last_create_seq_by_node[str(chain_row[2])] = int(chain_row[0])
+        revision_chain_count_by_node: dict[str, int] = {}
+        for chain_row in chain:
+            operation = str(chain_row[1])
+            tid = str(chain_row[2])
+            if operation in node_chain_ops:
                 chain_count_by_node[tid] = chain_count_by_node.get(tid, 0) + 1
+            if operation in REVISION_CHAIN_OPS and int(chain_row[0]) >= last_create_seq_by_node.get(
+                tid, -1
+            ):
+                revision_chain_count_by_node[tid] = revision_chain_count_by_node.get(tid, 0) + 1
 
         for hrow in history:
             h_seq = int(hrow[0])
@@ -2464,6 +2621,18 @@ class CreativeGraph:
                 )
 
         for node_id in sorted(known):
+            declared_revisions = revision_count_by_node[node_id]
+            observed_revisions = revision_chain_count_by_node.get(node_id, 0)
+            if declared_revisions != observed_revisions:
+                report.findings.append(
+                    IntegrityFinding(
+                        "GRAPH034",
+                        "error",
+                        f"revision_count {declared_revisions} disagrees with "
+                        f"{observed_revisions} node_create/node_advance chain entr(ies)",
+                        node_id,
+                    )
+                )
             node_hist = history_by_node.get(node_id)
             if not node_hist:
                 report.findings.append(
@@ -2663,7 +2832,13 @@ class CreativeGraph:
     def restore(self, source: Path | str, *, whole_database: bool = False) -> None:
         """Whole-file restore with pre-restore logical integrity & rollback safety (F05)."""
         source_path = Path(source)
-        origin = sqlite3.connect(str(source_path))
+        # 1A: open the backup strictly read-only so a restore can never mutate its source.
+        try:
+            origin = sqlite3.connect(
+                f"file:{source_path.resolve().as_posix()}?mode=ro", uri=True, timeout=30.0
+            )
+        except sqlite3.DatabaseError as exc:
+            raise GraphStateError(f"restore source {source} is not a readable database") from exc
         origin.row_factory = sqlite3.Row
         try:
             try:
@@ -3236,6 +3411,7 @@ __all__ = [
     "LINEAGE_CHAIN",
     "NODE_KINDS",
     "RELATIONS",
+    "REVISION_CHAIN_OPS",
     "STATUSES",
     "TERMINAL_STATUSES",
     "CanonicalValueError",
