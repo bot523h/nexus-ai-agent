@@ -32,6 +32,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is the worker gate: envelope integrity, expected revision/plan digests, the
   current-head rule, and every on-disk asset (lstat symlink refusal,
   `is_relative_to`, exact size, `hmac.compare_digest` SHA-256).
+- **Wave 3 — crash-safe approval-to-enqueue outbox.** `nagar/ibpc/execution_outbox.py`
+  removes the two failure modes that let an approved turn silently diverge from its
+  durable record: the consume-then-die-before-enqueue window (the single-use approval
+  was spent with no job, and no retry was legal) and the destructive poll timeout (a
+  short caller budget marked the turn `FAILED` while the worker was still running).
+  `DurableExecutionOutboxStore` persists the intent under a derived
+  `idempotency_key` before the approval is consumed and walks a closed
+  `INTENT_STAGED → APPROVAL_CONSUMED → JOB_ENQUEUED → AWAITING_WORKER →
+  COMPLETED | FAILED_TERMINAL` machine in `BEGIN IMMEDIATE` writes;
+  `ExecutionOutboxCoordinator.execute_or_recover` resumes from any crash point
+  without re-consuming or double-enqueueing, `reconcile_in_flight` drives stalled
+  rows under a cross-process `fcntl.flock`, and a poll timeout is `AWAITING_WORKER`
+  (`can_resume=True`) with the elapsed time recorded. An unverified completion is
+  never reported as success.
+- **Wave 4 — WYSIWYS structured preview readback.** `creative/studio/preview_readback.py`
+  describes exactly what an approval authorises, in `fractions.Fraction` only (floats
+  are refused at the boundary): `RationalTime`, `RationalTimeSpan`,
+  `ParameterReadbackDelta`, `TimelineOperationPreview` and the sealed
+  `StructuredPreviewReadback`, whose `preview_digest` is the RFC 8785 JCS SHA-256 of
+  every field — including the bilingual `fa`/`en` labels, the timebase and the
+  operation order — so `verify_wysiwys_readback` fails on any tampering.
+  `compare_revisions` splits added/removed/changed operations and reports drift as an
+  exact rational (`duration_drift_seconds`, with `duration_drift_us` as a rounded
+  projection that is never used to decide identity); an NTSC one-frame move is
+  `1001/30000` s exactly, and 10,000 cuts at 24000/1001, 30000/1001, 25/1 or 24/1
+  land on their frame boundaries with zero drift.
 - The two reviewed architecture gates (`test_nagar_studio_isolation`,
   `test_slideshow_adapter_boundary`) gain an explicit, minimal durable-state
   allowlist: the new state modules may use SQLite/POSIX locks/paths and the one
