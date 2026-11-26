@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import os
 import re
+import uuid
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
 
 from nexus_ai_agent.adapters.studio_principal_auth import (
@@ -193,6 +194,7 @@ class RegisterPrincipalRequest(BaseModel):
     raw_token: str = Field(min_length=8, max_length=256)
     display_name: str = Field(default="", max_length=128)
     tenant_id: str | None = Field(default=None, min_length=1, max_length=128)
+    project_id: str | None = Field(default=None, min_length=1, max_length=128)
 
 
 class BindChannelRequest(BaseModel):
@@ -203,6 +205,7 @@ class BindChannelRequest(BaseModel):
     user_id: int = Field(ge=0, default=0)
     chat_id: int = Field(ge=0, default=0)
     binding_ref: str | None = Field(default=None, min_length=1, max_length=128)
+    project_id: str | None = Field(default=None, min_length=1, max_length=128)
 
 
 @router.post("/projects/{project_id}/ibpc/sessions", status_code=201)
@@ -702,16 +705,43 @@ async def revoke_project_membership(
         auth_store.close()
 
 
+def _authorize_owner_mutation(
+    auth_store: StudioPrincipalAuthStore,
+    *,
+    actor_id: str,
+    actor_tenant: str,
+    project_id: str | None,
+) -> None:
+    if project_id is not None:
+        actor_binding = auth_store.default_binding_for(actor_id) or ""
+        _authorize(
+            auth_store,
+            principal_id=actor_id,
+            project_id=project_id,
+            action=StudioAction.MANAGE_MEMBERSHIP,
+            binding_ref=actor_binding,
+        )
+        return
+    if not auth_store.has_owner_role(actor_id, actor_tenant):
+        raise HTTPException(status_code=403, detail="owner_role_required")
+
+
 @router.post("/principals", status_code=201)
 async def register_studio_principal(
     body: RegisterPrincipalRequest,
+    project_id: str | None = Query(default=None),
     x_nexus_principal_token: str | None = Header(default=None, alias="X-Nexus-Principal-Token"),
 ) -> dict[str, Any]:
+    scoped_project = body.project_id or project_id
     auth_store = get_studio_auth_store()
     try:
         actor_id, actor_tenant = _authenticate_principal(auth_store, x_nexus_principal_token)
-        if not auth_store.has_owner_role(actor_id, actor_tenant):
-            raise HTTPException(status_code=403, detail="owner_role_required")
+        _authorize_owner_mutation(
+            auth_store,
+            actor_id=actor_id,
+            actor_tenant=actor_tenant,
+            project_id=scoped_project,
+        )
         if body.tenant_id is not None and body.tenant_id != actor_tenant:
             raise HTTPException(status_code=403, detail="cross_tenant_principal_denied")
         try:
@@ -722,6 +752,8 @@ async def register_studio_principal(
                 display_name=body.display_name,
                 actor_id=actor_id,
             )
+        except AuthorizationError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {
@@ -738,6 +770,56 @@ async def register_studio_principal(
 async def bind_studio_principal_channel(
     target_principal_id: str,
     body: BindChannelRequest,
+    project_id: str | None = Query(default=None),
+    x_nexus_principal_token: str | None = Header(default=None, alias="X-Nexus-Principal-Token"),
+) -> dict[str, Any]:
+    if not _ID_RE.fullmatch(target_principal_id):
+        raise HTTPException(status_code=400, detail="invalid principal_id")
+    scoped_project = body.project_id or project_id
+    auth_store = get_studio_auth_store()
+    try:
+        actor_id, actor_tenant = _authenticate_principal(auth_store, x_nexus_principal_token)
+        _authorize_owner_mutation(
+            auth_store,
+            actor_id=actor_id,
+            actor_tenant=actor_tenant,
+            project_id=scoped_project,
+        )
+        try:
+            target_tenant = auth_store.get_principal_tenant(target_principal_id)
+        except AuthorizationError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        if target_tenant != actor_tenant:
+            raise HTTPException(status_code=403, detail="cross_tenant_binding_denied")
+        server_ref = body.binding_ref or f"bind-{uuid.uuid4().hex[:16]}"
+        try:
+            binding_ref = auth_store.bind_channel(
+                target_principal_id,
+                channel=body.channel,
+                external_subject=body.external_subject,
+                user_id=body.user_id,
+                chat_id=body.chat_id,
+                binding_ref=server_ref,
+                actor_id=actor_id,
+            )
+        except AuthorizationError as exc:
+            if exc.reason == "binding_already_exists":
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        return {
+            "binding_ref": binding_ref,
+            "principal_id": target_principal_id,
+            "channel": body.channel,
+            "status": "ACTIVE",
+        }
+    finally:
+        auth_store.close()
+
+
+@router.post("/projects/{project_id}/principals/{target_principal_id}/revoke")
+async def revoke_project_principal(
+    project_id: str,
+    target_principal_id: str,
     x_nexus_principal_token: str | None = Header(default=None, alias="X-Nexus-Principal-Token"),
 ) -> dict[str, Any]:
     if not _ID_RE.fullmatch(target_principal_id):
@@ -745,28 +827,69 @@ async def bind_studio_principal_channel(
     auth_store = get_studio_auth_store()
     try:
         actor_id, actor_tenant = _authenticate_principal(auth_store, x_nexus_principal_token)
-        if not auth_store.has_owner_role(actor_id, actor_tenant):
-            raise HTTPException(status_code=403, detail="owner_role_required")
-        try:
-            target_tenant = auth_store.get_principal_tenant(target_principal_id)
-        except AuthorizationError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-        if target_tenant != actor_tenant:
-            raise HTTPException(status_code=403, detail="cross_tenant_binding_denied")
-        binding_ref = auth_store.bind_channel(
-            target_principal_id,
-            channel=body.channel,
-            external_subject=body.external_subject,
-            user_id=body.user_id,
-            chat_id=body.chat_id,
-            binding_ref=body.binding_ref,
+        _authorize_owner_mutation(
+            auth_store,
             actor_id=actor_id,
+            actor_tenant=actor_tenant,
+            project_id=project_id,
         )
+        try:
+            auth_store.revoke_principal(
+                target_principal_id,
+                actor_id=actor_id,
+                expected_tenant_id=actor_tenant,
+            )
+        except AuthorizationError as exc:
+            if exc.reason == "principal_not_found":
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
         return {
-            "binding_ref": binding_ref,
+            "project_id": project_id,
             "principal_id": target_principal_id,
-            "channel": body.channel,
-            "status": "ACTIVE",
+            "status": "REVOKED",
+        }
+    finally:
+        auth_store.close()
+
+
+@router.post(
+    "/projects/{project_id}/principals/{target_principal_id}/bindings/{binding_ref}/revoke"
+)
+async def revoke_project_principal_binding(
+    project_id: str,
+    target_principal_id: str,
+    binding_ref: str,
+    x_nexus_principal_token: str | None = Header(default=None, alias="X-Nexus-Principal-Token"),
+) -> dict[str, Any]:
+    if not _ID_RE.fullmatch(target_principal_id):
+        raise HTTPException(status_code=400, detail="invalid principal_id")
+    if not _ID_RE.fullmatch(binding_ref):
+        raise HTTPException(status_code=400, detail="invalid binding_ref")
+    auth_store = get_studio_auth_store()
+    try:
+        actor_id, actor_tenant = _authenticate_principal(auth_store, x_nexus_principal_token)
+        _authorize_owner_mutation(
+            auth_store,
+            actor_id=actor_id,
+            actor_tenant=actor_tenant,
+            project_id=project_id,
+        )
+        try:
+            auth_store.revoke_channel_binding(
+                binding_ref,
+                actor_id=actor_id,
+                expected_tenant_id=actor_tenant,
+                expected_principal_id=target_principal_id,
+            )
+        except AuthorizationError as exc:
+            if exc.reason == "binding_not_found":
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        return {
+            "project_id": project_id,
+            "principal_id": target_principal_id,
+            "binding_ref": binding_ref,
+            "status": "REVOKED",
         }
     finally:
         auth_store.close()

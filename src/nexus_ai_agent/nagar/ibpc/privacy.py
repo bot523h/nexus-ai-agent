@@ -444,6 +444,23 @@ class DurablePrivacyConsentStore:
             assert updated is not None
             return updated
 
+    def backfill_legacy_tenant_id(self, *, project_id: str, tenant_id: str) -> int:
+        """Deterministically backfill legacy consent rows with empty tenant_id."""
+        if not project_id or not tenant_id:
+            raise PrivacyViolation(
+                "invalid_identity", "project_id and tenant_id are required for backfill"
+            )
+        with self._transaction():
+            cur = self._conn.execute(
+                """
+                UPDATE nexus_privacy_consents
+                SET tenant_id = ?
+                WHERE project_id = ? AND tenant_id = ''
+                """,
+                (tenant_id, project_id),
+            )
+            return int(cur.rowcount or 0)
+
     def check_consent_status(
         self,
         *,
@@ -454,6 +471,7 @@ class DurablePrivacyConsentStore:
         data_category: str,
         now_utc: str,
         provider_id: str = "",
+        tenant_id: str = "",
     ) -> tuple[str, DurableConsentGrant | None]:
         """Return ``('active' | 'revoked' | 'expired' | 'missing', grant_or_None)``."""
         now_dt = _parse_utc(now_utc)
@@ -479,6 +497,14 @@ class DurablePrivacyConsentStore:
             matching = [g for g in grants if provider_id and g.provider_id == provider_id]
         else:
             matching = [g for g in grants if not provider_id or g.provider_id == provider_id]
+        if tenant_id:
+            tenant_matching = [g for g in matching if g.tenant_id == tenant_id]
+            if matching and not tenant_matching:
+                raise PrivacyViolation(
+                    "consent_tenant_mismatch",
+                    f"consent for project {project_id!r} does not belong to tenant {tenant_id!r}",
+                )
+            matching = tenant_matching
         if not matching:
             return "missing", None
         saw_revoked: DurableConsentGrant | None = None
@@ -712,6 +738,7 @@ class PrivacyPolicy:
         scope: str,
         project_id: str = "_session",
         processing_scope: str = ProcessingScope.EXTERNAL_PROVIDER_DISPATCH.value,
+        tenant_id: str = "",
     ) -> bool:
         if self._store is not None:
             status, _ = self._store.check_consent_status(
@@ -721,6 +748,7 @@ class PrivacyPolicy:
                 processing_scope=processing_scope,
                 data_category=scope.upper(),
                 now_utc=self._now(),
+                tenant_id=tenant_id,
             )
             if status == "active":
                 return True
@@ -805,6 +833,7 @@ class PrivacyPolicy:
         processing_scope: ProcessingScope | str,
         data_category: DataCategory | str,
         provider_id: str = "",
+        tenant_id: str = "",
         require_local_biometric_consent: bool = True,
     ) -> DurableConsentGrant | None:
         """Fail-closed consent + egress gate with append-only audit on denial/expiry."""
@@ -859,6 +888,7 @@ class PrivacyPolicy:
             data_category=dc,
             now_utc=now_utc,
             provider_id=provider_id,
+            tenant_id=tenant_id,
         )
         if status != "active":
             event_type: Literal["DENIED", "EXPIRED"] = (

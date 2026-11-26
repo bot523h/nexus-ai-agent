@@ -391,6 +391,58 @@ WAVE3_MUTANTS: tuple[Wave3MutantSpec, ...] = (
         ),
         expected_tokens=("AssertionError", "403"),
     ),
+    Wave3MutantSpec(
+        name="M21_register_principal_insert_only_conflict",
+        relative_path=Path("adapters/studio_principal_auth.py"),
+        func_name="register_principal",
+        predicate=lambda n: _is_if_with_test_substr(n, "existing is not None"),
+        transform=_bypass_if,
+        target_test=(
+            "tests/unit/test_wave3_ibpc_durability.py::"
+            "TestWave3FinalSecurityClosure::"
+            "test_p1_1_register_principal_rejects_duplicate_and_token_hijack_via_store_and_api"
+        ),
+        expected_tokens=("AuthorizationError", "DID NOT RAISE", "AssertionError", "IntegrityError"),
+    ),
+    Wave3MutantSpec(
+        name="M22_bind_channel_insert_only_conflict",
+        relative_path=Path("adapters/studio_principal_auth.py"),
+        func_name="bind_channel",
+        predicate=lambda n: _is_if_with_test_substr(n, "existing is not None"),
+        transform=_bypass_if,
+        target_test=(
+            "tests/unit/test_wave3_ibpc_durability.py::"
+            "TestWave3FinalSecurityClosure::"
+            "test_p1_2_bind_channel_rejects_collision_hijack_and_generates_server_binding_ref"
+        ),
+        expected_tokens=("AuthorizationError", "DID NOT RAISE", "AssertionError", "IntegrityError"),
+    ),
+    Wave3MutantSpec(
+        name="M23_privacy_consent_tenant_isolation",
+        relative_path=Path("nagar/ibpc/privacy.py"),
+        func_name="check_consent_status",
+        predicate=lambda n: _is_if_with_test_substr(n, "not tenant_matching"),
+        transform=_bypass_if,
+        target_test=(
+            "tests/unit/test_wave3_ibpc_durability.py::"
+            "TestWave3FinalSecurityClosure::"
+            "test_p2_2_privacy_consent_enforces_tenant_isolation_and_legacy_backfill"
+        ),
+        expected_tokens=("PrivacyViolation", "DID NOT RAISE", "AssertionError"),
+    ),
+    Wave3MutantSpec(
+        name="M24_production_rbac_opt_out_forbidden",
+        relative_path=Path("api/studio.py"),
+        func_name="_enforce_optional_principal_rbac",
+        predicate=lambda n: _is_if_with_test_substr(n, "require_flag == '0' or opt_out"),
+        transform=_bypass_if,
+        target_test=(
+            "tests/unit/test_wave3_ibpc_durability.py::"
+            "TestWave3FinalSecurityClosure::"
+            "test_p2_3_owner_scoped_to_project_and_production_forbids_rbac_opt_out"
+        ),
+        expected_tokens=("AssertionError", "403"),
+    ),
 )
 
 

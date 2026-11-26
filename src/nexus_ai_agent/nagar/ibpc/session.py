@@ -923,6 +923,7 @@ class LiveSessionManager:
             principal_id=session.principal_id,
             scope=data_kind,
             project_id=session.project_id,
+            tenant_id=session.tenant_id,
         )
         self._privacy.check_egress(session.privacy_mode, data_kind, consented=consented)
 
@@ -940,6 +941,7 @@ class LiveSessionManager:
             principal_id=session.principal_id,
             scope=data_kind,
             project_id=session.project_id,
+            tenant_id=session.tenant_id,
         )
         self._privacy.check_egress(session.privacy_mode, data_kind, consented=consented)
 

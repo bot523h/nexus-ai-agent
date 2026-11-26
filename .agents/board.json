@@ -8893,7 +8893,7 @@
       "agent_branch": "arena/aac14be0-nexus-ai-agent",
       "claimed_at": "2026-11-26T12:00:00Z",
       "ttl_hours": 24,
-      "gates_owner": false,
+      "gates_owner": true,
       "delivered": [
         "src/nexus_ai_agent/nagar/ibpc/",
         "src/nexus_ai_agent/adapters/studio_principal_auth.py",

@@ -301,18 +301,30 @@ class StudioPrincipalAuthStore(StudioAuthorizerPort, CanonicalAuthorityPort):
         token_sha = _hash_token(raw_token)
         now_utc = self._now()
         with self._transaction():
+            existing = self._conn.execute(
+                "SELECT tenant_id, status FROM nexus_studio_principals WHERE principal_id = ?",
+                (principal_id,),
+            ).fetchone()
+            if existing is not None:
+                raise AuthorizationError(
+                    "principal_already_exists",
+                    f"principal {principal_id!r} already exists",
+                )
+            token_owner = self._conn.execute(
+                "SELECT principal_id FROM nexus_studio_principals WHERE token_sha256 = ?",
+                (token_sha,),
+            ).fetchone()
+            if token_owner is not None:
+                raise AuthorizationError(
+                    "principal_token_conflict",
+                    "principal token is already registered",
+                )
             self._conn.execute(
                 """
                 INSERT INTO nexus_studio_principals (
                     principal_id, tenant_id, display_name, token_sha256,
                     status, created_at_utc, revoked_at_utc
                 ) VALUES (?, ?, ?, ?, 'ACTIVE', ?, '')
-                ON CONFLICT(principal_id) DO UPDATE SET
-                    tenant_id = excluded.tenant_id,
-                    display_name = excluded.display_name,
-                    token_sha256 = excluded.token_sha256,
-                    status = 'ACTIVE',
-                    revoked_at_utc = ''
                 """,
                 (principal_id, tenant_id, display_name, token_sha, now_utc),
             )
@@ -326,9 +338,29 @@ class StudioPrincipalAuthStore(StudioAuthorizerPort, CanonicalAuthorityPort):
             )
         return principal_id
 
-    def revoke_principal(self, principal_id: str) -> None:
+    def revoke_principal(
+        self,
+        principal_id: str,
+        *,
+        actor_id: str = "system",
+        expected_tenant_id: str | None = None,
+    ) -> None:
         now_utc = self._now()
         with self._transaction():
+            p_row = self._conn.execute(
+                "SELECT tenant_id FROM nexus_studio_principals WHERE principal_id = ?",
+                (principal_id,),
+            ).fetchone()
+            if p_row is None:
+                raise AuthorizationError(
+                    "principal_not_found", f"unknown principal {principal_id!r}"
+                )
+            target_tenant = str(p_row[0])
+            if expected_tenant_id is not None and target_tenant != expected_tenant_id:
+                raise AuthorizationError(
+                    "principal_tenant_mismatch",
+                    f"principal {principal_id!r} belongs to tenant {target_tenant!r}",
+                )
             self._conn.execute(
                 """
                 UPDATE nexus_studio_principals
@@ -336,6 +368,21 @@ class StudioPrincipalAuthStore(StudioAuthorizerPort, CanonicalAuthorityPort):
                 WHERE principal_id = ?
                 """,
                 (now_utc, principal_id),
+            )
+            self._conn.execute(
+                """
+                UPDATE nexus_studio_channel_bindings
+                SET status = 'REVOKED', revoked_at_utc = ?
+                WHERE principal_id = ? AND status = 'ACTIVE'
+                """,
+                (now_utc, principal_id),
+            )
+            self._record_admin_event_locked(
+                event_type="REVOKE_PRINCIPAL",
+                actor_id=actor_id,
+                tenant_id=target_tenant,
+                target_principal_id=principal_id,
+                occurred_at_utc=now_utc,
             )
 
     def authenticate_principal_context(self, raw_token: str | None) -> tuple[str, str]:
@@ -382,7 +429,7 @@ class StudioPrincipalAuthStore(StudioAuthorizerPort, CanonicalAuthorityPort):
         now_utc = self._now()
         with self._transaction():
             p_row = self._conn.execute(
-                "SELECT tenant_id FROM nexus_studio_principals WHERE principal_id = ?",
+                "SELECT tenant_id, status FROM nexus_studio_principals WHERE principal_id = ?",
                 (principal_id,),
             ).fetchone()
             if p_row is None:
@@ -390,16 +437,32 @@ class StudioPrincipalAuthStore(StudioAuthorizerPort, CanonicalAuthorityPort):
                     "principal_not_found", f"unknown principal {principal_id!r}"
                 )
             tenant_id = str(p_row[0])
+            if str(p_row[1]) != "ACTIVE":
+                raise AuthorizationError(
+                    "principal_revoked",
+                    f"principal {principal_id!r} is {p_row[1]}",
+                )
+            existing = self._conn.execute(
+                """
+                SELECT binding_ref
+                FROM nexus_studio_channel_bindings
+                WHERE binding_ref = ? OR (channel = ? AND external_subject = ?)
+                LIMIT 1
+                """,
+                (ref, channel, external_subject),
+            ).fetchone()
+            if existing is not None:
+                raise AuthorizationError(
+                    "binding_already_exists",
+                    f"channel binding {ref!r} or subject "
+                    f"{channel}:{external_subject} already exists",
+                )
             self._conn.execute(
                 """
                 INSERT INTO nexus_studio_channel_bindings (
                     binding_ref, principal_id, channel, external_subject,
                     user_id, chat_id, status, created_at_utc, revoked_at_utc
                 ) VALUES (?, ?, ?, ?, ?, ?, 'ACTIVE', ?, '')
-                ON CONFLICT(binding_ref) DO UPDATE SET
-                    principal_id = excluded.principal_id,
-                    status = 'ACTIVE',
-                    revoked_at_utc = ''
                 """,
                 (ref, principal_id, channel, external_subject, user_id, chat_id, now_utc),
             )
@@ -414,9 +477,41 @@ class StudioPrincipalAuthStore(StudioAuthorizerPort, CanonicalAuthorityPort):
             )
         return ref
 
-    def revoke_channel_binding(self, binding_ref: str) -> None:
+    def revoke_channel_binding(
+        self,
+        binding_ref: str,
+        *,
+        actor_id: str = "system",
+        expected_tenant_id: str | None = None,
+        expected_principal_id: str | None = None,
+    ) -> None:
         now_utc = self._now()
         with self._transaction():
+            row = self._conn.execute(
+                """
+                SELECT b.principal_id, p.tenant_id
+                FROM nexus_studio_channel_bindings b
+                JOIN nexus_studio_principals p ON p.principal_id = b.principal_id
+                WHERE b.binding_ref = ?
+                """,
+                (binding_ref,),
+            ).fetchone()
+            if row is None:
+                raise AuthorizationError(
+                    "binding_not_found", f"unknown channel binding {binding_ref!r}"
+                )
+            target_principal = str(row[0])
+            target_tenant = str(row[1])
+            if expected_principal_id is not None and target_principal != expected_principal_id:
+                raise AuthorizationError(
+                    "binding_not_found",
+                    f"binding {binding_ref!r} does not belong to {expected_principal_id!r}",
+                )
+            if expected_tenant_id is not None and target_tenant != expected_tenant_id:
+                raise AuthorizationError(
+                    "principal_tenant_mismatch",
+                    f"binding {binding_ref!r} belongs to tenant {target_tenant!r}",
+                )
             self._conn.execute(
                 """
                 UPDATE nexus_studio_channel_bindings
@@ -424,6 +519,14 @@ class StudioPrincipalAuthStore(StudioAuthorizerPort, CanonicalAuthorityPort):
                 WHERE binding_ref = ?
                 """,
                 (now_utc, binding_ref),
+            )
+            self._record_admin_event_locked(
+                event_type="REVOKE_CHANNEL_BINDING",
+                actor_id=actor_id,
+                tenant_id=target_tenant,
+                target_principal_id=target_principal,
+                binding_ref=binding_ref,
+                occurred_at_utc=now_utc,
             )
 
     def ensure_project(
@@ -491,7 +594,29 @@ class StudioPrincipalAuthStore(StudioAuthorizerPort, CanonicalAuthorityPort):
                 f"principal={p_tenant!r}/project={proj_tenant!r}",
             )
 
-    def has_owner_role(self, principal_id: str, tenant_id: str) -> bool:
+    def has_owner_role(
+        self,
+        principal_id: str,
+        tenant_id: str,
+        *,
+        project_id: str | None = None,
+    ) -> bool:
+        if project_id is not None:
+            row = self._conn.execute(
+                """
+                SELECT 1
+                FROM nexus_studio_project_memberships m
+                JOIN nexus_studio_projects p ON p.project_id = m.project_id
+                WHERE m.principal_id = ?
+                  AND m.project_id = ?
+                  AND m.status = 'ACTIVE'
+                  AND m.role = 'OWNER'
+                  AND p.tenant_id = ?
+                LIMIT 1
+                """,
+                (principal_id, project_id, tenant_id),
+            ).fetchone()
+            return row is not None
         row = self._conn.execute(
             """
             SELECT 1
@@ -898,6 +1023,9 @@ class ProjectMembershipAuthorizer(StudioAuthorizerPort):
 
     def __init__(self, store: StudioPrincipalAuthStore) -> None:
         self._store = store
+
+    def get_project_tenant(self, project_id: str) -> str:
+        return self._store.get_project_tenant(project_id)
 
     def authorize_action(
         self,

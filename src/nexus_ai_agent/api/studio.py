@@ -57,8 +57,12 @@ def _configured_projects() -> frozenset[str]:
 def _enforce_optional_principal_rbac(project_id: str, request: Request) -> None:
     """Enforce durable principal membership RBAC by default when configured or active."""
     principal_token = request.headers.get("x-nexus-principal-token")
+    is_production = os.getenv("NEXUS_ENV", "").strip().lower() == "production"
     require_flag = os.getenv("NEXUS_STUDIO_REQUIRE_PRINCIPAL", "").strip()
-    opt_out = os.getenv("NEXUS_STUDIO_ALLOW_UNAUTHENTICATED_PRINCIPAL", "").strip() == "1"
+    opt_out = (
+        os.getenv("NEXUS_STUDIO_ALLOW_UNAUTHENTICATED_PRINCIPAL", "").strip() == "1"
+        or os.getenv("NEXUS_STUDIO_RBAC_OPT_OUT", "").strip() == "1"
+    )
     auth_db_env = os.getenv("NEXUS_STUDIO_AUTH_DB", "").strip()
     ws_env = os.getenv("NEXUS_STUDIO_WORKSPACE_ROOT", "").strip()
     default_auth_db = (
@@ -67,10 +71,22 @@ def _enforce_optional_principal_rbac(project_id: str, request: Request) -> None:
         else Path("workspace") / "queue" / "studio_auth.sqlite3"
     )
     auth_configured = bool(auth_db_env) or default_auth_db.is_file()
-    if require_flag == "0" or (opt_out and require_flag != "1" and not principal_token):
-        return
-    if not principal_token and require_flag != "1" and not auth_configured:
-        return
+    if is_production:
+        if require_flag == "0" or opt_out:
+            raise HTTPException(
+                status_code=403,
+                detail="principal RBAC opt-out is forbidden in production",
+            )
+        if not principal_token or not auth_configured:
+            raise HTTPException(
+                status_code=401,
+                detail="principal authentication and RBAC store required in production",
+            )
+    else:
+        if require_flag == "0" or (opt_out and require_flag != "1" and not principal_token):
+            return
+        if not principal_token and require_flag != "1" and not auth_configured:
+            return
     from nexus_ai_agent.adapters.studio_principal_auth import (
         PrincipalAuthenticationError,
         ProjectMembershipAuthorizer,

@@ -741,9 +741,14 @@ class IBPCService:
             project_id=project_id,
             action=StudioAction.MANAGE_CONSENT,
         )
+        effective_tenant_id = tenant_id
+        if not effective_tenant_id:
+            get_proj_tenant = getattr(self._deps.authorizer, "get_project_tenant", None)
+            if callable(get_proj_tenant):
+                effective_tenant_id = str(get_proj_tenant(project_id))
         return self._privacy.grant_durable_consent(
             project_id=project_id,
-            tenant_id=tenant_id,
+            tenant_id=effective_tenant_id,
             principal_id=principal_id,
             mode=mode,
             processing_scope=processing_scope,
@@ -1134,6 +1139,7 @@ class IBPCService:
             mode=session.privacy_mode,
             processing_scope=ProcessingScope.LOCAL_PROCESSING,
             data_category=DataCategory.AUDIO,
+            tenant_id=session.tenant_id,
         )
         if audio_dir is None:
             audio_dir = self._deps.workspace_root / "audio" / session.session_id
