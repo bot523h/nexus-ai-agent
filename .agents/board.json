@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-11-25T20:48:41Z",
+  "updated_at": "2026-11-26T12:00:00Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -1297,6 +1297,19 @@
         "src/nexus_ai_agent/creative/studio/runtime.py",
         "src/nexus_ai_agent/adapters/durable_studio_runtime.py",
         "tests/unit/test_w4_cp4_coverage.py"
+      ]
+    },
+    {
+      "id": "nagar-ibpc-wave3-durability",
+      "description": "Wave 3 IBPC durable live sessions, canonical approval binding, durable privacy consent, Studio principal auth & RBAC",
+      "paths": [
+        "src/nexus_ai_agent/nagar/ibpc/",
+        "src/nexus_ai_agent/adapters/studio_principal_auth.py",
+        "src/nexus_ai_agent/api/app.py",
+        "src/nexus_ai_agent/api/studio.py",
+        "src/nexus_ai_agent/api/studio_ibpc.py",
+        "tests/unit/test_wave3_ibpc_durability.py",
+        "tests/unit/creative/test_wave3_ibpc_mutations.py"
       ]
     }
   ],
@@ -8846,6 +8859,51 @@
       "gates_owner": false,
       "note": "",
       "generation": 1
+    },
+    {
+      "task": "task-w3-ibpc-durability",
+      "title": "W3: IBPC durable live sessions, canonical approval binding, privacy consent & Studio principal RBAC",
+      "zone": "nagar-ibpc-wave3-durability",
+      "priority": "P0",
+      "status": "active_in_review",
+      "scope": "Wave 3 IBPC durability & security closure: SQLite WAL live sessions/turns/contexts, RFC 8785 JCS canonical approval binding hash + key_id rotation/expiry, durable privacy consent ownership & exact-provider egress gating, Studio principal RBAC default & lifecycle/audit APIs, symlink/root containment, deterministic store close, >=98% line/branch coverage, and 36-mutant AST campaign.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "DurableLiveSessionStore enforces WAL pragmas, monotonic turn ordering, idempotency deduplication/conflict rejection, CAS session epoch fencing, and restart hydration.",
+        "ApprovalBinding enforces RFC 8785 JCS canonical approval hash, key_id rotation/revocation, scope signature, revision id, and constant-time expiry verification without hardcoded keys.",
+        "DurablePrivacyConsentStore enforces project/tenant ownership on revoke, exact provider_id egress matching, and append-only audit.",
+        "StudioPrincipalAuthStore + /api/studio/projects/{project_id}/ibpc & /api/studio/principals enforce token auth, tenant isolation, OWNER/EDITOR/VIEWER/AUDITOR RBAC, and append-only admin audit.",
+        "36/36 AST mutants killed (0 survived, 0 invalid), >=98% line/branch coverage across all 10 Wave 3 modules, and all IBPC, Studio, boundary, lint, and strict mypy checks green."
+      ],
+      "evidence_required": [
+        "pytest tests/unit/test_wave3_ibpc_durability.py tests/unit/creative/test_wave3_ibpc_mutations.py",
+        "pytest tests/unit/test_ibpc_*.py tests/integration/test_ibpc_e2e.py tests/architecture/test_ibpc_boundary.py",
+        "ruff check, ruff format --check, mypy --strict"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/nagar/ibpc/",
+        "src/nexus_ai_agent/adapters/studio_principal_auth.py",
+        "src/nexus_ai_agent/api/app.py",
+        "src/nexus_ai_agent/api/studio.py",
+        "src/nexus_ai_agent/api/studio_ibpc.py",
+        "tests/unit/test_wave3_ibpc_durability.py",
+        "tests/unit/creative/test_wave3_ibpc_mutations.py"
+      ],
+      "owner_hint": "arena/aac14be0-nexus-ai-agent",
+      "agent_branch": "arena/aac14be0-nexus-ai-agent",
+      "claimed_at": "2026-11-26T12:00:00Z",
+      "ttl_hours": 24,
+      "gates_owner": true,
+      "delivered": [
+        "src/nexus_ai_agent/nagar/ibpc/",
+        "src/nexus_ai_agent/adapters/studio_principal_auth.py",
+        "src/nexus_ai_agent/api/app.py",
+        "src/nexus_ai_agent/api/studio.py",
+        "src/nexus_ai_agent/api/studio_ibpc.py",
+        "tests/unit/test_wave3_ibpc_durability.py",
+        "tests/unit/creative/test_wave3_ibpc_mutations.py"
+      ],
+      "note": "Active in review on arena/aac14be0-nexus-ai-agent (PR #365) without overlapping task-w4-integrated-durable-execution or task-w11x-cp1-provenance-hardening."
     }
   ],
   "deferred_log": [
