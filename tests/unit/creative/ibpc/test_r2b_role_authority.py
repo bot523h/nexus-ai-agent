@@ -121,7 +121,8 @@ class TestNoSynthesizedOwner:
             service._authorize_principal(
                 principal_id=PRINCIPAL, project_id=PROJECT, action=Action.REVISION_RESTORE
             )
-        assert exc.value.reason == "unauthorized_principal:role_verification_required"
+        assert exc.value.reason == "unauthorized_principal"
+        assert "role_verification_required" in exc.value.detail
         assert "REVISION_RESTORE" in exc.value.detail
 
     def test_require_role_authority_refuses_every_action_without_one(self, tmp_path: Path) -> None:
@@ -131,7 +132,8 @@ class TestNoSynthesizedOwner:
                 service._authorize_principal(
                     principal_id=PRINCIPAL, project_id=PROJECT, action=action
                 )
-            assert exc.value.reason == "unauthorized_principal:role_verification_required"
+            assert exc.value.reason == "unauthorized_principal"
+            assert "role_verification_required" in exc.value.detail
 
     def test_the_only_owner_only_action_is_derived_from_the_matrix(self) -> None:
         owner_only = {a for a, roles in ACTION_ROLES.items() if roles == {MembershipRole.OWNER}}
@@ -150,7 +152,8 @@ class TestAVerifiedRoleOnTheIdentityFacts:
                 service._authorize_principal(
                     principal_id=PRINCIPAL, project_id=PROJECT, action=action
                 )
-            assert exc.value.reason == "unauthorized_principal:insufficient_role"
+            assert exc.value.reason == "unauthorized_principal"
+            assert "insufficient_role" in exc.value.detail
         # ... and the destruction action too
         service = _service(
             tmp_path / f"{role.value}-restore", authority=_IdentityAuthority(role=role)
@@ -173,7 +176,8 @@ class TestAVerifiedRoleOnTheIdentityFacts:
             service._authorize_principal(
                 principal_id=PRINCIPAL, project_id=PROJECT, action=Action.REVISION_RESTORE
             )
-        assert exc.value.reason == "unauthorized_principal:insufficient_role"
+        assert exc.value.reason == "unauthorized_principal"
+        assert "insufficient_role" in exc.value.detail
 
     def test_an_owner_may_restore(self, tmp_path: Path) -> None:
         service = _service(tmp_path, authority=_IdentityAuthority(role=MembershipRole.OWNER))
@@ -247,7 +251,8 @@ class TestTheDurableRoleAuthority:
                 service._authorize_principal(
                     principal_id=PRINCIPAL, project_id=PROJECT, action=Action.TURN_CREATE
                 )
-            assert exc.value.reason == "unauthorized_principal:binding_inconsistent"
+            assert exc.value.reason == "unauthorized_principal"
+            assert "binding_inconsistent" in exc.value.detail
         finally:
             authz.close()
 
@@ -267,7 +272,8 @@ class TestTheDurableRoleAuthority:
             service._authorize_principal(
                 principal_id=PRINCIPAL, project_id=PROJECT, action=Action.TURN_CREATE
             )
-        assert exc.value.reason == "unauthorized_principal:role_verification_required"
+        assert exc.value.reason == "unauthorized_principal"
+        assert "role_verification_required" in exc.value.detail
 
 
 class TestProductionCompositionRequiresRoleAuthority:
@@ -342,7 +348,8 @@ class TestTheServiceBoundaryStillFailsClosed:
                 chat_id=1,
                 current_revision=7,
             )
-        assert exc.value.reason == "unauthorized_principal:authorization_denied"
+        assert exc.value.reason == "unauthorized_principal"
+        assert "authorization_denied" in exc.value.detail
 
     def test_a_legacy_composition_still_executes_the_edit_lane(self, tmp_path: Path) -> None:
         """The fallback is narrow on purpose: identity-only composition keeps the

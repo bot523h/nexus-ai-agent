@@ -148,6 +148,47 @@ _OWNER_ONLY_ACTIONS = frozenset(
 
 logger = logging.getLogger(__name__)
 
+#: The ONE reason an authorization refusal ever carries.
+#:
+#: ``reason`` is a *contract*: callers switch on it (``reason ==
+#: "unauthorized_principal"``), so the specific diagnostic —
+#: ``role_verification_required``, ``insufficient_role``, ``binding_inconsistent``,
+#: ``authority_unconfigured``, … — travels in ``detail`` (and therefore in
+#: ``str()``), never concatenated onto the reason.  Splitting it the other way
+#: (``reason="unauthorized_principal:insufficient_role"``) silently breaks every
+#: exact-match caller and pushes tests into prefix-matching.
+AUTHORIZATION_REFUSAL_REASON = "unauthorized_principal"
+
+
+def _authorization_error(diagnostic: str, detail: str = "") -> ApprovalError:
+    """Build the canonical authorization refusal (exact reason, structured detail)."""
+    text = f"{diagnostic}: {detail}".strip(": ") if detail else diagnostic
+    return ApprovalError(AUTHORIZATION_REFUSAL_REASON, text)
+
+
+def _authorization_refusal(exc: ApprovalError) -> Refusal:
+    """Translate an authorization ``ApprovalError`` into the public ``Refusal``.
+
+    The returned ``reason`` is exactly :data:`AUTHORIZATION_REFUSAL_REASON` and
+    ``detail`` keeps the diagnostic.  A refusal that still carries a legacy
+    ``reason:diagnostic`` spelling is normalised here, so the public contract stays
+    canonical even for an error raised by a third-party authority port.
+    """
+    prefix = f"{AUTHORIZATION_REFUSAL_REASON}:"
+    diagnostic = ""
+    if exc.reason.startswith(prefix):
+        diagnostic = exc.reason[len(prefix) :]
+    elif exc.reason != AUTHORIZATION_REFUSAL_REASON:
+        diagnostic = exc.reason
+    detail = f"{diagnostic}: {exc.detail}".strip(": ") if diagnostic else exc.detail
+    return Refusal(AUTHORIZATION_REFUSAL_REASON, detail)
+
+
+def _authority_port_detail(exc: CanonicalAuthorityError) -> str:
+    """The structured detail a canonical-authority refusal carries."""
+    return f"{exc.reason}: {exc.detail}".strip(": ")
+
+
 #: Durable turn states whose in-memory ``TurnState`` is reconstructed on recovery.
 _RECOVERY_TURN_STATES: dict[TurnStatus, TurnState] = {
     TurnStatus.DRAFTED: TurnState.RECEIVED,
@@ -277,7 +318,38 @@ class IBPCServiceDeps:
     #: Wave 3-R2b: when True, a mutation is refused unless the acting principal's
     #: Studio role was verified by a role authority. Production composition
     #: (``build_durable_ibpc_service``) sets this; identity alone is never a grant.
+    #:
+    #: It is **not** the only way role enforcement switches on — see
+    #: :attr:`role_authority_enforced`, which is what every gate actually reads:
+    #:
+    #: * supplying :attr:`principal_authority` enforces roles implicitly, because a
+    #:   durable principal authority *is* the role source (its
+    #:   ``authorize_action`` refuses an action the principal's ``ACTION_ROLES``
+    #:   entry does not allow).  A composition that can prove a role but quietly
+    #:   skips the role gate would be the original synthetic-``OWNER`` bug wearing
+    #:   a different hat, so the flag can never *weaken* a configured authority.
+    #: * the flag alone (no ``principal_authority``) makes every identity-only
+    #:   mutation fail closed with ``role_verification_required`` instead of
+    #:   falling back to the legacy identity proof.
+    #:
+    #: Legacy in-memory unit tests construct this deps object with neither, so
+    #: ``role_authority_enforced`` is False for them — yet the OWNER-only actions
+    #: (``_OWNER_ONLY_ACTIONS``, today ``REVISION_RESTORE``) are **still blocked
+    #: unconditionally**: that refusal is keyed on the action inside
+    #: ``_authorize_principal`` and does not consult this flag at all.  A
+    #: composition without a role source can therefore never execute a
+    #: destructive action, no matter how it is wired.
     require_role_authority: bool = False
+
+    @property
+    def role_authority_enforced(self) -> bool:
+        """Whether every mutation must carry a *verified Studio role*.
+
+        True when the caller asked for it (``require_role_authority``) **or** when
+        a durable ``principal_authority`` is configured — the role source makes
+        role enforcement intrinsic, so omitting the flag cannot disable it.
+        """
+        return self.require_role_authority or self.principal_authority is not None
 
 
 @dataclass(frozen=True)
@@ -404,7 +476,7 @@ class IBPCService:
         base_revision_id: str | None = None,
         session_id: str | None = None,
     ) -> str:
-        if self._deps.principal_authority is not None or self._deps.require_role_authority:
+        if self._deps.role_authority_enforced:
             # Authoritative composition: only a principal with an authenticated
             # binding and an EDITOR/OWNER role on this project may open a
             # session.  ``require_role_authority`` (Wave 3-R2b) makes that gate
@@ -479,7 +551,7 @@ class IBPCService:
             # No trusted identity → typed refusal before job admission. Never a
             # synthetic binding, never broad service permissions (Phase 1).
             self._sessions.mark_failed(session_id, turn_id)
-            return Refusal("unauthorized_principal", f"{exc.reason}: {exc.detail}")
+            return Refusal(AUTHORIZATION_REFUSAL_REASON, _authority_port_detail(exc))
         src = Path(source_path)
         if not src.is_file():
             self._sessions.mark_failed(session_id, turn_id)
@@ -1649,7 +1721,7 @@ class IBPCService:
             try:
                 resolved = self._resolve_authority(principal_id, project_id)
             except CanonicalAuthorityError as exc:
-                raise ApprovalError(f"unauthorized_principal:{exc.reason}", exc.detail) from exc
+                raise _authorization_error(exc.reason, exc.detail) from exc
             # Wave 3-R2b: the canonical port proves IDENTITY, never a ROLE. A
             # synthesized OWNER used to be handed back here, which silently
             # granted the OWNER-only ``REVISION_RESTORE`` to any member.
@@ -1657,8 +1729,8 @@ class IBPCService:
             if isinstance(role, MembershipRole):
                 allowed = ACTION_ROLES[action]
                 if role not in allowed:
-                    raise ApprovalError(
-                        "unauthorized_principal:insufficient_role",
+                    raise _authorization_error(
+                        "insufficient_role",
                         f"{action.value} requires one of "
                         f"{sorted(r.value for r in allowed)}, principal holds {role.value}",
                     )
@@ -1670,9 +1742,9 @@ class IBPCService:
                 )
             # No verified role: an OWNER-only action, or a composition that
             # requires role authority, fails closed here — never a synthetic grant.
-            if self._deps.require_role_authority or action in _OWNER_ONLY_ACTIONS:
-                raise ApprovalError(
-                    "unauthorized_principal:role_verification_required",
+            if self._deps.role_authority_enforced or action in _OWNER_ONLY_ACTIONS:
+                raise _authorization_error(
+                    "role_verification_required",
                     f"{action.value} needs a verified Studio role and no role authority "
                     "is configured",
                 )
@@ -1687,12 +1759,12 @@ class IBPCService:
                 action=action,
             )
         except Exception as exc:  # noqa: BLE001 — every authority refusal is typed
-            reason = getattr(exc, "reason", "unauthorized_principal")
+            reason = getattr(exc, "reason", "authority_refused")
             detail = getattr(exc, "detail", "") or str(exc)
-            raise ApprovalError(f"unauthorized_principal:{reason}", detail) from exc
+            raise _authorization_error(reason, detail) from exc
         if facts.principal_id != principal_id or facts.project_id != project_id:
-            raise ApprovalError(
-                "unauthorized_principal:identity_mismatch",
+            raise _authorization_error(
+                "identity_mismatch",
                 "the authority returned a different identity than requested",
             )
         # Wave 3-R2b: the role authority is the ONLY role source when it is
@@ -1701,19 +1773,19 @@ class IBPCService:
         try:
             resolved = self._resolve_authority(principal_id, project_id)
         except CanonicalAuthorityError as exc:
-            raise ApprovalError(f"unauthorized_principal:{exc.reason}", exc.detail) from exc
+            raise _authorization_error(exc.reason, exc.detail) from exc
         if (
             getattr(resolved, "channel_binding_id", None) is not None
             and resolved.channel_binding_id != facts.channel_binding_id
         ):
-            raise ApprovalError(
-                "unauthorized_principal:binding_inconsistent",
+            raise _authorization_error(
+                "binding_inconsistent",
                 "the role authority and the canonical authority disagree on the binding",
             )
         role = getattr(facts, "role", None)
         if not isinstance(role, MembershipRole):
-            raise ApprovalError(
-                "unauthorized_principal:role_verification_required",
+            raise _authorization_error(
+                "role_verification_required",
                 "the role authority returned no verified Studio role",
             )
         return facts
@@ -1732,7 +1804,7 @@ class IBPCService:
                 action=PrincipalStudioAction.TURN_CREATE,
             )
         except ApprovalError as exc:
-            return Refusal("unauthorized_principal", f"{exc.reason}: {exc.detail}")
+            return _authorization_refusal(exc)
         return None
 
     def _require_media_consent(self, session: Any, data_category: ConsentScope) -> Refusal | None:

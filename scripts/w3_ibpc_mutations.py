@@ -491,8 +491,8 @@ MUTATIONS: tuple[Mutation, ...] = (
         IBPC / "service.py",
         (
             (
-                "            if self._deps.require_role_authority or action in _OWNER_ONLY_ACTIONS:",
-                "            return AuthorizedPrincipalFacts(  # mutation: identity is treated as OWNER\n                principal_id=resolved.principal_id,\n                project_id=resolved.project_id,\n                channel_binding_id=resolved.channel_binding_id,\n                role=MembershipRole.OWNER,\n            )\n            if self._deps.require_role_authority or action in _OWNER_ONLY_ACTIONS:",
+                "            if self._deps.role_authority_enforced or action in _OWNER_ONLY_ACTIONS:",
+                "            return AuthorizedPrincipalFacts(  # mutation: identity is treated as OWNER\n                principal_id=resolved.principal_id,\n                project_id=resolved.project_id,\n                channel_binding_id=resolved.channel_binding_id,\n                role=MembershipRole.OWNER,\n            )\n            if self._deps.role_authority_enforced or action in _OWNER_ONLY_ACTIONS:",
             ),
         ),
         "a verified identity is not a role: the OWNER-only action is refused without a role proof",

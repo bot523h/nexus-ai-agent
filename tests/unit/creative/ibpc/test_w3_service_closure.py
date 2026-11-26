@@ -111,6 +111,17 @@ class _Authority:
         )
 
 
+class _VanishingAuthority(_Authority):
+    """Resolves once (turn authorization), then withdraws before admission."""
+
+    def resolve_principal(self, *, principal_id: str, project_id: str, binding_ref: str):
+        if self.calls:
+            raise CanonicalAuthorityError("not_a_member", "membership revoked mid-flight")
+        return super().resolve_principal(
+            principal_id=principal_id, project_id=project_id, binding_ref=binding_ref
+        )
+
+
 @pytest.fixture()
 def harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """Media probes stubbed, stores real, authority injectable per test."""
@@ -271,40 +282,74 @@ class TestCanonicalAuthorityRefusals:
         assert type(result).__name__ == "Refusal"
         assert "missing_binding" in result.detail
 
-    def test_an_unconfigured_canonical_authority_refuses_before_the_fence(
-        self, harness, studio
-    ) -> None:
+    def test_an_unconfigured_canonical_authority_refuses_the_session(self, harness, studio) -> None:
         # Wave 3-R2b: when a role authority is present the service also requires
         # the canonical authority to confirm the identity/binding, so the refusal
-        # now happens BEFORE the turn fence opens — a stricter, still typed
-        # refusal (no half-open turn to terminalise).
+        # happens BEFORE the turn fence opens.  The reason stays canonical; the
+        # diagnostic travels in ``detail``.
         service = harness.build(
             authority=None,
             principal_authority=studio.service,
             channel_binding_ref=studio.binding,
         )
-        # the two authorities must agree: with the studio gate satisfied but no
-        # canonical authority, even opening a session is refused (typed, no
-        # fence opened, nothing persisted).
         with pytest.raises(ApprovalError) as exc:
             _session(service)
-        assert exc.value.reason == "unauthorized_principal:authority_unconfigured"
+        assert exc.value.reason == "unauthorized_principal"
+        assert "authority_unconfigured" in exc.value.detail
         assert service._deps.queue.enqueued == []
         assert service._sessions._sessions == {}
 
-    def test_a_typed_authority_refusal_is_surfaced_verbatim(self, harness, studio) -> None:
+    def test_a_typed_authority_refusal_is_surfaced_verbatim(self, harness) -> None:
+        # The identity-only composition still opens a session for planning, so the
+        # canonical authority's refusal surfaces as the public *Refusal* contract
+        # (exact reason, structured detail) before any turn fence or context.
         authority = _Authority(error=CanonicalAuthorityError("not_a_member", "no membership"))
+        service = harness.build(authority=authority)
+        session_id = _session(service)
+        result = _submit(service, harness.clip, session_id)
+        assert type(result).__name__ == "Refusal"
+        assert result.reason == "unauthorized_principal"
+        assert "not_a_member" in result.detail
+        assert "no membership" in result.detail
+        assert service._contexts == {}
+        assert service._deps.queue.enqueued == []
+        # refused BEFORE begin_turn: the session's turn map is still empty
+        assert service._sessions.get_session(session_id).turns == {}
+
+    def test_an_insufficient_role_is_a_refusal_with_the_canonical_reason(
+        self, harness, studio
+    ) -> None:
+        # A verified-but-insufficient role must surface through the SAME public
+        # contract as every other authorization refusal: ``reason`` is exactly
+        # ``unauthorized_principal`` and the diagnostic lives in ``detail``.
         service = harness.build(
-            authority=authority,
             principal_authority=studio.service,
             channel_binding_ref=studio.binding,
         )
-        # Wave 3-R2b: the canonical authority's typed refusal is surfaced
-        # verbatim at the session boundary, before any fence or context exists.
-        with pytest.raises(ApprovalError) as exc:
-            _session(service)
-        assert exc.value.reason == "unauthorized_principal:not_a_member"
-        assert "no membership" in exc.value.detail
+        session_id = _session(service)
+        studio.service.grant_membership(
+            project_id=PROJECT, principal_id=PRINCIPAL, role=MembershipRole.VIEWER
+        )
+        result = _submit(service, harness.clip, session_id)
+        assert type(result).__name__ == "Refusal"
+        assert result.reason == "unauthorized_principal"
+        assert "insufficient_role" in (result.detail or "")
+        assert service._contexts == {}
+        assert service._deps.queue.enqueued == []
+        assert service._sessions.get_session(session_id).turns == {}
+
+    def test_an_authority_withdrawn_after_authorization_refuses_the_admission(
+        self, harness
+    ) -> None:
+        # Wave 3-R6: the canonical refusal contract holds at the SECOND resolve
+        # too (turn authorization passed, the identity is gone before admission).
+        service = harness.build(authority=_VanishingAuthority())
+        session_id = _session(service)
+        result = _submit(service, harness.clip, session_id)
+        assert type(result).__name__ == "Refusal"
+        assert result.reason == "unauthorized_principal"
+        assert "not_a_member" in result.detail
+        assert "revoked mid-flight" in result.detail
         assert service._contexts == {}
         assert service._deps.queue.enqueued == []
 
@@ -327,7 +372,8 @@ class TestCanonicalAuthorityRefusals:
                 project_id=PROJECT,
                 action=PrincipalStudioAction.TURN_CREATE,
             )
-        assert "identity_mismatch" in exc.value.reason
+        assert exc.value.reason == "unauthorized_principal"
+        assert "identity_mismatch" in exc.value.detail
 
 
 class TestDurableConsentGate:

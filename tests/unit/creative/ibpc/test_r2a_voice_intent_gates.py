@@ -27,11 +27,15 @@ from pathlib import Path
 import pytest
 
 import nexus_ai_agent.nagar.ibpc.service as service_mod
-from nexus_ai_agent.creative.packs.runtime import build_runtime_registry
 from nexus_ai_agent.nagar.ibpc.approval import DurableCanonicalApprovalLedger
 from nexus_ai_agent.nagar.ibpc.approval_mac import StaticKeyRing
 from nexus_ai_agent.nagar.ibpc.authority import PrincipalFacts
 from nexus_ai_agent.nagar.ibpc.live_session import DurableLiveSessionStore, TurnStatus
+from nexus_ai_agent.nagar.ibpc.models import (
+    CapabilityIdentity,
+    CompiledPlan,
+    PlannedStep,
+)
 from nexus_ai_agent.nagar.ibpc.principal_authority import (
     DurableStudioAuthorizationService,
     MembershipRole,
@@ -69,15 +73,38 @@ class _Engine:
         self.calls += 1
         if self.error is not None:
             raise self.error
-        from nexus_ai_agent.creative.packs.caption.models import (
-            TranscriptRef,
-            TranscriptSegment,
+        # The caption port's contract for this boundary is ``transcript.text``
+        # (session.submit_audio reads nothing else), so the double stays a plain
+        # object: this module must not import a creative pack at all — an
+        # import here would drag the voice boundary into the pack-coverage
+        # contract and tempt a HOST_LAYER_PACK_IMPORTERS exemption.
+        return types.SimpleNamespace(
+            text=self.text,
+            segments=(types.SimpleNamespace(start_us=0, end_us=1_000_000, text=self.text),),
         )
 
-        return TranscriptRef(
-            transcript_id="tr_r2a",
-            segments=(TranscriptSegment(start_us=0, end_us=1_000_000, text=self.text),),
-        )
+
+def _stub_compile(ast, *, registry):
+    """A deterministic, pack-free stand-in for the registry-validated compiler."""
+    return CompiledPlan(
+        ast_digest=ast.ast_digest,
+        capability=CapabilityIdentity(
+            operation_id=ast.operation,
+            schema_version=1,
+            permission_level="read",
+            execution_modes=("local",),
+            required_packs=(),
+            required_permissions=(),
+            schema_digest="sha256:" + "e" * 64,
+        ),
+        steps=(
+            PlannedStep(
+                operation=ast.operation,
+                input=dict(ast.params),
+                target={"project_id": ast.project_id, "asset_id": ast.asset_id},
+            ),
+        ),
+    )
 
 
 class _Queue:
@@ -157,6 +184,11 @@ def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
     monkeypatch.setattr(service_mod, "build_shadow_preview", counting_shadow)
     monkeypatch.setattr(service_mod, "compute_scope_signature", fake_signature)
+    # The registry-validated compiler is exercised by its own suite
+    # (tests/unit/test_ibpc_intent_compiler.py) against the real composition.
+    # Here the voice *boundary* is under test, so the compile step is stubbed:
+    # that keeps this module free of any creative-pack import.
+    monkeypatch.setattr(service_mod, "compile_ast", _stub_compile)
 
     clip = tmp_path / "source.mp4"
     clip.write_bytes(b"\x00\x00\x00\x18ftypmp42" + b"\x00" * 2048)
@@ -177,7 +209,7 @@ def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     service = IBPCService(
         IBPCServiceDeps(
             queue=queue,  # type: ignore[arg-type]
-            registry=build_runtime_registry(),
+            registry=None,  # type: ignore[arg-type]  # stub compiler, no pack composition
             workspace_root=tmp_path,
             revision_provider=lambda: 7,
             now=NOW,

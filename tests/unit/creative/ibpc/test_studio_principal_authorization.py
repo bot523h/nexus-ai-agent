@@ -360,7 +360,9 @@ class TestServiceWiring:
                     chat_id=1,
                     current_revision=7,
                 )
-            assert "not_a_member" in exc.value.reason
+            # canonical reason + structured diagnostic (never concatenated)
+            assert exc.value.reason == "unauthorized_principal"
+            assert "not_a_member" in exc.value.detail
         finally:
             authz.close()
 
@@ -409,7 +411,8 @@ class TestServiceWiring:
                     chat_id=1,
                     current_revision=7,
                 )
-            assert start_exc.value.reason == "unauthorized_principal:insufficient_role"
+            assert start_exc.value.reason == "unauthorized_principal"
+            assert "insufficient_role" in start_exc.value.detail
             assert "EDITOR" in start_exc.value.detail
         finally:
             authz.close()
