@@ -57,6 +57,8 @@ from nexus_ai_agent.nagar.ibpc.service import (
 )
 
 NOW = lambda: "2026-11-25T00:00:00Z"  # noqa: E731
+#: The instant the approval token minted for NOW() expires (T0 + the TTL).
+T0_PLUS_TTL = "2026-11-25T00:10:00Z"
 KEY = b"k" * 32
 PRINCIPAL = "prn_" + "1" * 32
 PROJECT = "project-w3"
@@ -401,7 +403,9 @@ class TestBindingAndTurnMirrors:
             principal_id=PRINCIPAL,
         )
         ctx = _TurnContext.__new__(_TurnContext)
-        payload = service._canonical_binding_payload(ctx, identity)  # type: ignore[arg-type]
+        payload = service._canonical_binding_payload(  # type: ignore[arg-type]
+            ctx, identity, expires_at_utc=T0_PLUS_TTL
+        )
         assert payload.base_revision_id == "rev:7"
 
     def test_the_payload_uses_the_session_revision_when_known(self, harness) -> None:
@@ -418,7 +422,9 @@ class TestBindingAndTurnMirrors:
             principal_id=PRINCIPAL,
         )
         ctx = _TurnContext.__new__(_TurnContext)
-        payload = service._canonical_binding_payload(ctx, identity)  # type: ignore[arg-type]
+        payload = service._canonical_binding_payload(  # type: ignore[arg-type]
+            ctx, identity, expires_at_utc=T0_PLUS_TTL
+        )
         assert (
             payload.base_revision_id
             == service._session_store.get_session(session_id).active_revision_id
@@ -723,7 +729,9 @@ class TestResidualRefusalBranches:
             principal_id=PRINCIPAL,
         )
         ctx = _TurnContext.__new__(_TurnContext)
-        payload = service._canonical_binding_payload(ctx, identity)  # type: ignore[arg-type]
+        payload = service._canonical_binding_payload(  # type: ignore[arg-type]
+            ctx, identity, expires_at_utc=T0_PLUS_TTL
+        )
         assert payload.base_revision_id == "rev:7"
 
     def test_marking_a_non_terminal_target_is_a_noop(self, harness) -> None:
@@ -787,7 +795,9 @@ class TestCanonicalBindingAndScopeEnforcement:
         service, session_id, approval_id = self._approved(harness)
         stored = service._deps.approval_ledger.binding_payload(approval_id)
         drifted = dataclasses.replace(stored, base_revision_id="rev:999")
-        monkeypatch.setattr(service, "_canonical_binding_payload", lambda *a, **k: drifted)
+        # Wave 3-R1a: consumption presents the payload minted at issuance, so the
+        # drift is injected where it would actually be able to reach the ledger.
+        monkeypatch.setattr(service, "_issued_binding_payload", lambda ctx: drifted)
         outcome = asyncio.run(
             service.execute(session_id, "turn-1", approval_id, principal_id=PRINCIPAL)
         )

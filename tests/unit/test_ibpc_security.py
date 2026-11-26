@@ -987,7 +987,10 @@ def test_approval_provider_and_clock_fail_closed(service_env) -> None:
     sid2 = _open_service_session(service)
     second = _submit(service, sid2, "naive-clock", 1, clip)
     service._deps.now = lambda: "2026-10-31T00:00:00"
-    with pytest.raises(ApprovalError, match="approval_key_unavailable"):
+    # Wave 3-R1a: the issuance instant is parsed outside the key-error
+    # translation, so a naive clock is its own typed refusal instead of being
+    # reported as a missing key.
+    with pytest.raises(ApprovalError, match="invalid_instant"):
         service.approve(sid2, "naive-clock", second.approval_id, principal_id="user-1")
 
 

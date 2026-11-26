@@ -143,6 +143,21 @@ def utc_now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def _parse_instant(value: str) -> datetime:
+    """Parse the canonical ``YYYY-MM-DDTHH:MM:SSZ`` instant; require tz-aware.
+
+    A naive/unparsable instant is a typed ``ApprovalError`` — assuming UTC would
+    let a misconfigured clock mint approvals that never expire.
+    """
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except (TypeError, ValueError) as exc:
+        raise ApprovalError("invalid_instant", f"unparsable instant {value!r}") from exc
+    if parsed.tzinfo is None:
+        raise ApprovalError("invalid_instant", f"instant {value!r} is naive (no timezone)")
+    return parsed.astimezone(timezone.utc)
+
+
 class JobFactsProvider(Protocol):
     def get_job_facts(self, job_id: str) -> Any: ...
 
@@ -255,6 +270,13 @@ class _TurnContext:
     delta_spec: dict[str, Any] | None = None
     #: durable turn index (Wave 3 slice 3.1) when a session store is configured
     durable_turn_index: int | None = None
+    #: The expiry instant minted **once** when the human approved (Wave 3-R1a).
+    #: Consumption compares the current clock against it; it is never recomputed,
+    #: so a decision taken at T0 and executed at T0+30s still verifies.
+    issued_expires_at_utc: str | None = None
+    #: The exact canonical nine-field payload signed at issuance. Consumption
+    #: presents *this* object (or its durable copy), never a fresh computation.
+    canonical_payload: ApprovalBindingPayload | None = None
 
 
 class IBPCService:
@@ -939,13 +961,25 @@ class IBPCService:
             turn_is_active=lambda: self._sessions.turn_is_active(session_id, turn_id),
         )
         ctx.scope_signature = self._scope_signature(ctx, identity)
-        self._bind_canonical_approval(ctx, identity, approval_id)
+        # Wave 3-R1a: the token's lifetime is minted EXACTLY ONCE, here, and both
+        # the canonical binding payload and the authenticated envelope carry that
+        # same instant.  Rebuilding it later (at consume time) would make every
+        # approval issued under a live clock disagree with its own stored payload
+        # the moment a second passed — the drift that unit tests with a frozen
+        # clock could never see.
+        issued_at = self._deps.now()
+        # Parsed OUTSIDE the key-error translation below: a naive/misconfigured
+        # clock is its own typed refusal and must never masquerade as a missing key.
+        issued_at_dt = _parse_instant(issued_at)
         try:
-            issued_at = self._deps.now()
-            issue_dt = datetime.fromisoformat(issued_at.replace("Z", "+00:00"))
-            if issue_dt.tzinfo is None:
-                raise ValueError("approval issue time must be timezone-aware")
-            expires_at = (issue_dt + timedelta(minutes=10)).strftime("%Y-%m-%dT%H:%M:%SZ")
+            expires_at = (issued_at_dt + timedelta(minutes=APPROVAL_TTL_MINUTES)).strftime(
+                "%Y-%m-%dT%H:%M:%SZ"
+            )
+            ctx.issued_expires_at_utc = expires_at
+            ctx.canonical_payload = self._canonical_binding_payload(
+                ctx, identity, expires_at_utc=expires_at
+            )
+            self._bind_canonical_approval(ctx, identity, approval_id)
             ctx.approval_envelope = issue_envelope(
                 provider,
                 approval_id=approval_id,
@@ -955,6 +989,8 @@ class IBPCService:
             )
         except (KeyProviderError, TypeError, ValueError) as exc:
             self._approvals.revoke(approval_id)
+            ctx.canonical_payload = None
+            ctx.issued_expires_at_utc = None
             raise ApprovalError(
                 "approval_key_unavailable", "approval envelope could not be issued"
             ) from exc
@@ -965,7 +1001,11 @@ class IBPCService:
     # -- canonical approval binding (Wave 3 slice 3.2) ------------------------
 
     def _canonical_binding_payload(
-        self, ctx: _TurnContext, identity: ApprovalIdentity
+        self,
+        ctx: _TurnContext,
+        identity: ApprovalIdentity,
+        *,
+        expires_at_utc: str,
     ) -> ApprovalBindingPayload:
         """The nine-field canonical payload this approval is bound to.
 
@@ -973,6 +1013,10 @@ class IBPCService:
         store is configured (the revision the human saw), else ``rev:<n>`` for
         the frozen binding revision — always derived from verified context,
         never from caller text.
+
+        ``expires_at_utc`` is **required** and supplied by the issuer: this
+        function never consults the clock, so the only instant that can ever be
+        signed is the one minted at issuance (Wave 3-R1a).
         """
         base_revision = f"rev:{identity.source_revision}"
         if self._session_store is not None:
@@ -982,10 +1026,7 @@ class IBPCService:
                 ).active_revision_id
             except ValueError:
                 base_revision = f"rev:{identity.source_revision}"
-        expires_at = (
-            datetime.fromisoformat(self._deps.now().replace("Z", "+00:00"))
-            + timedelta(minutes=APPROVAL_TTL_MINUTES)
-        ).strftime("%Y-%m-%dT%H:%M:%SZ")
+        expires_at = expires_at_utc
         return ApprovalBindingPayload(
             project_id=identity.project_id,
             session_id=identity.session_id,
@@ -1001,11 +1042,16 @@ class IBPCService:
     def _bind_canonical_approval(
         self, ctx: _TurnContext, identity: ApprovalIdentity, approval_id: str
     ) -> str | None:
-        """Record the canonical MAC when the ledger supports canonical bindings."""
+        """Record the canonical MAC when the ledger supports canonical bindings.
+
+        The payload is the one minted by :meth:`approve` (``ctx.canonical_payload``)
+        — signing a freshly computed payload would silently re-introduce the
+        expiry drift R1a exists to remove.
+        """
         bind = getattr(self._approvals, "bind_canonical", None)
         if ctx.scope_signature is None or bind is None:
             return None
-        return str(bind(approval_id, self._canonical_binding_payload(ctx, identity)))
+        return str(bind(approval_id, self._issued_binding_payload(ctx)))
 
     def _consume_approval(
         self, approval_id: str, ctx: _TurnContext, identity: ApprovalIdentity
@@ -1023,13 +1069,51 @@ class IBPCService:
         if consume_canonical is None:
             self._approvals.consume(approval_id, identity=identity)
             return
-        payload = self._canonical_binding_payload(ctx, identity)
+        payload = self._issued_binding_payload(ctx)
         consume_canonical(
             approval_id,
             identity=identity,
             payload=payload,
             job_id=f"ibpc:{approval_id}",
         )
+
+    def _assert_approval_not_expired(self, ctx: _TurnContext) -> None:
+        """Enforce the token TTL against the **issued** instant, fail closed.
+
+        The comparison is against the expiry minted at approval time (R1a), so
+        the window is fixed when the human decided and never slides forward with
+        the clock.  The ledger re-checks atomically inside the consume
+        transaction; this check exists so an expired token produces the *typed*
+        ``approval_expired`` refusal instead of a generic MAC failure.
+        """
+        if ctx.issued_expires_at_utc is None:
+            raise ApprovalError(
+                "approval_expired",
+                "this turn carries no issued expiry instant; refusing to execute",
+            )
+        current = _parse_instant(self._deps.now())
+        expires = _parse_instant(ctx.issued_expires_at_utc)
+        if current >= expires:
+            raise ApprovalError(
+                "approval_expired",
+                f"token expired at {ctx.issued_expires_at_utc} (now {self._deps.now()})",
+            )
+
+    def _issued_binding_payload(self, ctx: _TurnContext) -> ApprovalBindingPayload:
+        """The payload signed at issuance — the only payload consumption accepts.
+
+        A context without an issued payload (never approved, or approved by a
+        previous generation of this code) fails closed: rebuilding the payload
+        here is exactly the defect R1a fixes, so there is deliberately no
+        fallback path.
+        """
+        payload = ctx.canonical_payload
+        if payload is None:
+            raise ApprovalError(
+                "approval_payload_missing",
+                "this turn carries no issued canonical approval payload",
+            )
+        return payload
 
     def _mark_durable_turn(self, session_id: str, turn_id: str, target: TurnStatus) -> None:
         """Advance the durable turn row (best-effort mirror of the session fence)."""
@@ -1362,6 +1446,12 @@ class IBPCService:
                     principal_id=principal_id,
                 )
             except (ApprovalError, SessionError) as exc:
+                return ExecutionOutcome(status="refused", detail=f"{exc.reason}: {exc.detail}")
+            # Wave 3-R1a: the TTL is checked against the issuance instant, before
+            # anything is consumed, so an expired token is a typed refusal.
+            try:
+                self._assert_approval_not_expired(ctx)
+            except ApprovalError as exc:
                 return ExecutionOutcome(status="refused", detail=f"{exc.reason}: {exc.detail}")
             if ctx.scope_signature is None or not hmac.compare_digest(
                 ctx.scope_signature, self._scope_signature(ctx, identity)
