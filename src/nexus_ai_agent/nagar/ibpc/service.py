@@ -1073,12 +1073,11 @@ class IBPCService:
             # One authority, two gates: the durable principal authority is the
             # richer surface, but the injected canonical authority already
             # proves principal membership + binding ownership, so it satisfies
-            # this gate too. A service with NO authority at all fails closed.
-            if self._deps.authority is None:
-                raise ApprovalError(
-                    "unauthorized_principal",
-                    "no canonical/principal authority is configured; refusing the mutation",
-                )
+            # this gate too.  The unconfigured case is NOT re-spelled here: it
+            # stays a single guard in ``_resolve_authority`` (the same one the
+            # execute path trusts), so a service composed with no authority at
+            # all fails closed through that exactly-once check and the
+            # ``unconfigured_authority_allows`` mutant has nowhere to hide.
             try:
                 resolved = self._resolve_authority(principal_id, project_id)
             except CanonicalAuthorityError as exc:

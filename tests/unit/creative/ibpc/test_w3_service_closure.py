@@ -247,12 +247,17 @@ def _identity_for(ctx: _TurnContext) -> ApprovalIdentity:
 
 class TestCanonicalAuthorityRefusals:
     def test_no_principal_authority_and_no_canonical_authority_refuses(self, harness) -> None:
+        # The unconfigured case is delegated to the single ``_resolve_authority``
+        # guard (see scripts/ibpc_security_mutations.py::unconfigured_authority_allows),
+        # so the refusal keeps the execute path's own typed reason instead of a
+        # second, shadowing message.
         service = harness.build(authority=None)
         session_id = _session(service)
         result = _submit(service, harness.clip, session_id)
         assert type(result).__name__ == "Refusal"
         assert result.reason == "unauthorized_principal"
-        assert "no canonical/principal authority" in result.detail
+        assert "authority_unconfigured" in result.detail
+        assert "no trusted canonical authority" in result.detail
         # refused BEFORE begin_turn: no context, nothing enqueued
         assert service._contexts == {}
         assert service._deps.queue.enqueued == []

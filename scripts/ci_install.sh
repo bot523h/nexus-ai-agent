@@ -56,6 +56,7 @@ python -m pip install \
 python -m pip install \
   --isolated \
   --index-url https://pypi.org/simple \
+  --extra-index-url https://download.pytorch.org/whl/cpu \
   -c "${CONSTRAINTS}" \
   -e "${EDITABLE}" "$@"
 
