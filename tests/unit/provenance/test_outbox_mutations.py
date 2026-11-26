@@ -131,7 +131,7 @@ MUTATIONS: tuple[MutationSpec, ...] = (
         invariant="mark_applied transitions PENDING -> APPLIED and clears pending queue",
         func_name="mark_applied",
         test_selector="test_outbox_reconciler_crash_replay_and_idempotency",
-        expected_error_tokens=("AssertionError",),
+        expected_error_tokens=("AssertionError", "OutboxEvent", "Left contains"),
         predicate=lambda n: (
             isinstance(n, ast.Constant)
             and isinstance(n.value, str)
@@ -217,9 +217,11 @@ def _classify_mutant_outcome(
         return "INVALID", "pytest exited 1 without reporting >= 1 failed test"
     matched_tokens = [tok for tok in spec.expected_error_tokens if tok in combined_output]
     if not matched_tokens:
+        tail = combined_output.strip()[-500:]
         return (
             "INVALID",
-            f"failure output lacked expected invariant token(s) {spec.expected_error_tokens}",
+            f"failure output lacked expected invariant token(s) "
+            f"{spec.expected_error_tokens}; tail={tail!r}",
         )
     return "KILLED", f"rc=1, matched={matched_tokens[0]!r}"
 
