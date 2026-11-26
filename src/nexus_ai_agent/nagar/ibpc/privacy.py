@@ -494,11 +494,21 @@ class DurablePrivacyConsentStore:
             ).fetchall()
         grants = [self._row_to_grant(r) for r in rows]
         if processing_scope == ProcessingScope.EXTERNAL_PROVIDER_DISPATCH.value:
-            matching = [g for g in grants if provider_id and g.provider_id == provider_id]
+            matching = [
+                g
+                for g in grants
+                if provider_id.strip() and g.provider_id.strip() == provider_id.strip()
+            ]
         else:
-            matching = [g for g in grants if not provider_id or g.provider_id == provider_id]
-        if tenant_id:
-            tenant_matching = [g for g in matching if g.tenant_id == tenant_id]
+            matching = [
+                g
+                for g in grants
+                if not (provider_id.strip() or g.provider_id.strip())
+                or g.provider_id.strip() == provider_id.strip()
+            ]
+        resolved_tenant = tenant_id.strip()
+        if resolved_tenant or any(g.tenant_id.strip() for g in matching):
+            tenant_matching = [g for g in matching if g.tenant_id.strip() == resolved_tenant]
             if matching and not tenant_matching:
                 raise PrivacyViolation(
                     "consent_tenant_mismatch",
@@ -774,17 +784,18 @@ class PrivacyPolicy:
             )
         ).strip()
         if self._store is not None:
-            status, grant = self._store.check_consent_status(
-                project_id=project_id or "_session",
-                principal_id=principal_id,
-                mode=mode,
-                processing_scope=effective_ps,
-                data_category=(data_category or scope).upper(),
-                now_utc=self._now(),
-                provider_id=provider_id,
-                tenant_id=tenant_id,
-            )
-            if grant is not None and grant.tenant_id and not tenant_id.strip():
+            try:
+                status, _grant = self._store.check_consent_status(
+                    project_id=project_id or "_session",
+                    principal_id=principal_id,
+                    mode=mode,
+                    processing_scope=effective_ps,
+                    data_category=(data_category or scope).upper(),
+                    now_utc=self._now(),
+                    provider_id=provider_id,
+                    tenant_id=tenant_id,
+                )
+            except PrivacyViolation:
                 return False
             return status == "active"
         now_dt = _parse_utc(self._now())
@@ -961,16 +972,53 @@ class PrivacyPolicy:
         if self._store is None:
             raise PrivacyViolation("consent_missing", f"no durable consent for {ps}:{dc}")
 
-        status, grant = self._store.check_consent_status(
-            project_id=project_id,
-            principal_id=principal_id,
-            mode=mode,
-            processing_scope=ps,
-            data_category=dc,
-            now_utc=now_utc,
-            provider_id=provider_id,
-            tenant_id=tenant_id,
-        )
+        try:
+            status, grant = self._store.check_consent_status(
+                project_id=project_id,
+                principal_id=principal_id,
+                mode=mode,
+                processing_scope=ps,
+                data_category=dc,
+                now_utc=now_utc,
+                provider_id=provider_id,
+                tenant_id=tenant_id,
+            )
+        except PrivacyViolation as exc:
+            self._store.record_audit_event(
+                consent_id="",
+                event_type="DENIED",
+                project_id=project_id,
+                principal_id=principal_id,
+                mode=mode.value,
+                processing_scope=ps,
+                data_category=dc,
+                provider_id=provider_id,
+                actor_id=principal_id,
+                reason=exc.reason,
+                occurred_at_utc=now_utc,
+            )
+            raise
+        if grant is not None and (
+            (grant.tenant_id.strip() or tenant_id.strip())
+            and grant.tenant_id.strip() != tenant_id.strip()
+        ):
+            self._store.record_audit_event(
+                consent_id=grant.consent_id,
+                event_type="DENIED",
+                project_id=project_id,
+                principal_id=principal_id,
+                mode=mode.value,
+                processing_scope=ps,
+                data_category=dc,
+                provider_id=provider_id,
+                actor_id=principal_id,
+                reason="consent_tenant_mismatch",
+                occurred_at_utc=now_utc,
+            )
+            raise PrivacyViolation(
+                "consent_tenant_mismatch",
+                f"consent for project {project_id!r} does not belong to tenant {tenant_id!r}",
+            )
         if status != "active":
             event_type: Literal["DENIED", "EXPIRED"] = (
                 "EXPIRED" if status == "expired" else "DENIED"

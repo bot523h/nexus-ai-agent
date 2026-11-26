@@ -188,6 +188,30 @@ def _ignore_omitted_processing_scope(node: ast.AST) -> ast.AST:
     return ast.copy_location(ast.If(test=expr, body=node.body, orelse=node.orelse), node)
 
 
+def _allow_empty_provider_match(node: ast.AST) -> ast.AST:
+    assert isinstance(node, ast.ListComp)
+    cond = ast.parse("not provider_id or g.provider_id == provider_id", mode="eval").body
+    new_comp = ast.comprehension(
+        target=node.generators[0].target,
+        iter=node.generators[0].iter,
+        ifs=[cond],
+        is_async=0,
+    )
+    return ast.copy_location(ast.ListComp(elt=node.elt, generators=[new_comp]), node)
+
+
+def _skip_empty_tenant_mismatch(node: ast.AST) -> ast.AST:
+    assert isinstance(node, ast.If)
+    return ast.copy_location(
+        ast.If(
+            test=ast.Name(id="tenant_id", ctx=ast.Load()),
+            body=node.body,
+            orelse=node.orelse,
+        ),
+        node,
+    )
+
+
 WAVE3_MUTANTS: tuple[Wave3MutantSpec, ...] = (
     Wave3MutantSpec(
         name="M01_session_epoch_fencing",
@@ -669,6 +693,61 @@ WAVE3_MUTANTS: tuple[Wave3MutantSpec, ...] = (
             "tests/unit/test_wave3_ibpc_durability.py::"
             "TestWave3FinalSecurityClosure::"
             "test_in_memory_consent_omitted_processing_scope_and_substring_category_isolation"
+        ),
+        expected_tokens=("AssertionError",),
+    ),
+    Wave3MutantSpec(
+        name="M37_durable_consent_non_external_provider_mismatch",
+        relative_path=Path("nagar/ibpc/privacy.py"),
+        func_name="check_consent_status",
+        predicate=lambda n: (
+            isinstance(n, ast.ListComp)
+            and "not (provider_id.strip() or g.provider_id.strip())" in ast.unparse(n)
+        ),
+        transform=_allow_empty_provider_match,
+        target_test=(
+            "tests/unit/test_wave3_ibpc_durability.py::"
+            "TestWave3FinalSecurityClosure::"
+            "test_durable_consent_non_external_provider_id_mismatch_when_query_omits_provider"
+        ),
+        expected_tokens=("AssertionError",),
+    ),
+    Wave3MutantSpec(
+        name="M38_durable_consent_empty_tenant_mismatch",
+        relative_path=Path("nagar/ibpc/privacy.py"),
+        func_name="check_consent_status",
+        predicate=lambda n: _is_if_with_test_substr(n, "resolved_tenant or any"),
+        transform=_skip_empty_tenant_mismatch,
+        target_test=(
+            "tests/unit/test_wave3_ibpc_durability.py::"
+            "TestWave3FinalSecurityClosure::"
+            "test_enforce_processing_consent_fails_closed_when_grant_has_tenant_and_caller_omits_tenant"
+        ),
+        expected_tokens=("PrivacyViolation", "DID NOT RAISE", "AssertionError"),
+    ),
+    Wave3MutantSpec(
+        name="M39_studio_api_rejects_conflicting_project_scope_params",
+        relative_path=Path("api/studio_ibpc.py"),
+        func_name="_resolve_scoped_project_id",
+        predicate=lambda n: _is_if_with_test_substr(n, "b_proj != q_proj"),
+        transform=_bypass_if,
+        target_test=(
+            "tests/unit/test_wave3_ibpc_durability.py::"
+            "TestWave3FinalSecurityClosure::"
+            "test_studio_api_rejects_conflicting_body_and_query_project_id_with_400"
+        ),
+        expected_tokens=("AssertionError",),
+    ),
+    Wave3MutantSpec(
+        name="M40_enforce_processing_consent_records_durable_tenant_mismatch_audit",
+        relative_path=Path("nagar/ibpc/privacy.py"),
+        func_name="enforce_processing_consent",
+        predicate=lambda n: _is_expr_call_substr(n, "reason=exc.reason"),
+        transform=_replace_with_pass,
+        target_test=(
+            "tests/unit/test_wave3_ibpc_durability.py::"
+            "TestWave3FinalSecurityClosure::"
+            "test_enforce_processing_consent_fails_closed_when_grant_has_tenant_and_caller_omits_tenant"
         ),
         expected_tokens=("AssertionError",),
     ),
