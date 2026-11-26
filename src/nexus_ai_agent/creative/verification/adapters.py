@@ -306,10 +306,14 @@ class ChromophoreUncertainty:
         return UncertaintyInput.from_covariance((self.melanin, self.hemoglobin), self.covariance)
 
 
-def _gramian_inverse(
+def _gramian_entries(
     melanin_extinction: Sequence[float], hemoglobin_extinction: Sequence[float], ridge: float
 ) -> tuple[float, float, float]:
-    """Inverse of the ridge-regularised ``2x2`` Gramian ``E E^T + ridge I``."""
+    """Validated ``(a, b, c)`` of the ridge-regularised Gramian ``[[a, c], [c, b]]``.
+
+    Both the inverse and the spectrum read the same validated entries, so the
+    curve/ridge checks live in exactly one place.
+    """
     mel = tuple(
         _finite_number(value, f"melanin_extinction[{index}]")
         for index, value in enumerate(melanin_extinction)
@@ -327,9 +331,20 @@ def _gramian_inverse(
     regularisation = _finite_number(ridge, "ridge")
     if regularisation < 0.0:
         raise GUMInputError(f"ridge must be non-negative, got {regularisation!r}")
-    gramian_mel = math.fsum(value * value for value in mel) + regularisation
-    gramian_hem = math.fsum(value * value for value in hem) + regularisation
-    gramian_cross = math.fsum(a * b for a, b in zip(mel, hem, strict=False))
+    return (
+        math.fsum(value * value for value in mel) + regularisation,
+        math.fsum(value * value for value in hem) + regularisation,
+        math.fsum(a * b for a, b in zip(mel, hem, strict=False)),
+    )
+
+
+def _gramian_inverse(
+    melanin_extinction: Sequence[float], hemoglobin_extinction: Sequence[float], ridge: float
+) -> tuple[float, float, float]:
+    """Inverse of the ridge-regularised ``2x2`` Gramian ``E E^T + ridge I``."""
+    gramian_mel, gramian_hem, gramian_cross = _gramian_entries(
+        melanin_extinction, hemoglobin_extinction, ridge
+    )
     determinant = gramian_mel * gramian_hem - gramian_cross * gramian_cross
     if determinant <= 0.0:
         raise GUMInputError(
@@ -354,26 +369,9 @@ def _gramian_spectrum(
     inverse (for ``[[1, rho], [rho, 1]]`` the inverse's entries are all
     ``1/(1 - rho^2)`` and their ratio is 1.0 for every ``rho``).
     """
-    mel = tuple(
-        _finite_number(value, f"melanin_extinction[{index}]")
-        for index, value in enumerate(melanin_extinction)
+    gramian_mel, gramian_hem, gramian_cross = _gramian_entries(
+        melanin_extinction, hemoglobin_extinction, ridge
     )
-    hem = tuple(
-        _finite_number(value, f"hemoglobin_extinction[{index}]")
-        for index, value in enumerate(hemoglobin_extinction)
-    )
-    if len(mel) != len(hem):
-        raise GUMInputError(
-            f"extinction curves must share a band count, got {len(mel)} and {len(hem)}"
-        )
-    if not mel:
-        raise GUMInputError("extinction curves must not be empty")
-    regularisation = _finite_number(ridge, "ridge")
-    if regularisation < 0.0:
-        raise GUMInputError(f"ridge must be non-negative, got {regularisation!r}")
-    gramian_mel = math.fsum(value * value for value in mel) + regularisation
-    gramian_hem = math.fsum(value * value for value in hem) + regularisation
-    gramian_cross = math.fsum(a * b for a, b in zip(mel, hem, strict=False))
     spread = math.hypot(gramian_mel - gramian_hem, 2.0 * gramian_cross)
     trace = gramian_mel + gramian_hem
     return 0.5 * (trace - spread), 0.5 * (trace + spread)

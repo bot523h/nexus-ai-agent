@@ -241,3 +241,29 @@ def _combined() -> Any:
     )
 
     return combine((1.0,), UncertaintyInput.from_standard((1.0,), (0.1,)))
+
+
+def test_the_typed_record_refuses_wrong_port_types_and_a_foreign_request() -> None:
+    """Construction validates the port types; ``admit_perception`` validates its request."""
+    decision = evaluate_guard_band(
+        -14.0, _combined(), SpecificationLimits(lower=-15.0, upper=-13.0), 2.0
+    )
+    combination = admit_perception(_request()).license
+    with pytest.raises(GUMInputError, match="license must be a LicenseCombination"):
+        PerceptionAdmission(
+            admitted=False,
+            license=object(),  # type: ignore[arg-type]
+            loudness=decision,
+            recommended_gain_db=None,
+            refusal="no",
+        )
+    with pytest.raises(GUMInputError, match="loudness must be a GuardBandDecision"):
+        PerceptionAdmission(
+            admitted=False,
+            license=combination,
+            loudness=object(),  # type: ignore[arg-type]
+            recommended_gain_db=None,
+            refusal="no",
+        )
+    with pytest.raises(GUMInputError, match="must be a PerceptionAdmissionRequest"):
+        admit_perception("not a request")  # type: ignore[arg-type]

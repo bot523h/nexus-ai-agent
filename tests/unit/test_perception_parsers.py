@@ -228,3 +228,27 @@ def test_line_filters_select_only_what_parsers_need() -> None:
     kept = [ln for ln in LOUDNESS_REAL.splitlines() if parsers.LOUDNESS_SUMMARY_LINE.search(ln)]
     assert parsers.parse_loudness("\n".join(kept)).integrated_lufs == -22.0
     assert parsers.VERSION_LINE.match("ffmpeg version 6")
+
+
+def test_scene_lines_without_the_showinfo_marker_are_skipped() -> None:
+    """A ``pts_time`` line from another filter is not a scene cut."""
+    assert parsers.parse_scene_cuts(["frame pts_time:1.5 unrelated"], 3 * SEC) == []
+
+
+def test_a_non_finite_loudness_token_is_refused() -> None:
+    """``_number`` refuses ``nan``/``inf`` instead of propagating a poison value."""
+    with pytest.raises(ParseError, match="non-finite"):
+        parsers._number("nan")
+    with pytest.raises(ParseError, match="non-finite"):
+        parsers._number("inf")
+
+
+def test_a_non_audio_video_stream_does_not_claim_presence() -> None:
+    lines = [
+        "  Duration: 00:00:01.00, start: 0.0, bitrate: 1 kb/s",
+        "  Stream #0:2: Subtitle: mov_text (eng)",
+    ]
+    probe = parsers.parse_probe(lines)
+    assert probe.has_video is False
+    assert probe.has_audio is False
+    assert probe.width is None and probe.height is None and probe.sample_rate is None

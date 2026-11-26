@@ -483,3 +483,16 @@ def test_the_loudness_budget_is_level_dependent() -> None:
 def test_digital_silence_is_refused_instead_of_dividing_by_zero() -> None:
     with pytest.raises(GUMInputError, match="positive mean square"):
         loudness_uncertainty(_audio(-math.inf))
+
+
+def test_a_bin_empty_in_both_histograms_contributes_exactly_zero() -> None:
+    """``lim_{x -> 0+} x log(x/m) = 0``: a shared empty bin adds nothing to the JSD."""
+    budget = scene_cut_uncertainty(
+        (0.5, 0.5, 0.0, 0.0),
+        (0.5, 0.0, 0.5, 0.0),
+        samples_per_histogram=1_000,
+    )
+    # bin 0 identical; bins 1 and 2 are one-sided (0.25 bit each); bin 3 empty on
+    # both sides. The empty bin must contribute exactly zero, not an error.
+    assert budget.js_divergence == pytest.approx(0.5, rel=1e-12)
+    assert budget.standard > 0.0

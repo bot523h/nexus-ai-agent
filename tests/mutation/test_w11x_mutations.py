@@ -1,6 +1,6 @@
 """W11X phase-2 AST mutation campaign: GUM math, adapters, gate and pack wiring.
 
-Twenty-two surgical mutations, each attacking one mathematical invariant of the
+Twenty-three surgical mutations, each attacking one mathematical invariant of the
 JCGM 100:2008 propagation, the three-valued guard band, or the licence/GUM
 admission composition. The kill oracle is the strict one used by the
 creative-graph campaign: ``KILLED`` requires ``returncode == 1``, at least one
@@ -210,6 +210,15 @@ def _drop_level_term(node: ast.AST) -> ast.AST:
     return node
 
 
+def _restore_sample_formula(node: ast.AST) -> ast.AST:
+    """Restore the old, level-blind ``u(M) = sqrt(q^2/(12N))`` sample formula."""
+    assert isinstance(node, ast.Return)
+    node.value = ast.parse(
+        "math.sqrt(quantisation_step_value**2 / (12.0 * samples))", mode="eval"
+    ).body
+    return node
+
+
 def _set_constant(node: ast.AST, value: float) -> ast.AST:
     assert isinstance(node, ast.Assign)
     node.value = ast.Constant(value=value)
@@ -413,6 +422,17 @@ MUTATIONS: tuple[MutationSpec, ...] = (
         transform=_flatten_gradient,
     ),
     MutationSpec(
+        mutant_id="W18_loudness_sample_formula_restored",
+        invariant="u(M) = sqrt(q^2 M/(3N) + q^4/(180N)), not the level-blind sqrt(q^2/(12N))",
+        target_file=LOUDNESS_FILE,
+        func_name="mean_square_deviation",
+        test_file=LOUDNESS_TESTS,
+        test_selector="test_the_mean_square_deviation_has_the_level_term_the_sample_model_lacked",
+        expected_error_tokens=("assert",),
+        predicate=lambda n: _is_return_starting(n, "math.sqrt(math.fsum"),
+        transform=_restore_sample_formula,
+    ),
+    MutationSpec(
         mutant_id="W19_condition_from_inverse_entries",
         invariant="kappa_2 is lambda_max/lambda_min of the Gramian, not of its inverse",
         target_file=ADAPTERS_FILE,
@@ -564,7 +584,7 @@ def test_w11x_mutation_campaign_zero_survived() -> None:
 
     # The pin is deliberate: a silently dropped mutant would otherwise look like
     # a clean campaign. Raise it whenever a mutant is added, never lower it.
-    assert len(MUTATIONS) == 22
+    assert len(MUTATIONS) == 23
     assert invalid == [], f"Invalid mutants ({len(invalid)}): {invalid}"
     assert survived == [], f"Survived mutants ({len(survived)}): {survived}"
     assert len(killed) == len(MUTATIONS)

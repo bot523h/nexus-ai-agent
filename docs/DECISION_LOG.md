@@ -2980,9 +2980,9 @@ the level-aware mean-square variance lives in the **dependency-free**
 `kappa_2` is read off the Gramian spectrum; and `UncertaintyInput` proves
 positive semi-definiteness for `n >= 3` at construction (Gershgorin bound, then a
 deterministic Jacobi spectrum) while `combine` clamps cancellation noise instead
-of raising, because construction now owns the invariant. `W02`, `W11`, `W12` and
-`W19`–`W23` are the mutants that pin these decisions
-(`tests/mutation/test_w11x_mutations.py`, 22/22 killed).
+of raising, because construction now owns the invariant. `W02`, `W11`, `W12`,
+`W18` and `W19`–`W23` are the mutants that pin these decisions
+(`tests/mutation/test_w11x_mutations.py`, 23/23 killed).
 
 **Consequence.** A singular-but-PSD covariance stays legal (identical inputs are
 a legitimate degenerate case) and propagates to `u = 0`; a materially negative
