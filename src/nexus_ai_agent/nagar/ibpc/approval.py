@@ -392,6 +392,24 @@ class ApprovalLedger:
                     out.append(self.revoke(binding.approval_id))
             return tuple(out)
 
+    def revoke_session(self, session_id: str) -> tuple[ApprovalBinding, ...]:
+        """Revoke every non-terminal binding of one *session* (Wave 3-R3).
+
+        Closing or aborting a session must fence every turn it still has open,
+        and the recovery reconciler uses the same call to clean up an approval
+        that survived a crash between the two stores.  Idempotent: a session with
+        nothing left to revoke yields an empty tuple.
+        """
+        with self._transaction():
+            out: list[ApprovalBinding] = []
+            for binding in self._all():
+                if binding.session_id != session_id:
+                    continue
+                if binding.state not in (ApprovalState.PENDING, ApprovalState.APPROVED):
+                    continue
+                out.append(self.revoke(binding.approval_id))
+            return tuple(out)
+
 
 class DurableApprovalLedger(ApprovalLedger):
     """The same single-use ledger, persisted in a SQLite file.

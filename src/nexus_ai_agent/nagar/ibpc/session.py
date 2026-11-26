@@ -325,6 +325,93 @@ class LiveSessionManager:
             except KeyError:
                 raise SessionError("unknown_session", session_id) from None
 
+    # -- recovery seam (Wave 3-R3) -------------------------------------------
+
+    def restore_session(
+        self,
+        *,
+        session_id: str,
+        tenant_id: str,
+        project_id: str,
+        principal_id: str,
+        user_id: int,
+        chat_id: int,
+        privacy_mode: PrivacyMode,
+        current_revision: int,
+        created_at: str | None = None,
+    ) -> LiveSession:
+        """Re-materialise a session recorded by another process.
+
+        Idempotent: restoring the same session twice returns the live object.
+        This is the *only* way a session can enter the manager with an id the
+        manager did not generate, and it is deliberately explicit — recovery
+        must never look like session creation.
+        """
+        if not session_id or not project_id or not principal_id:
+            raise SessionError("invalid_restore", "session/project/principal are required")
+        with self._lock:
+            existing = self._sessions.get(session_id)
+            if existing is not None:
+                return existing
+            session = LiveSession(
+                session_id=session_id,
+                tenant_id=tenant_id,
+                project_id=project_id,
+                principal_id=principal_id,
+                user_id=user_id,
+                chat_id=chat_id,
+                privacy_mode=privacy_mode,
+                current_revision=current_revision,
+                created_at=created_at or self._now(),
+            )
+            self._sessions[session_id] = session
+            return session
+
+    def restore_turn(
+        self,
+        session_id: str,
+        *,
+        turn_id: str,
+        sequence_number: int,
+        project_revision: int,
+        turn_state: TurnState,
+        approval_id: str = "",
+        intent_digest: str = "",
+        transcript_state: TranscriptState = TranscriptState.EMPTY,
+        transcript_sha256: str = "",
+        audio_sha256: str = "",
+    ) -> VoiceTurn:
+        """Re-materialise one fenced turn in its recorded state.
+
+        The state is taken from the durable row, never guessed; the session's
+        sequence head is raised to the highest restored sequence so staleness
+        fencing behaves exactly as it did before the restart.  A turn id that
+        already exists is returned unchanged (idempotent recovery).
+        """
+        if not isinstance(turn_state, TurnState):
+            raise SessionError("invalid_restore", f"{turn_state!r} is not a TurnState")
+        with self._lock:
+            session = self.get_session(session_id)
+            existing = session.turns.get(turn_id)
+            if existing is not None:
+                return existing
+            validate_turn_id(turn_id)
+            turn = VoiceTurn(
+                session_id=session_id,
+                turn_id=turn_id,
+                sequence_number=sequence_number,
+                project_revision=project_revision,
+                turn_state=turn_state,
+                transcript_state=transcript_state,
+                transcript_sha256=transcript_sha256,
+                audio_sha256=audio_sha256,
+                intent_digest=intent_digest,
+                approval_id=approval_id,
+            )
+            session.turns[turn_id] = turn
+            session.max_sequence = max(session.max_sequence, sequence_number)
+            return turn
+
     def _require_turn(self, session: LiveSession, turn_id: str) -> VoiceTurn:
         """A turn id that is not part of *this* session fails closed with a typed
         error; a raw ``KeyError`` would leak an untyped failure to callers."""

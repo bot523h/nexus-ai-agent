@@ -25,11 +25,14 @@ Pipeline per turn:
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import hashlib
 import hmac
 import json
+import logging
 import os
 import shutil
+import threading
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -69,6 +72,7 @@ from nexus_ai_agent.nagar.ibpc.intent import (
 )
 from nexus_ai_agent.nagar.ibpc.live_session import (
     DurableLiveSessionStore,
+    SessionStatus,
     StaleSessionRevisionError,
     TurnStatus,
     TurnStoreError,
@@ -81,6 +85,7 @@ from nexus_ai_agent.nagar.ibpc.models import (
     PreviewManifest,
     PrivacyMode,
     Readback,
+    ShadowPreviewManifest,
     TypedCreativeAST,
     VerifierReport,
 )
@@ -110,7 +115,7 @@ from nexus_ai_agent.nagar.ibpc.session import (
     TurnState,
 )
 from nexus_ai_agent.nagar.ibpc.shadow import build_shadow_preview, verify_shadow_manifest
-from nexus_ai_agent.nagar.ibpc.signature import compute_scope_signature
+from nexus_ai_agent.nagar.ibpc.signature import ScopeSignature, compute_scope_signature
 from nexus_ai_agent.provenance.canonicalization import (
     CanonicalizationScheme,
     canonical_digest,
@@ -139,6 +144,54 @@ APPROVAL_TTL_MINUTES = 10
 _OWNER_ONLY_ACTIONS = frozenset(
     action for action, roles in ACTION_ROLES.items() if roles == frozenset({MembershipRole.OWNER})
 )
+
+
+logger = logging.getLogger(__name__)
+
+#: Durable turn states whose in-memory ``TurnState`` is reconstructed on recovery.
+_RECOVERY_TURN_STATES: dict[TurnStatus, TurnState] = {
+    TurnStatus.DRAFTED: TurnState.RECEIVED,
+    TurnStatus.PREVIEW_READY: TurnState.AWAITING_APPROVAL,
+    TurnStatus.APPROVED: TurnState.APPROVED,
+    TurnStatus.EXECUTED: TurnState.EXECUTED,
+    TurnStatus.REJECTED: TurnState.CANCELLED,
+    TurnStatus.SUPERSEDED: TurnState.STALE,
+}
+
+#: Durable-row misses that a *mirror* write may legitimately skip: the row
+#: predates the store or a concurrent termination already closed the session.
+_BENIGN_TURN_MIRROR_MISSES = frozenset({"unknown_turn", "unknown_session", "session_terminated"})
+
+
+@dataclasses.dataclass(frozen=True)
+class _RecoveredIdentity:
+    """The identity references a recovered context carries.
+
+    Roles are deliberately absent: recovery reconstructs *references*, and every
+    execution re-verifies them through the configured authorities.
+    """
+
+    principal_id: str
+    project_id: str
+    channel_binding_id: str
+
+
+def _revision_from_id(revision_id: str) -> int:
+    """``rev:<n>`` → ``n`` (0 when the spelling carries no integer)."""
+    prefix, _, value = str(revision_id).partition(":")
+    if prefix != "rev":
+        return 0
+    try:
+        return int(value)
+    except ValueError:
+        return 0
+
+
+class RecoveryError(ApprovalError):
+    """The durable state could not be reconstructed into an executable service."""
+
+    def __init__(self, reason: str, detail: str = "") -> None:
+        super().__init__(reason, detail)
 
 
 class ScopeSignatureMismatchError(ApprovalError):
@@ -314,6 +367,11 @@ class IBPCService:
         # serializes the sensitive section of execute() (identity validation ->
         # atomic consume -> turn-state transition) across concurrent requests
         self._execute_lock = asyncio.Lock()
+        # Wave 3-R3: lazy recovery from the durable stores. The lock is a plain
+        # thread lock because recovery touches SQLite synchronously.
+        self._recovery_lock = threading.Lock()
+        self._recovered = False
+        self._recovery_report: dict[str, Any] = {}
 
     # -- accessors ----------------------------------------------------------
 
@@ -382,6 +440,9 @@ class IBPCService:
                 principal_id=principal_id,
                 base_revision_id=base_revision_id or f"rev:{current_revision}",
                 active_revision_id=base_revision_id or f"rev:{current_revision}",
+                # the approval binding carries the tenant and identity resolution
+                # compares it, so the durable row must carry it too (Wave 3-R3)
+                tenant_id=tenant_id,
             )
         return session.session_id
 
@@ -595,6 +656,10 @@ class IBPCService:
             ctx_durable = self._contexts.get(stored.approval_id)
             if ctx_durable is not None:
                 ctx_durable.durable_turn_index = durable_turn.turn_index
+                # Wave 3-R3: the preview-ready turn carries its recoverable
+                # context too, so a restarted process can re-present and approve
+                # it without the original in-memory map.
+                self._persist_context(ctx_durable)
         self._sessions.mark_intent_parsed(session_id, turn_id, intent_digest=parsed.intent_digest)
         self._sessions.mark_plan_preview(session_id, turn_id)
         self._sessions.mark_awaiting_approval(session_id, turn_id, approval_id=stored.approval_id)
@@ -825,6 +890,10 @@ class IBPCService:
             ctx_durable = self._contexts.get(stored.approval_id)
             if ctx_durable is not None:
                 ctx_durable.durable_turn_index = durable_turn.turn_index
+                # Wave 3-R3: the preview-ready turn carries its recoverable
+                # context too, so a restarted process can re-present and approve
+                # it without the original in-memory map.
+                self._persist_context(ctx_durable)
         self._sessions.mark_intent_parsed(session_id, turn_id, intent_digest=parsed.intent_digest)
         self._sessions.mark_plan_preview(session_id, turn_id)
         self._sessions.mark_awaiting_approval(session_id, turn_id, approval_id=stored.approval_id)
@@ -884,6 +953,13 @@ class IBPCService:
         # 1) execution context must exist (a deleted/incomplete context fails
         #    closed with a typed error, never a KeyError/500)
         ctx = self._contexts.get(approval_id)
+        if ctx is None:
+            # Wave 3-R3: the context map is a cache — a turn approved by another
+            # process is recoverable from its durable record, so try that once
+            # before refusing. Recovery never invents a context: an unrecoverable
+            # row is a typed refusal below.
+            self._ensure_recovered()
+            ctx = self._contexts.get(approval_id)
         if ctx is None:
             raise ApprovalError("unknown_context", f"no execution context for {approval_id!r}")
         # 2) session must exist (typed SessionError)
@@ -1070,7 +1146,10 @@ class IBPCService:
                 "approval_key_unavailable", "approval envelope could not be issued"
             ) from exc
         self._sessions.mark_approved(session_id, turn_id)
-        self._mark_durable_turn(session_id, turn_id, TurnStatus.APPROVED)
+        # Wave 3-R3/R4: the APPROVED durable row carries the recoverable context
+        # AND the issuance instant, so another process can execute this exact
+        # approval. A lifecycle divergence propagates (never silently skipped).
+        self._persist_context(ctx, approved=True)
         return binding
 
     # -- canonical approval binding (Wave 3 slice 3.2) ------------------------
@@ -1190,8 +1269,327 @@ class IBPCService:
             )
         return payload
 
+    # -- durable execution context + recovery (Wave 3-R3) --------------------
+
+    def _serialize_context(self, ctx: _TurnContext) -> str:
+        """Canonical JSON of everything needed to rebuild ``_TurnContext``.
+
+        Only digests, canonical plan/preview documents and the media evidence are
+        stored — never media bytes, audio or transcript text.
+        """
+        payload: dict[str, Any] = {
+            "ast": ctx.ast.model_dump(mode="json"),
+            "plan": ctx.plan.model_dump(mode="json"),
+            "preview": ctx.preview.model_dump(mode="json"),
+            "intent_digest": ctx.intent_digest,
+            "source_path": str(ctx.source_path),
+            "source_asset_digest": ctx.source_asset_digest,
+            "duration_us": int(ctx.duration_us),
+            "fps": float(ctx.fps),
+            "session_id": ctx.session_id,
+            "turn_id": ctx.turn_id,
+            "tenant_id": ctx.tenant_id,
+            "project_id": ctx.project_id,
+            "principal_id": ctx.principal_id,
+            "binding_ref": ctx.binding_ref,
+            "scope_signature": ctx.scope_signature,
+            "shadow_manifest": (
+                ctx.shadow_manifest.model_dump(mode="json") if ctx.shadow_manifest else None
+            ),
+            "media_signature": (
+                ctx.media_signature.model_dump(mode="json") if ctx.media_signature else None
+            ),
+            "parent_proposal_id": ctx.parent_proposal_id,
+            "parent_scope_digest": ctx.parent_scope_digest,
+            "delta_spec": ctx.delta_spec,
+            "durable_turn_index": ctx.durable_turn_index,
+            "issued_expires_at_utc": ctx.issued_expires_at_utc,
+            "canonical_payload": (
+                ctx.canonical_payload.as_dict() if ctx.canonical_payload is not None else None
+            ),
+            "approval_envelope": (
+                dataclasses.asdict(ctx.approval_envelope)
+                if ctx.approval_envelope is not None
+                else None
+            ),
+        }
+        return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+
+    def _deserialize_context(self, raw: str) -> _TurnContext:
+        """Rebuild ``_TurnContext`` from its durable record, fail closed.
+
+        Every canonical document is re-validated by the model that owns it, so a
+        tampered or truncated context is a typed ``RecoveryError`` — never a
+        half-populated context that could execute something else.
+        """
+        try:
+            payload = json.loads(raw)
+            ast = TypedCreativeAST.model_validate(payload["ast"])
+            plan = CompiledPlan.model_validate(payload["plan"])
+            preview = PreviewManifest.model_validate(payload["preview"])
+            shadow = (
+                ShadowPreviewManifest.model_validate(payload["shadow_manifest"])
+                if payload.get("shadow_manifest") is not None
+                else None
+            )
+            media = (
+                ScopeSignature.model_validate(payload["media_signature"])
+                if payload.get("media_signature") is not None
+                else None
+            )
+            canonical = payload.get("canonical_payload")
+            envelope = payload.get("approval_envelope")
+        except (KeyError, TypeError, ValueError) as exc:
+            raise RecoveryError(
+                "context_unrecoverable", f"durable execution context is not restorable: {exc}"
+            ) from exc
+        return _TurnContext(
+            ast=ast,
+            plan=plan,
+            preview=preview,
+            readback=render_readback(ast, plan, preview),
+            intent_digest=str(payload["intent_digest"]),
+            source_path=Path(str(payload["source_path"])),
+            source_asset_digest=str(payload["source_asset_digest"]),
+            duration_us=int(payload["duration_us"]),
+            fps=float(payload["fps"]),
+            session_id=str(payload["session_id"]),
+            turn_id=str(payload["turn_id"]),
+            tenant_id=str(payload["tenant_id"]),
+            project_id=str(payload["project_id"]),
+            principal_id=str(payload["principal_id"]),
+            binding_ref=str(payload.get("binding_ref") or ""),
+            verified_identity=None,
+            scope_signature=payload.get("scope_signature"),
+            shadow_manifest=shadow,
+            media_signature=media,
+            approval_envelope=ApprovalEnvelope(**envelope) if envelope else None,
+            parent_proposal_id=payload.get("parent_proposal_id"),
+            parent_scope_digest=payload.get("parent_scope_digest"),
+            delta_spec=payload.get("delta_spec"),
+            durable_turn_index=payload.get("durable_turn_index"),
+            issued_expires_at_utc=payload.get("issued_expires_at_utc"),
+            canonical_payload=ApprovalBindingPayload(**canonical) if canonical else None,
+        )
+
+    def _persist_context(
+        self,
+        ctx: _TurnContext,
+        *,
+        base_revision_id: str | None = None,
+        approved: bool = False,
+    ) -> None:
+        """Write the recoverable context; a lifecycle failure is NOT swallowed.
+
+        ``approved`` uses the APPROVED transition (which freezes the issuance
+        instant and the canonical payload); otherwise the context is attached to
+        the still-live turn.
+        """
+        if self._session_store is None or ctx.turn_id is None:
+            return
+        if base_revision_id is None:
+            base_revision_id = self._session_store.get_session(ctx.session_id).active_revision_id
+        serialized = self._serialize_context(ctx)
+        try:
+            if approved:
+                self._session_store.mark_turn_approved(
+                    ctx.session_id,
+                    ctx.turn_id,
+                    base_revision_id=base_revision_id,
+                    execution_context_json=serialized,
+                    issued_expires_at_utc=ctx.issued_expires_at_utc,
+                )
+            else:
+                self._session_store.set_turn_context(
+                    ctx.session_id,
+                    ctx.turn_id,
+                    base_revision_id=base_revision_id,
+                    execution_context_json=serialized,
+                    issued_expires_at_utc=ctx.issued_expires_at_utc,
+                )
+        except TurnStoreError as exc:
+            if exc.reason not in _BENIGN_TURN_MIRROR_MISSES:
+                raise ApprovalError(
+                    f"durable_context_not_persisted:{exc.reason}", exc.detail
+                ) from exc
+            logger.warning(
+                "ibpc.durable_context_skipped session=%s turn=%s reason=%s",
+                ctx.session_id,
+                ctx.turn_id,
+                exc.reason,
+            )
+
+    def _revoke_session_approvals(self, session_id: str) -> tuple[ApprovalBinding, ...]:
+        """Revoke every unconsumed approval of one session (idempotent)."""
+        return self._approvals.revoke_session(session_id)
+
+    def recover_from_durable_state(self, *, force: bool = False) -> dict[str, Any]:
+        """Rebuild sessions, turns and executable contexts from SQLite.
+
+        Wave 3-R3: the in-memory manager and the context map are *caches* of the
+        durable state, never the authority. A process that starts after another
+        one stopped recovers here:
+
+        * ACTIVE/PAUSED sessions and their turns (with their states, sequence
+          heads and approval ids);
+        * the canonical execution context of every turn that has one, so a
+          pending approval issued by the previous process can be validated and
+          executed here;
+        * reconciliation: an approval that outlived a CLOSED/ABORTED session is
+          revoked, so a crash between the two stores cannot leave an executable
+          orphan.
+        """
+        if self._session_store is None:
+            return {"sessions": 0, "turns": 0, "contexts": 0, "revoked": 0, "reason": "no_store"}
+        with self._recovery_lock:
+            if self._recovered and not force:
+                return dict(self._recovery_report)
+            report: dict[str, Any] = {
+                "sessions": 0,
+                "turns": 0,
+                "contexts": 0,
+                "revoked": 0,
+                "terminated": 0,
+                "unrecoverable": 0,
+                "contexts_kept": 0,
+            }
+            store = self._session_store
+            for record in store.list_sessions(SessionStatus.ACTIVE, SessionStatus.PAUSED):
+                revision = _revision_from_id(record.active_revision_id)
+                self._sessions.restore_session(
+                    session_id=record.session_id,
+                    tenant_id=record.tenant_id,
+                    project_id=record.project_id,
+                    principal_id=record.principal_id,
+                    user_id=int(getattr(record, "user_id", 0) or 0),
+                    chat_id=int(getattr(record, "chat_id", 0) or 0),
+                    privacy_mode=PrivacyMode.LOCAL_VAULT,
+                    current_revision=revision,
+                    created_at=record.created_at_utc,
+                )
+                report["sessions"] += 1
+                for turn in store.list_turns(record.session_id):
+                    state = _RECOVERY_TURN_STATES[turn.turn_status]
+                    self._sessions.restore_turn(
+                        record.session_id,
+                        turn_id=turn.turn_id,
+                        sequence_number=turn.turn_index,
+                        project_revision=revision,
+                        turn_state=state,
+                        approval_id=turn.approval_id or "",
+                    )
+                    report["turns"] += 1
+                    if turn.approval_id and turn.execution_context_json:
+                        if turn.approval_id in self._contexts:
+                            # A context minted by THIS process is authoritative:
+                            # its evidence objects are the ones the approval was
+                            # signed over. Never replace it with a re-validated
+                            # copy (recovery only fills genuine gaps).
+                            report["contexts_kept"] += 1
+                            continue
+                        try:
+                            ctx = self._deserialize_context(turn.execution_context_json)
+                        except RecoveryError as exc:
+                            report["unrecoverable"] += 1
+                            logger.warning(
+                                "ibpc.recovery_context_unusable session=%s turn=%s reason=%s",
+                                record.session_id,
+                                turn.turn_id,
+                                exc.reason,
+                            )
+                            continue
+                        ctx.verified_identity = self._recovered_identity(ctx)
+                        ctx.durable_turn_index = turn.turn_index
+                        if ctx.issued_expires_at_utc is None:
+                            ctx.issued_expires_at_utc = turn.issued_expires_at_utc
+                        self._store_context(turn.approval_id, ctx)
+                        report["contexts"] += 1
+            # reconciliation: a terminated session must never leave a live approval
+            for terminal in store.list_sessions(SessionStatus.CLOSED, SessionStatus.ABORTED):
+                report["terminated"] += 1
+                revoked = self._revoke_session_approvals(terminal.session_id)
+                report["revoked"] += len(revoked)
+            self._recovered = True
+            self._recovery_report = dict(report)
+            return report
+
+    def _recovered_identity(self, ctx: _TurnContext) -> Any:
+        """A recovery-time identity view: verified facts are re-checked by the
+        authorities on every execution, so the stored references are enough."""
+        return _RecoveredIdentity(
+            principal_id=ctx.principal_id,
+            project_id=ctx.project_id,
+            channel_binding_id=ctx.binding_ref,
+        )
+
+    def _ensure_recovered(self) -> None:
+        if self._session_store is not None and not self._recovered:
+            self.recover_from_durable_state()
+
+    # -- session termination (Wave 3-R4) -------------------------------------
+
+    def close_session(self, session_id: str) -> Any:
+        """Close a session durably AND fence everything it still has open."""
+        return self._terminate_session(session_id, SessionStatus.CLOSED)
+
+    def abort_session(self, session_id: str) -> Any:
+        """Abort a session durably (interrupt/crash path); same fencing duty."""
+        return self._terminate_session(session_id, SessionStatus.ABORTED)
+
+    def _terminate_session(self, session_id: str, status: SessionStatus) -> Any:
+        """One termination path for both stores, in the only safe order.
+
+        The durable store commits CLOSED/ABORTED *and* revokes the session's
+        unconsumed approvals inside its own transaction (``revoke_approvals``
+        callback), then the in-memory turns are terminalised and their contexts
+        dropped. A crash between the two stores is repaired by the recovery
+        reconciler, which revokes approvals of every terminated session.
+        """
+        record: Any = None
+        if self._session_store is not None:
+            try:
+                if status is SessionStatus.CLOSED:
+                    record = self._session_store.close_session(
+                        session_id, revoke_approvals=self._revoke_session_approvals
+                    )
+                else:
+                    record = self._session_store.abort_session(
+                        session_id, revoke_approvals=self._revoke_session_approvals
+                    )
+            except TurnStoreError as exc:
+                if exc.reason != "session_terminated":
+                    raise
+                record = self._session_store.get_session(session_id)
+        # revoke again outside the store transaction: idempotent, and it covers
+        # a service composed without a durable session store
+        self._revoke_session_approvals(session_id)
+        session = self._sessions.get_session(session_id)
+        for turn in list(session.turns.values()):
+            if turn.turn_state in (TurnState.EXECUTED, TurnState.FAILED, TurnState.CANCELLED):
+                continue
+            if turn.turn_state in (TurnState.INTERRUPTED, TurnState.STALE):
+                continue
+            try:
+                if status is SessionStatus.CLOSED:
+                    self._sessions.cancel(session_id, turn.turn_id)
+                else:
+                    self._sessions.interrupt(session_id, turn.turn_id)
+            except (SessionError, TransitionError):
+                # already terminal — nothing to fence
+                continue
+            self._contexts.pop(turn.approval_id, None) if turn.approval_id else None
+        return record
+
     def _mark_durable_turn(self, session_id: str, turn_id: str, target: TurnStatus) -> None:
-        """Advance the durable turn row (best-effort mirror of the session fence)."""
+        """Advance the durable turn row — a *narrow*, never silent mirror.
+
+        Wave 3-R4: the previous version swallowed every ``ValueError``. Only a
+        genuinely benign miss (the row predates the store, or a concurrent
+        termination already closed the session) may be skipped, and it is logged
+        with its typed reason. Anything else — a stale revision, an illegal
+        transition, a concurrent writer — propagates, because a lifecycle
+        divergence between the two stores must not disappear.
+        """
         if self._session_store is None:
             return
         try:
@@ -1204,10 +1602,16 @@ class IBPCService:
                 self._session_store.mark_turn_executed(
                     session_id, turn_id, base_revision_id=session.active_revision_id
                 )
-        except ValueError:
-            # A turn that predates the store (or a concurrent termination) must
-            # never convert an already-decided approval into a crash.
-            return
+        except TurnStoreError as exc:
+            if exc.reason not in _BENIGN_TURN_MIRROR_MISSES:
+                raise ApprovalError(f"durable_turn_not_mirrored:{exc.reason}", exc.detail) from exc
+            logger.warning(
+                "ibpc.durable_turn_mirror_skipped session=%s turn=%s target=%s reason=%s",
+                session_id,
+                turn_id,
+                target.value,
+                exc.reason,
+            )
 
     # -- principal authority + durable consent (Wave 3) -----------------------
 
@@ -1629,6 +2033,7 @@ class IBPCService:
         # yields exactly one winner, the rest are typed replay refusals).
         async with self._execute_lock:
             try:
+                await asyncio.to_thread(self._ensure_recovered)
                 # _resolve_identity re-hashes the source asset (synchronous I/O)
                 # and the ledger/context stores use threading locks, so it runs
                 # off the event loop.

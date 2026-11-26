@@ -145,13 +145,14 @@ _OPEN_TURN_STATES = (
 
 _SESSION_COLUMNS = (
     "session_id, project_id, principal_id, base_revision_id, active_revision_id, status,"
-    " version_epoch, last_turn_index, created_at_utc, updated_at_utc"
+    " version_epoch, last_turn_index, created_at_utc, updated_at_utc, tenant_id"
 )
 
 _TURN_COLUMNS = (
     "turn_id, session_id, turn_index, idempotency_key, user_utterance, base_revision_id,"
     " scope_signature, compiled_plan_json, compiled_plan_sha256, preview_manifest_json,"
-    " preview_sha256, approval_id, turn_status, created_at_utc, refusal_reason"
+    " preview_sha256, approval_id, turn_status, created_at_utc, refusal_reason,"
+    " execution_context_json, issued_expires_at_utc"
 )
 
 _SCHEMA = (
@@ -165,6 +166,9 @@ _SCHEMA = (
     " version_epoch INTEGER NOT NULL DEFAULT 1,"
     " last_turn_index INTEGER NOT NULL DEFAULT 0,"
     " created_at_utc TEXT NOT NULL,"
+    # the tenant the session was opened for: an approval binding carries it and
+    # identity resolution compares it, so recovery must restore the exact value
+    " tenant_id TEXT NOT NULL DEFAULT '',"
     " updated_at_utc TEXT NOT NULL)",
     "CREATE TABLE IF NOT EXISTS ibpc_turns ("
     " turn_id TEXT PRIMARY KEY,"
@@ -185,6 +189,11 @@ _SCHEMA = (
     # a turn that failed BEFORE a plan existed keeps an empty plan document and
     # names its typed refusal here (Wave 3-R2a: failed voice turns are durable)
     " refusal_reason TEXT,"
+    # the canonical execution context (ast/plan/preview/media evidence/scope
+    # signature/binding) so another process can rebuild _TurnContext (Wave 3-R3)
+    " execution_context_json TEXT,"
+    # the approval expiry minted at issuance, never recomputed (Wave 3-R1a)
+    " issued_expires_at_utc TEXT,"
     " UNIQUE(session_id, turn_index))",
     "CREATE INDEX IF NOT EXISTS idx_ibpc_turns_session ON ibpc_turns(session_id, turn_index)",
 )
@@ -232,6 +241,8 @@ class SessionRecord:
     last_turn_index: int
     created_at_utc: str
     updated_at_utc: str
+    #: The tenant the session was opened for ("" for rows written before R3).
+    tenant_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -258,6 +269,10 @@ class TurnRecord:
     created_at_utc: str
     #: Present only for a plan-less row: why the turn failed before a plan existed.
     refusal_reason: str | None = None
+    #: Canonical execution context JSON (the recoverable ``_TurnContext``).
+    execution_context_json: str | None = None
+    #: The approval expiry minted at issuance (never recomputed downstream).
+    issued_expires_at_utc: str | None = None
 
     def compiled_plan(self) -> CompiledPlan:
         if self.refusal_reason is not None:
@@ -290,10 +305,21 @@ class DurableLiveSessionStore:
             for statement in _SCHEMA:
                 self._conn.execute(statement)
             turn_columns = {row[1] for row in self._conn.execute("PRAGMA table_info(ibpc_turns)")}
+            session_columns = {
+                row[1] for row in self._conn.execute("PRAGMA table_info(ibpc_sessions)")
+            }
+            if "tenant_id" not in session_columns:
+                self._conn.execute(
+                    "ALTER TABLE ibpc_sessions ADD COLUMN tenant_id TEXT NOT NULL DEFAULT ''"
+                )
             if "refusal_reason" not in turn_columns:
                 # Additive, backwards-compatible: every existing row keeps NULL,
                 # which means "this turn reached a compiled plan".
                 self._conn.execute("ALTER TABLE ibpc_turns ADD COLUMN refusal_reason TEXT")
+            if "execution_context_json" not in turn_columns:
+                self._conn.execute("ALTER TABLE ibpc_turns ADD COLUMN execution_context_json TEXT")
+            if "issued_expires_at_utc" not in turn_columns:
+                self._conn.execute("ALTER TABLE ibpc_turns ADD COLUMN issued_expires_at_utc TEXT")
         with contextlib.suppress(OSError):
             os.chmod(self._path, 0o600)
 
@@ -358,6 +384,7 @@ class DurableLiveSessionStore:
         principal_id: str,
         base_revision_id: str,
         active_revision_id: str | None = None,
+        tenant_id: str = "",
     ) -> SessionRecord:
         """Create one ACTIVE session. Idempotent for the identical request."""
         if not session_id or not project_id or not principal_id or not base_revision_id:
@@ -373,6 +400,7 @@ class DurableLiveSessionStore:
                     and existing.principal_id == principal_id
                     and existing.base_revision_id == base_revision_id
                     and existing.active_revision_id == active
+                    and existing.tenant_id == tenant_id
                 )
                 if identical:
                     return existing
@@ -391,7 +419,7 @@ class DurableLiveSessionStore:
             self._conn.execute(
                 "INSERT INTO ibpc_sessions (session_id, project_id, principal_id, base_revision_id,"
                 " active_revision_id, status, version_epoch, last_turn_index, created_at_utc,"
-                " updated_at_utc) VALUES (?, ?, ?, ?, ?, ?, 1, 0, ?, ?)",
+                " updated_at_utc, tenant_id) VALUES (?, ?, ?, ?, ?, ?, 1, 0, ?, ?, ?)",
                 (
                     session_id,
                     project_id,
@@ -401,6 +429,7 @@ class DurableLiveSessionStore:
                     SessionStatus.ACTIVE.value,
                     stamp,
                     stamp,
+                    tenant_id,
                 ),
             )
             record = self._fetch_session(session_id)
@@ -545,6 +574,7 @@ class DurableLiveSessionStore:
         preview: PreviewManifest | None = None,
         approval_id: str | None = None,
         turn_status: TurnStatus = TurnStatus.DRAFTED,
+        execution_context_json: str | None = None,
     ) -> TurnRecord:
         """Allocate the next ``turn_index`` and persist the turn exactly once."""
         if not idempotency_key:
@@ -594,8 +624,8 @@ class DurableLiveSessionStore:
                     "INSERT INTO ibpc_turns (turn_id, session_id, turn_index, idempotency_key,"
                     " user_utterance, base_revision_id, scope_signature, compiled_plan_json,"
                     " compiled_plan_sha256, preview_manifest_json, preview_sha256, approval_id,"
-                    " turn_status, created_at_utc)"
-                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    " turn_status, created_at_utc, execution_context_json)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         turn_id,
                         session_id,
@@ -611,6 +641,7 @@ class DurableLiveSessionStore:
                         approval_id,
                         turn_status.value,
                         stamp,
+                        execution_context_json,
                     ),
                 )
             except sqlite3.IntegrityError as exc:
@@ -688,11 +719,64 @@ class DurableLiveSessionStore:
         )
 
     def mark_turn_approved(
-        self, session_id: str, turn_id: str, *, base_revision_id: str
+        self,
+        session_id: str,
+        turn_id: str,
+        *,
+        base_revision_id: str,
+        execution_context_json: str | None = None,
+        issued_expires_at_utc: str | None = None,
     ) -> TurnRecord:
         return self._transition_turn(
-            session_id, turn_id, TurnStatus.APPROVED, base_revision_id=base_revision_id
+            session_id,
+            turn_id,
+            TurnStatus.APPROVED,
+            base_revision_id=base_revision_id,
+            execution_context_json=execution_context_json,
+            issued_expires_at_utc=issued_expires_at_utc,
         )
+
+    def set_turn_context(
+        self,
+        session_id: str,
+        turn_id: str,
+        *,
+        base_revision_id: str,
+        execution_context_json: str,
+        issued_expires_at_utc: str | None = None,
+    ) -> TurnRecord:
+        """Persist the execution context of a live (non-terminal) turn.
+
+        This is the recovery seam for Wave 3-R3: whoever approved the turn
+        writes the canonical context here, so a *different* process can rebuild
+        ``_TurnContext`` and execute the approval without the original process.
+        """
+        with self._transaction():
+            turn = self.get_turn(session_id, turn_id)
+            if turn.turn_status in (
+                TurnStatus.EXECUTED,
+                TurnStatus.REJECTED,
+                TurnStatus.SUPERSEDED,
+            ):
+                raise TurnStoreError(
+                    "turn_terminal",
+                    f"cannot store an execution context on a {turn.turn_status.value} turn",
+                )
+            session = self.get_session(session_id)
+            if base_revision_id != session.active_revision_id:
+                raise StaleSessionRevisionError(
+                    "stale_revision",
+                    f"context base {base_revision_id!r} != active {session.active_revision_id!r}",
+                )
+            self._conn.execute(
+                "UPDATE ibpc_turns SET execution_context_json = ?,"
+                " issued_expires_at_utc = COALESCE(?, issued_expires_at_utc)"
+                " WHERE session_id = ? AND turn_id = ?",
+                (execution_context_json, issued_expires_at_utc, session_id, turn_id),
+            )
+            record = self._fetch_turn(session_id, turn_id)
+        assert record is not None
+        return record
 
     def mark_turn_executed(
         self, session_id: str, turn_id: str, *, base_revision_id: str
@@ -800,6 +884,8 @@ class DurableLiveSessionStore:
         preview_json: str | None = None,
         preview_sha: str | None = None,
         approval_id: str | None = None,
+        execution_context_json: str | None = None,
+        issued_expires_at_utc: str | None = None,
     ) -> TurnRecord:
         with self._transaction():
             session = self.get_session(session_id)
@@ -818,13 +904,17 @@ class DurableLiveSessionStore:
                 "UPDATE ibpc_turns SET turn_status = ?,"
                 " preview_manifest_json = COALESCE(?, preview_manifest_json),"
                 " preview_sha256 = COALESCE(?, preview_sha256),"
-                " approval_id = COALESCE(?, approval_id)"
+                " approval_id = COALESCE(?, approval_id),"
+                " execution_context_json = COALESCE(?, execution_context_json),"
+                " issued_expires_at_utc = COALESCE(?, issued_expires_at_utc)"
                 " WHERE session_id = ? AND turn_id = ? AND turn_status = ?",
                 (
                     target.value,
                     preview_json,
                     preview_sha,
                     approval_id,
+                    execution_context_json,
+                    issued_expires_at_utc,
                     session_id,
                     turn_id,
                     turn.turn_status.value,
@@ -857,6 +947,8 @@ def _turn_record(row: tuple[Any, ...]) -> TurnRecord:
         TurnStatus(row[12]),
         row[13],
         row[14],
+        row[15],
+        row[16],
     )
 
 
@@ -872,4 +964,5 @@ def _session_record(row: tuple[Any, ...]) -> SessionRecord:
         int(row[7]),
         row[8],
         row[9],
+        row[10],
     )
