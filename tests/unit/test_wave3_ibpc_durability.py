@@ -4,7 +4,9 @@ single-use approvals, durable revocable privacy consent, and Studio RBAC."""
 from __future__ import annotations
 
 import base64
+import dataclasses
 import json
+import os
 import sqlite3
 import threading
 import types
@@ -25,6 +27,7 @@ from nexus_ai_agent.creative.packs.runtime import build_runtime_registry
 from nexus_ai_agent.nagar.ibpc import (
     ApprovalBinding,
     ApprovalError,
+    AuthorizationError,
     DataCategory,
     DurableApprovalLedger,
     DurableLiveSessionStore,
@@ -328,7 +331,9 @@ class TestSlice31DurableLiveSessions:
     ) -> None:
         _stub_media_tools(monkeypatch)
         clock = _Clock()
-        clip = tmp_path / "clip.mp4"
+        ws = tmp_path / "ws"
+        ws.mkdir()
+        clip = ws / "clip.mp4"
         _fake_media(clip)
         auth_store, bref = _setup_auth_store(tmp_path / "auth.sqlite3", now=clock)
         queue = InProcessJobQueue(tmp_path / "jobs.sqlite3")
@@ -336,7 +341,7 @@ class TestSlice31DurableLiveSessions:
         service = build_studio_ibpc_service(
             queue=queue,
             registry=build_runtime_registry(),
-            workspace_root=tmp_path / "ws",
+            workspace_root=ws,
             revision_provider=lambda: 0,
             key_provider=ring,
             auth_store=auth_store,
@@ -425,10 +430,10 @@ class TestSlice31DurableLiveSessions:
     ) -> None:
         _stub_media_tools(monkeypatch)
         clock = _Clock()
-        clip = tmp_path / "clip.mp4"
-        _fake_media(clip)
         ws = tmp_path / "ws"
         ws.mkdir()
+        clip = ws / "clip.mp4"
+        _fake_media(clip)
         from nexus_ai_agent.config.settings import get_settings
 
         monkeypatch.setenv("CREATIVE_TEMP_DIR", str(ws))
@@ -964,10 +969,13 @@ class TestSlice34StudioPrincipalAuthAndAPI:
 
         _stub_media_tools(monkeypatch)
         clock = _Clock()
-        clip = tmp_path / "clip.mp4"
-        _fake_media(clip)
         ws = tmp_path / "ws"
+        ws.mkdir()
+        clip = ws / "clip.mp4"
+        _fake_media(clip)
         auth_db = tmp_path / "studio_auth.sqlite3"
+
+        import base64 as _b64
 
         monkeypatch.setenv("NEXUS_DASHBOARD_TOKEN", "deploy-bearer-token")
         monkeypatch.setenv("NEXUS_STUDIO_PROJECT_IDS", "proj-http")
@@ -975,6 +983,11 @@ class TestSlice34StudioPrincipalAuthAndAPI:
         monkeypatch.setenv("NEXUS_STUDIO_AUTH_DB", str(auth_db))
         monkeypatch.setenv("NEXUS_STUDIO_ACTIVE_REVISION", "0")
         monkeypatch.setenv("NEXUS_QUEUE_DB_PATH", str(tmp_path / "queue.sqlite3"))
+        monkeypatch.setenv(
+            "NEXUS_IBPC_APPROVAL_KEY_RING",
+            json.dumps({"k1": _b64.b64encode(b"k" * 32).decode("ascii")}),
+        )
+        monkeypatch.setenv("NEXUS_IBPC_APPROVAL_ACTIVE_KEY_ID", "k1")
         get_settings.cache_clear()
         monkeypatch.setattr(app_module, "_creative_registry", None)
 
@@ -1725,11 +1738,13 @@ class TestWave3EdgeCasesAndCoverage:
 
         # HTTP error branches + _enforce_optional_principal_rbac on existing /api/studio routes.
         _stub_media_tools(monkeypatch)
-        clip = tmp_path / "clip.mp4"
-        _fake_media(clip)
+        import base64 as _b64
+
         http_auth_db = tmp_path / "http_auth.sqlite3"
         http_ws = tmp_path / "http_ws"
         http_ws.mkdir()
+        clip = http_ws / "clip.mp4"
+        _fake_media(clip)
         monkeypatch.setenv("NEXUS_DASHBOARD_TOKEN", "deploy-tok")
         monkeypatch.setenv("NEXUS_STUDIO_PROJECT_IDS", "proj-err")
         monkeypatch.setenv("NEXUS_STUDIO_WORKSPACE_ROOT", str(http_ws))
@@ -1737,6 +1752,11 @@ class TestWave3EdgeCasesAndCoverage:
         monkeypatch.setenv("NEXUS_STUDIO_ACTIVE_REVISION", "0")
         monkeypatch.setenv("NEXUS_QUEUE_DB_PATH", str(tmp_path / "http_q.sqlite3"))
         monkeypatch.setenv("NEXUS_STUDIO_REQUIRE_PRINCIPAL", "1")
+        monkeypatch.setenv(
+            "NEXUS_IBPC_APPROVAL_KEY_RING",
+            json.dumps({"k1": _b64.b64encode(b"k" * 32).decode("ascii")}),
+        )
+        monkeypatch.setenv("NEXUS_IBPC_APPROVAL_ACTIVE_KEY_ID", "k1")
         get_settings.cache_clear()
         monkeypatch.setattr(app_module, "_creative_registry", None)
 
@@ -2380,6 +2400,8 @@ class TestWave3EdgeCasesAndCoverage:
 
         voice_ws = tmp_path / "voice_ws"
         voice_ws.mkdir()
+        voice_clip = voice_ws / "clip.mp4"
+        _fake_media(voice_clip)
         auth, bref = _setup_auth_store(voice_ws / "auth.sqlite3", now=clock)
         ring = StaticKeyRing({"k1": b"k" * 32}, active_key_id="k1")
         svc = build_studio_ibpc_service(
@@ -2407,7 +2429,7 @@ class TestWave3EdgeCasesAndCoverage:
                 text="trim from 1 to 2 seconds",
                 sequence_number=1,
                 asset_id="clip",
-                source_path=str(clip),
+                source_path=str(voice_clip),
                 idempotency_key="txt-key-1",
             )
             r_txt2 = svc.submit_text_intent(
@@ -2416,7 +2438,7 @@ class TestWave3EdgeCasesAndCoverage:
                 text="trim from 1 to 2 seconds",
                 sequence_number=2,
                 asset_id="clip",
-                source_path=str(clip),
+                source_path=str(voice_clip),
                 idempotency_key="txt-key-1",
             )
             assert isinstance(r_txt1, PipelineResult) and isinstance(r_txt2, PipelineResult)
@@ -2430,7 +2452,7 @@ class TestWave3EdgeCasesAndCoverage:
                     audio=b"RIFF\x00\x00\x00\x00WAVE",
                     sequence_number=2,
                     asset_id="clip",
-                    source_path=str(clip),
+                    source_path=str(voice_clip),
                     idempotency_key="voice-key-1",
                 )
             )
@@ -2442,7 +2464,7 @@ class TestWave3EdgeCasesAndCoverage:
                     audio=b"RIFF\x00\x00\x00\x00WAVE",
                     sequence_number=3,
                     asset_id="clip",
-                    source_path=str(clip),
+                    source_path=str(voice_clip),
                     idempotency_key="voice-key-1",
                 )
             )
@@ -2488,3 +2510,2924 @@ class TestWave3EdgeCasesAndCoverage:
         finally:
             svc2.close()
             auth2.close()
+
+
+class TestWave3SecurityClosureAndCoverage:
+    """Wave A/B/C security invariants & >=98% branch coverage tests."""
+
+    def test_cross_project_consent_revoke_refused(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from nexus_ai_agent.api import app as app_module
+        from nexus_ai_agent.config.settings import get_settings
+
+        clock = _Clock()
+        store = DurablePrivacyConsentStore(tmp_path / "privacy.sqlite3")
+        try:
+            grant = store.grant_consent(
+                consent_id="cns_proj_a",
+                project_id="proj-a",
+                tenant_id="ten-1",
+                principal_id=OWNER_ID,
+                mode=PrivacyMode.TRUSTED_CLOUD,
+                processing_scope=ProcessingScope.EXTERNAL_PROVIDER_DISPATCH.value,
+                data_category=DataCategory.TRANSCRIPT.value,
+                provider_id="gemini",
+                granted_at_utc=clock(),
+            )
+            assert grant.tenant_id == "ten-1"
+            with pytest.raises(PrivacyViolation, match="consent_not_found"):
+                store.revoke_consent(
+                    "cns_proj_a",
+                    revoked_by=OWNER_ID,
+                    revoked_at_utc=clock(),
+                    project_id="proj-b",
+                    expected_tenant_id="ten-1",
+                )
+            with pytest.raises(PrivacyViolation, match="consent_not_found"):
+                store.revoke_consent(
+                    "cns_proj_a",
+                    revoked_by=OWNER_ID,
+                    revoked_at_utc=clock(),
+                    project_id="proj-a",
+                    expected_tenant_id="ten-other",
+                )
+            with pytest.raises(PrivacyViolation, match="consent_not_found"):
+                store.revoke_consent(
+                    "cns_missing",
+                    revoked_by=OWNER_ID,
+                    revoked_at_utc=clock(),
+                    project_id="proj-a",
+                )
+            with pytest.raises(PrivacyViolation, match="unknown_consent"):
+                store.revoke_consent(
+                    "cns_missing",
+                    revoked_by=OWNER_ID,
+                    revoked_at_utc=clock(),
+                )
+            still_active = store.get_consent("cns_proj_a")
+            assert still_active is not None and still_active.revoked_at_utc == ""
+            # Direct service-level revoke_privacy_consent guard
+            ws = tmp_path / "ws"
+            ws.mkdir()
+            auth, bref = _setup_auth_store(
+                tmp_path / "auth.sqlite3", now=clock, project_id="proj-b"
+            )
+
+            class _Q:
+                async def enqueue(self, **_kw):
+                    return "j"
+
+                async def get_status(self, _j):
+                    return None
+
+                async def get_result(self, _j):
+                    return None
+
+            svc = build_studio_ibpc_service(
+                queue=_Q(),
+                registry=build_runtime_registry(),
+                workspace_root=ws,
+                revision_provider=lambda: 0,
+                key_provider=StaticKeyRing({"k1": b"k" * 32}, active_key_id="k1"),
+                auth_store=auth,
+                channel_binding_ref=bref,
+                now=clock,
+            )
+            try:
+                with pytest.raises(PrivacyViolation, match="consent_not_found"):
+                    svc.revoke_privacy_consent(
+                        "cns_proj_a",
+                        project_id="proj-b",
+                        actor_id=OWNER_ID,
+                    )
+            finally:
+                svc.close()
+                auth.close()
+        finally:
+            store.close()
+
+        # HTTP cross-project revoke returns 404 and leaves proj-a consent intact.
+        import base64 as _b64
+
+        http_ws = tmp_path / "http_ws"
+        http_ws.mkdir()
+        http_auth = tmp_path / "http_auth.sqlite3"
+        monkeypatch.setenv("NEXUS_DASHBOARD_TOKEN", "deploy-tok")
+        monkeypatch.setenv("NEXUS_STUDIO_PROJECT_IDS", "proj-a,proj-b")
+        monkeypatch.setenv("NEXUS_STUDIO_WORKSPACE_ROOT", str(http_ws))
+        monkeypatch.setenv("NEXUS_STUDIO_AUTH_DB", str(http_auth))
+        monkeypatch.setenv("NEXUS_QUEUE_DB_PATH", str(tmp_path / "http_q.sqlite3"))
+        monkeypatch.setenv(
+            "NEXUS_IBPC_APPROVAL_KEY_RING",
+            json.dumps({"k1": _b64.b64encode(b"k" * 32).decode("ascii")}),
+        )
+        monkeypatch.setenv("NEXUS_IBPC_APPROVAL_ACTIVE_KEY_ID", "k1")
+        get_settings.cache_clear()
+        monkeypatch.setattr(app_module, "_creative_registry", None)
+
+        s = StudioPrincipalAuthStore(http_auth, now=clock)
+        s.ensure_project("proj-a", tenant_id="ten-1")
+        s.ensure_project("proj-b", tenant_id="ten-1")
+        s.register_principal(OWNER_ID, tenant_id="ten-1", raw_token="tok-owner-sec1")
+        s.bind_channel(OWNER_ID, channel="studio", external_subject="sub-owner-sec1")
+        s.grant_membership("proj-a", OWNER_ID, role=StudioRole.OWNER, granted_by=OWNER_ID)
+        s.grant_membership("proj-b", OWNER_ID, role=StudioRole.OWNER, granted_by=OWNER_ID)
+        s.close()
+
+        client = TestClient(app_module.app)
+        headers = {
+            "Authorization": "Bearer deploy-tok",
+            "X-Nexus-Principal-Token": "tok-owner-sec1",
+        }
+        r_g = client.post(
+            "/api/studio/projects/proj-a/ibpc/privacy/consents",
+            headers=headers,
+            json={
+                "mode": "TRUSTED_CLOUD",
+                "processing_scope": "EXTERNAL_PROVIDER_DISPATCH",
+                "data_category": "TRANSCRIPT",
+                "provider_id": "gemini",
+            },
+        )
+        assert r_g.status_code == 201
+        cid = r_g.json()["consent_id"]
+        assert (
+            client.post(
+                f"/api/studio/projects/proj-b/ibpc/privacy/consents/{cid}/revoke",
+                headers=headers,
+                json={"reason": "cross_project_attack"},
+            ).status_code
+            == 404
+        )
+        # Same-project revoke still succeeds -> 200.
+        assert (
+            client.post(
+                f"/api/studio/projects/proj-a/ibpc/privacy/consents/{cid}/revoke",
+                headers=headers,
+                json={"reason": "owner_revoked"},
+            ).status_code
+            == 200
+        )
+
+    def test_external_provider_consent_requires_exact_provider_id(self, tmp_path: Path) -> None:
+        clock = _Clock()
+        store = DurablePrivacyConsentStore(tmp_path / "privacy.sqlite3")
+        try:
+            policy = PrivacyPolicy(
+                now=clock,
+                store=store,
+                configured_providers=frozenset({"gemini", "openai"}),
+            )
+            # Empty provider_id or mismatched provider_id never satisfies "gemini".
+            store.grant_consent(
+                consent_id="cns_empty_prov",
+                project_id="proj-1",
+                tenant_id="ten-1",
+                principal_id=OWNER_ID,
+                mode=PrivacyMode.TRUSTED_CLOUD,
+                processing_scope=ProcessingScope.EXTERNAL_PROVIDER_DISPATCH.value,
+                data_category=DataCategory.TRANSCRIPT.value,
+                provider_id="",
+                granted_at_utc=clock(),
+            )
+            store.grant_consent(
+                consent_id="cns_openai",
+                project_id="proj-1",
+                tenant_id="ten-1",
+                principal_id=OWNER_ID,
+                mode=PrivacyMode.TRUSTED_CLOUD,
+                processing_scope=ProcessingScope.EXTERNAL_PROVIDER_DISPATCH.value,
+                data_category=DataCategory.TRANSCRIPT.value,
+                provider_id="openai",
+                granted_at_utc=clock(),
+            )
+            with pytest.raises(PrivacyViolation, match="consent_missing"):
+                policy.enforce_processing_consent(
+                    project_id="proj-1",
+                    principal_id=OWNER_ID,
+                    mode=PrivacyMode.TRUSTED_CLOUD,
+                    processing_scope=ProcessingScope.EXTERNAL_PROVIDER_DISPATCH,
+                    data_category=DataCategory.TRANSCRIPT,
+                    provider_id="gemini",
+                )
+            # Also dispatching with empty provider_id fails closed.
+            with pytest.raises(PrivacyViolation, match="consent_missing"):
+                policy.enforce_processing_consent(
+                    project_id="proj-1",
+                    principal_id=OWNER_ID,
+                    mode=PrivacyMode.TRUSTED_CLOUD,
+                    processing_scope=ProcessingScope.EXTERNAL_PROVIDER_DISPATCH,
+                    data_category=DataCategory.TRANSCRIPT,
+                    provider_id="",
+                )
+            # Exact provider_id="gemini" grant succeeds.
+            store.grant_consent(
+                consent_id="cns_gemini",
+                project_id="proj-1",
+                tenant_id="ten-1",
+                principal_id=OWNER_ID,
+                mode=PrivacyMode.TRUSTED_CLOUD,
+                processing_scope=ProcessingScope.EXTERNAL_PROVIDER_DISPATCH.value,
+                data_category=DataCategory.TRANSCRIPT.value,
+                provider_id="gemini",
+                granted_at_utc=clock(),
+            )
+            matched = policy.enforce_processing_consent(
+                project_id="proj-1",
+                principal_id=OWNER_ID,
+                mode=PrivacyMode.TRUSTED_CLOUD,
+                processing_scope=ProcessingScope.EXTERNAL_PROVIDER_DISPATCH,
+                data_category=DataCategory.TRANSCRIPT,
+                provider_id="gemini",
+            )
+            assert matched is not None and matched.consent_id == "cns_gemini"
+            # Local processing under LOCAL_VAULT uses LOCAL_PROCESSING scope.
+            assert (
+                policy.enforce_processing_consent(
+                    project_id="proj-1",
+                    principal_id=OWNER_ID,
+                    mode=PrivacyMode.LOCAL_VAULT,
+                    processing_scope=ProcessingScope.LOCAL_PROCESSING,
+                    data_category=DataCategory.AUDIO,
+                )
+                is None
+            )
+            # Context manager close coverage.
+            assert store.list_consents(project_id="proj-1")
+        finally:
+            store.close()
+        store.close()  # idempotent second close
+
+    @pytest.mark.asyncio
+    async def test_cross_project_and_cross_principal_turn_submission_refused(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from nexus_ai_agent.api import app as app_module
+        from nexus_ai_agent.config.settings import get_settings
+
+        _stub_media_tools(monkeypatch)
+        clock = _Clock()
+        ws = tmp_path / "ws"
+        ws.mkdir()
+        clip = ws / "clip.mp4"
+        _fake_media(clip)
+        auth_db = tmp_path / "auth.sqlite3"
+        auth = StudioPrincipalAuthStore(auth_db, now=clock)
+        auth.ensure_project("proj-a", tenant_id="ten-1")
+        auth.ensure_project("proj-b", tenant_id="ten-1")
+        auth.register_principal(OWNER_ID, tenant_id="ten-1", raw_token="tok-owner-sec3")
+        bref_owner = auth.bind_channel(
+            OWNER_ID, channel="studio", external_subject="sub-owner-sec3"
+        )
+        auth.grant_membership("proj-a", OWNER_ID, role=StudioRole.OWNER, granted_by=OWNER_ID)
+        auth.grant_membership("proj-b", OWNER_ID, role=StudioRole.OWNER, granted_by=OWNER_ID)
+        auth.register_principal(EDITOR_ID, tenant_id="ten-1", raw_token="tok-editor-sec3")
+        auth.bind_channel(EDITOR_ID, channel="studio", external_subject="sub-editor-sec3")
+        auth.grant_membership("proj-a", EDITOR_ID, role=StudioRole.EDITOR, granted_by=OWNER_ID)
+
+        class _Q:
+            async def enqueue(self, **_kw):
+                return "job-sec3"
+
+            async def get_status(self, _j):
+                return None
+
+            async def get_result(self, _j):
+                return None
+
+        class _FakeCap:
+            def is_available(self) -> bool:
+                return True
+
+            async def transcribe_file(self, _p: Path, **_kw):
+                return types.SimpleNamespace(text="trim from 1 to 2 seconds", is_final=True)
+
+        ring = StaticKeyRing({"k1": b"k" * 32}, active_key_id="k1")
+        svc = build_studio_ibpc_service(
+            queue=_Q(),
+            registry=build_runtime_registry(),
+            workspace_root=ws,
+            revision_provider=lambda: 0,
+            key_provider=ring,
+            auth_store=auth,
+            channel_binding_ref=bref_owner,
+            now=clock,
+        )
+        svc._deps = dataclasses.replace(svc._deps, caption_engine=_FakeCap())  # type: ignore[misc]
+        try:
+            sid = svc.open_session(
+                tenant_id="ten-1",
+                project_id="proj-a",
+                principal_id=OWNER_ID,
+                user_id=1,
+                chat_id=1,
+            )
+            # Cross-project / cross-tenant / cross-principal get/submit/close/approve/execute
+            # refused!
+            with pytest.raises(AuthorizationError, match="session_project_mismatch"):
+                svc.get_session(sid, principal_id=OWNER_ID, expected_project_id="proj-b")
+            with pytest.raises(AuthorizationError, match="tenant_mismatch"):
+                svc.get_session(sid, principal_id=OWNER_ID, expected_tenant_id="ten-other")
+            with pytest.raises(AuthorizationError, match="session_project_mismatch"):
+                svc.submit_text_intent(
+                    sid,
+                    "t-xproj",
+                    sequence_number=1,
+                    text="trim from 1 to 2 seconds",
+                    asset_id="clip",
+                    source_path=str(clip),
+                    caller_principal_id=OWNER_ID,
+                    expected_project_id="proj-b",
+                )
+            with pytest.raises(AuthorizationError, match="wrong_principal"):
+                svc.submit_text_intent(
+                    sid,
+                    "t-xprin",
+                    sequence_number=1,
+                    text="trim from 1 to 2 seconds",
+                    asset_id="clip",
+                    source_path=str(clip),
+                    caller_principal_id=EDITOR_ID,
+                    expected_project_id="proj-a",
+                )
+            with pytest.raises(AuthorizationError, match="wrong_principal"):
+                await svc.submit_voice_intent(
+                    sid,
+                    "t-vxprin",
+                    sequence_number=1,
+                    audio=b"RIFF\x00\x00\x00\x00WAVE",
+                    asset_id="clip",
+                    source_path=str(clip),
+                    caller_principal_id=EDITOR_ID,
+                    expected_project_id="proj-a",
+                )
+            with pytest.raises(AuthorizationError, match="wrong_principal"):
+                svc.close_session(sid, principal_id=EDITOR_ID, expected_project_id="proj-a")
+            with pytest.raises(AuthorizationError, match="session_project_mismatch"):
+                svc.pause_session(sid, principal_id=OWNER_ID, expected_project_id="proj-b")
+            with pytest.raises(AuthorizationError, match="session_project_mismatch"):
+                svc.abort_session(sid, principal_id=OWNER_ID, expected_project_id="proj-b")
+            with pytest.raises(AuthorizationError, match="session_project_mismatch"):
+                svc.resume_session(sid, principal_id=OWNER_ID, expected_project_id="proj-b")
+
+            res = svc.submit_text_intent(
+                sid,
+                "t-ok",
+                sequence_number=1,
+                text="trim from 1 to 2 seconds",
+                asset_id="clip",
+                source_path=str(clip),
+                caller_principal_id=OWNER_ID,
+                expected_project_id="proj-a",
+                expected_tenant_id="ten-1",
+            )
+            assert isinstance(res, PipelineResult)
+            with pytest.raises(AuthorizationError, match="session_project_mismatch"):
+                svc.approve(
+                    sid,
+                    "t-ok",
+                    res.approval_id,
+                    principal_id=OWNER_ID,
+                    expected_project_id="proj-b",
+                )
+            with pytest.raises(AuthorizationError, match="tenant_mismatch"):
+                svc.approve(
+                    sid,
+                    "t-ok",
+                    res.approval_id,
+                    principal_id=OWNER_ID,
+                    expected_tenant_id="ten-other",
+                )
+            svc.approve(
+                sid,
+                "t-ok",
+                res.approval_id,
+                principal_id=OWNER_ID,
+                expected_project_id="proj-a",
+                expected_tenant_id="ten-1",
+            )
+            with pytest.raises(AuthorizationError, match="session_project_mismatch"):
+                await svc.execute(
+                    sid,
+                    "t-ok",
+                    res.approval_id,
+                    principal_id=OWNER_ID,
+                    expected_project_id="proj-b",
+                )
+
+            # Voice intent under TRUSTED_CLOUD without AUDIO consent fails closed.
+            svc.grant_privacy_consent(
+                project_id="proj-a",
+                tenant_id="ten-1",
+                principal_id=OWNER_ID,
+                mode=PrivacyMode.TRUSTED_CLOUD,
+                processing_scope=ProcessingScope.EXTERNAL_PROVIDER_DISPATCH,
+                data_category=DataCategory.TRANSCRIPT,
+                provider_id="gemini",
+            )
+            sid_tc = svc.open_session(
+                tenant_id="ten-1",
+                project_id="proj-a",
+                principal_id=OWNER_ID,
+                user_id=1,
+                chat_id=1,
+                privacy_mode=PrivacyMode.TRUSTED_CLOUD,
+                consent_scope="transcript",
+            )
+            with pytest.raises(PrivacyViolation):
+                await svc.submit_voice_intent(
+                    sid_tc,
+                    "t-voice-noconsent",
+                    sequence_number=1,
+                    audio=b"RIFF\x00\x00\x00\x00WAVE",
+                    asset_id="clip",
+                    source_path=str(clip),
+                    caller_principal_id=OWNER_ID,
+                    expected_project_id="proj-a",
+                    expected_tenant_id="ten-1",
+                )
+        finally:
+            svc.close()
+            auth.close()
+
+        # HTTP cross-project / cross-principal session routes return 403/404.
+        import base64 as _b64
+
+        monkeypatch.setenv("NEXUS_DASHBOARD_TOKEN", "deploy-tok")
+        monkeypatch.setenv("NEXUS_STUDIO_PROJECT_IDS", "proj-a,proj-b")
+        monkeypatch.setenv("NEXUS_STUDIO_WORKSPACE_ROOT", str(ws))
+        monkeypatch.setenv("NEXUS_STUDIO_AUTH_DB", str(auth_db))
+        monkeypatch.setenv("NEXUS_QUEUE_DB_PATH", str(tmp_path / "http_q.sqlite3"))
+        monkeypatch.setenv(
+            "NEXUS_IBPC_APPROVAL_KEY_RING",
+            json.dumps({"k1": _b64.b64encode(b"k" * 32).decode("ascii")}),
+        )
+        monkeypatch.setenv("NEXUS_IBPC_APPROVAL_ACTIVE_KEY_ID", "k1")
+        get_settings.cache_clear()
+        monkeypatch.setattr(app_module, "_creative_registry", None)
+
+        client = TestClient(app_module.app)
+        owner_h = {
+            "Authorization": "Bearer deploy-tok",
+            "X-Nexus-Principal-Token": "tok-owner-sec3",
+        }
+        editor_h = {
+            "Authorization": "Bearer deploy-tok",
+            "X-Nexus-Principal-Token": "tok-editor-sec3",
+        }
+        r_open = client.post(
+            "/api/studio/projects/proj-a/ibpc/sessions",
+            headers=owner_h,
+            json={},
+        )
+        assert r_open.status_code == 201
+        http_sid = r_open.json()["session_id"]
+        assert r_open.json()["tenant_id"] == "ten-1"
+        assert (
+            client.post(
+                f"/api/studio/projects/proj-b/ibpc/sessions/{http_sid}/turns",
+                headers=owner_h,
+                json={
+                    "turn_id": "t-http-xp",
+                    "sequence_number": 1,
+                    "text": "trim from 1 to 2 seconds",
+                    "asset_id": "clip",
+                    "source_path": str(clip),
+                },
+            ).status_code
+            == 403
+        )
+        assert (
+            client.post(
+                f"/api/studio/projects/proj-a/ibpc/sessions/{http_sid}/turns",
+                headers=editor_h,
+                json={
+                    "turn_id": "t-http-xprin",
+                    "sequence_number": 1,
+                    "text": "trim from 1 to 2 seconds",
+                    "asset_id": "clip",
+                    "source_path": str(clip),
+                },
+            ).status_code
+            == 403
+        )
+        assert (
+            client.post(
+                f"/api/studio/projects/proj-b/ibpc/sessions/{http_sid}/close",
+                headers=owner_h,
+            ).status_code
+            == 403
+        )
+
+    def test_cross_tenant_membership_grant_and_session_spoof_denied(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from nexus_ai_agent.api import app as app_module
+        from nexus_ai_agent.config.settings import get_settings
+
+        clock = _Clock()
+        auth_db = tmp_path / "auth.sqlite3"
+        with StudioPrincipalAuthStore(auth_db, now=clock) as store:
+            store.ensure_project("proj-t1", tenant_id="ten-1")
+            store.ensure_project("proj-t2", tenant_id="ten-2")
+            store.register_principal(OWNER_ID, tenant_id="ten-1", raw_token="tok-t1-owner")
+            b1 = store.bind_channel(OWNER_ID, channel="studio", external_subject="sub-t1-owner")
+            store.grant_membership("proj-t1", OWNER_ID, role=StudioRole.OWNER, granted_by=OWNER_ID)
+
+            t2_user = "prn_" + "e" * 32
+            store.register_principal(t2_user, tenant_id="ten-2", raw_token="tok-t2-user")
+            store.bind_channel(t2_user, channel="studio", external_subject="sub-t2-user")
+            store.grant_membership("proj-t2", t2_user, role=StudioRole.OWNER, granted_by=t2_user)
+
+            # Cross-tenant membership grant fails closed.
+            with pytest.raises(AuthorizationError, match="cross_tenant_membership_denied"):
+                store.grant_membership(
+                    "proj-t1", t2_user, role=StudioRole.EDITOR, granted_by=OWNER_ID
+                )
+            # Unknown project/principal checks.
+            with pytest.raises(AuthorizationError, match="project_not_found"):
+                store.grant_membership(
+                    "proj-missing", OWNER_ID, role=StudioRole.EDITOR, granted_by=OWNER_ID
+                )
+            with pytest.raises(AuthorizationError, match="principal_not_found"):
+                store.grant_membership(
+                    "proj-t1", "prn_" + "f" * 32, role=StudioRole.EDITOR, granted_by=OWNER_ID
+                )
+            with pytest.raises(AuthorizationError, match="principal_not_found"):
+                store.grant_membership(
+                    "proj-t1", OWNER_ID, role=StudioRole.EDITOR, granted_by="prn_" + "f" * 32
+                )
+            with pytest.raises(AuthorizationError, match="principal_not_found"):
+                store.get_principal_tenant("prn_" + "f" * 32)
+            with pytest.raises(AuthorizationError, match="project_not_found"):
+                store.get_project_tenant("proj-missing")
+            with pytest.raises(AuthorizationError, match="project_not_found"):
+                store.get_project_revision("proj-missing")
+            with pytest.raises(AuthorizationError, match="project_not_found"):
+                store.set_project_revision("proj-missing", "1")
+            with pytest.raises(AuthorizationError, match="tenant_mismatch"):
+                store.assert_same_tenant(
+                    principal_id=OWNER_ID, project_id="proj-t1", tenant_id="ten-2"
+                )
+            # Cross-tenant authorize_action fails closed.
+            with pytest.raises(StudioAuthorizationError, match="cross_tenant_denied"):
+                store.authorize_action(
+                    principal_id=OWNER_ID,
+                    project_id="proj-t2",
+                    action=StudioAction.READ_SESSION,
+                    binding_ref=b1,
+                )
+
+        import base64 as _b64
+
+        ws = tmp_path / "ws"
+        ws.mkdir()
+        monkeypatch.setenv("NEXUS_DASHBOARD_TOKEN", "deploy-tok")
+        monkeypatch.setenv("NEXUS_STUDIO_PROJECT_IDS", "proj-t1,proj-t2")
+        monkeypatch.setenv("NEXUS_STUDIO_WORKSPACE_ROOT", str(ws))
+        monkeypatch.setenv("NEXUS_STUDIO_AUTH_DB", str(auth_db))
+        monkeypatch.setenv("NEXUS_QUEUE_DB_PATH", str(tmp_path / "q.sqlite3"))
+        monkeypatch.setenv(
+            "NEXUS_IBPC_APPROVAL_KEY_RING",
+            json.dumps({"k1": _b64.b64encode(b"k" * 32).decode("ascii")}),
+        )
+        monkeypatch.setenv("NEXUS_IBPC_APPROVAL_ACTIVE_KEY_ID", "k1")
+        get_settings.cache_clear()
+        monkeypatch.setattr(app_module, "_creative_registry", None)
+
+        client = TestClient(app_module.app)
+        h_t1 = {"Authorization": "Bearer deploy-tok", "X-Nexus-Principal-Token": "tok-t1-owner"}
+        # Spoofed tenant_id -> 403.
+        assert (
+            client.post(
+                "/api/studio/projects/proj-t1/ibpc/sessions",
+                headers=h_t1,
+                json={"tenant_id": "ten-2"},
+            ).status_code
+            == 403
+        )
+        # Cross-tenant membership grant over HTTP -> 403.
+        assert (
+            client.post(
+                "/api/studio/projects/proj-t1/memberships",
+                headers=h_t1,
+                json={"principal_id": t2_user, "role": "EDITOR"},
+            ).status_code
+            == 403
+        )
+        # Cross-tenant project open -> 403.
+        assert (
+            client.post(
+                "/api/studio/projects/proj-t2/ibpc/sessions",
+                headers=h_t1,
+                json={},
+            ).status_code
+            == 403
+        )
+
+    def test_symlink_and_outside_asset_root_source_path_refused(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from nexus_ai_agent.api import app as app_module
+        from nexus_ai_agent.config.settings import get_settings
+
+        clock = _Clock()
+        ws = tmp_path / "ws"
+        ws.mkdir()
+        asset_root = tmp_path / "assets"
+        asset_root.mkdir()
+        outside = tmp_path / "secret_outside.mp4"
+        _fake_media(outside)
+        inside_real = asset_root / "valid.mp4"
+        _fake_media(inside_real)
+        symlink_inside = asset_root / "evil_link.mp4"
+        symlink_inside.symlink_to(outside)
+        internal_symlink = asset_root / "internal_link.mp4"
+        internal_symlink.symlink_to(inside_real)
+
+        probe_calls = 0
+
+        def _counting_probe(*_a, **_kw):
+            nonlocal probe_calls
+            probe_calls += 1
+            raise AssertionError("probe_media must never be called for untrusted source_path")
+
+        monkeypatch.setattr(service_mod, "probe_media", _counting_probe)
+
+        auth, bref = _setup_auth_store(tmp_path / "auth.sqlite3", now=clock)
+
+        class _Q:
+            async def enqueue(self, **_kw):
+                return "j"
+
+            async def get_status(self, _j):
+                return None
+
+            async def get_result(self, _j):
+                return None
+
+        ring = StaticKeyRing({"k1": b"k" * 32}, active_key_id="k1")
+        svc = build_studio_ibpc_service(
+            queue=_Q(),
+            registry=build_runtime_registry(),
+            workspace_root=ws,
+            revision_provider=lambda: 0,
+            key_provider=ring,
+            auth_store=auth,
+            channel_binding_ref=bref,
+            now=clock,
+            authorized_asset_root=asset_root,
+        )
+        try:
+            sid = svc.open_session(
+                tenant_id="ten-1",
+                project_id="proj-w3",
+                principal_id=OWNER_ID,
+                user_id=1,
+                chat_id=1,
+            )
+            # Symlink inside authorized_asset_root -> AuthorizationError("untrusted_source_path").
+            with pytest.raises(AuthorizationError, match="untrusted_source_path"):
+                svc.submit_text_intent(
+                    sid,
+                    "t-sym",
+                    sequence_number=1,
+                    text="trim from 1 to 2 seconds",
+                    asset_id="clip",
+                    source_path=str(symlink_inside),
+                )
+            with pytest.raises(AuthorizationError, match="untrusted_source_path"):
+                svc.submit_text_intent(
+                    sid,
+                    "t-sym-in",
+                    sequence_number=1,
+                    text="trim from 1 to 2 seconds",
+                    asset_id="clip",
+                    source_path=str(internal_symlink),
+                )
+            # Existing file outside authorized_asset_root ->
+            # AuthorizationError("untrusted_source_path").
+            with pytest.raises(AuthorizationError, match="untrusted_source_path"):
+                svc.submit_text_intent(
+                    sid,
+                    "t-out",
+                    sequence_number=1,
+                    text="trim from 1 to 2 seconds",
+                    asset_id="clip",
+                    source_path=str(outside),
+                )
+            # Non-existent file outside authorized_asset_root -> AuthorizationError (not
+            # missing_source!).
+            with pytest.raises(AuthorizationError, match="untrusted_source_path"):
+                svc.submit_text_intent(
+                    sid,
+                    "t-out-missing",
+                    sequence_number=1,
+                    text="trim from 1 to 2 seconds",
+                    asset_id="clip",
+                    source_path=str(tmp_path / "nonexistent_outside.mp4"),
+                )
+            # Missing file INSIDE authorized_asset_root returns typed Refusal("missing_source").
+            refusal = svc.submit_text_intent(
+                sid,
+                "t-in-missing",
+                sequence_number=1,
+                text="trim from 1 to 2 seconds",
+                asset_id="clip",
+                source_path=str(asset_root / "missing_inside.mp4"),
+            )
+            assert getattr(refusal, "reason", None) == "missing_source"
+            assert probe_calls == 0
+        finally:
+            svc.close()
+            auth.close()
+
+        # HTTP endpoint rejects outside/symlink paths with 403 and respects NEXUS_STUDIO_ASSET_ROOT.
+        import base64 as _b64
+
+        monkeypatch.setenv("NEXUS_DASHBOARD_TOKEN", "deploy-tok")
+        monkeypatch.setenv("NEXUS_STUDIO_PROJECT_IDS", "proj-w3")
+        monkeypatch.setenv("NEXUS_STUDIO_WORKSPACE_ROOT", str(ws))
+        monkeypatch.setenv("NEXUS_STUDIO_ASSET_ROOT", str(asset_root))
+        monkeypatch.setenv("NEXUS_STUDIO_AUTH_DB", str(tmp_path / "auth.sqlite3"))
+        monkeypatch.setenv("NEXUS_QUEUE_DB_PATH", str(tmp_path / "q.sqlite3"))
+        monkeypatch.setenv(
+            "NEXUS_IBPC_APPROVAL_KEY_RING",
+            json.dumps({"k1": _b64.b64encode(b"k" * 32).decode("ascii")}),
+        )
+        monkeypatch.setenv("NEXUS_IBPC_APPROVAL_ACTIVE_KEY_ID", "k1")
+        get_settings.cache_clear()
+        monkeypatch.setattr(app_module, "_creative_registry", None)
+
+        client = TestClient(app_module.app)
+        headers = {
+            "Authorization": "Bearer deploy-tok",
+            "X-Nexus-Principal-Token": f"tok-{OWNER_ID}-secret",
+        }
+        r_s = client.post("/api/studio/projects/proj-w3/ibpc/sessions", headers=headers, json={})
+        assert r_s.status_code == 201
+        http_sid = r_s.json()["session_id"]
+        assert (
+            client.post(
+                f"/api/studio/projects/proj-w3/ibpc/sessions/{http_sid}/turns",
+                headers=headers,
+                json={
+                    "turn_id": "t-http-sym",
+                    "sequence_number": 1,
+                    "text": "trim from 1 to 2 seconds",
+                    "asset_id": "clip",
+                    "source_path": str(symlink_inside),
+                },
+            ).status_code
+            == 403
+        )
+
+    @pytest.mark.asyncio
+    async def test_missing_approval_key_fails_closed_no_fallback_and_key_rotation(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from nexus_ai_agent.api import app as app_module
+        from nexus_ai_agent.config.settings import get_settings
+        from nexus_ai_agent.nagar.ibpc.approval import (
+            ApprovalBinding,
+            ApprovalIdentity,
+            DurableApprovalLedger,
+            canonical_approval_payload,
+            compute_approval_hash,
+        )
+        from nexus_ai_agent.nagar.ibpc.models import CanonicalizationScheme, canonical_digest
+
+        _stub_media_tools(monkeypatch)
+        clock = _Clock()
+        ws = tmp_path / "ws"
+        ws.mkdir()
+        clip = ws / "clip.mp4"
+        _fake_media(clip)
+        auth_db = tmp_path / "auth.sqlite3"
+        auth, bref = _setup_auth_store(auth_db, now=clock)
+
+        # HTTP without NEXUS_IBPC_APPROVAL_KEY_RING -> 503 (never "studio-default").
+        monkeypatch.setenv("NEXUS_DASHBOARD_TOKEN", "deploy-tok")
+        monkeypatch.setenv("NEXUS_STUDIO_PROJECT_IDS", "proj-w3")
+        monkeypatch.setenv("NEXUS_STUDIO_WORKSPACE_ROOT", str(ws))
+        monkeypatch.setenv("NEXUS_STUDIO_AUTH_DB", str(auth_db))
+        monkeypatch.setenv("NEXUS_QUEUE_DB_PATH", str(tmp_path / "q.sqlite3"))
+        monkeypatch.delenv("NEXUS_IBPC_APPROVAL_KEY_RING", raising=False)
+        monkeypatch.delenv("NEXUS_IBPC_APPROVAL_ACTIVE_KEY_ID", raising=False)
+        get_settings.cache_clear()
+        monkeypatch.setattr(app_module, "_creative_registry", None)
+
+        client = TestClient(app_module.app)
+        headers = {
+            "Authorization": "Bearer deploy-tok",
+            "X-Nexus-Principal-Token": f"tok-{OWNER_ID}-secret",
+        }
+        assert (
+            client.post(
+                "/api/studio/projects/proj-w3/ibpc/sessions", headers=headers, json={}
+            ).status_code
+            == 503
+        )
+
+        # Check RFC 8785 JCS canonical_approval_payload & compute_approval_hash parity.
+        payload = canonical_approval_payload(
+            project_id="proj-w3",
+            revision_id="0",
+            plan_digest="sha256:" + "a" * 64,
+            preview_digest="sha256:" + "b" * 64,
+            scope_signature="sha256:" + "c" * 64,
+            principal_id=OWNER_ID,
+            expires_at_utc="2026-11-26T12:10:00Z",
+        )
+        assert compute_approval_hash(**payload) == canonical_digest(
+            payload, CanonicalizationScheme.JCS_RFC8785_V2
+        )
+
+        # Key rotation: approve under k1, restart with ring {"k1", "k2"} active="k2" -> succeeds;
+        # restart with ring {"k2"} only (k1 revoked) -> fails closed with approval_key_unavailable!
+        class _RecordingQ:
+            def __init__(self) -> None:
+                self.enqueued: list[dict] = []
+                self._results: dict[str, dict] = {}
+
+            async def enqueue(self, *, job_type: str, idempotency_key: str, payload: dict) -> str:
+                jid = f"job-rot-{len(self.enqueued) + 1}"
+                out = Path(str(payload["workspace_dir"])) / "out.mp4"
+                out.write_bytes(b"OK")
+                self.enqueued.append({"job_id": jid})
+                self._results[jid] = {"success": True, "artifact_path": str(out)}
+                return jid
+
+            async def get_status(self, _j: str):
+                from nexus_ai_agent.application.ports.job_queue import JobStatus
+
+                return JobStatus.COMPLETED
+
+            async def get_result(self, j: str):
+                return self._results.get(j)
+
+        from nexus_ai_agent.nagar.ibpc.models import CheckVerdict
+
+        monkeypatch.setattr(
+            service_mod,
+            "verify_keep",
+            lambda *_a, **_kw: types.SimpleNamespace(
+                verdict=CheckVerdict.PASS, report_digest="sha256:" + "3" * 64
+            ),
+        )
+        monkeypatch.setenv("CREATIVE_TEMP_DIR", str(ws))
+        get_settings.cache_clear()
+
+        ring_k1 = StaticKeyRing({"k1": b"1" * 32}, active_key_id="k1")
+        q = _RecordingQ()
+        svc1 = build_studio_ibpc_service(
+            queue=q,
+            registry=build_runtime_registry(),
+            workspace_root=ws,
+            revision_provider=lambda: 0,
+            key_provider=ring_k1,
+            auth_store=auth,
+            channel_binding_ref=bref,
+            now=clock,
+        )
+        sid1 = svc1.open_session(
+            tenant_id="ten-1", project_id="proj-w3", principal_id=OWNER_ID, user_id=1, chat_id=1
+        )
+        sid2 = svc1.open_session(
+            tenant_id="ten-1", project_id="proj-w3", principal_id=OWNER_ID, user_id=1, chat_id=2
+        )
+        r1 = svc1.submit_text_intent(
+            sid1,
+            "t-rot-1",
+            sequence_number=1,
+            text="trim from 1 to 2 seconds",
+            asset_id="clip",
+            source_path=str(clip),
+        )
+        r2 = svc1.submit_text_intent(
+            sid2,
+            "t-rot-2",
+            sequence_number=1,
+            text="trim from 1 to 2 seconds",
+            asset_id="clip",
+            source_path=str(clip),
+        )
+        assert isinstance(r1, PipelineResult) and isinstance(r2, PipelineResult)
+        b1 = svc1.approve(sid1, "t-rot-1", r1.approval_id, principal_id=OWNER_ID)
+        svc1.approve(sid2, "t-rot-2", r2.approval_id, principal_id=OWNER_ID)
+        assert b1.key_id == "k1"
+        svc1.close()
+
+        # Ring rotated to k2 while k1 remains for verification -> execute r1 succeeds!
+        ring_rotated = StaticKeyRing({"k1": b"1" * 32, "k2": b"2" * 32}, active_key_id="k2")
+        svc2 = build_studio_ibpc_service(
+            queue=q,
+            registry=build_runtime_registry(),
+            workspace_root=ws,
+            revision_provider=lambda: 0,
+            key_provider=ring_rotated,
+            auth_store=auth,
+            channel_binding_ref=bref,
+            now=clock,
+        )
+        out1 = await svc2.execute(sid1, "t-rot-1", r1.approval_id, principal_id=OWNER_ID)
+        assert out1.status in ("executed", "executed_unverified")
+        svc2.close()
+
+        # Ring with k1 revoked -> consume refuses r2 with approval_key_unavailable.
+        ring_k2_only = StaticKeyRing({"k2": b"2" * 32}, active_key_id="k2")
+        svc3 = build_studio_ibpc_service(
+            queue=q,
+            registry=build_runtime_registry(),
+            workspace_root=ws,
+            revision_provider=lambda: 0,
+            key_provider=ring_k2_only,
+            auth_store=auth,
+            channel_binding_ref=bref,
+            now=clock,
+        )
+        out2 = await svc3.execute(sid2, "t-rot-2", r2.approval_id, principal_id=OWNER_ID)
+        assert out2.status == "refused"
+        assert "approval_key_unavailable" in out2.detail or "approval_mac_invalid" in out2.detail
+        svc3.close()
+
+        # Direct DurableApprovalLedger key validation coverage.
+        with DurableApprovalLedger(tmp_path / "ledger_keys.sqlite3", now=clock) as ledger:
+            ident = ApprovalIdentity(
+                principal_id=OWNER_ID,
+                tenant_id="ten-1",
+                project_id="proj-w3",
+                session_id="sess-1",
+                turn_id="turn-1",
+                sequence_number=1,
+                source_revision=0,
+                source_asset_digest="sha256:" + "1" * 64,
+                ast_digest="sha256:" + "2" * 64,
+                plan_digest="sha256:" + "3" * 64,
+                preview_digest="sha256:" + "4" * 64,
+                revision_id="0",
+                scope_signature="sha256:" + "5" * 64,
+                expires_at_utc="2026-11-26T12:10:00Z",
+            )
+            binding = ApprovalBinding(
+                session_id="sess-1",
+                turn_id="turn-1",
+                sequence_number=1,
+                tenant_id="ten-1",
+                project_id="proj-w3",
+                principal_id=OWNER_ID,
+                source_revision=0,
+                source_asset_digest=ident.source_asset_digest,
+                ast_digest=ident.ast_digest,
+                plan_digest=ident.plan_digest,
+                preview_digest=ident.preview_digest,
+                revision_id="0",
+                scope_signature=ident.scope_signature or "",
+                expires_at_utc="2026-11-26T12:10:00Z",
+            )
+            stored = ledger.create(binding)
+            with pytest.raises(ApprovalError, match="approval_key_unavailable"):
+                ledger.approve(
+                    stored.approval_id,
+                    identity=ident,
+                    turn_is_active=lambda: True,
+                    key_id="missing-key",
+                    key_provider=ring_k1,
+                )
+            ledger.approve(
+                stored.approval_id,
+                identity=ident,
+                turn_is_active=lambda: True,
+                key_id="k1",
+                key_provider=ring_k1,
+            )
+            with pytest.raises(ApprovalError, match="approval_key_unavailable"):
+                ledger.consume(stored.approval_id, identity=ident, key_provider=None)
+            with pytest.raises(ApprovalError, match="approval_key_unavailable"):
+                ledger.consume(stored.approval_id, identity=ident, key_provider=ring_k2_only)
+        auth.close()
+
+    def test_stale_and_spoofed_base_revision_id_refused(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from nexus_ai_agent.api import app as app_module
+        from nexus_ai_agent.config.settings import get_settings
+
+        _stub_media_tools(monkeypatch)
+        clock = _Clock()
+        ws = tmp_path / "ws"
+        ws.mkdir()
+        clip = ws / "clip.mp4"
+        _fake_media(clip)
+        auth_db = tmp_path / "auth.sqlite3"
+        auth, bref = _setup_auth_store(auth_db, now=clock)
+
+        class _Q:
+            async def enqueue(self, **_kw):
+                return "j"
+
+            async def get_status(self, _j):
+                return None
+
+            async def get_result(self, _j):
+                return None
+
+        ring = StaticKeyRing({"k1": b"k" * 32}, active_key_id="k1")
+        svc = build_studio_ibpc_service(
+            queue=_Q(),
+            registry=build_runtime_registry(),
+            workspace_root=ws,
+            revision_provider=lambda: 0,
+            key_provider=ring,
+            auth_store=auth,
+            channel_binding_ref=bref,
+            now=clock,
+        )
+        try:
+            with pytest.raises(StaleRevisionError, match="revision_mismatch"):
+                svc.open_session(
+                    tenant_id="ten-1",
+                    project_id="proj-w3",
+                    principal_id=OWNER_ID,
+                    user_id=1,
+                    chat_id=1,
+                    base_revision_id="999",
+                )
+            with pytest.raises(StaleRevisionError, match="revision_mismatch"):
+                svc.open_session(
+                    tenant_id="ten-1",
+                    project_id="proj-w3",
+                    principal_id=OWNER_ID,
+                    user_id=1,
+                    chat_id=1,
+                    active_revision_id="999",
+                )
+            sid = svc.open_session(
+                tenant_id="ten-1",
+                project_id="proj-w3",
+                principal_id=OWNER_ID,
+                user_id=1,
+                chat_id=1,
+                base_revision_id="0",
+            )
+            with pytest.raises(StaleRevisionError, match="revision_mismatch"):
+                svc.submit_text_intent(
+                    sid,
+                    "t-bad-rev",
+                    sequence_number=1,
+                    text="trim from 1 to 2 seconds",
+                    asset_id="clip",
+                    source_path=str(clip),
+                    base_revision_id="999",
+                )
+            # Advance authoritative project revision -> session becomes stale!
+            auth.set_project_revision("proj-w3", "1")
+            with pytest.raises(StaleRevisionError, match="stale_revision"):
+                svc.submit_text_intent(
+                    sid,
+                    "t-stale-rev",
+                    sequence_number=1,
+                    text="trim from 1 to 2 seconds",
+                    asset_id="clip",
+                    source_path=str(clip),
+                )
+        finally:
+            svc.close()
+
+        # Reset project revision to "0" for HTTP check.
+        auth.set_project_revision("proj-w3", "0")
+        auth.close()
+
+        import base64 as _b64
+
+        monkeypatch.setenv("NEXUS_DASHBOARD_TOKEN", "deploy-tok")
+        monkeypatch.setenv("NEXUS_STUDIO_PROJECT_IDS", "proj-w3")
+        monkeypatch.setenv("NEXUS_STUDIO_WORKSPACE_ROOT", str(ws))
+        monkeypatch.setenv("NEXUS_STUDIO_AUTH_DB", str(auth_db))
+        monkeypatch.setenv("NEXUS_QUEUE_DB_PATH", str(tmp_path / "q.sqlite3"))
+        monkeypatch.setenv(
+            "NEXUS_IBPC_APPROVAL_KEY_RING",
+            json.dumps({"k1": _b64.b64encode(b"k" * 32).decode("ascii")}),
+        )
+        monkeypatch.setenv("NEXUS_IBPC_APPROVAL_ACTIVE_KEY_ID", "k1")
+        get_settings.cache_clear()
+        monkeypatch.setattr(app_module, "_creative_registry", None)
+
+        client = TestClient(app_module.app)
+        headers = {
+            "Authorization": "Bearer deploy-tok",
+            "X-Nexus-Principal-Token": f"tok-{OWNER_ID}-secret",
+        }
+        assert (
+            client.post(
+                "/api/studio/projects/proj-w3/ibpc/sessions",
+                headers=headers,
+                json={"active_revision_id": "999"},
+            ).status_code
+            == 409
+        )
+        assert (
+            client.post(
+                "/api/studio/projects/proj-w3/ibpc/sessions",
+                headers=headers,
+                json={"base_revision_id": "999"},
+            ).status_code
+            == 409
+        )
+        r_ok = client.post(
+            "/api/studio/projects/proj-w3/ibpc/sessions",
+            headers=headers,
+            json={"base_revision_id": "0"},
+        )
+        assert r_ok.status_code == 201
+        http_sid = r_ok.json()["session_id"]
+        assert (
+            client.post(
+                f"/api/studio/projects/proj-w3/ibpc/sessions/{http_sid}/turns",
+                headers=headers,
+                json={
+                    "turn_id": "t-spoof",
+                    "sequence_number": 1,
+                    "text": "trim from 1 to 2 seconds",
+                    "asset_id": "clip",
+                    "source_path": str(clip),
+                    "base_revision_id": "42",
+                },
+            ).status_code
+            == 409
+        )
+
+    def test_studio_rbac_fail_closed_by_default_when_auth_configured(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from nexus_ai_agent.api import app as app_module
+        from nexus_ai_agent.config.settings import get_settings
+
+        clock = _Clock()
+        ws = tmp_path / "ws"
+        ws.mkdir()
+        auth_db = ws / "queue" / "studio_auth.sqlite3"
+        auth, _bref = _setup_auth_store(auth_db, now=clock)
+        auth.close()
+
+        monkeypatch.setenv("NEXUS_DASHBOARD_TOKEN", "deploy-tok")
+        monkeypatch.setenv("NEXUS_STUDIO_PROJECT_IDS", "proj-w3")
+        monkeypatch.setenv("NEXUS_STUDIO_WORKSPACE_ROOT", str(ws))
+        monkeypatch.setenv("NEXUS_QUEUE_DB_PATH", str(tmp_path / "q.sqlite3"))
+        monkeypatch.delenv("NEXUS_STUDIO_AUTH_DB", raising=False)
+        monkeypatch.delenv("NEXUS_STUDIO_REQUIRE_PRINCIPAL", raising=False)
+        monkeypatch.delenv("NEXUS_STUDIO_ALLOW_UNAUTHENTICATED_PRINCIPAL", raising=False)
+        get_settings.cache_clear()
+        monkeypatch.setattr(app_module, "_creative_registry", None)
+
+        client = TestClient(app_module.app)
+        deploy_h = {"Authorization": "Bearer deploy-tok"}
+        # Even WITHOUT NEXUS_STUDIO_REQUIRE_PRINCIPAL=1, studio_auth.sqlite3 present fails closed ->
+        # 401!
+        assert (
+            client.get(
+                "/api/studio/projects/proj-w3/jobs/job-1/state",
+                headers=deploy_h,
+            ).status_code
+            == 401
+        )
+        # With explicit legacy opt-out, unauthenticated principal falls through to route (404
+        # missing job).
+        monkeypatch.setenv("NEXUS_STUDIO_ALLOW_UNAUTHENTICATED_PRINCIPAL", "1")
+        assert (
+            client.get(
+                "/api/studio/projects/proj-w3/jobs/job-1/state",
+                headers=deploy_h,
+            ).status_code
+            == 404
+        )
+        # NEXUS_STUDIO_REQUIRE_PRINCIPAL=0 also explicitly disables default principal check.
+        monkeypatch.delenv("NEXUS_STUDIO_ALLOW_UNAUTHENTICATED_PRINCIPAL", raising=False)
+        monkeypatch.setenv("NEXUS_STUDIO_REQUIRE_PRINCIPAL", "0")
+        assert (
+            client.get(
+                "/api/studio/projects/proj-w3/jobs/job-1/state",
+                headers=deploy_h,
+            ).status_code
+            == 404
+        )
+
+    def test_membership_and_principal_lifecycle_apis_and_admin_audit(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from nexus_ai_agent.api import app as app_module
+        from nexus_ai_agent.config.settings import get_settings
+
+        clock = _Clock()
+        ws = tmp_path / "ws"
+        ws.mkdir()
+        auth_db = tmp_path / "auth.sqlite3"
+        auth = StudioPrincipalAuthStore(auth_db, now=clock)
+        auth.ensure_project("proj-w3", tenant_id="ten-1")
+        auth.register_principal(OWNER_ID, tenant_id="ten-1", raw_token="tok-owner-life")
+        auth.bind_channel(OWNER_ID, channel="studio", external_subject="sub-owner-life")
+        auth.grant_membership("proj-w3", OWNER_ID, role=StudioRole.OWNER, granted_by=OWNER_ID)
+
+        auth.register_principal(EDITOR_ID, tenant_id="ten-1", raw_token="tok-editor-life")
+        auth.bind_channel(EDITOR_ID, channel="studio", external_subject="sub-editor-life")
+        auth.grant_membership("proj-w3", EDITOR_ID, role=StudioRole.EDITOR, granted_by=OWNER_ID)
+
+        t2_owner = "prn_" + "9" * 32
+        auth.register_principal(t2_owner, tenant_id="ten-2", raw_token="tok-t2-life")
+        auth.close()
+
+        monkeypatch.setenv("NEXUS_DASHBOARD_TOKEN", "deploy-tok")
+        monkeypatch.setenv("NEXUS_STUDIO_PROJECT_IDS", "proj-w3")
+        monkeypatch.setenv("NEXUS_STUDIO_WORKSPACE_ROOT", str(ws))
+        monkeypatch.setenv("NEXUS_STUDIO_AUTH_DB", str(auth_db))
+        monkeypatch.setenv("NEXUS_QUEUE_DB_PATH", str(tmp_path / "q.sqlite3"))
+        get_settings.cache_clear()
+        monkeypatch.setattr(app_module, "_creative_registry", None)
+
+        client = TestClient(app_module.app)
+        owner_h = {
+            "Authorization": "Bearer deploy-tok",
+            "X-Nexus-Principal-Token": "tok-owner-life",
+        }
+        editor_h = {
+            "Authorization": "Bearer deploy-tok",
+            "X-Nexus-Principal-Token": "tok-editor-life",
+        }
+        new_pid = "prn_" + "8" * 32
+
+        # Non-OWNER cannot provision principals or bindings -> 403.
+        assert (
+            client.post(
+                "/api/studio/principals",
+                headers=editor_h,
+                json={"principal_id": new_pid, "raw_token": "tok-new-principal-123"},
+            ).status_code
+            == 403
+        )
+        assert (
+            client.post(
+                f"/api/studio/principals/{EDITOR_ID}/bindings",
+                headers=editor_h,
+                json={"channel": "studio", "external_subject": "sub-e2"},
+            ).status_code
+            == 403
+        )
+        # Cross-tenant principal / binding rejected -> 403.
+        assert (
+            client.post(
+                "/api/studio/principals",
+                headers=owner_h,
+                json={
+                    "principal_id": new_pid,
+                    "raw_token": "tok-new-principal-123",
+                    "tenant_id": "ten-2",
+                },
+            ).status_code
+            == 403
+        )
+        assert (
+            client.post(
+                f"/api/studio/principals/{t2_owner}/bindings",
+                headers=owner_h,
+                json={"channel": "studio", "external_subject": "sub-xten"},
+            ).status_code
+            == 403
+        )
+        # Invalid principal id -> 400; short token -> 422; unknown principal binding -> 404.
+        assert (
+            client.post(
+                "/api/studio/principals/bad$pid/bindings",
+                headers=owner_h,
+                json={"channel": "studio", "external_subject": "sub-bad"},
+            ).status_code
+            == 400
+        )
+        assert (
+            client.post(
+                f"/api/studio/principals/{new_pid}/bindings",
+                headers=owner_h,
+                json={"channel": "studio", "external_subject": "sub-missing"},
+            ).status_code
+            == 404
+        )
+        # Invalid principal format caught by ValueError -> 400.
+        assert (
+            client.post(
+                "/api/studio/principals",
+                headers=owner_h,
+                json={"principal_id": "not-a-valid-pid", "raw_token": "tok-valid-len-123"},
+            ).status_code
+            == 400
+        )
+
+        # OWNER provisions principal + binds channel + grants/lists/revokes membership.
+        r_p = client.post(
+            "/api/studio/principals",
+            headers=owner_h,
+            json={
+                "principal_id": new_pid,
+                "raw_token": "tok-new-principal-123",
+                "display_name": "New Editor",
+            },
+        )
+        assert r_p.status_code == 201
+        r_b = client.post(
+            f"/api/studio/principals/{new_pid}/bindings",
+            headers=owner_h,
+            json={"channel": "studio", "external_subject": "sub-new-editor"},
+        )
+        assert r_b.status_code == 201
+        assert (
+            client.post(
+                "/api/studio/projects/proj-w3/memberships",
+                headers=owner_h,
+                json={"principal_id": new_pid, "role": "EDITOR"},
+            ).status_code
+            == 201
+        )
+        r_list = client.get("/api/studio/projects/proj-w3/memberships", headers=owner_h)
+        assert r_list.status_code == 200
+        assert any(
+            m["principal_id"] == new_pid and m["status"] == "ACTIVE"
+            for m in r_list.json()["memberships"]
+        )
+
+        # DELETE membership: invalid id (400), unknown target (404), cross-tenant target (403),
+        # valid (200).
+        assert (
+            client.delete(
+                "/api/studio/projects/proj-w3/memberships/bad$pid",
+                headers=owner_h,
+            ).status_code
+            == 400
+        )
+        assert (
+            client.delete(
+                f"/api/studio/projects/proj-w3/memberships/{'prn_' + '7' * 32}",
+                headers=owner_h,
+            ).status_code
+            == 404
+        )
+        assert (
+            client.delete(
+                f"/api/studio/projects/proj-w3/memberships/{t2_owner}",
+                headers=owner_h,
+            ).status_code
+            == 403
+        )
+        r_del = client.delete(
+            f"/api/studio/projects/proj-w3/memberships/{new_pid}",
+            headers=owner_h,
+        )
+        assert r_del.status_code == 200 and r_del.json()["status"] == "REVOKED"
+
+        # Admin audit endpoint records all lifecycle events and DB table is append-only.
+        r_adm = client.get("/api/studio/projects/proj-w3/admin/audit", headers=owner_h)
+        assert r_adm.status_code == 200
+        events = [e["event_type"] for e in r_adm.json()["audit"]]
+        assert "grant_membership" in events and "revoke_membership" in events
+
+        with StudioPrincipalAuthStore(auth_db, now=clock) as check_store:
+            all_admin = check_store.list_admin_audit(target_principal_id=new_pid)
+            assert [e["event_type"] for e in all_admin] == [
+                "register_principal",
+                "bind_channel",
+                "grant_membership",
+                "revoke_membership",
+            ]
+            assert check_store.list_admin_audit()  # unfiltered path
+            with pytest.raises(sqlite3.DatabaseError, match="append-only"):
+                check_store._conn.execute("UPDATE nexus_studio_admin_audit SET actor_id = 'tamper'")
+            with pytest.raises(sqlite3.DatabaseError, match="append-only"):
+                check_store._conn.execute("DELETE FROM nexus_studio_admin_audit")
+
+        # Deterministic close: verify no leftover open SQLite FDs in this process for auth_db.
+        import gc
+
+        gc.collect()
+        fd_targets: list[str] = []
+        proc_fd = Path("/proc/self/fd")
+        if proc_fd.exists():
+            for entry in proc_fd.iterdir():
+                try:
+                    fd_targets.append(os.readlink(entry))
+                except OSError:
+                    continue
+        assert str(auth_db) not in fd_targets
+
+    @pytest.mark.asyncio
+    async def test_wave3_branch_coverage_closure(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from nexus_ai_agent.api import app as app_module
+        from nexus_ai_agent.api import studio as studio_api
+        from nexus_ai_agent.config.settings import get_settings
+        from nexus_ai_agent.nagar.ibpc.approval import (
+            ApprovalBinding,
+            ApprovalIdentity,
+            DurableApprovalLedger,
+        )
+        from nexus_ai_agent.nagar.ibpc.composition import build_ibpc_service
+        from nexus_ai_agent.nagar.ibpc.models import VideoTimeScope, _reject_non_finite
+        from nexus_ai_agent.nagar.ibpc.privacy import _parse_utc
+        from nexus_ai_agent.nagar.ibpc.session import (
+            DurableLiveSessionStore,
+            LiveSessionManager,
+            StaleRevisionError,
+        )
+
+        clock = _Clock()
+
+        # 1. models.py: _reject_non_finite nested dict/list & VideoTimeScope.forbidden_ranges edge
+        # cases.
+        _reject_non_finite({"a": [1, 2.0, {"b": 3}]})
+        with pytest.raises(ValueError, match="non-finite"):
+            _reject_non_finite({"a": [float("nan")]})
+        scope_keep = VideoTimeScope(asset_id="clip", start_us=0, end_us=500, effect="keep")
+        assert scope_keep.forbidden_ranges(0) == ()
+        assert scope_keep.forbidden_ranges(200)[0].end_us == 200
+        scope_keep_empty = VideoTimeScope(asset_id="clip", start_us=500, end_us=1000, effect="keep")
+        assert scope_keep_empty.forbidden_ranges(300) == ()
+        assert scope_keep_empty._complement(0) == ()
+
+        # 2. composition.py: non-durable and pre-injected store branches.
+        class _StubQ:
+            async def enqueue(self, **_kw):
+                return "j-cov"
+
+            async def get_status(self, _j):
+                return None
+
+            async def get_result(self, _j):
+                return None
+
+        ring = StaticKeyRing({"k1": b"k" * 32}, active_key_id="k1")
+        ws_comp = tmp_path / "ws_comp"
+        ws_comp.mkdir()
+        svc_nd = build_ibpc_service(
+            IBPCServiceDeps(
+                queue=_StubQ(),
+                registry=build_runtime_registry(),
+                workspace_root=ws_comp,
+                revision_provider=lambda: 0,
+                durable=False,
+                now=clock,
+            ),
+            key_provider=ring,
+        )
+        svc_nd.close()
+        s_pre = DurableLiveSessionStore(ws_comp / "pre_s.sqlite3")
+        a_pre = DurableApprovalLedger(ws_comp / "pre_a.sqlite3", now=clock)
+        p_pre = DurablePrivacyConsentStore(ws_comp / "pre_p.sqlite3")
+        svc_pre = build_ibpc_service(
+            IBPCServiceDeps(
+                queue=_StubQ(),
+                registry=build_runtime_registry(),
+                workspace_root=ws_comp,
+                revision_provider=lambda: 0,
+                durable=True,
+                session_store=s_pre,
+                approval_ledger=a_pre,
+                privacy_store=p_pre,
+                authorized_asset_root=ws_comp,
+                now=clock,
+            ),
+            key_provider=ring,
+        )
+        svc_pre.close()
+        s_pre.close()
+        a_pre.close()
+        p_pre.close()
+
+        # 3. studio_principal_auth.py: idempotent close + bind_channel when principal absent.
+        auth_tmp = StudioPrincipalAuthStore(tmp_path / "auth_extra.sqlite3", now=clock)
+        with pytest.raises(AuthorizationError, match="principal_not_found"):
+            auth_tmp.bind_channel(
+                "prn_" + "1" * 32, channel="studio", external_subject="sub-orphan"
+            )
+        auth_tmp.close()
+        auth_tmp.close()
+
+        # 4. studio.py: get_studio_submission_service + download_studio_artifact missing-config
+        # cleanup.
+        monkeypatch.setenv("NEXUS_QUEUE_DB_PATH", str(tmp_path / "q_studio.sqlite3"))
+        get_settings.cache_clear()
+        monkeypatch.setattr(app_module, "_creative_registry", None)
+        sub_svc = studio_api.get_studio_submission_service()
+        assert sub_svc is not None
+
+        # 5. privacy.py: _parse_utc invalid/naive, list_consents(None), record_consent/has_consent
+        # edge cases.
+        with pytest.raises(PrivacyViolation, match="invalid_timestamp"):
+            _parse_utc("not-a-date")
+        with pytest.raises(PrivacyViolation, match="invalid_timestamp"):
+            _parse_utc("2026-11-26T00:00:00")
+        pstore = DurablePrivacyConsentStore(tmp_path / "priv_cov.sqlite3")
+        assert pstore.list_consents() == ()
+        pol = PrivacyPolicy(now=clock, store=pstore, configured_providers=frozenset({"gemini"}))
+        with pytest.raises(PrivacyViolation, match="invalid_mode"):
+            pol.require_local("BAD", "audio")  # type: ignore[arg-type]
+        with pytest.raises(PrivacyViolation, match="invalid_mode"):
+            pol.record_consent("BAD", principal_id=OWNER_ID, scope="s")  # type: ignore[arg-type]
+        with pytest.raises(PrivacyViolation, match="consent_missing"):
+            pol.check_egress(PrivacyMode.TRUSTED_CLOUD, "audio", consented=False)
+        pstore.grant_consent(
+            consent_id="cns_cov_1",
+            project_id="p-cov",
+            tenant_id="ten-1",
+            principal_id=OWNER_ID,
+            mode=PrivacyMode.TRUSTED_CLOUD,
+            processing_scope=ProcessingScope.EXTERNAL_PROVIDER_DISPATCH.value,
+            data_category=DataCategory.TRANSCRIPT.value,
+            provider_id="gemini",
+            granted_at_utc=clock(),
+            expires_at_utc="2026-11-26T12:00:00Z",
+        )
+        # Check exact boundary expiry (now == expires_at_utc).
+        clock.current = "2026-11-26T12:00:00Z"
+        with pytest.raises(PrivacyViolation, match="consent_expired"):
+            pol.enforce_processing_consent(
+                project_id="p-cov",
+                principal_id=OWNER_ID,
+                mode=PrivacyMode.TRUSTED_CLOUD,
+                processing_scope=ProcessingScope.EXTERNAL_PROVIDER_DISPATCH,
+                data_category=DataCategory.TRANSCRIPT,
+                provider_id="gemini",
+            )
+        pstore.close()
+        pstore.close()
+
+        # 6. approval.py: identity mismatch branches, job reservation & key_id branches.
+        with DurableApprovalLedger(tmp_path / "appr_cov.sqlite3", now=clock) as ledger:
+            ident = ApprovalIdentity(
+                principal_id=OWNER_ID,
+                tenant_id="ten-1",
+                project_id="proj-1",
+                session_id="sess-1",
+                turn_id="turn-1",
+                sequence_number=1,
+                source_revision=0,
+                source_asset_digest="sha256:" + "1" * 64,
+                ast_digest="sha256:" + "2" * 64,
+                plan_digest="sha256:" + "3" * 64,
+                preview_digest="sha256:" + "4" * 64,
+                revision_id="0",
+                scope_signature="sha256:" + "5" * 64,
+                expires_at_utc="2026-11-26T13:00:00Z",
+            )
+            b = ApprovalBinding(
+                session_id="sess-1",
+                turn_id="turn-1",
+                sequence_number=1,
+                tenant_id="ten-1",
+                project_id="proj-1",
+                principal_id=OWNER_ID,
+                source_revision=0,
+                source_asset_digest=ident.source_asset_digest,
+                ast_digest=ident.ast_digest,
+                plan_digest=ident.plan_digest,
+                preview_digest=ident.preview_digest,
+                revision_id="0",
+                scope_signature=ident.scope_signature or "",
+                expires_at_utc="2026-11-26T13:00:00Z",
+                key_id="k1",
+            )
+            stored = ledger.create(b)
+            for field, bad_val in (
+                ("principal_id", EDITOR_ID),
+                ("project_id", "proj-2"),
+                ("plan_digest", "sha256:" + "9" * 64),
+                ("preview_digest", "sha256:" + "9" * 64),
+                ("revision_id", "9"),
+                ("expires_at_utc", "2099-01-01T00:00:00Z"),
+                ("scope_signature", "sha256:" + "9" * 64),
+            ):
+                bad_ident = dataclasses.replace(ident, **{field: bad_val})
+                with pytest.raises(ApprovalError):
+                    ledger.approve(
+                        stored.approval_id, identity=bad_ident, turn_is_active=lambda: True
+                    )
+            ledger.approve(
+                stored.approval_id, identity=ident, turn_is_active=lambda: True, key_id="k1"
+            )
+            ledger.consume(
+                stored.approval_id, identity=ident, job_id="job-r1", attempt=1, key_provider=ring
+            )
+            # Recovery with higher attempt, stale attempt, and finalization.
+            ledger.consume(
+                stored.approval_id, identity=ident, job_id="job-r1", attempt=2, key_provider=ring
+            )
+            with pytest.raises(ApprovalError, match="stale_attempt"):
+                ledger.consume(
+                    stored.approval_id,
+                    identity=ident,
+                    job_id="job-r1",
+                    attempt=1,
+                    key_provider=ring,
+                )
+            ledger.assert_active_reservation(
+                stored.approval_id, job_id="job-r1", attempt=2, identity=ident
+            )
+            ledger.finalize_consumption(stored.approval_id, job_id="job-r1", attempt=2)
+            with pytest.raises(ApprovalError, match="replay"):
+                ledger.consume(
+                    stored.approval_id,
+                    identity=ident,
+                    job_id="job-r1",
+                    attempt=3,
+                    key_provider=ring,
+                )
+        ledger.close()  # already closed via __exit__
+
+        # 7. session.py: close/get_turn/stale_revision/list_turn_contexts branches.
+        with DurableLiveSessionStore(tmp_path / "sess_cov.sqlite3") as sstore:
+            mgr = LiveSessionManager(now=clock, privacy=PrivacyPolicy(now=clock), store=sstore)
+            sess = mgr.open_session(
+                tenant_id="ten-1",
+                project_id="proj-1",
+                principal_id=OWNER_ID,
+                user_id=1,
+                chat_id=1,
+                active_revision_id="0",
+            )
+            t = mgr.begin_turn(
+                sess.session_id,
+                "t-1",
+                sequence_number=1,
+                project_revision=0,
+                target_revision_id="0",
+            )
+            assert mgr.get_turn(sess.session_id, "t-1").turn_id == t.turn_id
+            mgr.mark_intent_parsed(sess.session_id, "t-1", intent_digest="sha256:" + "1" * 64)
+            mgr.mark_plan_preview(
+                sess.session_id, "t-1", shadow_preview_digest="sha256:" + "2" * 64
+            )
+            # Bumping active_revision_id in store makes mark_awaiting_approval/mark_approved raise
+            # StaleRevisionError.
+            with sstore._transaction():
+                sstore._conn.execute(
+                    "UPDATE nexus_ibpc_sessions SET active_revision_id = '1' WHERE session_id = ?",
+                    (sess.session_id,),
+                )
+            with pytest.raises(StaleRevisionError):
+                mgr.mark_awaiting_approval(sess.session_id, "t-1", approval_id="appr-1")
+            with sstore._transaction():
+                sstore._conn.execute(
+                    "UPDATE nexus_ibpc_sessions SET active_revision_id = '0' WHERE session_id = ?",
+                    (sess.session_id,),
+                )
+            mgr.mark_awaiting_approval(sess.session_id, "t-1", approval_id="appr-1")
+            with sstore._transaction():
+                sstore._conn.execute(
+                    "UPDATE nexus_ibpc_sessions SET active_revision_id = '1' WHERE session_id = ?",
+                    (sess.session_id,),
+                )
+            with pytest.raises(StaleRevisionError):
+                mgr.mark_approved(sess.session_id, "t-1")
+            # Non-dict JSON in turn_contexts skipped gracefully.
+            with sstore._transaction():
+                sstore._conn.execute(
+                    "INSERT INTO nexus_ibpc_turn_contexts "
+                    "(approval_id, session_id, turn_id, context_json, updated_at) "
+                    "VALUES ('bad_ctx', ?, 't-1', '[1, 2]', ?)",
+                    (sess.session_id, clock()),
+                )
+            assert sstore.load_turn_context("bad_ctx") is None
+            assert isinstance(sstore.list_turn_contexts(), tuple)
+        sstore.close()
+
+        # 8. service.py & studio_ibpc.py: remaining HTTP/service error mapping branches.
+        import base64 as _b64
+
+        _stub_media_tools(monkeypatch)
+        ws_cov = tmp_path / "ws_cov"
+        ws_cov.mkdir()
+        clip_cov = ws_cov / "clip.mp4"
+        _fake_media(clip_cov)
+        auth_cov_db = tmp_path / "auth_cov.sqlite3"
+        with StudioPrincipalAuthStore(auth_cov_db, now=clock) as ac:
+            ac.ensure_project("proj-cov", tenant_id="ten-1")
+            ac.register_principal(OWNER_ID, tenant_id="ten-1", raw_token="tok-owner-cov")
+            ac.bind_channel(OWNER_ID, channel="studio", external_subject="sub-owner-cov")
+            ac.grant_membership("proj-cov", OWNER_ID, role=StudioRole.OWNER, granted_by=OWNER_ID)
+            ac.ensure_project("proj-t2", tenant_id="ten-2")
+            t2_p = "prn_" + "d" * 32
+            ac.register_principal(t2_p, tenant_id="ten-2", raw_token="tok-t2-cov")
+            ac.bind_channel(t2_p, channel="studio", external_subject="sub-t2-cov")
+            ac.grant_membership("proj-t2", t2_p, role=StudioRole.OWNER, granted_by=t2_p)
+
+        monkeypatch.setenv("NEXUS_DASHBOARD_TOKEN", "deploy-tok")
+        monkeypatch.setenv("NEXUS_STUDIO_PROJECT_IDS", "proj-cov,proj-t2")
+        monkeypatch.setenv("NEXUS_STUDIO_WORKSPACE_ROOT", str(ws_cov))
+        monkeypatch.delenv("NEXUS_STUDIO_ASSET_ROOT", raising=False)
+        monkeypatch.setenv("NEXUS_STUDIO_AUTH_DB", str(auth_cov_db))
+        monkeypatch.setenv("NEXUS_QUEUE_DB_PATH", str(tmp_path / "q_cov.sqlite3"))
+        monkeypatch.setenv(
+            "NEXUS_IBPC_APPROVAL_KEY_RING",
+            json.dumps({"k1": _b64.b64encode(b"k" * 32).decode("ascii")}),
+        )
+        monkeypatch.setenv("NEXUS_IBPC_APPROVAL_ACTIVE_KEY_ID", "k1")
+        get_settings.cache_clear()
+        monkeypatch.setattr(app_module, "_creative_registry", None)
+
+        client = TestClient(app_module.app)
+        h1 = {"Authorization": "Bearer deploy-tok", "X-Nexus-Principal-Token": "tok-owner-cov"}
+        h2 = {"Authorization": "Bearer deploy-tok", "X-Nexus-Principal-Token": "tok-t2-cov"}
+
+        r_s1 = client.post("/api/studio/projects/proj-cov/ibpc/sessions", headers=h1, json={})
+        assert r_s1.status_code == 201
+        sid1 = r_s1.json()["session_id"]
+
+        r_t1 = client.post(
+            f"/api/studio/projects/proj-cov/ibpc/sessions/{sid1}/turns",
+            headers=h1,
+            json={
+                "turn_id": "t-1",
+                "sequence_number": 1,
+                "text": "trim from 1 to 2 seconds",
+                "asset_id": "clip",
+                "source_path": str(clip_cov),
+            },
+        )
+        assert r_t1.status_code == 201
+        aid1 = r_t1.json()["approval_id"]
+
+        # Cross-tenant GET on same session fails with AuthorizationError("tenant_mismatch") -> 403!
+        # Give t2_p OWNER on proj-cov? Wait: cross-tenant membership is denied; instead test
+        # approve/execute with wrong project -> 403 via proj-t2? Use monkeypatch on
+        # get_project_tenant
+        # or test approve/execute on proj-cov when service raises AuthorizationError.
+        with monkeypatch.context() as mp:
+            mp.setattr(
+                StudioPrincipalAuthStore,
+                "get_project_tenant",
+                lambda *_a, **_kw: (_ for _ in ()).throw(
+                    AuthorizationError("project_not_found", "missing")
+                ),
+            )
+            assert (
+                client.post(
+                    "/api/studio/projects/proj-cov/ibpc/sessions", headers=h1, json={}
+                ).status_code
+                == 403
+            )
+        with monkeypatch.context() as mp:
+            mp.setattr(
+                StudioPrincipalAuthStore,
+                "get_project_tenant",
+                lambda *_a, **_kw: "ten-other",
+            )
+            assert (
+                client.post(
+                    "/api/studio/projects/proj-cov/ibpc/sessions", headers=h1, json={}
+                ).status_code
+                == 403
+            )
+        with monkeypatch.context() as mp:
+            mp.setattr(
+                service_mod.IBPCService,
+                "get_session",
+                lambda *_a, **_kw: (_ for _ in ()).throw(
+                    AuthorizationError("tenant_mismatch", "wrong tenant")
+                ),
+            )
+            assert (
+                client.get(
+                    f"/api/studio/projects/proj-cov/ibpc/sessions/{sid1}", headers=h1
+                ).status_code
+                == 403
+            )
+        with monkeypatch.context() as mp:
+            mp.setattr(
+                service_mod.IBPCService,
+                "approve",
+                lambda *_a, **_kw: (_ for _ in ()).throw(
+                    AuthorizationError("tenant_mismatch", "wrong tenant")
+                ),
+            )
+            assert (
+                client.post(
+                    f"/api/studio/projects/proj-cov/ibpc/sessions/{sid1}/turns/t-1/approve",
+                    headers=h1,
+                    json={"approval_id": aid1},
+                ).status_code
+                == 403
+            )
+        with monkeypatch.context() as mp:
+
+            async def _auth_err(*_a, **_kw):
+                raise AuthorizationError("tenant_mismatch", "wrong tenant")
+
+            mp.setattr(service_mod.IBPCService, "execute", _auth_err)
+            assert (
+                client.post(
+                    f"/api/studio/projects/proj-cov/ibpc/sessions/{sid1}/turns/t-1/execute",
+                    headers=h1,
+                    json={"approval_id": aid1},
+                ).status_code
+                == 403
+            )
+        # Also test service.py open_session without project_revision_resolver (in-memory).
+        mem_svc = build_ibpc_service(
+            IBPCServiceDeps(
+                queue=_StubQ(),
+                registry=build_runtime_registry(),
+                workspace_root=ws_cov,
+                revision_provider=lambda: 0,
+                durable=False,
+                now=clock,
+            ),
+            key_provider=ring,
+        )
+        with pytest.raises(StaleRevisionError, match="revision_mismatch"):
+            mem_svc.open_session(
+                tenant_id="ten-1",
+                project_id="proj-m",
+                principal_id=OWNER_ID,
+                user_id=1,
+                chat_id=1,
+                base_revision_id="99",
+            )
+        mem_svc.close()
+        assert h2 is not None
+
+        # 9. Remaining branch closures across privacy, approval, studio, studio_ibpc, session,
+        # service.
+        # studio.py line 205: authorized.close() on StoryboardJobConfigError after
+        # authorize_artifact_download.
+        from nexus_ai_agent.creative.storyboard_jobs import StoryboardJobConfigError
+
+        class _DummyAuth:
+            def __init__(self) -> None:
+                self.closed = False
+
+            def close(self) -> None:
+                self.closed = True
+
+        dummy_auth = _DummyAuth()
+        with monkeypatch.context() as mp:
+
+            async def _fake_get_job(_jid):
+                return {
+                    "project_id": "proj-cov",
+                    "canonical_status": "COMPLETED",
+                    "result": {"artifact_verification": {"media_verdict": "PASS"}},
+                }
+
+            mp.setattr(
+                app_module,
+                "get_creative_registry",
+                lambda: types.SimpleNamespace(get_job=_fake_get_job),
+            )
+            mp.setattr(studio_api, "artifact_rel_path_for_job", lambda *_a: "out.mp4")
+            mp.setattr(studio_api, "studio_settings", lambda *_a: (ws_cov, b"k" * 32))
+            mp.setattr(studio_api, "authorize_artifact_download", lambda *_a: dummy_auth)
+            mp.setattr(
+                studio_api,
+                "iter_authorized_chunks",
+                lambda *_a: (_ for _ in ()).throw(StoryboardJobConfigError("bad cfg")),
+            )
+            with pytest.raises(studio_api.HTTPException) as exc_dl:
+                await studio_api.download_studio_artifact("proj-cov", "job-1")
+            assert exc_dl.value.status_code == 503
+            assert dummy_auth.closed
+
+        # studio_ibpc.py lines 271 & 501: open_session StaleRevisionError->409 & execute
+        # refused->409.
+        with monkeypatch.context() as mp:
+            mp.setattr(
+                service_mod.IBPCService,
+                "open_session",
+                lambda *_a, **_kw: (_ for _ in ()).throw(
+                    StaleRevisionError("stale_revision", "stale")
+                ),
+            )
+            assert (
+                client.post(
+                    "/api/studio/projects/proj-cov/ibpc/sessions", headers=h1, json={}
+                ).status_code
+                == 409
+            )
+        with monkeypatch.context() as mp:
+            from nexus_ai_agent.nagar.ibpc.service import ExecutionOutcome
+
+            async def _refused(*_a, **_kw):
+                return ExecutionOutcome(status="refused", detail="refused_test")
+
+            mp.setattr(service_mod.IBPCService, "execute", _refused)
+            assert (
+                client.post(
+                    f"/api/studio/projects/proj-cov/ibpc/sessions/{sid1}/turns/t-1/execute",
+                    headers=h1,
+                    json={"approval_id": aid1},
+                ).status_code
+                == 409
+            )
+
+        # privacy.py remaining branches: consents property, check_egress no_provider_wired,
+        # has_consent active & in-memory, grant_durable_consent store_unconfigured/invalid
+        # scope/category.
+        pol_mem = PrivacyPolicy(now=clock, store=None, configured_providers=frozenset())
+        with pytest.raises(PrivacyViolation, match="no_provider_wired"):
+            pol_mem.check_egress(PrivacyMode.TRUSTED_CLOUD, "audio", consented=True, provider_id="")
+        pol_mem.record_consent(PrivacyMode.TRUSTED_CLOUD, principal_id=OWNER_ID, scope="transcript")
+        assert pol_mem.has_consent(
+            PrivacyMode.TRUSTED_CLOUD, principal_id=OWNER_ID, scope="transcript"
+        )
+        with pytest.raises(PrivacyViolation, match="store_unconfigured"):
+            pol_mem.grant_durable_consent(
+                project_id="p",
+                principal_id=OWNER_ID,
+                mode=PrivacyMode.TRUSTED_CLOUD,
+                processing_scope=ProcessingScope.EXTERNAL_PROVIDER_DISPATCH,
+                data_category=DataCategory.TRANSCRIPT,
+            )
+        pstore2 = DurablePrivacyConsentStore(tmp_path / "priv_cov2.sqlite3")
+        pol2 = PrivacyPolicy(now=clock, store=pstore2, configured_providers=frozenset({"gemini"}))
+        with pytest.raises(PrivacyViolation, match="invalid_scope"):
+            pol2.grant_durable_consent(
+                project_id="p",
+                principal_id=OWNER_ID,
+                mode=PrivacyMode.TRUSTED_CLOUD,
+                processing_scope="NOPE",
+                data_category=DataCategory.TRANSCRIPT,
+            )
+        with pytest.raises(PrivacyViolation, match="invalid_category"):
+            pol2.grant_durable_consent(
+                project_id="p",
+                principal_id=OWNER_ID,
+                mode=PrivacyMode.TRUSTED_CLOUD,
+                processing_scope=ProcessingScope.EXTERNAL_PROVIDER_DISPATCH,
+                data_category="NOPE",
+            )
+        pol2.grant_durable_consent(
+            project_id="p-cov2",
+            principal_id=OWNER_ID,
+            mode=PrivacyMode.TRUSTED_CLOUD,
+            processing_scope=ProcessingScope.LOCAL_PROCESSING,
+            data_category=DataCategory.AUDIO,
+        )
+        assert len(pol2.consents) == 1
+        assert pol2.has_consent(
+            PrivacyMode.TRUSTED_CLOUD,
+            principal_id=OWNER_ID,
+            scope="audio",
+            project_id="p-cov2",
+            processing_scope=ProcessingScope.LOCAL_PROCESSING.value,
+        )
+        pstore2.close()
+
+        # approval.py legacy schema migration (approvals without key_id, reservations without
+        # last_attempt),
+        # revoke on CONSUMED, finalize_consumption errors, no-key_provider approve/consume.
+        mig_db = tmp_path / "legacy_appr.sqlite3"
+        conn = sqlite3.connect(str(mig_db))
+        conn.execute(
+            "CREATE TABLE approvals (approval_id TEXT PRIMARY KEY, session_id TEXT NOT NULL,"
+            " turn_id TEXT NOT NULL, state TEXT NOT NULL, body TEXT NOT NULL)"
+        )
+        conn.execute(
+            "CREATE TABLE approval_reservations (approval_id TEXT PRIMARY KEY, job_id"
+            " TEXT NOT NULL, fingerprint TEXT NOT NULL, finalized_at TEXT)"
+        )
+        conn.commit()
+        conn.close()
+        with DurableApprovalLedger(mig_db, now=clock) as leg:
+            cols = {r[1] for r in leg._conn.execute("PRAGMA table_info(approvals)")}
+            assert "key_id" in cols
+            ident2 = ApprovalIdentity(
+                principal_id=OWNER_ID,
+                tenant_id="ten-1",
+                project_id="proj-1",
+                session_id="sess-2",
+                turn_id="turn-2",
+                sequence_number=1,
+                source_revision=0,
+                source_asset_digest="sha256:" + "1" * 64,
+                ast_digest="sha256:" + "2" * 64,
+                plan_digest="sha256:" + "3" * 64,
+                preview_digest="sha256:" + "4" * 64,
+            )
+            b2 = ApprovalBinding(
+                session_id="sess-2",
+                turn_id="turn-2",
+                sequence_number=1,
+                tenant_id="ten-1",
+                project_id="proj-1",
+                principal_id=OWNER_ID,
+                source_revision=0,
+                source_asset_digest=ident2.source_asset_digest,
+                ast_digest=ident2.ast_digest,
+                plan_digest=ident2.plan_digest,
+                preview_digest=ident2.preview_digest,
+            )
+            st2 = leg.create(b2)
+            leg.approve(st2.approval_id, identity=ident2, turn_is_active=lambda: True, key_id="k1")
+            leg.consume(
+                st2.approval_id, identity=ident2, job_id="j-2", attempt=1, key_provider=ring
+            )
+            with pytest.raises(ApprovalError, match="replay"):
+                leg.revoke(st2.approval_id)
+            with pytest.raises(ApprovalError, match="replay"):
+                leg.finalize_consumption(st2.approval_id, job_id="other-job", attempt=1)
+
+        # service.py helpers: _attempt_identity (async, sync, exc), _provenance_reference, _drain,
+        # execute error paths.
+        async def _async_attempts(_jid):
+            return [{"attempt": 1}, {"attempt": 3}, "ignored"]
+
+        svc_helper = build_ibpc_service(
+            IBPCServiceDeps(
+                queue=_StubQ(),
+                registry=build_runtime_registry(),
+                workspace_root=ws_cov,
+                revision_provider=lambda: 0,
+                attempt_provider=_async_attempts,
+                journal=types.SimpleNamespace(
+                    records_for_job=lambda _j: (_ for _ in ()).throw(RuntimeError("j-err")),
+                    all_records=lambda: (),
+                ),
+                facts_provider=object(),
+                now=clock,
+            ),
+            key_provider=ring,
+        )
+        assert await svc_helper._attempt_identity("job-x") == "job-x:attempt3"
+        svc_helper._deps = dataclasses.replace(
+            svc_helper._deps,
+            attempt_provider=lambda _j: (_ for _ in ()).throw(RuntimeError("boom")),
+        )
+        assert await svc_helper._attempt_identity("job-x") == "job-x:attempt?"
+        prov_ref = svc_helper._provenance_reference("job-x")
+        assert "error" in prov_ref["journal"] and "error" in prov_ref["passport"]
+        assert await svc_helper._drain("job-x", timeout=0.0) is None
+        svc_helper.close()
+
+    @pytest.mark.asyncio
+    async def test_wave3_remaining_branches(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from nexus_ai_agent.api import app as app_module
+        from nexus_ai_agent.api import studio as studio_api
+        from nexus_ai_agent.config.settings import get_settings
+        from nexus_ai_agent.creative.storyboard_jobs import StoryboardJobConfigError
+        from nexus_ai_agent.nagar.ibpc.approval import (
+            ApprovalAlreadyConsumedError,
+            ApprovalBinding,
+            ApprovalIdentity,
+            DurableApprovalLedger,
+        )
+        from nexus_ai_agent.nagar.ibpc.composition import build_ibpc_service
+        from nexus_ai_agent.nagar.ibpc.models import (
+            DataCategory,
+            PrivacyMode,
+            ProcessingScope,
+        )
+        from nexus_ai_agent.nagar.ibpc.privacy import (
+            DurablePrivacyConsentStore,
+            PrivacyPolicy,
+            PrivacyViolation,
+        )
+        from nexus_ai_agent.nagar.ibpc.session import (
+            DurableLiveSessionStore,
+            LiveSessionManager,
+            SessionError,
+            SessionStatus,
+        )
+
+        clock = _Clock()
+        ring = StaticKeyRing({"k1": b"k" * 32}, active_key_id="k1")
+
+        # 1. studio.py: StoryboardJobConfigError BEFORE authorize_artifact_download (authorized is
+        # None).
+        with monkeypatch.context() as mp:
+
+            async def _fake_get_job(_jid):
+                return {
+                    "project_id": "proj-cov",
+                    "canonical_status": "COMPLETED",
+                    "result": {"artifact_verification": {"media_verdict": "PASS"}},
+                }
+
+            mp.setattr(
+                app_module,
+                "get_creative_registry",
+                lambda: types.SimpleNamespace(get_job=_fake_get_job),
+            )
+            mp.setattr(studio_api, "artifact_rel_path_for_job", lambda *_a: "out.mp4")
+            mp.setattr(
+                studio_api,
+                "studio_settings",
+                lambda *_a: (_ for _ in ()).throw(StoryboardJobConfigError("unconfigured")),
+            )
+            with pytest.raises(studio_api.HTTPException) as exc_dl:
+                await studio_api.download_studio_artifact("proj-cov", "job-1")
+            assert exc_dl.value.status_code == 503
+
+        # 2. privacy.py: legacy schema migration (missing tenant_id), __enter__/__exit__,
+        # in-memory consents property, check_egress success, require_local_biometric_consent=False.
+        priv_mig_db = tmp_path / "priv_mig.sqlite3"
+        c_p = sqlite3.connect(str(priv_mig_db))
+        c_p.execute(
+            """
+            CREATE TABLE nexus_privacy_consents (
+                consent_id TEXT PRIMARY KEY,
+                project_id TEXT NOT NULL,
+                principal_id TEXT NOT NULL,
+                mode TEXT NOT NULL,
+                processing_scope TEXT NOT NULL,
+                data_category TEXT NOT NULL,
+                provider_id TEXT NOT NULL DEFAULT '',
+                granted_at_utc TEXT NOT NULL,
+                expires_at_utc TEXT NOT NULL DEFAULT '',
+                revoked_at_utc TEXT NOT NULL DEFAULT '',
+                revoked_by TEXT NOT NULL DEFAULT '',
+                revoke_reason TEXT NOT NULL DEFAULT ''
+            )
+            """
+        )
+        c_p.commit()
+        c_p.close()
+        with DurablePrivacyConsentStore(priv_mig_db) as ps_mig:
+            cols_p = {
+                r[1] for r in ps_mig._conn.execute("PRAGMA table_info(nexus_privacy_consents)")
+            }
+            assert "tenant_id" in cols_p
+        ps_mem = PrivacyPolicy(now=clock, store=None, configured_providers=frozenset({"gemini"}))
+        ps_mem.record_consent(PrivacyMode.TRUSTED_CLOUD, principal_id=OWNER_ID, scope="audio")
+        assert len(ps_mem.consents) == 1
+        ps_mem.check_egress(
+            PrivacyMode.TRUSTED_CLOUD, "audio", consented=True, provider_id="gemini"
+        )
+        assert (
+            ps_mem.enforce_processing_consent(
+                project_id="p",
+                principal_id=OWNER_ID,
+                mode=PrivacyMode.LOCAL_VAULT,
+                processing_scope=ProcessingScope.LOCAL_PROCESSING,
+                data_category=DataCategory.BIOMETRIC_FACE_ROI,
+                require_local_biometric_consent=False,
+            )
+            is None
+        )
+
+        # 3. approval.py: _check_identity field mismatches (principal/project/plan/preview),
+        #    reservation identity mismatch on consume & assert_active_reservation, stale_attempt,
+        #    and finalize_consumption ApprovalAlreadyConsumedError.
+        with DurableApprovalLedger(tmp_path / "appr_rem.sqlite3", now=clock) as leg:
+            ident = ApprovalIdentity(
+                principal_id=OWNER_ID,
+                tenant_id="ten-1",
+                project_id="proj-1",
+                session_id="sess-1",
+                turn_id="turn-1",
+                sequence_number=1,
+                source_revision=0,
+                source_asset_digest="sha256:" + "1" * 64,
+                ast_digest="sha256:" + "2" * 64,
+                plan_digest="sha256:" + "3" * 64,
+                preview_digest="sha256:" + "4" * 64,
+            )
+            b = ApprovalBinding(
+                session_id="sess-1",
+                turn_id="turn-1",
+                sequence_number=1,
+                tenant_id="ten-1",
+                project_id="proj-1",
+                principal_id=OWNER_ID,
+                source_revision=0,
+                source_asset_digest=ident.source_asset_digest,
+                ast_digest=ident.ast_digest,
+                plan_digest=ident.plan_digest,
+                preview_digest=ident.preview_digest,
+            )
+            for field, val in (
+                ("principal_id", EDITOR_ID),
+                ("project_id", "proj-other"),
+                ("plan_digest", "sha256:" + "9" * 64),
+                ("preview_digest", "sha256:" + "9" * 64),
+            ):
+                with pytest.raises(ApprovalError):
+                    leg._check_identity(b, dataclasses.replace(ident, **{field: val}))
+            st = leg.create(b)
+            leg.approve(st.approval_id, identity=ident, turn_is_active=lambda: True)
+            leg.consume(st.approval_id, identity=ident, job_id="job-1", attempt=2)
+            with pytest.raises(ApprovalError, match="stale_attempt"):
+                leg.assert_active_reservation(
+                    st.approval_id, job_id="job-1", attempt=1, identity=ident
+                )
+            with pytest.raises(ApprovalAlreadyConsumedError):
+                leg.finalize_consumption(st.approval_id, job_id="job-1", attempt=1)
+            # Mutate stored binding's principal_id while keeping identical identity_digest in
+            # reservation
+            # to exercise `except ApprovalError: raise ApprovalError("replay", "reserved identity
+            # changed")`.
+            tampered_b = st.model_copy(
+                update={"state": st.state.CONSUMED, "principal_id": EDITOR_ID}
+            )
+            leg._store(tampered_b)
+            with pytest.raises(ApprovalError, match="reserved identity changed"):
+                leg.consume(st.approval_id, identity=ident, job_id="job-1", attempt=2)
+            with pytest.raises(ApprovalError, match="reserved identity changed"):
+                leg.assert_active_reservation(
+                    st.approval_id, job_id="job-1", attempt=2, identity=ident
+                )
+
+        # 4. session.py: set_privacy_mode (wrong_principal + success), _cleanup_audio(None),
+        #    turn_is_active False for stale/non-active, and IdempotencyConflictError in save_turn.
+        with DurableLiveSessionStore(tmp_path / "sess_mig.sqlite3") as smig:
+            mgr = LiveSessionManager(
+                now=clock,
+                privacy=PrivacyPolicy(now=clock, configured_providers=frozenset({"gemini"})),
+                store=smig,
+            )
+            sess = mgr.open_session(
+                tenant_id="ten-1",
+                project_id="proj-1",
+                principal_id=OWNER_ID,
+                user_id=1,
+                chat_id=1,
+            )
+            with pytest.raises(PrivacyViolation, match="wrong_principal"):
+                mgr.set_privacy_mode(
+                    sess.session_id,
+                    PrivacyMode.TRUSTED_CLOUD,
+                    principal_id=EDITOR_ID,
+                    consent_scope="transcript",
+                )
+            mgr.set_privacy_mode(
+                sess.session_id,
+                PrivacyMode.TRUSTED_CLOUD,
+                principal_id=OWNER_ID,
+                consent_scope="transcript",
+            )
+            t1 = mgr.begin_turn(
+                sess.session_id,
+                "t-1",
+                sequence_number=1,
+                project_revision=0,
+                idempotency_key="idem-k",
+                payload_digest="sha256:" + "1" * 64,
+            )
+            from nexus_ai_agent.nagar.ibpc.session import IdempotencyConflictError
+
+            with pytest.raises(IdempotencyConflictError):
+                mgr.begin_turn(
+                    sess.session_id,
+                    "t-1-dup",
+                    sequence_number=2,
+                    project_revision=0,
+                    idempotency_key="idem-k",
+                    payload_digest="sha256:" + "2" * 64,
+                )
+            t2 = mgr.begin_turn(sess.session_id, "t-2", sequence_number=2, project_revision=0)
+            assert mgr.turn_is_active(sess.session_id, t1.turn_id) is False
+            assert mgr.turn_is_active(sess.session_id, "missing") is False
+            assert mgr.turn_is_active(sess.session_id, t2.turn_id) is True
+            mgr.pause_session(sess.session_id)
+            assert mgr.turn_is_active(sess.session_id, t2.turn_id) is False
+            mgr._cleanup_audio(tmp_path, None)
+            with monkeypatch.context() as mp:
+                mp.setattr(os.path, "realpath", lambda _p: (_ for _ in ()).throw(OSError("io")))
+                mgr._cleanup_audio(tmp_path, tmp_path / "any.wav")
+
+        # 5. service.py: execute refusal paths (shadow_scope_mismatch, media_signature_mismatch,
+        # source_changed_during_staging, media_evidence_missing, source_unreadable, _TurnContext
+        # persistence).
+        _stub_media_tools(monkeypatch)
+        ws_svc = tmp_path / "ws_svc"
+        ws_svc.mkdir()
+        clip_svc = ws_svc / "clip.mp4"
+        _fake_media(clip_svc)
+        auth_svc, bref_svc = _setup_auth_store(tmp_path / "auth_svc.sqlite3", now=clock)
+
+        class _StubQ2:
+            async def enqueue(self, **_kw):
+                return "job-s2"
+
+            async def get_status(self, _j):
+                return None
+
+            async def get_result(self, _j):
+                return None
+
+        svc = build_studio_ibpc_service(
+            queue=_StubQ2(),
+            registry=build_runtime_registry(),
+            workspace_root=ws_svc,
+            revision_provider=lambda: 0,
+            key_provider=ring,
+            auth_store=auth_svc,
+            channel_binding_ref=bref_svc,
+            now=clock,
+        )
+        try:
+            sid_a = svc.open_session(
+                tenant_id="ten-1",
+                project_id="proj-w3",
+                principal_id=OWNER_ID,
+                user_id=1,
+                chat_id=1,
+            )
+            res_a = svc.submit_text_intent(
+                sid_a,
+                "t-a",
+                sequence_number=1,
+                text="trim from 1 to 2 seconds",
+                asset_id="clip",
+                source_path=str(clip_svc),
+            )
+            assert isinstance(res_a, PipelineResult)
+            svc.approve(sid_a, "t-a", res_a.approval_id, principal_id=OWNER_ID)
+            # media_evidence_missing (mutated during staging after scope_signature check)
+            ctx_a = svc._contexts[res_a.approval_id]
+            orig_sha256_fd = svc._sha256_fd
+            with monkeypatch.context() as mp:
+
+                def _sha_clear_manifest(p):
+                    ctx_a.shadow_manifest = None
+                    return orig_sha256_fd(p)
+
+                mp.setattr(svc, "_sha256_fd", _sha_clear_manifest)
+                out_miss = await svc.execute(sid_a, "t-a", res_a.approval_id, principal_id=OWNER_ID)
+            assert out_miss.status == "refused" and "media_evidence_missing" in out_miss.detail
+
+            # shadow_scope_mismatch (mutated during staging after scope_signature check)
+            sid_b = svc.open_session(
+                tenant_id="ten-1",
+                project_id="proj-w3",
+                principal_id=OWNER_ID,
+                user_id=1,
+                chat_id=2,
+            )
+            res_b = svc.submit_text_intent(
+                sid_b,
+                "t-b",
+                sequence_number=1,
+                text="trim from 1 to 2 seconds",
+                asset_id="clip",
+                source_path=str(clip_svc),
+            )
+            assert isinstance(res_b, PipelineResult)
+            svc.approve(sid_b, "t-b", res_b.approval_id, principal_id=OWNER_ID)
+            ctx_b = svc._contexts[res_b.approval_id]
+            with monkeypatch.context() as mp:
+
+                def _sha_bad_manifest(p):
+                    ctx_b.shadow_manifest = types.SimpleNamespace(
+                        plan_digest="sha256:" + "f" * 64,
+                        scope_digest=ctx_b.ast.scope.scope_digest,
+                    )
+                    return orig_sha256_fd(p)
+
+                mp.setattr(svc, "_sha256_fd", _sha_bad_manifest)
+                mp.setattr(service_mod, "verify_shadow_manifest", lambda _m: None)
+                out_sm = await svc.execute(sid_b, "t-b", res_b.approval_id, principal_id=OWNER_ID)
+            assert out_sm.status == "refused" and "shadow_scope_mismatch" in out_sm.detail
+
+            # media_signature_mismatch
+            sid_c = svc.open_session(
+                tenant_id="ten-1",
+                project_id="proj-w3",
+                principal_id=OWNER_ID,
+                user_id=1,
+                chat_id=3,
+            )
+            res_c = svc.submit_text_intent(
+                sid_c,
+                "t-c",
+                sequence_number=1,
+                text="trim from 1 to 2 seconds",
+                asset_id="clip",
+                source_path=str(clip_svc),
+            )
+            assert isinstance(res_c, PipelineResult)
+            svc.approve(sid_c, "t-c", res_c.approval_id, principal_id=OWNER_ID)
+            with monkeypatch.context() as mp:
+                mp.setattr(
+                    service_mod,
+                    "compute_scope_signature",
+                    lambda *_a, **_kw: types.SimpleNamespace(signature_digest="sha256:" + "9" * 64),
+                )
+                out_sig = await svc.execute(sid_c, "t-c", res_c.approval_id, principal_id=OWNER_ID)
+                assert out_sig.status == "refused" and "media_signature_mismatch" in out_sig.detail
+
+            # source_changed_during_staging
+            sid_d = svc.open_session(
+                tenant_id="ten-1",
+                project_id="proj-w3",
+                principal_id=OWNER_ID,
+                user_id=1,
+                chat_id=4,
+            )
+            res_d = svc.submit_text_intent(
+                sid_d,
+                "t-d",
+                sequence_number=1,
+                text="trim from 1 to 2 seconds",
+                asset_id="clip",
+                source_path=str(clip_svc),
+            )
+            assert isinstance(res_d, PipelineResult)
+            svc.approve(sid_d, "t-d", res_d.approval_id, principal_id=OWNER_ID)
+            with monkeypatch.context() as mp:
+                mp.setattr(svc, "_sha256_fd", lambda _p: "sha256:" + "8" * 64)
+                out_chg = await svc.execute(sid_d, "t-d", res_d.approval_id, principal_id=OWNER_ID)
+                assert (
+                    out_chg.status == "refused"
+                    and "source_changed_during_staging" in out_chg.detail
+                )
+
+            # _TurnContext.from_persisted_dict with verified_identity=None & approval_envelope=None
+            d_ctx = svc._contexts[res_d.approval_id].to_persisted_dict()
+            d_ctx["verified_identity"] = None
+            d_ctx["approval_envelope"] = None
+            d_ctx["shadow_manifest"] = None
+            d_ctx["media_signature"] = None
+            restored = service_mod._TurnContext.from_persisted_dict(d_ctx)
+            assert restored.verified_identity is None and restored.approval_envelope is None
+            assert restored.to_persisted_dict()["verified_identity"] is None
+
+            # _stage_source OSError
+            with pytest.raises(SessionError, match="source_unreadable"):
+                svc._stage_source(ws_svc / "missing_file.mp4", ws_svc / "stg_err")
+        finally:
+            svc.close()
+            auth_svc.close()
+
+        # Verify _validate_source_path when authorized_asset_root is None (non-durable).
+        nd_svc = service_mod.IBPCService(
+            service_mod.IBPCServiceDeps(
+                queue=_StubQ2(),
+                registry=build_runtime_registry(),
+                workspace_root=ws_svc,
+                revision_provider=lambda: 0,
+                durable=False,
+                authorized_asset_root=None,
+                now=clock,
+            )
+        )
+        assert nd_svc._validate_source_path(str(clip_svc)) == clip_svc
+        nd_svc.close()
+        assert get_settings is not None
+        assert build_ibpc_service is not None
+        assert SessionStatus.ACTIVE.value == "ACTIVE"
+
+    @pytest.mark.asyncio
+    async def test_wave3_final_branch_closure(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from nexus_ai_agent.api import app as app_module
+        from nexus_ai_agent.api import studio as studio_api
+        from nexus_ai_agent.nagar.ibpc.approval import (
+            ApprovalBinding,
+            ApprovalIdentity,
+            DurableApprovalLedger,
+        )
+        from nexus_ai_agent.nagar.ibpc.models import PrivacyMode, digest_of
+        from nexus_ai_agent.nagar.ibpc.privacy import PrivacyPolicy, PrivacyViolation
+        from nexus_ai_agent.nagar.ibpc.session import (
+            DurableLiveSessionStore,
+            LiveSessionManager,
+            SessionError,
+        )
+
+        clock = _Clock()
+        ring = StaticKeyRing({"k1": b"k" * 32}, active_key_id="k1")
+
+        # 1. studio.py: authorized.close() when DownloadRefused raised AFTER
+        # authorize_artifact_download
+        class _DummyAuth:
+            def __init__(self) -> None:
+                self.closed = False
+
+            def close(self) -> None:
+                self.closed = True
+
+        dummy_auth = _DummyAuth()
+        with monkeypatch.context() as mp:
+
+            async def _fake_get_job(_jid):
+                return {
+                    "project_id": "proj-cov",
+                    "canonical_status": "COMPLETED",
+                    "result": {"artifact_verification": {"media_verdict": "PASS"}},
+                }
+
+            mp.setattr(
+                app_module,
+                "get_creative_registry",
+                lambda: types.SimpleNamespace(get_job=_fake_get_job),
+            )
+            mp.setattr(studio_api, "artifact_rel_path_for_job", lambda *_a: "out.mp4")
+            mp.setattr(studio_api, "studio_settings", lambda *_a: (tmp_path, b"k" * 32))
+            mp.setattr(studio_api, "authorize_artifact_download", lambda *_a: dummy_auth)
+            mp.setattr(
+                studio_api,
+                "iter_authorized_chunks",
+                lambda *_a: (_ for _ in ()).throw(
+                    studio_api.DownloadRefused(409, "stale_passport")
+                ),
+            )
+            with pytest.raises(studio_api.HTTPException) as exc_dr:
+                await studio_api.download_studio_artifact("proj-cov", "job-1")
+            assert exc_dr.value.status_code == 409
+            assert dummy_auth.closed is True
+        with pytest.raises(studio_api.HTTPException) as exc_bad_id:
+            await studio_api.download_studio_artifact("proj-cov", "../bad")
+        assert exc_bad_id.value.status_code == 400
+
+        # 2. approval.py: _check_identity lines 266/268/270/272 (matching identity_digest,
+        # mismatched field),
+        # idempotent consume on matching attempt (364->366), idempotent finalize_consumption
+        # (450->exit),
+        #    and stale_attempt in assert_active_reservation (418).
+        with DurableApprovalLedger(tmp_path / "appr_final.sqlite3", now=clock) as leg:
+            ident = ApprovalIdentity(
+                principal_id=OWNER_ID,
+                tenant_id="ten-1",
+                project_id="proj-1",
+                session_id="sess-1",
+                turn_id="turn-1",
+                sequence_number=1,
+                source_revision=0,
+                source_asset_digest="sha256:" + "1" * 64,
+                ast_digest="sha256:" + "2" * 64,
+                plan_digest="sha256:" + "3" * 64,
+                preview_digest="sha256:" + "4" * 64,
+            )
+            for field, bad_val in (
+                ("principal_id", EDITOR_ID),
+                ("project_id", "proj-other"),
+                ("plan_digest", "sha256:" + "9" * 64),
+                ("preview_digest", "sha256:" + "9" * 64),
+            ):
+                b_bad = ApprovalBinding(
+                    session_id="sess-1",
+                    turn_id="turn-1",
+                    sequence_number=1,
+                    tenant_id="ten-1",
+                    project_id="proj-1",
+                    principal_id=OWNER_ID,
+                    source_revision=0,
+                    source_asset_digest=ident.source_asset_digest,
+                    ast_digest=ident.ast_digest,
+                    plan_digest=ident.plan_digest,
+                    preview_digest=ident.preview_digest,
+                )
+                forced_digest = digest_of(
+                    {
+                        "schema_id": b_bad.schema_id,
+                        "approval_id": b_bad.approval_id,
+                        "nonce": b_bad.nonce,
+                        **ident.as_dict(),
+                    }
+                )
+                b_bad = b_bad.model_copy(
+                    update={"identity_digest": forced_digest, "approval_hash": "", field: bad_val}
+                )
+                with pytest.raises(ApprovalError, match="identity_mismatch_"):
+                    leg._check_identity(b_bad, ident)
+
+            b_ok = ApprovalBinding(
+                session_id="sess-1",
+                turn_id="turn-1",
+                sequence_number=1,
+                tenant_id="ten-1",
+                project_id="proj-1",
+                principal_id=OWNER_ID,
+                source_revision=0,
+                source_asset_digest=ident.source_asset_digest,
+                ast_digest=ident.ast_digest,
+                plan_digest=ident.plan_digest,
+                preview_digest=ident.preview_digest,
+            )
+            st_ok = leg.create(b_ok)
+            leg.approve(st_ok.approval_id, identity=ident, turn_is_active=lambda: True)
+            leg.consume(st_ok.approval_id, identity=ident, job_id="job-1", attempt=2)
+            # Same attempt again (364->366)
+            leg.consume(st_ok.approval_id, identity=ident, job_id="job-1", attempt=2)
+            # assert_active_reservation with attempt=1 raises stale_attempt
+            with pytest.raises(ApprovalError, match="stale_attempt"):
+                leg.assert_active_reservation(
+                    st_ok.approval_id, job_id="job-1", attempt=1, identity=ident
+                )
+            with pytest.raises(ApprovalError, match="replay"):
+                leg.assert_active_reservation(
+                    st_ok.approval_id, job_id="wrong-job", attempt=2, identity=ident
+                )
+            # Idempotent finalize_consumption (second call skips write when finalized_at is set)
+            leg.finalize_consumption(st_ok.approval_id, job_id="job-1", attempt=2)
+            leg.finalize_consumption(st_ok.approval_id, job_id="job-1", attempt=2)
+
+        # 3. session.py: close() idempotency, _on_revoke_session callback, get_turn unknown,
+        #    submit_partial_transcript twice, mark_failed on terminal turn.
+        revoked_sessions: list[str] = []
+        sm_final = DurableLiveSessionStore(tmp_path / "sess_final.sqlite3")
+        assert sm_final.path == tmp_path / "sess_final.sqlite3"
+        mgr_f = LiveSessionManager(
+            now=clock,
+            privacy=PrivacyPolicy(now=clock),
+            store=sm_final,
+            on_revoke_session=revoked_sessions.append,
+        )
+        s_f = mgr_f.open_session(
+            tenant_id="ten-1", project_id="proj-1", principal_id=OWNER_ID, user_id=1, chat_id=1
+        )
+        t_f = mgr_f.begin_turn(
+            s_f.session_id,
+            "t-f",
+            sequence_number=1,
+            project_revision=0,
+            idempotency_key="k-f",
+            payload_digest="sha256:" + "1" * 64,
+        )
+        t_f_dup = mgr_f.begin_turn(
+            s_f.session_id,
+            "t-f-dup",
+            sequence_number=1,
+            project_revision=0,
+            idempotency_key="k-f",
+            payload_digest="sha256:" + "1" * 64,
+        )
+        assert t_f_dup.turn_id == t_f.turn_id
+        sm_final._conn.execute(
+            "UPDATE nexus_ibpc_turns SET turn_state='TRANSCRIBING' WHERE turn_id=?", ("t-f",)
+        )
+        sm_final._conn.commit()
+        mgr_f.submit_partial_transcript(s_f.session_id, t_f.turn_id, "trim")
+        with pytest.raises(SessionError, match="unknown_turn"):
+            mgr_f.get_turn(s_f.session_id, "no-such-turn")
+        with pytest.raises(SessionError, match="unknown_turn"):
+            await mgr_f.submit_audio(
+                s_f.session_id,
+                "no-such-turn",
+                b"audio",
+                engine=types.SimpleNamespace(),
+                audio_dir=tmp_path,
+            )
+        # EXECUTING turn prevents close_session
+        sm_final._conn.execute(
+            "UPDATE nexus_ibpc_turns SET turn_state='EXECUTING' WHERE turn_id=?", ("t-f",)
+        )
+        sm_final._conn.commit()
+        from nexus_ai_agent.nagar.ibpc.session import TransitionError
+
+        with pytest.raises(TransitionError, match="executing"):
+            mgr_f.close_session(s_f.session_id)
+        sm_final._conn.execute(
+            "UPDATE nexus_ibpc_turns SET turn_state='TRANSCRIPT_PARTIAL' WHERE turn_id=?", ("t-f",)
+        )
+        sm_final._conn.commit()
+        mgr_f.mark_failed(s_f.session_id, t_f.turn_id)
+        # Second mark_failed on already-FAILED turn (1430->1432)
+        mgr_f.mark_failed(s_f.session_id, t_f.turn_id)
+        mgr_f.close_session(s_f.session_id)
+        assert revoked_sessions == [s_f.session_id]
+        sm_final.close()
+        sm_final.close()  # idempotent second close
+
+        # Non-durable LiveSessionManager _persist_session
+        mgr_nd = LiveSessionManager(now=clock, privacy=PrivacyPolicy(now=clock), store=None)
+        s_nd = mgr_nd.open_session(
+            tenant_id="ten-1", project_id="proj-1", principal_id=OWNER_ID, user_id=1, chat_id=1
+        )
+        mgr_nd.pause_session(s_nd.session_id)
+
+        # 4. service.py: _load_or_get_context (session_store=None, terminal binding, missing row),
+        #    _validate_source_path lstat OSError, turn_state not APPROVED on execute,
+        #    revision_id mismatch in _resolve_identity.
+        _stub_media_tools(monkeypatch)
+        ws_f = tmp_path / "ws_final"
+        ws_f.mkdir()
+        clip_f = ws_f / "clip.mp4"
+        _fake_media(clip_f)
+        auth_f, bref_f = _setup_auth_store(tmp_path / "auth_final.sqlite3", now=clock)
+
+        class _StubQF:
+            async def enqueue(self, **_kw):
+                return "job-f"
+
+            async def get_status(self, _j):
+                return None
+
+            async def get_result(self, _j):
+                return None
+
+        nd_f = service_mod.IBPCService(
+            service_mod.IBPCServiceDeps(
+                queue=_StubQF(),
+                registry=build_runtime_registry(),
+                workspace_root=ws_f,
+                revision_provider=lambda: 0,
+                durable=False,
+                authorized_asset_root=ws_f,
+                owned_closables=(object(),),
+                now=clock,
+            )
+        )
+        assert nd_f._load_or_get_context("missing") is None
+        s_nd_svc = nd_f.open_session(
+            tenant_id="ten-1",
+            project_id="proj-w3",
+            principal_id=OWNER_ID,
+            user_id=1,
+            chat_id=1,
+            base_revision_id="0",
+        )
+        assert (
+            nd_f._validate_session_binding(nd_f._sessions.get_session(s_nd_svc), action=None)
+            == OWNER_ID
+        )
+        with pytest.raises(SessionError, match="workspace_prefix"):
+            nd_f._guarded_workspace("../../escape")
+        with monkeypatch.context() as mp:
+            mp.setattr(service_mod, "WORKSPACE_PREFIX", "../../")
+            with pytest.raises(SessionError, match="workspace_escape"):
+                nd_f._guarded_workspace("appr")
+        with pytest.raises(PrivacyViolation):
+            nd_f.revoke_privacy_consent("c-none", actor_id=OWNER_ID, project_id="proj-w3")
+        with monkeypatch.context() as mp:
+            mp.setattr(os, "lstat", lambda _p: (_ for _ in ()).throw(PermissionError("denied")))
+            with pytest.raises(AuthorizationError, match="untrusted_source_path"):
+                nd_f._validate_source_path(str(clip_f))
+        nd_f.close()
+
+        svc_f = build_studio_ibpc_service(
+            queue=_StubQF(),
+            registry=build_runtime_registry(),
+            workspace_root=ws_f,
+            revision_provider=lambda: 0,
+            key_provider=ring,
+            auth_store=auth_f,
+            channel_binding_ref=bref_f,
+            now=clock,
+        )
+        try:
+            sid_f = svc_f.open_session(
+                tenant_id="ten-1",
+                project_id="proj-w3",
+                principal_id=OWNER_ID,
+                user_id=1,
+                chat_id=1,
+                base_revision_id="0",
+            )
+            res_f = svc_f.submit_text_intent(
+                sid_f,
+                "t-1",
+                sequence_number=1,
+                text="trim from 1 to 2 seconds",
+                asset_id="clip",
+                source_path=str(clip_f),
+            )
+            assert isinstance(res_f, PipelineResult)
+            svc_f.approve(sid_f, "t-1", res_f.approval_id, principal_id=OWNER_ID)
+            # Force turn state to AWAITING_APPROVAL (non-terminal, non-APPROVED) -> hits line 1804!
+            svc_f._session_store._conn.execute(
+                "UPDATE nexus_ibpc_turns SET turn_state = 'AWAITING_APPROVAL' WHERE turn_id = ?",
+                ("t-1",),
+            )
+            svc_f._session_store._conn.commit()
+            out_bad_turn = await svc_f.execute(
+                sid_f, "t-1", res_f.approval_id, principal_id=OWNER_ID
+            )
+            assert out_bad_turn.status == "refused" and "cannot execute" in out_bad_turn.detail
+
+            # Terminal binding (CONSUMED) in _load_or_get_context
+            svc_f._contexts.pop(res_f.approval_id, None)
+            assert svc_f._load_or_get_context(res_f.approval_id) is None
+
+            # Pending approval with deleted context row -> load_turn_context returns None
+            sid_f2 = svc_f.open_session(
+                tenant_id="ten-1", project_id="proj-w3", principal_id=OWNER_ID, user_id=1, chat_id=2
+            )
+            res_f2 = svc_f.submit_text_intent(
+                sid_f2,
+                "t-2",
+                sequence_number=1,
+                text="trim from 1 to 2 seconds",
+                asset_id="clip",
+                source_path=str(clip_f),
+                idempotency_key="idem-t2",
+            )
+            assert isinstance(res_f2, PipelineResult)
+            svc_f._contexts.pop(res_f2.approval_id, None)
+            svc_f._session_store._conn.execute(
+                "DELETE FROM nexus_ibpc_turn_contexts WHERE approval_id = ?",
+                (res_f2.approval_id,),
+            )
+            svc_f._session_store._conn.commit()
+            assert svc_f._load_or_get_context(res_f2.approval_id) is None
+
+            # submit_text_intent idempotency replay when existing_ctx is None -> falls through
+            # (916->928)
+            svc_f._session_store._conn.execute(
+                "UPDATE nexus_ibpc_turns SET turn_state = 'TRANSCRIPT_FINAL' WHERE turn_id = ?",
+                ("t-2",),
+            )
+            svc_f._session_store._conn.commit()
+            res_f2_b = svc_f.submit_text_intent(
+                sid_f2,
+                "t-2",
+                sequence_number=1,
+                text="trim from 1 to 2 seconds",
+                asset_id="clip",
+                source_path=str(clip_f),
+                idempotency_key="idem-t2",
+            )
+            assert isinstance(res_f2_b, (service_mod.Refusal, PipelineResult))
+
+            # base_approval_id with missing context -> unknown_base_proposal (958)
+            sid_f2c = svc_f.open_session(
+                tenant_id="ten-1",
+                project_id="proj-w3",
+                principal_id=OWNER_ID,
+                user_id=1,
+                chat_id=22,
+            )
+            res_base = svc_f.submit_text_intent(
+                sid_f2c,
+                "t-base",
+                sequence_number=1,
+                text="trim from 1 to 2 seconds",
+                asset_id="clip",
+                source_path=str(clip_f),
+            )
+            assert isinstance(res_base, PipelineResult)
+            svc_f._contexts.pop(res_base.approval_id, None)
+            svc_f._session_store._conn.execute(
+                "DELETE FROM nexus_ibpc_turn_contexts WHERE approval_id = ?",
+                (res_base.approval_id,),
+            )
+            svc_f._session_store._conn.commit()
+            res_delta_miss = svc_f.submit_text_intent(
+                sid_f2c,
+                "t-delta",
+                sequence_number=2,
+                text="make it shorter",
+                asset_id="clip",
+                source_path=str(clip_f),
+                base_approval_id=res_base.approval_id,
+            )
+            assert (
+                isinstance(res_delta_miss, service_mod.Refusal)
+                and res_delta_miss.reason == "unknown_base_proposal"
+            )
+
+            # _stage_source failure on destination closes src_fd (1631)
+            bad_ws = ws_f / "bad_ws"
+            bad_ws.mkdir()
+            (bad_ws / "input.mp4").mkdir()
+            with pytest.raises(SessionError, match="staging_failed"):
+                svc_f._stage_source(clip_f, bad_ws)
+
+            # _resolve_identity stale revision_id mismatch + line 1818 (mark_executing no-op)
+            sid_f3 = svc_f.open_session(
+                tenant_id="ten-1", project_id="proj-w3", principal_id=OWNER_ID, user_id=1, chat_id=3
+            )
+            res_f3 = svc_f.submit_text_intent(
+                sid_f3,
+                "t-3",
+                sequence_number=1,
+                text="trim from 1 to 2 seconds",
+                asset_id="clip",
+                source_path=str(clip_f),
+            )
+            assert isinstance(res_f3, PipelineResult)
+            svc_f.approve(sid_f3, "t-3", res_f3.approval_id, principal_id=OWNER_ID)
+            with monkeypatch.context() as mp:
+                mp.setattr(svc_f._sessions, "mark_executing", lambda *_a, **_kw: None)
+                out_noexec = await svc_f.execute(
+                    sid_f3, "t-3", res_f3.approval_id, principal_id=OWNER_ID
+                )
+                assert (
+                    out_noexec.status == "refused"
+                    and "no longer in an executing" in out_noexec.detail
+                )
+
+            sid_f4 = svc_f.open_session(
+                tenant_id="ten-1", project_id="proj-w3", principal_id=OWNER_ID, user_id=1, chat_id=4
+            )
+            res_f4 = svc_f.submit_text_intent(
+                sid_f4,
+                "t-4",
+                sequence_number=1,
+                text="trim from 1 to 2 seconds",
+                asset_id="clip",
+                source_path=str(clip_f),
+            )
+            assert isinstance(res_f4, PipelineResult)
+            svc_f.approve(sid_f4, "t-4", res_f4.approval_id, principal_id=OWNER_ID)
+            svc_f._session_store._conn.execute(
+                "UPDATE nexus_ibpc_sessions SET active_revision_id = 'rev-other' "
+                "WHERE session_id = ?",
+                (sid_f4,),
+            )
+            svc_f._session_store._conn.commit()
+            out_rev = await svc_f.execute(sid_f4, "t-4", res_f4.approval_id, principal_id=OWNER_ID)
+            assert out_rev.status == "refused" and "stale_revision" in out_rev.detail
+        finally:
+            svc_f.close()
+            auth_f.close()
+        assert PrivacyMode.LOCAL_VAULT.value == "LOCAL_VAULT"

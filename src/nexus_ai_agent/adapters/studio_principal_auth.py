@@ -23,12 +23,9 @@ from typing import Any
 from nexus_ai_agent.application.ports.job_queue import JobQueuePort
 from nexus_ai_agent.application.principal import PrincipalId
 from nexus_ai_agent.creative.studio.capabilities import CapabilityRegistry
-from nexus_ai_agent.nagar.ibpc.approval import (
-    DurableApprovalLedger,
-    durable_approval_ledger_path,
-)
 from nexus_ai_agent.nagar.ibpc.approval_mac import KeyProvider
 from nexus_ai_agent.nagar.ibpc.authority import (
+    AuthorizationError,
     CanonicalAuthorityError,
     CanonicalAuthorityPort,
     PrincipalFacts,
@@ -39,15 +36,7 @@ from nexus_ai_agent.nagar.ibpc.authority import (
     StudioRole,
 )
 from nexus_ai_agent.nagar.ibpc.composition import build_ibpc_service
-from nexus_ai_agent.nagar.ibpc.privacy import (
-    DurablePrivacyConsentStore,
-    durable_privacy_consent_path,
-)
 from nexus_ai_agent.nagar.ibpc.service import IBPCService, IBPCServiceDeps, utc_now
-from nexus_ai_agent.nagar.ibpc.session import (
-    DurableLiveSessionStore,
-    durable_session_store_path,
-)
 
 ROLE_ACTIONS: dict[StudioRole, frozenset[StudioAction]] = {
     StudioRole.OWNER: frozenset(StudioAction),
@@ -201,6 +190,41 @@ class StudioPrincipalAuthStore(StudioAuthorizerPort, CanonicalAuthorityPort):
                 END
                 """
             )
+            self._conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS nexus_studio_admin_audit (
+                    audit_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    event_type TEXT NOT NULL,
+                    actor_id TEXT NOT NULL,
+                    tenant_id TEXT NOT NULL DEFAULT '',
+                    project_id TEXT NOT NULL DEFAULT '',
+                    target_principal_id TEXT NOT NULL DEFAULT '',
+                    role TEXT NOT NULL DEFAULT '',
+                    binding_ref TEXT NOT NULL DEFAULT '',
+                    detail TEXT NOT NULL DEFAULT '',
+                    occurred_at_utc TEXT NOT NULL
+                )
+                """
+            )
+            self._conn.execute(
+                """
+                CREATE TRIGGER IF NOT EXISTS trg_studio_admin_audit_no_update
+                BEFORE UPDATE ON nexus_studio_admin_audit
+                BEGIN
+                    SELECT RAISE(ABORT, 'studio admin audit is append-only');
+                END
+                """
+            )
+            self._conn.execute(
+                """
+                CREATE TRIGGER IF NOT EXISTS trg_studio_admin_audit_no_delete
+                BEFORE DELETE ON nexus_studio_admin_audit
+                BEGIN
+                    SELECT RAISE(ABORT, 'studio admin audit is append-only');
+                END
+                """
+            )
+        self._closed = False
         with contextlib.suppress(OSError):
             os.chmod(self._path, 0o600)
 
@@ -209,7 +233,48 @@ class StudioPrincipalAuthStore(StudioAuthorizerPort, CanonicalAuthorityPort):
         return self._path
 
     def close(self) -> None:
-        self._conn.close()
+        if not self._closed:
+            self._conn.close()
+            self._closed = True
+
+    def __enter__(self) -> StudioPrincipalAuthStore:
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        self.close()
+
+    def _record_admin_event_locked(
+        self,
+        *,
+        event_type: str,
+        actor_id: str,
+        tenant_id: str = "",
+        project_id: str = "",
+        target_principal_id: str = "",
+        role: str = "",
+        binding_ref: str = "",
+        detail: str = "",
+        occurred_at_utc: str,
+    ) -> None:
+        self._conn.execute(
+            """
+            INSERT INTO nexus_studio_admin_audit (
+                event_type, actor_id, tenant_id, project_id, target_principal_id,
+                role, binding_ref, detail, occurred_at_utc
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                event_type,
+                actor_id,
+                tenant_id,
+                project_id,
+                target_principal_id,
+                role,
+                binding_ref,
+                detail,
+                occurred_at_utc,
+            ),
+        )
 
     @contextmanager
     def _transaction(self) -> Iterator[None]:
@@ -228,6 +293,7 @@ class StudioPrincipalAuthStore(StudioAuthorizerPort, CanonicalAuthorityPort):
         tenant_id: str,
         raw_token: str,
         display_name: str = "",
+        actor_id: str = "system",
     ) -> str:
         if not raw_token or len(raw_token) < 8:
             raise ValueError("principal raw_token must be at least 8 characters")
@@ -250,6 +316,14 @@ class StudioPrincipalAuthStore(StudioAuthorizerPort, CanonicalAuthorityPort):
                 """,
                 (principal_id, tenant_id, display_name, token_sha, now_utc),
             )
+            self._record_admin_event_locked(
+                event_type="register_principal",
+                actor_id=actor_id,
+                tenant_id=tenant_id,
+                target_principal_id=principal_id,
+                detail=display_name,
+                occurred_at_utc=now_utc,
+            )
         return principal_id
 
     def revoke_principal(self, principal_id: str) -> None:
@@ -264,20 +338,22 @@ class StudioPrincipalAuthStore(StudioAuthorizerPort, CanonicalAuthorityPort):
                 (now_utc, principal_id),
             )
 
-    def authenticate_token(self, raw_token: str | None) -> str:
+    def authenticate_principal_context(self, raw_token: str | None) -> tuple[str, str]:
         if not isinstance(raw_token, str) or not raw_token.strip():
             raise PrincipalAuthenticationError(
                 "missing_principal_token", "principal token required"
             )
         presented_digest = _hash_token(raw_token.strip())
         rows = self._conn.execute(
-            "SELECT principal_id, token_sha256, status FROM nexus_studio_principals"
+            "SELECT principal_id, tenant_id, token_sha256, status FROM nexus_studio_principals"
         ).fetchall()
         matched_id: str | None = None
+        matched_tenant: str = ""
         matched_status: str = ""
-        for pid, stored_digest, status in rows:
+        for pid, tenant_id, stored_digest, status in rows:
             if hmac.compare_digest(presented_digest, str(stored_digest)):
                 matched_id = str(pid)
+                matched_tenant = str(tenant_id)
                 matched_status = str(status)
         if matched_id is None:
             raise PrincipalAuthenticationError("invalid_principal_token", "unknown principal token")
@@ -285,7 +361,11 @@ class StudioPrincipalAuthStore(StudioAuthorizerPort, CanonicalAuthorityPort):
             raise PrincipalAuthenticationError(
                 "principal_revoked", f"principal {matched_id} is {matched_status}"
             )
-        return matched_id
+        return matched_id, matched_tenant
+
+    def authenticate_token(self, raw_token: str | None) -> str:
+        principal_id, _tenant_id = self.authenticate_principal_context(raw_token)
+        return principal_id
 
     def bind_channel(
         self,
@@ -296,10 +376,20 @@ class StudioPrincipalAuthStore(StudioAuthorizerPort, CanonicalAuthorityPort):
         user_id: int = 0,
         chat_id: int = 0,
         binding_ref: str | None = None,
+        actor_id: str = "system",
     ) -> str:
         ref = binding_ref or _binding_ref_for(channel, external_subject)
         now_utc = self._now()
         with self._transaction():
+            p_row = self._conn.execute(
+                "SELECT tenant_id FROM nexus_studio_principals WHERE principal_id = ?",
+                (principal_id,),
+            ).fetchone()
+            if p_row is None:
+                raise AuthorizationError(
+                    "principal_not_found", f"unknown principal {principal_id!r}"
+                )
+            tenant_id = str(p_row[0])
             self._conn.execute(
                 """
                 INSERT INTO nexus_studio_channel_bindings (
@@ -312,6 +402,15 @@ class StudioPrincipalAuthStore(StudioAuthorizerPort, CanonicalAuthorityPort):
                     revoked_at_utc = ''
                 """,
                 (ref, principal_id, channel, external_subject, user_id, chat_id, now_utc),
+            )
+            self._record_admin_event_locked(
+                event_type="bind_channel",
+                actor_id=actor_id,
+                tenant_id=tenant_id,
+                target_principal_id=principal_id,
+                binding_ref=ref,
+                detail=f"{channel}:{external_subject}",
+                occurred_at_utc=now_utc,
             )
         return ref
 
@@ -342,6 +441,72 @@ class StudioPrincipalAuthStore(StudioAuthorizerPort, CanonicalAuthorityPort):
                 (project_id, tenant_id, active_revision_id, now_utc),
             )
 
+    def get_principal_tenant(self, principal_id: str) -> str:
+        row = self._conn.execute(
+            "SELECT tenant_id FROM nexus_studio_principals WHERE principal_id = ?",
+            (principal_id,),
+        ).fetchone()
+        if row is None:
+            raise AuthorizationError("principal_not_found", f"unknown principal {principal_id!r}")
+        return str(row[0])
+
+    def get_project_tenant(self, project_id: str) -> str:
+        row = self._conn.execute(
+            "SELECT tenant_id FROM nexus_studio_projects WHERE project_id = ?",
+            (project_id,),
+        ).fetchone()
+        if row is None:
+            raise AuthorizationError("project_not_found", f"unknown project {project_id!r}")
+        return str(row[0])
+
+    def get_project_revision(self, project_id: str) -> str:
+        row = self._conn.execute(
+            "SELECT active_revision_id FROM nexus_studio_projects WHERE project_id = ?",
+            (project_id,),
+        ).fetchone()
+        if row is None:
+            raise AuthorizationError("project_not_found", f"unknown project {project_id!r}")
+        return str(row[0])
+
+    def set_project_revision(self, project_id: str, active_revision_id: str) -> None:
+        with self._transaction():
+            cur = self._conn.execute(
+                """
+                UPDATE nexus_studio_projects
+                SET active_revision_id = ?
+                WHERE project_id = ?
+                """,
+                (active_revision_id, project_id),
+            )
+            if cur.rowcount == 0:
+                raise AuthorizationError("project_not_found", f"unknown project {project_id!r}")
+
+    def assert_same_tenant(self, *, principal_id: str, project_id: str, tenant_id: str) -> None:
+        p_tenant = self.get_principal_tenant(principal_id)
+        proj_tenant = self.get_project_tenant(project_id)
+        if p_tenant != tenant_id or proj_tenant != tenant_id or p_tenant != proj_tenant:
+            raise AuthorizationError(
+                "tenant_mismatch",
+                f"tenant {tenant_id!r} conflicts with "
+                f"principal={p_tenant!r}/project={proj_tenant!r}",
+            )
+
+    def has_owner_role(self, principal_id: str, tenant_id: str) -> bool:
+        row = self._conn.execute(
+            """
+            SELECT 1
+            FROM nexus_studio_project_memberships m
+            JOIN nexus_studio_projects p ON p.project_id = m.project_id
+            WHERE m.principal_id = ?
+              AND m.status = 'ACTIVE'
+              AND m.role = 'OWNER'
+              AND p.tenant_id = ?
+            LIMIT 1
+            """,
+            (principal_id, tenant_id),
+        ).fetchone()
+        return row is not None
+
     def grant_membership(
         self,
         project_id: str,
@@ -354,6 +519,32 @@ class StudioPrincipalAuthStore(StudioAuthorizerPort, CanonicalAuthorityPort):
         now_utc = self._now()
         membership_id = f"mbr_{uuid.uuid4().hex}"
         with self._transaction():
+            proj_row = self._conn.execute(
+                "SELECT tenant_id FROM nexus_studio_projects WHERE project_id = ?",
+                (project_id,),
+            ).fetchone()
+            if proj_row is None:
+                raise AuthorizationError("project_not_found", f"unknown project {project_id!r}")
+            target_row = self._conn.execute(
+                "SELECT tenant_id FROM nexus_studio_principals WHERE principal_id = ?",
+                (principal_id,),
+            ).fetchone()
+            if target_row is None:
+                raise AuthorizationError(
+                    "principal_not_found", f"unknown principal {principal_id!r}"
+                )
+            granter_row = self._conn.execute(
+                "SELECT tenant_id FROM nexus_studio_principals WHERE principal_id = ?",
+                (granted_by,),
+            ).fetchone()
+            if granter_row is None:
+                raise AuthorizationError("principal_not_found", f"unknown principal {granted_by!r}")
+            project_tenant = str(proj_row[0])
+            if str(target_row[0]) != project_tenant or str(granter_row[0]) != project_tenant:
+                raise AuthorizationError(
+                    "cross_tenant_membership_denied",
+                    f"cross-tenant membership grant denied for project {project_id!r}",
+                )
             self._conn.execute(
                 """
                 INSERT INTO nexus_studio_project_memberships (
@@ -375,11 +566,27 @@ class StudioPrincipalAuthStore(StudioAuthorizerPort, CanonicalAuthorityPort):
                     now_utc,
                 ),
             )
+            self._record_admin_event_locked(
+                event_type="grant_membership",
+                actor_id=granted_by,
+                tenant_id=project_tenant,
+                project_id=project_id,
+                target_principal_id=principal_id,
+                role=resolved_role.value,
+                occurred_at_utc=now_utc,
+            )
         return membership_id
 
-    def revoke_membership(self, project_id: str, principal_id: str) -> None:
+    def revoke_membership(
+        self, project_id: str, principal_id: str, *, revoked_by: str = "system"
+    ) -> None:
         now_utc = self._now()
         with self._transaction():
+            proj_row = self._conn.execute(
+                "SELECT tenant_id FROM nexus_studio_projects WHERE project_id = ?",
+                (project_id,),
+            ).fetchone()
+            tenant_id = str(proj_row[0]) if proj_row is not None else ""
             self._conn.execute(
                 """
                 UPDATE nexus_studio_project_memberships
@@ -388,6 +595,80 @@ class StudioPrincipalAuthStore(StudioAuthorizerPort, CanonicalAuthorityPort):
                 """,
                 (now_utc, project_id, principal_id),
             )
+            self._record_admin_event_locked(
+                event_type="revoke_membership",
+                actor_id=revoked_by,
+                tenant_id=tenant_id,
+                project_id=project_id,
+                target_principal_id=principal_id,
+                occurred_at_utc=now_utc,
+            )
+
+    def list_memberships(self, project_id: str) -> tuple[dict[str, Any], ...]:
+        rows = self._conn.execute(
+            """
+            SELECT membership_id, project_id, principal_id, role, status,
+                   granted_by, created_at_utc, revoked_at_utc
+            FROM nexus_studio_project_memberships
+            WHERE project_id = ?
+            ORDER BY created_at_utc ASC, principal_id ASC
+            """,
+            (project_id,),
+        ).fetchall()
+        return tuple(
+            {
+                "membership_id": r[0],
+                "project_id": r[1],
+                "principal_id": r[2],
+                "role": r[3],
+                "status": r[4],
+                "granted_by": r[5],
+                "created_at_utc": r[6],
+                "revoked_at_utc": r[7],
+            }
+            for r in rows
+        )
+
+    def list_admin_audit(
+        self,
+        *,
+        project_id: str | None = None,
+        target_principal_id: str | None = None,
+    ) -> tuple[dict[str, Any], ...]:
+        clauses: list[str] = []
+        params: list[Any] = []
+        if project_id is not None:
+            clauses.append("project_id = ?")
+            params.append(project_id)
+        if target_principal_id is not None:
+            clauses.append("target_principal_id = ?")
+            params.append(target_principal_id)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        rows = self._conn.execute(
+            f"""
+            SELECT audit_id, event_type, actor_id, tenant_id, project_id,
+                   target_principal_id, role, binding_ref, detail, occurred_at_utc
+            FROM nexus_studio_admin_audit
+            {where}
+            ORDER BY audit_id ASC
+            """,
+            params,
+        ).fetchall()
+        return tuple(
+            {
+                "audit_id": int(r[0]),
+                "event_type": r[1],
+                "actor_id": r[2],
+                "tenant_id": r[3],
+                "project_id": r[4],
+                "target_principal_id": r[5],
+                "role": r[6],
+                "binding_ref": r[7],
+                "detail": r[8],
+                "occurred_at_utc": r[9],
+            }
+            for r in rows
+        )
 
     def _record_decision(self, decision: StudioAuthorizationDecision) -> None:
         with self._transaction():
@@ -420,7 +701,7 @@ class StudioPrincipalAuthStore(StudioAuthorizerPort, CanonicalAuthorityPort):
     ) -> StudioAuthorizationDecision:
         now_utc = self._now()
         p_row = self._conn.execute(
-            "SELECT status FROM nexus_studio_principals WHERE principal_id = ?",
+            "SELECT status, tenant_id FROM nexus_studio_principals WHERE principal_id = ?",
             (principal_id,),
         ).fetchone()
         if p_row is None or p_row[0] != "ACTIVE":
@@ -432,6 +713,24 @@ class StudioPrincipalAuthStore(StudioAuthorizerPort, CanonicalAuthorityPort):
                 role="NONE",
                 action=action.value,
                 reason=reason,
+                binding_ref=binding_ref,
+                decided_at_utc=now_utc,
+            )
+            self._record_decision(decision)
+            raise StudioAuthorizationError(decision)
+
+        proj_row = self._conn.execute(
+            "SELECT tenant_id FROM nexus_studio_projects WHERE project_id = ?",
+            (project_id,),
+        ).fetchone()
+        if proj_row is not None and str(p_row[1]) != str(proj_row[0]):
+            decision = StudioAuthorizationDecision(
+                allowed=False,
+                principal_id=principal_id,
+                project_id=project_id,
+                role="NONE",
+                action=action.value,
+                reason="cross_tenant_denied",
                 binding_ref=binding_ref,
                 decided_at_utc=now_utc,
             )
@@ -615,6 +914,11 @@ class ProjectMembershipAuthorizer(StudioAuthorizerPort):
             binding_ref=binding_ref,
         )
 
+    def assert_same_tenant(self, *, principal_id: str, project_id: str, tenant_id: str) -> None:
+        self._store.assert_same_tenant(
+            principal_id=principal_id, project_id=project_id, tenant_id=tenant_id
+        )
+
 
 def durable_studio_auth_path(workspace: str | Path) -> Path:
     """Canonical SQLite location for Studio principal & membership authorization."""
@@ -633,6 +937,8 @@ def build_studio_ibpc_service(
     channel_binding_ref: str | None = None,
     now: Callable[[], str] = utc_now,
     verifier_binary: str | None = None,
+    authorized_asset_root: Path | None = None,
+    project_revision_resolver: Callable[[str], str] | None = None,
 ) -> IBPCService:
     """Compose production-durable IBPCService wired to Studio RBAC & SQLite WAL stores."""
     resolved_auth = auth_store or StudioPrincipalAuthStore(
@@ -650,11 +956,9 @@ def build_studio_ibpc_service(
         authorizer=authorizer,
         channel_binding_ref=channel_binding_ref,
         durable=True,
-        session_store=DurableLiveSessionStore(durable_session_store_path(workspace_root)),
-        approval_ledger=DurableApprovalLedger(
-            durable_approval_ledger_path(workspace_root), now=now
-        ),
-        privacy_store=DurablePrivacyConsentStore(durable_privacy_consent_path(workspace_root)),
+        authorized_asset_root=authorized_asset_root or workspace_root,
+        project_revision_resolver=project_revision_resolver or resolved_auth.get_project_revision,
+        owned_closables=(resolved_auth,) if auth_store is None else (),
     )
     return build_ibpc_service(deps, key_provider=key_provider, environ=environ)
 

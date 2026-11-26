@@ -306,6 +306,7 @@ class DurableLiveSessionStore:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
         self._depth = 0
+        self._closed = False
         self._conn = sqlite3.connect(
             str(self._path), isolation_level=None, check_same_thread=False, timeout=30.0
         )
@@ -389,7 +390,15 @@ class DurableLiveSessionStore:
 
     def close(self) -> None:
         with self._lock:
-            self._conn.close()
+            if not self._closed:
+                self._conn.close()
+                self._closed = True
+
+    def __enter__(self) -> DurableLiveSessionStore:
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        self.close()
 
     @contextmanager
     def _transaction(self) -> Iterator[None]:

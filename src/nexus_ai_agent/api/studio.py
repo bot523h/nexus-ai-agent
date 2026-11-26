@@ -16,6 +16,7 @@ from __future__ import annotations
 import os
 import re
 from collections.abc import Mapping
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
@@ -54,10 +55,21 @@ def _configured_projects() -> frozenset[str]:
 
 
 def _enforce_optional_principal_rbac(project_id: str, request: Request) -> None:
-    """Enforce durable principal membership RBAC when principal auth is enabled or presented."""
+    """Enforce durable principal membership RBAC by default when configured or active."""
     principal_token = request.headers.get("x-nexus-principal-token")
-    require_principal = os.getenv("NEXUS_STUDIO_REQUIRE_PRINCIPAL", "").strip() == "1"
-    if not principal_token and not require_principal:
+    require_flag = os.getenv("NEXUS_STUDIO_REQUIRE_PRINCIPAL", "").strip()
+    opt_out = os.getenv("NEXUS_STUDIO_ALLOW_UNAUTHENTICATED_PRINCIPAL", "").strip() == "1"
+    auth_db_env = os.getenv("NEXUS_STUDIO_AUTH_DB", "").strip()
+    ws_env = os.getenv("NEXUS_STUDIO_WORKSPACE_ROOT", "").strip()
+    default_auth_db = (
+        Path(ws_env) / "queue" / "studio_auth.sqlite3"
+        if ws_env
+        else Path("workspace") / "queue" / "studio_auth.sqlite3"
+    )
+    auth_configured = bool(auth_db_env) or default_auth_db.is_file()
+    if require_flag == "0" or (opt_out and require_flag != "1" and not principal_token):
+        return
+    if not principal_token and require_flag != "1" and not auth_configured:
         return
     from nexus_ai_agent.adapters.studio_principal_auth import (
         PrincipalAuthenticationError,

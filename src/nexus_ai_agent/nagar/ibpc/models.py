@@ -22,6 +22,10 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from nexus_ai_agent.nagar.ibpc.canonical import digest_of
+from nexus_ai_agent.provenance.canonicalization import (
+    CanonicalizationScheme,
+    canonical_digest,
+)
 
 CAPSULE_VERSION: Literal["1"] = "1"
 AST_SCHEMA_ID: Literal["nexus.ibpc.ast.v2"] = "nexus.ibpc.ast.v2"
@@ -369,6 +373,28 @@ class ApprovalState(str, Enum):
     REVOKED = "REVOKED"
 
 
+def canonical_approval_payload(
+    *,
+    project_id: str,
+    revision_id: str,
+    plan_digest: str,
+    preview_digest: str,
+    scope_signature: str,
+    principal_id: str,
+    expires_at_utc: str,
+) -> dict[str, str]:
+    """Build the canonical payload bound by an IBPC approval hash."""
+    return {
+        "project_id": project_id,
+        "revision_id": revision_id,
+        "plan_digest": plan_digest,
+        "preview_digest": preview_digest,
+        "scope_signature": scope_signature,
+        "principal_id": principal_id,
+        "expires_at_utc": expires_at_utc,
+    }
+
+
 def compute_canonical_approval_hash(
     *,
     project_id: str,
@@ -379,18 +405,20 @@ def compute_canonical_approval_hash(
     principal_id: str,
     expires_at_utc: str,
 ) -> str:
-    """Canonical SHA-256 binding over approval target, scope, principal, and expiry."""
-    return digest_of(
-        {
-            "project_id": project_id,
-            "revision_id": revision_id,
-            "plan_digest": plan_digest,
-            "preview_digest": preview_digest,
-            "scope_signature": scope_signature,
-            "principal_id": principal_id,
-            "expires_at_utc": expires_at_utc,
-        }
+    """RFC 8785 JCS SHA-256 binding over approval target, scope, principal, and expiry."""
+    payload = canonical_approval_payload(
+        project_id=project_id,
+        revision_id=revision_id,
+        plan_digest=plan_digest,
+        preview_digest=preview_digest,
+        scope_signature=scope_signature,
+        principal_id=principal_id,
+        expires_at_utc=expires_at_utc,
     )
+    return canonical_digest(payload, CanonicalizationScheme.JCS_RFC8785_V2)
+
+
+compute_approval_hash = compute_canonical_approval_hash
 
 
 class ApprovalBinding(BaseModel):
@@ -426,6 +454,7 @@ class ApprovalBinding(BaseModel):
     scope_signature: str = ""
     expires_at_utc: str = ""
     approval_hash: str = ""
+    key_id: str = ""
 
     @property
     def canonical_binding_digest(self) -> str:
@@ -632,6 +661,7 @@ class DurableConsentGrant(BaseModel):
 
     consent_id: str = Field(default_factory=lambda: _new_id("consent"))
     project_id: str = Field(min_length=1, max_length=128)
+    tenant_id: str = ""
     principal_id: str = Field(min_length=1, max_length=128)
     mode: PrivacyMode
     processing_scope: str = Field(min_length=1, max_length=64)
@@ -699,6 +729,8 @@ __all__ = [
     "VerifierReport",
     "VideoTimeRange",
     "VideoTimeScope",
+    "canonical_approval_payload",
+    "compute_approval_hash",
     "compute_canonical_approval_hash",
     "worst_verdict",
 ]

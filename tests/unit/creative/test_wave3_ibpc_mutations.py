@@ -93,6 +93,14 @@ def _bypass_if(node: ast.AST) -> ast.AST:
     )
 
 
+def _force_if_true(node: ast.AST) -> ast.AST:
+    assert isinstance(node, ast.If)
+    return ast.copy_location(
+        ast.If(test=ast.Constant(value=True), body=node.body, orelse=node.orelse),
+        node,
+    )
+
+
 def _replace_dict_entry_with_empty(node: ast.AST, key_name: str) -> ast.AST:
     assert isinstance(node, ast.Dict)
     new_values = []
@@ -165,7 +173,7 @@ WAVE3_MUTANTS: tuple[Wave3MutantSpec, ...] = (
     Wave3MutantSpec(
         name="M04_canonical_approval_hash_drops_expiry",
         relative_path=Path("nagar/ibpc/models.py"),
-        func_name="compute_canonical_approval_hash",
+        func_name="canonical_approval_payload",
         predicate=lambda n: (
             isinstance(n, ast.Dict)
             and any(isinstance(k, ast.Constant) and k.value == "expires_at_utc" for k in n.keys)
@@ -254,6 +262,134 @@ WAVE3_MUTANTS: tuple[Wave3MutantSpec, ...] = (
             "TestWave3EdgeCasesAndCoverage::test_studio_principal_auth_and_http_error_paths"
         ),
         expected_tokens=("AssertionError", "400"),
+    ),
+    Wave3MutantSpec(
+        name="M11_approval_key_provider_check",
+        relative_path=Path("nagar/ibpc/approval.py"),
+        func_name="consume",
+        predicate=lambda n: _is_if_with_test_substr(n, "binding.key_id"),
+        transform=_bypass_if,
+        target_test=(
+            "tests/unit/test_wave3_ibpc_durability.py::"
+            "TestWave3SecurityClosureAndCoverage::test_missing_approval_key_fails_closed_no_fallback_and_key_rotation"
+        ),
+        expected_tokens=("AssertionError", "ApprovalError", "DID NOT RAISE"),
+    ),
+    Wave3MutantSpec(
+        name="M12_privacy_external_provider_exact_match",
+        relative_path=Path("nagar/ibpc/privacy.py"),
+        func_name="check_consent_status",
+        predicate=lambda n: _is_if_with_test_substr(
+            n, "processing_scope == ProcessingScope.EXTERNAL_PROVIDER_DISPATCH.value"
+        ),
+        transform=_bypass_if,
+        target_test=(
+            "tests/unit/test_wave3_ibpc_durability.py::"
+            "TestWave3SecurityClosureAndCoverage::test_external_provider_consent_requires_exact_provider_id"
+        ),
+        expected_tokens=("PrivacyViolation", "DID NOT RAISE", "AssertionError"),
+    ),
+    Wave3MutantSpec(
+        name="M13_privacy_revoke_project_guard",
+        relative_path=Path("nagar/ibpc/privacy.py"),
+        func_name="revoke_consent",
+        predicate=lambda n: _is_if_with_test_substr(
+            n, "project_id is not None and existing.project_id != project_id"
+        ),
+        transform=_bypass_if,
+        target_test=(
+            "tests/unit/test_wave3_ibpc_durability.py::"
+            "TestWave3SecurityClosureAndCoverage::test_cross_project_consent_revoke_refused"
+        ),
+        expected_tokens=("PrivacyViolation", "DID NOT RAISE"),
+    ),
+    Wave3MutantSpec(
+        name="M14_service_untrusted_source_path_symlink",
+        relative_path=Path("nagar/ibpc/service.py"),
+        func_name="_validate_source_path",
+        predicate=lambda n: _is_if_with_test_substr(n, "stat.S_ISLNK(st.st_mode)"),
+        transform=_bypass_if,
+        target_test=(
+            "tests/unit/test_wave3_ibpc_durability.py::"
+            "TestWave3SecurityClosureAndCoverage::test_symlink_and_outside_asset_root_source_path_refused"
+        ),
+        expected_tokens=("AuthorizationError", "DID NOT RAISE", "AssertionError"),
+    ),
+    Wave3MutantSpec(
+        name="M15_service_untrusted_source_path_outside_root",
+        relative_path=Path("nagar/ibpc/service.py"),
+        func_name="_validate_source_path",
+        predicate=lambda n: _is_if_with_test_substr(
+            n, "not resolved_src.is_relative_to(resolved_root)"
+        ),
+        transform=_bypass_if,
+        target_test=(
+            "tests/unit/test_wave3_ibpc_durability.py::"
+            "TestWave3SecurityClosureAndCoverage::test_symlink_and_outside_asset_root_source_path_refused"
+        ),
+        expected_tokens=("AuthorizationError", "DID NOT RAISE", "AssertionError"),
+    ),
+    Wave3MutantSpec(
+        name="M16_service_authoritative_revision_mismatch",
+        relative_path=Path("nagar/ibpc/service.py"),
+        func_name="_validate_revision_binding",
+        predicate=lambda n: _is_if_with_test_substr(n, "base_revision_id is not None"),
+        transform=_bypass_if,
+        target_test=(
+            "tests/unit/test_wave3_ibpc_durability.py::"
+            "TestWave3SecurityClosureAndCoverage::test_stale_and_spoofed_base_revision_id_refused"
+        ),
+        expected_tokens=("StaleRevisionError", "DID NOT RAISE", "AssertionError"),
+    ),
+    Wave3MutantSpec(
+        name="M17_service_session_owner_binding",
+        relative_path=Path("nagar/ibpc/service.py"),
+        func_name="_validate_session_binding",
+        predicate=lambda n: _is_if_with_test_substr(n, "require_session_owner"),
+        transform=_bypass_if,
+        target_test=(
+            "tests/unit/test_wave3_ibpc_durability.py::"
+            "TestWave3SecurityClosureAndCoverage::test_cross_project_and_cross_principal_turn_submission_refused"
+        ),
+        expected_tokens=("AuthorizationError", "DID NOT RAISE", "AssertionError"),
+    ),
+    Wave3MutantSpec(
+        name="M18_auth_same_tenant_enforcement",
+        relative_path=Path("adapters/studio_principal_auth.py"),
+        func_name="assert_same_tenant",
+        predicate=lambda n: _is_if_with_test_substr(n, "p_tenant != tenant_id"),
+        transform=_bypass_if,
+        target_test=(
+            "tests/unit/test_wave3_ibpc_durability.py::"
+            "TestWave3SecurityClosureAndCoverage::test_cross_tenant_membership_grant_and_session_spoof_denied"
+        ),
+        expected_tokens=("AuthorizationError", "DID NOT RAISE", "AssertionError"),
+    ),
+    Wave3MutantSpec(
+        name="M19_studio_rbac_fail_closed",
+        relative_path=Path("api/studio.py"),
+        func_name="_enforce_optional_principal_rbac",
+        predicate=lambda n: _is_if_with_test_substr(
+            n, "not principal_token and require_flag != '1' and (not auth_configured)"
+        ),
+        transform=_force_if_true,
+        target_test=(
+            "tests/unit/test_wave3_ibpc_durability.py::"
+            "TestWave3SecurityClosureAndCoverage::test_studio_rbac_fail_closed_by_default_when_auth_configured"
+        ),
+        expected_tokens=("AssertionError", "401"),
+    ),
+    Wave3MutantSpec(
+        name="M20_studio_ibpc_cross_tenant_binding_guard",
+        relative_path=Path("api/studio_ibpc.py"),
+        func_name="bind_studio_principal_channel",
+        predicate=lambda n: _is_if_with_test_substr(n, "target_tenant != actor_tenant"),
+        transform=_bypass_if,
+        target_test=(
+            "tests/unit/test_wave3_ibpc_durability.py::"
+            "TestWave3SecurityClosureAndCoverage::test_membership_and_principal_lifecycle_apis_and_admin_audit"
+        ),
+        expected_tokens=("AssertionError", "403"),
     ),
 )
 

@@ -30,6 +30,7 @@ import hmac
 import json
 import os
 import shutil
+import stat
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -55,6 +56,7 @@ from nexus_ai_agent.nagar.ibpc.approval_mac import (
     verify_envelope,
 )
 from nexus_ai_agent.nagar.ibpc.authority import (
+    AuthorizationError,
     CanonicalAuthorityError,
     CanonicalAuthorityPort,
     PrincipalFacts,
@@ -92,6 +94,7 @@ from nexus_ai_agent.nagar.ibpc.preview import build_preview, render_readback
 from nexus_ai_agent.nagar.ibpc.privacy import (
     DurablePrivacyConsentStore,
     PrivacyPolicy,
+    PrivacyViolation,
     durable_privacy_consent_path,
 )
 from nexus_ai_agent.nagar.ibpc.proof import evaluate_proof_gate
@@ -100,6 +103,7 @@ from nexus_ai_agent.nagar.ibpc.session import (
     LiveSession,
     LiveSessionManager,
     SessionError,
+    StaleRevisionError,
     StaleTurnError,
     TransitionError,
     TurnState,
@@ -180,6 +184,9 @@ class IBPCServiceDeps:
     authorizer: StudioAuthorizerPort | None = None
     configured_external_providers: frozenset[str] = frozenset()
     approval_ttl_seconds: int = 600
+    authorized_asset_root: Path | None = None
+    project_revision_resolver: Any | None = None  # Callable[[str], str] | None
+    owned_closables: tuple[Any, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -391,6 +398,7 @@ class IBPCService:
         )
         self._contexts: dict[str, _TurnContext] = {}
         self._context_order = 0
+        self._owned_closables: list[Any] = list(deps.owned_closables)
         # serializes the sensitive section of execute() (identity validation ->
         # atomic consume -> turn-state transition) across concurrent requests
         self._execute_lock = asyncio.Lock()
@@ -417,6 +425,10 @@ class IBPCService:
             self._approvals.close()
         if self._owns_privacy_store and self._privacy_store is not None:
             self._privacy_store.close()
+        for resource in self._owned_closables:
+            close_fn = getattr(resource, "close", None)
+            if callable(close_fn):
+                close_fn()
 
     # -- accessors ----------------------------------------------------------
 
@@ -438,16 +450,129 @@ class IBPCService:
         principal_id: str,
         project_id: str,
         action: StudioAction,
-        binding_ref: str = "",
+        binding_ref: str | None = None,
     ) -> None:
         authorizer = self._deps.authorizer
         if authorizer is not None:
+            resolved_ref = (
+                (self._deps.channel_binding_ref or "") if binding_ref is None else binding_ref
+            )
             authorizer.authorize_action(
                 principal_id=principal_id,
                 project_id=project_id,
                 action=action,
-                binding_ref=binding_ref or (self._deps.channel_binding_ref or ""),
+                binding_ref=resolved_ref,
             )
+
+    def _validate_session_binding(
+        self,
+        session: LiveSession,
+        *,
+        caller_principal_id: str | None = None,
+        expected_project_id: str | None = None,
+        expected_tenant_id: str | None = None,
+        action: StudioAction | None = None,
+        require_session_owner: bool = True,
+    ) -> str:
+        if expected_project_id is not None and session.project_id != expected_project_id:
+            raise AuthorizationError(
+                "session_project_mismatch",
+                f"session {session.session_id} belongs to project {session.project_id!r}, "
+                f"not {expected_project_id!r}",
+            )
+        if expected_tenant_id is not None and session.tenant_id != expected_tenant_id:
+            raise AuthorizationError(
+                "tenant_mismatch",
+                f"session {session.session_id} belongs to tenant {session.tenant_id!r}, "
+                f"not {expected_tenant_id!r}",
+            )
+        acting_principal = (
+            caller_principal_id if caller_principal_id is not None else session.principal_id
+        )
+        if action is not None:
+            bref = (
+                (self._deps.channel_binding_ref or "")
+                if acting_principal == session.principal_id
+                else ""
+            )
+            self._authorize_studio_action(
+                principal_id=acting_principal,
+                project_id=session.project_id,
+                action=action,
+                binding_ref=bref,
+            )
+        if (
+            require_session_owner
+            and caller_principal_id is not None
+            and caller_principal_id != session.principal_id
+        ):
+            raise AuthorizationError(
+                "wrong_principal",
+                "caller principal does not own this session",
+            )
+        return acting_principal
+
+    def _validate_source_path(self, source_path: str) -> Path:
+        src = Path(source_path)
+        authorized_root = self._deps.authorized_asset_root
+        if authorized_root is not None:
+            try:
+                st = os.lstat(src)
+            except FileNotFoundError:
+                st = None
+            except OSError as exc:
+                raise AuthorizationError("untrusted_source_path", str(exc)) from exc
+            if st is not None and stat.S_ISLNK(st.st_mode):
+                raise AuthorizationError(
+                    "untrusted_source_path", "symlinked source_path is forbidden"
+                )
+            resolved_root = authorized_root.resolve(strict=False)
+            if st is None:
+                candidate = src.resolve(strict=False)
+                if not candidate.is_relative_to(resolved_root):
+                    raise AuthorizationError(
+                        "untrusted_source_path",
+                        "source_path is outside authorized_asset_root",
+                    )
+                return src
+            resolved_src = src.resolve(strict=True)
+            if not resolved_src.is_relative_to(resolved_root):
+                raise AuthorizationError(
+                    "untrusted_source_path",
+                    "source_path is outside authorized_asset_root",
+                )
+            return resolved_src
+        return src
+
+    def _authoritative_revision(self, project_id: str) -> tuple[int, str]:
+        revision = int(self._deps.revision_provider())
+        if self._deps.project_revision_resolver is not None:
+            rev_id = str(self._deps.project_revision_resolver(project_id))
+            return revision, rev_id
+        return revision, str(revision)
+
+    def _validate_revision_binding(
+        self,
+        session: LiveSession,
+        *,
+        base_revision_id: str | None = None,
+    ) -> int:
+        revision, authoritative_rev = self._authoritative_revision(session.project_id)
+        if base_revision_id is not None and (
+            base_revision_id != authoritative_rev or base_revision_id != session.active_revision_id
+        ):
+            raise StaleRevisionError(
+                "revision_mismatch",
+                f"base_revision_id {base_revision_id!r} != authoritative "
+                f"{authoritative_rev!r} (session {session.active_revision_id!r})",
+            )
+        if session.active_revision_id != authoritative_rev:
+            raise StaleRevisionError(
+                "stale_revision",
+                f"session active revision {session.active_revision_id!r} != "
+                f"authoritative {authoritative_rev!r}",
+            )
+        return revision
 
     # -- session ------------------------------------------------------------
 
@@ -463,12 +588,37 @@ class IBPCService:
         consent_scope: str = "",
         current_revision: int = 0,
         active_revision_id: str | None = None,
+        base_revision_id: str | None = None,
     ) -> str:
         self._authorize_studio_action(
             principal_id=principal_id,
             project_id=project_id,
             action=StudioAction.SUBMIT_INTENT,
         )
+        assert_tenant = getattr(self._deps.authorizer, "assert_same_tenant", None)
+        if callable(assert_tenant):
+            assert_tenant(principal_id=principal_id, project_id=project_id, tenant_id=tenant_id)
+        if self._deps.project_revision_resolver is not None:
+            auth_rev = str(self._deps.project_revision_resolver(project_id))
+            if base_revision_id is not None and base_revision_id != auth_rev:
+                raise StaleRevisionError(
+                    "revision_mismatch",
+                    f"base_revision_id {base_revision_id!r} != authoritative {auth_rev!r}",
+                )
+            if active_revision_id is not None and active_revision_id != auth_rev:
+                raise StaleRevisionError(
+                    "revision_mismatch",
+                    f"active_revision_id {active_revision_id!r} != authoritative {auth_rev!r}",
+                )
+        elif base_revision_id is not None:
+            expected_rev = (
+                active_revision_id if active_revision_id is not None else str(current_revision)
+            )
+            if base_revision_id != expected_rev:
+                raise StaleRevisionError(
+                    "revision_mismatch",
+                    f"base_revision_id {base_revision_id!r} != {expected_rev!r}",
+                )
         session = self._sessions.open_session(
             tenant_id=tenant_id,
             project_id=project_id,
@@ -482,54 +632,95 @@ class IBPCService:
         )
         return session.session_id
 
-    def get_session(self, session_id: str, *, principal_id: str | None = None) -> LiveSession:
+    def get_session(
+        self,
+        session_id: str,
+        *,
+        principal_id: str | None = None,
+        expected_project_id: str | None = None,
+        expected_tenant_id: str | None = None,
+    ) -> LiveSession:
         session = self._sessions.get_session(session_id)
-        if principal_id is not None:
-            self._authorize_studio_action(
-                principal_id=principal_id,
-                project_id=session.project_id,
-                action=StudioAction.READ_SESSION,
-            )
+        self._validate_session_binding(
+            session,
+            caller_principal_id=principal_id,
+            expected_project_id=expected_project_id,
+            expected_tenant_id=expected_tenant_id,
+            action=StudioAction.READ_SESSION if principal_id is not None else None,
+            require_session_owner=False,
+        )
         return session
 
-    def close_session(self, session_id: str, *, principal_id: str | None = None) -> LiveSession:
+    def close_session(
+        self,
+        session_id: str,
+        *,
+        principal_id: str | None = None,
+        expected_project_id: str | None = None,
+        expected_tenant_id: str | None = None,
+    ) -> LiveSession:
         session = self._sessions.get_session(session_id)
-        if principal_id is not None:
-            self._authorize_studio_action(
-                principal_id=principal_id,
-                project_id=session.project_id,
-                action=StudioAction.CLOSE_SESSION,
-            )
+        self._validate_session_binding(
+            session,
+            caller_principal_id=principal_id,
+            expected_project_id=expected_project_id,
+            expected_tenant_id=expected_tenant_id,
+            action=StudioAction.CLOSE_SESSION if principal_id is not None else None,
+        )
         return self._sessions.close_session(session_id)
 
-    def pause_session(self, session_id: str, *, principal_id: str | None = None) -> LiveSession:
+    def pause_session(
+        self,
+        session_id: str,
+        *,
+        principal_id: str | None = None,
+        expected_project_id: str | None = None,
+        expected_tenant_id: str | None = None,
+    ) -> LiveSession:
         session = self._sessions.get_session(session_id)
-        if principal_id is not None:
-            self._authorize_studio_action(
-                principal_id=principal_id,
-                project_id=session.project_id,
-                action=StudioAction.CLOSE_SESSION,
-            )
+        self._validate_session_binding(
+            session,
+            caller_principal_id=principal_id,
+            expected_project_id=expected_project_id,
+            expected_tenant_id=expected_tenant_id,
+            action=StudioAction.CLOSE_SESSION if principal_id is not None else None,
+        )
         return self._sessions.pause_session(session_id)
 
-    def abort_session(self, session_id: str, *, principal_id: str | None = None) -> LiveSession:
+    def abort_session(
+        self,
+        session_id: str,
+        *,
+        principal_id: str | None = None,
+        expected_project_id: str | None = None,
+        expected_tenant_id: str | None = None,
+    ) -> LiveSession:
         session = self._sessions.get_session(session_id)
-        if principal_id is not None:
-            self._authorize_studio_action(
-                principal_id=principal_id,
-                project_id=session.project_id,
-                action=StudioAction.CLOSE_SESSION,
-            )
+        self._validate_session_binding(
+            session,
+            caller_principal_id=principal_id,
+            expected_project_id=expected_project_id,
+            expected_tenant_id=expected_tenant_id,
+            action=StudioAction.CLOSE_SESSION if principal_id is not None else None,
+        )
         return self._sessions.abort_session(session_id)
 
-    def resume_session(self, session_id: str, *, principal_id: str | None = None) -> LiveSession:
+    def resume_session(
+        self,
+        session_id: str,
+        *,
+        principal_id: str | None = None,
+        expected_project_id: str | None = None,
+        expected_tenant_id: str | None = None,
+    ) -> LiveSession:
         session = self._sessions.get_session(session_id)
-        if principal_id is not None:
-            self._authorize_studio_action(
-                principal_id=principal_id,
-                project_id=session.project_id,
-                action=StudioAction.CLOSE_SESSION,
-            )
+        self._validate_session_binding(
+            session,
+            caller_principal_id=principal_id,
+            expected_project_id=expected_project_id,
+            expected_tenant_id=expected_tenant_id,
+            action=StudioAction.CLOSE_SESSION if principal_id is not None else None,
+        )
         return self._sessions.resume_session(session_id)
 
     def grant_privacy_consent(
@@ -540,6 +731,7 @@ class IBPCService:
         mode: PrivacyMode,
         processing_scope: ProcessingScope | str,
         data_category: DataCategory | str,
+        tenant_id: str = "",
         provider_id: str = "",
         expires_at_utc: str = "",
         metadata: dict[str, Any] | None = None,
@@ -551,6 +743,7 @@ class IBPCService:
         )
         return self._privacy.grant_durable_consent(
             project_id=project_id,
+            tenant_id=tenant_id,
             principal_id=principal_id,
             mode=mode,
             processing_scope=processing_scope,
@@ -566,6 +759,7 @@ class IBPCService:
         *,
         project_id: str,
         actor_id: str,
+        expected_tenant_id: str | None = None,
         reason: str = "user_revoked",
     ) -> DurableConsentGrant:
         self._authorize_studio_action(
@@ -573,9 +767,22 @@ class IBPCService:
             project_id=project_id,
             action=StudioAction.MANAGE_CONSENT,
         )
+        if self._privacy_store is not None:
+            grant = self._privacy_store.get_consent(consent_id)
+            if (
+                grant is None
+                or grant.project_id != project_id
+                or (expected_tenant_id is not None and grant.tenant_id != expected_tenant_id)
+            ):
+                raise PrivacyViolation(
+                    "consent_not_found",
+                    f"consent {consent_id!r} not found for project {project_id!r}",
+                )
         return self._privacy.revoke_durable_consent(
             consent_id,
             actor_id=actor_id,
+            project_id=project_id,
+            expected_tenant_id=expected_tenant_id,
             reason=reason,
         )
 
@@ -670,14 +877,21 @@ class IBPCService:
         idempotency_key: str | None = None,
         target_revision_id: str | None = None,
         expected_epoch: int | None = None,
+        caller_principal_id: str | None = None,
+        expected_project_id: str | None = None,
+        expected_tenant_id: str | None = None,
+        base_revision_id: str | None = None,
     ) -> PipelineResult | Clarification | Refusal:
         session = self._sessions.get_session(session_id)
-        self._authorize_studio_action(
-            principal_id=session.principal_id,
-            project_id=session.project_id,
+        self._validate_session_binding(
+            session,
+            caller_principal_id=caller_principal_id,
+            expected_project_id=expected_project_id,
+            expected_tenant_id=expected_tenant_id,
             action=StudioAction.SUBMIT_INTENT,
         )
-        revision = int(self._deps.revision_provider())
+        src = self._validate_source_path(source_path)
+        revision = self._validate_revision_binding(session, base_revision_id=base_revision_id)
         payload_digest = digest_of(
             {
                 "text": text,
@@ -718,7 +932,6 @@ class IBPCService:
             # synthetic binding, never broad service permissions (Phase 1).
             self._sessions.mark_failed(session_id, turn_id)
             return Refusal("unauthorized_principal", f"{exc.reason}: {exc.detail}")
-        src = Path(source_path)
         if not src.is_file():
             self._sessions.mark_failed(session_id, turn_id)
             return Refusal("missing_source", f"source media not found: {source_path!r}")
@@ -890,6 +1103,10 @@ class IBPCService:
         idempotency_key: str | None = None,
         target_revision_id: str | None = None,
         expected_epoch: int | None = None,
+        caller_principal_id: str | None = None,
+        expected_project_id: str | None = None,
+        expected_tenant_id: str | None = None,
+        base_revision_id: str | None = None,
     ) -> PipelineResult | Clarification | Refusal:
         """Voice turn: audio → local engine → FINAL transcript → same typed
         pipeline. The transcript is untrusted input; approval is still required.
@@ -902,15 +1119,25 @@ class IBPCService:
         if engine is None or not engine.is_available():
             return Refusal("caption_profile_unavailable", "no local caption engine configured")
         session = self._sessions.get_session(session_id)
-        self._authorize_studio_action(
-            principal_id=session.principal_id,
-            project_id=session.project_id,
+        acting_principal = self._validate_session_binding(
+            session,
+            caller_principal_id=caller_principal_id,
+            expected_project_id=expected_project_id,
+            expected_tenant_id=expected_tenant_id,
             action=StudioAction.SUBMIT_INTENT,
         )
+        src = self._validate_source_path(source_path)
         self._sessions.assert_local_processing(session_id, "audio")
+        self._privacy.enforce_processing_consent(
+            project_id=session.project_id,
+            principal_id=acting_principal,
+            mode=session.privacy_mode,
+            processing_scope=ProcessingScope.LOCAL_PROCESSING,
+            data_category=DataCategory.AUDIO,
+        )
         if audio_dir is None:
             audio_dir = self._deps.workspace_root / "audio" / session.session_id
-        revision = int(self._deps.revision_provider())
+        revision = self._validate_revision_binding(session, base_revision_id=base_revision_id)
         payload_digest = digest_of(
             {
                 "audio_sha256": hashlib.sha256(audio).hexdigest(),
@@ -959,7 +1186,7 @@ class IBPCService:
             turn.turn_id,
             transcript,
             asset_id=asset_id,
-            source_path=source_path,
+            source_path=str(src),
         )
 
     def _continue_with_text(
@@ -978,7 +1205,7 @@ class IBPCService:
         except CanonicalAuthorityError as exc:
             self._sessions.mark_failed(session_id, turn_id)
             return Refusal("unauthorized_principal", f"{exc.reason}: {exc.detail}")
-        src = Path(source_path)
+        src = self._validate_source_path(source_path)
         if not src.is_file():
             self._sessions.mark_failed(session_id, turn_id)
             return Refusal("missing_source", f"source media not found: {source_path!r}")
@@ -1122,7 +1349,14 @@ class IBPCService:
         return restored
 
     def _resolve_identity(
-        self, session_id: str, turn_id: str, approval_id: str, *, principal_id: str
+        self,
+        session_id: str,
+        turn_id: str,
+        approval_id: str,
+        *,
+        principal_id: str,
+        expected_project_id: str | None = None,
+        expected_tenant_id: str | None = None,
     ) -> tuple[Any, Any, _TurnContext, ApprovalIdentity]:
         """Fail-closed full identity resolution — the Phase-C core.
 
@@ -1138,6 +1372,18 @@ class IBPCService:
             raise ApprovalError("unknown_context", f"no execution context for {approval_id!r}")
         # 2) session must exist (typed SessionError)
         session = self._sessions.get_session(session_id)
+        if expected_project_id is not None and session.project_id != expected_project_id:
+            raise AuthorizationError(
+                "session_project_mismatch",
+                f"session {session.session_id} belongs to project {session.project_id!r}, "
+                f"not {expected_project_id!r}",
+            )
+        if expected_tenant_id is not None and session.tenant_id != expected_tenant_id:
+            raise AuthorizationError(
+                "tenant_mismatch",
+                f"session {session.session_id} belongs to tenant {session.tenant_id!r}, "
+                f"not {expected_tenant_id!r}",
+            )
         # 3) turn must belong to THIS session and not be stale/terminal —
         #    session-level guards surface as a typed approval refusal
         try:
@@ -1260,7 +1506,14 @@ class IBPCService:
         )
 
     def approve(
-        self, session_id: str, turn_id: str, approval_id: str, *, principal_id: str
+        self,
+        session_id: str,
+        turn_id: str,
+        approval_id: str,
+        *,
+        principal_id: str,
+        expected_project_id: str | None = None,
+        expected_tenant_id: str | None = None,
     ) -> ApprovalBinding:
         """Approve only in the exact context the binding was issued in.
 
@@ -1269,7 +1522,12 @@ class IBPCService:
         changed asset or tampered digests. Never changes another turn's state.
         """
         _session, _turn, ctx, identity = self._resolve_identity(
-            session_id, turn_id, approval_id, principal_id=principal_id
+            session_id,
+            turn_id,
+            approval_id,
+            principal_id=principal_id,
+            expected_project_id=expected_project_id,
+            expected_tenant_id=expected_tenant_id,
         )
         self._authorize_studio_action(
             principal_id=principal_id,
@@ -1291,6 +1549,8 @@ class IBPCService:
             approval_id,
             identity=identity,
             turn_is_active=lambda: self._sessions.turn_is_active(session_id, turn_id),
+            key_id=provider.active_key_id,
+            key_provider=provider,
         )
         ctx.scope_signature = self._scope_signature(ctx, identity)
         try:
@@ -1298,7 +1558,7 @@ class IBPCService:
             issue_dt = datetime.fromisoformat(issued_at.replace("Z", "+00:00"))
             if issue_dt.tzinfo is None:
                 raise ValueError("approval issue time must be timezone-aware")
-            expires_at = (issue_dt + timedelta(minutes=10)).strftime("%Y-%m-%dT%H:%M:%SZ")
+            expires_at = binding.expires_at_utc or self._approval_expiry(issued_at)
             ctx.approval_envelope = issue_envelope(
                 provider,
                 approval_id=approval_id,
@@ -1481,7 +1741,14 @@ class IBPCService:
         )
 
     async def execute(
-        self, session_id: str, turn_id: str, approval_id: str, *, principal_id: str
+        self,
+        session_id: str,
+        turn_id: str,
+        approval_id: str,
+        *,
+        principal_id: str,
+        expected_project_id: str | None = None,
+        expected_tenant_id: str | None = None,
     ) -> ExecutionOutcome:
         """Re-validate every binding, consume the approval once, then enqueue
         exactly one canonical job through the injected queue port."""
@@ -1502,6 +1769,8 @@ class IBPCService:
                     turn_id,
                     approval_id,
                     principal_id=principal_id,
+                    expected_project_id=expected_project_id,
+                    expected_tenant_id=expected_tenant_id,
                 )
             except (ApprovalError, SessionError) as exc:
                 return ExecutionOutcome(status="refused", detail=f"{exc.reason}: {exc.detail}")
@@ -1528,7 +1797,7 @@ class IBPCService:
                     status="refused", detail="approval_mac_invalid: envelope verification failed"
                 )
             try:
-                self._approvals.consume(approval_id, identity=identity)
+                self._approvals.consume(approval_id, identity=identity, key_provider=provider)
             except ApprovalError as exc:
                 return ExecutionOutcome(status="refused", detail=f"{exc.reason}: {exc.detail}")
             if turn.turn_state not in (TurnState.APPROVED, TurnState.EXECUTING):

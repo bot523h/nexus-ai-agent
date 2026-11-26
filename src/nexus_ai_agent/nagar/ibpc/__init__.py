@@ -47,9 +47,13 @@ from nexus_ai_agent.nagar.ibpc import (  # noqa: F401 — reachability (law R20)
 from nexus_ai_agent.nagar.ibpc.approval import (
     ApprovalError,
     ApprovalLedger,
+    ApprovalLedgerProtocol,
     DurableApprovalLedger,
+    canonical_approval_payload,
+    compute_approval_hash,
 )
 from nexus_ai_agent.nagar.ibpc.authority import (
+    AuthorizationError,
     CanonicalAuthorityError,
     CanonicalAuthorityPort,
     DirectoryAuthority,
@@ -126,7 +130,9 @@ __all__ = [
     "ApprovalBinding",
     "ApprovalError",
     "ApprovalLedger",
+    "ApprovalLedgerProtocol",
     "ApprovalState",
+    "AuthorizationError",
     "CanonicalAuthorityError",
     "CanonicalAuthorityPort",
     "CheckVerdict",
@@ -180,7 +186,9 @@ __all__ = [
     "build_preview",
     "build_ibpc_service",
     "canonical",
+    "canonical_approval_payload",
     "compile_ast",
+    "compute_approval_hash",
     "create_default_key_provider",
     "compiler",
     "delta",

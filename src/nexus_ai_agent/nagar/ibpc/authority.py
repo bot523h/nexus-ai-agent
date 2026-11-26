@@ -26,6 +26,7 @@ from pydantic import BaseModel, ConfigDict
 from nexus_ai_agent.application.principal import PrincipalId
 
 __all__ = [
+    "AuthorizationError",
     "CanonicalAuthorityError",
     "CanonicalAuthorityPort",
     "DirectoryAuthority",
@@ -36,6 +37,15 @@ __all__ = [
     "StudioAuthorizerPort",
     "StudioRole",
 ]
+
+
+class AuthorizationError(PermissionError):
+    """Typed, fail-closed authorization or resource-boundary refusal."""
+
+    def __init__(self, reason: str, detail: str = "") -> None:
+        super().__init__(f"{reason}: {detail}".strip(": "))
+        self.reason = reason
+        self.detail = detail
 
 
 class StudioRole(str, Enum):
@@ -72,15 +82,15 @@ class StudioAuthorizationDecision(BaseModel):
     decided_at_utc: str = ""
 
 
-class StudioAuthorizationError(PermissionError):
+class StudioAuthorizationError(AuthorizationError):
     """Fail-closed authorization refusal carrying the full structured decision."""
 
     def __init__(self, decision: StudioAuthorizationDecision) -> None:
         super().__init__(
-            f"{decision.reason}: principal={decision.principal_id} action={decision.action}"
+            decision.reason,
+            f"principal={decision.principal_id} action={decision.action}",
         )
         self.decision = decision
-        self.reason = decision.reason
 
 
 @runtime_checkable

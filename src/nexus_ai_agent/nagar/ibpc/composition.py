@@ -51,28 +51,29 @@ def build_ibpc_service(
     except (AttributeError, KeyProviderError) as exc:
         raise KeyProviderError("approval key provider is not configured correctly") from exc
     updated = replace(deps, approval_key_provider=provider, durable=True)
-    if updated.durable:
-        if updated.approval_ledger is None:
-            updated = replace(
-                updated,
-                approval_ledger=DurableApprovalLedger(
-                    durable_approval_ledger_path(updated.workspace_root), now=updated.now
-                ),
-            )
-        if updated.session_store is None:
-            updated = replace(
-                updated,
-                session_store=DurableLiveSessionStore(
-                    durable_session_store_path(updated.workspace_root)
-                ),
-            )
-        if updated.privacy_store is None:
-            updated = replace(
-                updated,
-                privacy_store=DurablePrivacyConsentStore(
-                    durable_privacy_consent_path(updated.workspace_root)
-                ),
-            )
+    if updated.authorized_asset_root is None:
+        updated = replace(updated, authorized_asset_root=updated.workspace_root)
+    if updated.approval_ledger is None:
+        updated = replace(
+            updated,
+            approval_ledger=DurableApprovalLedger(
+                durable_approval_ledger_path(updated.workspace_root), now=updated.now
+            ),
+        )
+    if updated.session_store is None:
+        updated = replace(
+            updated,
+            session_store=DurableLiveSessionStore(
+                durable_session_store_path(updated.workspace_root)
+            ),
+        )
+    if updated.privacy_store is None:
+        updated = replace(
+            updated,
+            privacy_store=DurablePrivacyConsentStore(
+                durable_privacy_consent_path(updated.workspace_root)
+            ),
+        )
     return IBPCService(updated)
 
 

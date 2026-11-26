@@ -112,6 +112,7 @@ class DurablePrivacyConsentStore:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
         self._depth = 0
+        self._closed = False
         self._conn = sqlite3.connect(
             str(self._path), isolation_level=None, check_same_thread=False, timeout=30.0
         )
@@ -125,6 +126,7 @@ class DurablePrivacyConsentStore:
                 CREATE TABLE IF NOT EXISTS nexus_privacy_consents (
                     consent_id TEXT PRIMARY KEY,
                     project_id TEXT NOT NULL,
+                    tenant_id TEXT NOT NULL DEFAULT '',
                     principal_id TEXT NOT NULL,
                     mode TEXT NOT NULL,
                     processing_scope TEXT NOT NULL,
@@ -138,6 +140,14 @@ class DurablePrivacyConsentStore:
                 )
                 """
             )
+            consent_cols = {
+                row[1] for row in self._conn.execute("PRAGMA table_info(nexus_privacy_consents)")
+            }
+            if "tenant_id" not in consent_cols:
+                self._conn.execute(
+                    "ALTER TABLE nexus_privacy_consents "
+                    "ADD COLUMN tenant_id TEXT NOT NULL DEFAULT ''"
+                )
             self._conn.execute(
                 """
                 CREATE INDEX IF NOT EXISTS idx_privacy_consent_lookup
@@ -192,7 +202,15 @@ class DurablePrivacyConsentStore:
 
     def close(self) -> None:
         with self._lock:
-            self._conn.close()
+            if not self._closed:
+                self._conn.close()
+                self._closed = True
+
+    def __enter__(self) -> DurablePrivacyConsentStore:
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        self.close()
 
     @contextmanager
     def _transaction(self) -> Iterator[None]:
@@ -216,16 +234,17 @@ class DurablePrivacyConsentStore:
         return DurableConsentGrant(
             consent_id=row[0],
             project_id=row[1],
-            principal_id=row[2],
-            mode=PrivacyMode(row[3]),
-            processing_scope=row[4],
-            data_category=row[5],
-            provider_id=row[6],
-            granted_at_utc=row[7],
-            expires_at_utc=row[8],
-            revoked_at_utc=row[9],
-            revoked_by=row[10],
-            revoke_reason=row[11],
+            tenant_id=row[2],
+            principal_id=row[3],
+            mode=PrivacyMode(row[4]),
+            processing_scope=row[5],
+            data_category=row[6],
+            provider_id=row[7],
+            granted_at_utc=row[8],
+            expires_at_utc=row[9],
+            revoked_at_utc=row[10],
+            revoked_by=row[11],
+            revoke_reason=row[12],
         )
 
     @staticmethod
@@ -285,6 +304,7 @@ class DurablePrivacyConsentStore:
         processing_scope: str,
         data_category: str,
         granted_at_utc: str,
+        tenant_id: str = "",
         expires_at_utc: str = "",
         provider_id: str = "",
         consent_id: str | None = None,
@@ -305,6 +325,7 @@ class DurablePrivacyConsentStore:
         grant = DurableConsentGrant(
             consent_id=cid,
             project_id=project_id,
+            tenant_id=tenant_id,
             principal_id=principal_id,
             mode=mode,
             processing_scope=processing_scope,
@@ -317,15 +338,16 @@ class DurablePrivacyConsentStore:
             self._conn.execute(
                 """
                 INSERT INTO nexus_privacy_consents (
-                    consent_id, project_id, principal_id, mode,
+                    consent_id, project_id, tenant_id, principal_id, mode,
                     processing_scope, data_category, provider_id,
                     granted_at_utc, expires_at_utc, revoked_at_utc,
                     revoked_by, revoke_reason
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '', '', '')
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', '', '')
                 """,
                 (
                     grant.consent_id,
                     grant.project_id,
+                    grant.tenant_id,
                     grant.principal_id,
                     grant.mode.value,
                     grant.processing_scope,
@@ -355,7 +377,7 @@ class DurablePrivacyConsentStore:
         with self._lock:
             row = self._conn.execute(
                 """
-                SELECT consent_id, project_id, principal_id, mode,
+                SELECT consent_id, project_id, tenant_id, principal_id, mode,
                        processing_scope, data_category, provider_id,
                        granted_at_utc, expires_at_utc, revoked_at_utc,
                        revoked_by, revoke_reason
@@ -373,13 +395,27 @@ class DurablePrivacyConsentStore:
         revoked_by: str,
         revoked_at_utc: str,
         reason: str = "user_revoked",
+        project_id: str | None = None,
+        expected_tenant_id: str | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> DurableConsentGrant:
         _parse_utc(revoked_at_utc)
         with self._transaction():
             existing = self.get_consent(consent_id)
             if existing is None:
+                if project_id is not None:
+                    raise PrivacyViolation("consent_not_found", f"consent {consent_id!r} not found")
                 raise PrivacyViolation("unknown_consent", f"consent {consent_id!r} not found")
+            if project_id is not None and existing.project_id != project_id:
+                raise PrivacyViolation(
+                    "consent_not_found",
+                    f"consent {consent_id!r} does not belong to project {project_id!r}",
+                )
+            if expected_tenant_id is not None and existing.tenant_id != expected_tenant_id:
+                raise PrivacyViolation(
+                    "consent_not_found",
+                    f"consent {consent_id!r} does not belong to tenant {expected_tenant_id!r}",
+                )
             if existing.revoked_at_utc:
                 return existing
             self._conn.execute(
@@ -424,7 +460,7 @@ class DurablePrivacyConsentStore:
         with self._lock:
             rows = self._conn.execute(
                 """
-                SELECT consent_id, project_id, principal_id, mode,
+                SELECT consent_id, project_id, tenant_id, principal_id, mode,
                        processing_scope, data_category, provider_id,
                        granted_at_utc, expires_at_utc, revoked_at_utc,
                        revoked_by, revoke_reason
@@ -439,7 +475,10 @@ class DurablePrivacyConsentStore:
                 (project_id, principal_id, mode.value, processing_scope, data_category),
             ).fetchall()
         grants = [self._row_to_grant(r) for r in rows]
-        matching = [g for g in grants if not provider_id or g.provider_id in ("", provider_id)]
+        if processing_scope == ProcessingScope.EXTERNAL_PROVIDER_DISPATCH.value:
+            matching = [g for g in grants if provider_id and g.provider_id == provider_id]
+        else:
+            matching = [g for g in grants if not provider_id or g.provider_id == provider_id]
         if not matching:
             return "missing", None
         saw_revoked: DurableConsentGrant | None = None
@@ -505,7 +544,7 @@ class DurablePrivacyConsentStore:
         with self._lock:
             rows = self._conn.execute(
                 f"""
-                SELECT consent_id, project_id, principal_id, mode,
+                SELECT consent_id, project_id, tenant_id, principal_id, mode,
                        processing_scope, data_category, provider_id,
                        granted_at_utc, expires_at_utc, revoked_at_utc,
                        revoked_by, revoke_reason
@@ -698,6 +737,7 @@ class PrivacyPolicy:
         mode: PrivacyMode,
         processing_scope: ProcessingScope | str,
         data_category: DataCategory | str,
+        tenant_id: str = "",
         provider_id: str = "",
         expires_at_utc: str = "",
         metadata: dict[str, Any] | None = None,
@@ -718,6 +758,7 @@ class PrivacyPolicy:
             raise PrivacyViolation("invalid_category", f"unsupported data category {dc!r}")
         return self._store.grant_consent(
             project_id=project_id,
+            tenant_id=tenant_id,
             principal_id=principal_id,
             mode=mode,
             processing_scope=ps,
@@ -733,6 +774,8 @@ class PrivacyPolicy:
         consent_id: str,
         *,
         actor_id: str,
+        project_id: str | None = None,
+        expected_tenant_id: str | None = None,
         reason: str = "user_revoked",
         metadata: dict[str, Any] | None = None,
     ) -> DurableConsentGrant:
@@ -745,6 +788,8 @@ class PrivacyPolicy:
             revoked_by=actor_id,
             revoked_at_utc=self._now(),
             reason=reason,
+            project_id=project_id,
+            expected_tenant_id=expected_tenant_id,
             metadata=metadata,
         )
         # Drop any matching legacy in-memory mirror as well.
