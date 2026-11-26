@@ -26,7 +26,18 @@ PACK = CREATIVE / "packs" / "perception"
 ADAPTER = CREATIVE / "perception"
 MANIFEST = PACK / "pack.manifest.json"
 
-PACK_ALLOWED = {"__future__", "hashlib", "json", "re", "typing", "pydantic", "nexus_ai_agent"}
+PACK_ALLOWED = {
+    "__future__",
+    # the plain-data admission port is typed with Callable/Mapping from
+    # collections.abc rather than the deprecated typing aliases.
+    "collections",
+    "hashlib",
+    "json",
+    "re",
+    "typing",
+    "pydantic",
+    "nexus_ai_agent",
+}
 ADAPTER_ALLOWED = {
     "__future__",
     "collections",
@@ -148,6 +159,22 @@ def test_manifest_is_data_only_and_offline() -> None:
                 walk(item)
 
     walk(data)
+
+
+def test_the_loudness_model_is_dependency_free() -> None:
+    """The budget the pack is gated on must not drag the FFmpeg adapter.
+
+    ``verification/loudness.py`` is imported by the gate *and* by the adapter; it
+    must stay stdlib + ``uncertainty_gum`` so the pure pack lane can reach the
+    same number the engine reports.
+    """
+    path = CREATIVE / "verification" / "loudness.py"
+    imports = _imports(path)
+    # ``uncertainty_gum`` is the sibling pure module (stdlib + dataclasses only).
+    assert imports <= {"__future__", "math", "uncertainty_gum"}, sorted(imports)
+    for module in _nexus_modules(path):
+        assert module == "nexus_ai_agent.creative.verification.uncertainty_gum", module
+    assert not imports & NETWORK_AND_HEAVY
 
 
 def test_pack_is_composed_and_has_a_lifecycle_record() -> None:

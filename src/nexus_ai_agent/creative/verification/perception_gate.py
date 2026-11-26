@@ -9,24 +9,32 @@ such a command is worth dispatching:
 * the loudness measurement must be precise enough to justify the gain it
   recommends -- otherwise the honest answer is to abstain, not to guess.
 
-This module composes those two independent refusals into one typed admission
-record so a caller cannot accidentally apply the license check without the
-uncertainty check, or vice versa.
+**Interface.** The pack may not import this module (the pack substrate depends on
+``creative.packs``/``studio``/``temporal`` only, see ``MODULE_MAP.md`` R31), so the
+public port is *plain data*: a mapping in, a mapping out.
+
+``{"kind": "loudness"|"license", ...}`` -> ``{"admitted", "outcome", "refusal", ...}``
+
+:func:`gate_perception` is the single entry point
+(:class:`~nexus_ai_agent.creative.packs.perception.operations.PerceptionGate`),
+and :func:`admit_perception` is the typed wrapper for callers already holding
+domain objects. Both run the same arithmetic, in the same order.
 """
 
 from __future__ import annotations
 
 import math
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from typing import Any
 
 from nexus_ai_agent.creative.composition.license_lattice import (
     LicenseCombination,
     LicenseRegime,
     combine_licenses,
 )
-from nexus_ai_agent.creative.perception.analyzer import AudioPerception
 
-from .adapters import loudness_uncertainty
+from .loudness import loudness_budget
 from .uncertainty_gum import (
     GuardBandDecision,
     GUMInputError,
@@ -39,6 +47,10 @@ __all__ = [
     "PerceptionAdmission",
     "PerceptionAdmissionRequest",
     "admit_perception",
+    "gate_licenses",
+    "gate_loudness",
+    "gate_perception",
+    "parse_regimes",
 ]
 
 
@@ -51,13 +63,168 @@ def _finite(value: object, label: str) -> float:
     return number
 
 
+def _mapping(context: object, label: str) -> Mapping[str, Any]:
+    if not isinstance(context, Mapping):
+        raise GUMInputError(f"{label} must be a mapping, got {type(context).__name__}")
+    return context
+
+
+def _required(context: Mapping[str, Any], keys: Sequence[str]) -> None:
+    missing = [key for key in keys if key not in context]
+    if missing:
+        raise GUMInputError(f"gate context is missing {sorted(missing)}")
+
+
+def parse_regimes(names: object) -> tuple[LicenseRegime, ...]:
+    """Map license regime *names* to lattice elements, refusing anything unknown."""
+    if isinstance(names, (str, bytes)) or not isinstance(names, Sequence):
+        raise GUMInputError(
+            f"licenses must be a tuple of license names, got {type(names).__name__}"
+        )
+    regimes: list[LicenseRegime] = []
+    for index, name in enumerate(names):
+        if not isinstance(name, str):
+            raise GUMInputError(f"licenses[{index}] must be a license name string")
+        try:
+            regimes.append(LicenseRegime(name))
+        except ValueError:
+            raise GUMInputError(
+                f"unknown license regime {name!r}; expected one of "
+                f"{[member.value for member in LicenseRegime]}"
+            ) from None
+    return tuple(regimes)
+
+
+def _license_payload(combination: LicenseCombination) -> dict[str, Any]:
+    return {
+        "supremum": combination.supremum.value,
+        "regimes": [regime.value for regime in combination.regimes],
+        "commercial_intent": combination.commercial_intent,
+        "compatible": combination.compatible,
+    }
+
+
+def gate_licenses(context: object) -> dict[str, Any]:
+    """Join the licenses of every contributing source, and nothing else."""
+    payload = _mapping(context, "gate context")
+    _required(payload, ("licenses",))
+    regimes = parse_regimes(payload["licenses"])
+    if not regimes:
+        raise GUMInputError("gate context must carry at least one license regime")
+    combination = combine_licenses(
+        regimes, commercial_intent=bool(payload.get("commercial_intent", False))
+    )
+    if not combination.compatible:
+        return {
+            "admitted": False,
+            "outcome": "license_conflict",
+            "refusal": (
+                f"license supremum {combination.supremum.value} is not distributable "
+                f"for regimes {[regime.value for regime in regimes]}"
+            ),
+            "license": _license_payload(combination),
+        }
+    return {
+        "admitted": True,
+        "outcome": "license_ok",
+        "refusal": None,
+        "license": _license_payload(combination),
+    }
+
+
+_LOUDNESS_KEYS = ("integrated_lufs", "target_lufs", "tolerance_lu")
+
+
+def gate_loudness(context: object) -> dict[str, Any]:
+    """License join **and** GUM guard band over one supplied loudness measurement.
+
+    The measurement must already exist (the pack never runs an analyser); this
+    function only decides whether it is admissible.
+    """
+    payload = _mapping(context, "gate context")
+    _required(payload, _LOUDNESS_KEYS)
+    # A caller that declares no contributing source makes no license claim; the
+    # guard band still runs. Declaring a conflicting set refuses outright.
+    regimes = parse_regimes(payload.get("licenses", ()))
+    target = _finite(payload["target_lufs"], "target_lufs")
+    tolerance = _finite(payload["tolerance_lu"], "tolerance_lu")
+    if tolerance <= 0.0:
+        raise GUMInputError(f"tolerance_lu must be positive, got {tolerance!r}")
+    coverage = _finite(payload.get("coverage_factor", 2.0), "coverage_factor")
+    if coverage <= 0.0:
+        raise GUMInputError("coverage_factor must be positive")
+    bit_depth = payload.get("bit_depth", 16)
+    sample_count = payload.get("sample_count", 48_000)
+    if isinstance(bit_depth, bool) or not isinstance(bit_depth, int):
+        raise GUMInputError("bit_depth must be an int")
+    if isinstance(sample_count, bool) or not isinstance(sample_count, int):
+        raise GUMInputError("sample_count must be an int")
+
+    combination = (
+        combine_licenses(regimes, commercial_intent=bool(payload.get("commercial_intent", False)))
+        if regimes
+        else None
+    )
+    measured, mean_square, _step, budget = loudness_budget(
+        _finite(payload["integrated_lufs"], "integrated_lufs"),
+        bit_depth=bit_depth,
+        sample_count=sample_count,
+    )
+    limits = SpecificationLimits(lower=target - tolerance, upper=target + tolerance)
+    decision = evaluate_guard_band(measured, budget, limits, coverage)
+    record: dict[str, Any] = {
+        "outcome": decision.outcome.value,
+        "admitted": False,
+        "refusal": None,
+        "recommended_gain_db": None,
+        "integrated_lufs": measured,
+        "mean_square": mean_square,
+        "expanded_uncertainty": decision.expanded_uncertainty,
+        "interval": [decision.interval_low, decision.interval_high],
+        "limits": [limits.lower, limits.upper],
+        "coverage_factor": coverage,
+        "effective_dof": decision.effective_dof,
+        "license": None if combination is None else _license_payload(combination),
+    }
+    if combination is not None and not combination.compatible:
+        record["outcome"] = "license_conflict"
+        record["refusal"] = (
+            f"license supremum {combination.supremum.value} is not distributable "
+            f"for regimes {[regime.value for regime in regimes]}"
+        )
+        return record
+    if decision.outcome is VerificationOutcome.ABSTAIN_INSUFFICIENT_EVIDENCE:
+        record["refusal"] = (
+            f"loudness interval [{decision.interval_low:.3f}, "
+            f"{decision.interval_high:.3f}] LUFS straddles the tolerance band; "
+            "the measurement cannot justify a gain"
+        )
+        return record
+    record["admitted"] = True
+    record["recommended_gain_db"] = (
+        0.0 if decision.outcome is VerificationOutcome.PASS else target - measured
+    )
+    return record
+
+
+def gate_perception(context: object) -> dict[str, Any]:
+    """The pack's single admission port: dispatch on ``context["kind"]``."""
+    payload = _mapping(context, "gate context")
+    kind = payload.get("kind", "loudness")
+    if kind == "loudness":
+        return gate_loudness(payload)
+    if kind == "license":
+        return gate_licenses(payload)
+    raise GUMInputError(f"unknown gate kind {kind!r}; expected 'loudness' or 'license'")
+
+
 @dataclass(frozen=True, slots=True)
 class PerceptionAdmissionRequest:
-    """What an admission decision needs: licenses, a measurement, a tolerance."""
+    """Typed request for callers that already hold domain objects."""
 
     licenses: tuple[LicenseRegime, ...]
     commercial_intent: bool
-    loudness: AudioPerception
+    integrated_lkfs: float
     target_lkfs: float
     tolerance_lu: float
     coverage_factor: float = 2.0
@@ -72,17 +239,35 @@ class PerceptionAdmissionRequest:
             raise GUMInputError("licenses must contain LicenseRegime values")
         if not isinstance(self.commercial_intent, bool):
             raise GUMInputError("commercial_intent must be a bool")
-        if not isinstance(self.loudness, AudioPerception):
-            raise GUMInputError("loudness must be an AudioPerception")
-        target = _finite(self.target_lkfs, "target_lkfs")
+        if isinstance(self.integrated_lkfs, bool) or not isinstance(
+            self.integrated_lkfs, (int, float)
+        ):
+            raise GUMInputError("integrated_lkfs must be a real number")
+        object.__setattr__(self, "licenses", regimes)
+        object.__setattr__(
+            self,
+            "target_lkfs",
+            _finite(self.target_lkfs, "target_lkfs"),
+        )
         tolerance = _finite(self.tolerance_lu, "tolerance_lu")
         if tolerance <= 0.0:
             raise GUMInputError(f"tolerance_lu must be positive, got {tolerance!r}")
+        object.__setattr__(self, "tolerance_lu", tolerance)
         if _finite(self.coverage_factor, "coverage_factor") <= 0.0:
             raise GUMInputError("coverage_factor must be positive")
-        object.__setattr__(self, "licenses", regimes)
-        object.__setattr__(self, "target_lkfs", target)
-        object.__setattr__(self, "tolerance_lu", tolerance)
+
+    def as_gate_context(self) -> dict[str, Any]:
+        return {
+            "kind": "loudness",
+            "licenses": [regime.value for regime in self.licenses],
+            "commercial_intent": self.commercial_intent,
+            "integrated_lufs": self.integrated_lkfs,
+            "target_lufs": self.target_lkfs,
+            "tolerance_lu": self.tolerance_lu,
+            "coverage_factor": self.coverage_factor,
+            "bit_depth": self.bit_depth,
+            "sample_count": self.sample_count,
+        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -113,54 +298,25 @@ class PerceptionAdmission:
 
 
 def admit_perception(request: PerceptionAdmissionRequest) -> PerceptionAdmission:
-    """Join the licenses, then gate the gain recommendation on the guard band.
-
-    A licence conflict refuses outright. Otherwise the loudness interval decides:
-
-    * fully inside the tolerance band -> admitted, gain ``0.0`` (no correction);
-    * fully outside the band -> admitted, gain ``target - measured``;
-    * straddling the band -> refused, because the measurement cannot say which
-      side of the tolerance it is on and a guess would be indistinguishable from
-      a measurement.
-    """
+    """Typed wrapper around :func:`gate_loudness` (same arithmetic, same order)."""
     if not isinstance(request, PerceptionAdmissionRequest):
         raise GUMInputError("request must be a PerceptionAdmissionRequest")
+    record = gate_loudness(request.as_gate_context())
     combination = combine_licenses(request.licenses, commercial_intent=request.commercial_intent)
-    budget = loudness_uncertainty(
-        request.loudness, bit_depth=request.bit_depth, sample_count=request.sample_count
+    measured, _mean_square, _step, budget = loudness_budget(
+        request.integrated_lkfs,
+        bit_depth=request.bit_depth,
+        sample_count=request.sample_count,
     )
     limits = SpecificationLimits(
         lower=request.target_lkfs - request.tolerance_lu,
         upper=request.target_lkfs + request.tolerance_lu,
     )
-    decision = evaluate_guard_band(budget.lkfs, budget.combined, limits, request.coverage_factor)
-    if not combination.compatible:
-        return PerceptionAdmission(
-            admitted=False,
-            license=combination,
-            loudness=decision,
-            recommended_gain_db=None,
-            refusal=f"license supremum {combination.supremum.value} is not distributable",
-        )
-    if decision.outcome is VerificationOutcome.ABSTAIN_INSUFFICIENT_EVIDENCE:
-        return PerceptionAdmission(
-            admitted=False,
-            license=combination,
-            loudness=decision,
-            recommended_gain_db=None,
-            refusal=(
-                f"loudness interval [{decision.interval_low:.3f}, "
-                f"{decision.interval_high:.3f}] LUFS straddles the tolerance band; "
-                "the measurement cannot justify a gain"
-            ),
-        )
-    gain = (
-        0.0 if decision.outcome is VerificationOutcome.PASS else request.target_lkfs - budget.lkfs
-    )
+    decision = evaluate_guard_band(measured, budget, limits, request.coverage_factor)
     return PerceptionAdmission(
-        admitted=True,
+        admitted=bool(record["admitted"]),
         license=combination,
         loudness=decision,
-        recommended_gain_db=gain,
-        refusal=None,
+        recommended_gain_db=record["recommended_gain_db"],
+        refusal=record["refusal"],
     )

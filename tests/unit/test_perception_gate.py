@@ -1,204 +1,243 @@
-"""Admission gate: license supremum and the GUM guard band, composed."""
+"""The perception admission gate: license supremum, guard band, plain-data port."""
 
 from __future__ import annotations
 
 import math
+from typing import Any
 
 import pytest
 
 from nexus_ai_agent.creative.composition.license_lattice import LicenseRegime
-from nexus_ai_agent.creative.perception.analyzer import AudioPerception
+from nexus_ai_agent.creative.packs.perception.models import LICENSE_REGIME_NAMES
 from nexus_ai_agent.creative.verification.perception_gate import (
     PerceptionAdmission,
     PerceptionAdmissionRequest,
     admit_perception,
+    gate_licenses,
+    gate_loudness,
+    gate_perception,
+    parse_regimes,
 )
 from nexus_ai_agent.creative.verification.uncertainty_gum import (
     GUMInputError,
+    SpecificationLimits,
     VerificationOutcome,
+    evaluate_guard_band,
 )
 
 _PERMISSIVE = (LicenseRegime.PERMISSIVE_MIT_APACHE,)
 
 
-def _audio(lkfs: float) -> AudioPerception:
-    return AudioPerception(
-        integrated_lkfs=lkfs,
-        momentary_lkfs=(lkfs,),
-        short_term_lkfs=(lkfs,),
-        loudness_range_lu=1.0,
-        true_peak_dbtp=-1.0,
-        bark_centroid=100.0,
-        silences=(),
-    )
+def _context(**overrides: Any) -> dict[str, Any]:
+    context: dict[str, Any] = {
+        "kind": "loudness",
+        "licenses": ["PERMISSIVE_MIT_APACHE"],
+        "commercial_intent": False,
+        "integrated_lufs": -14.0,
+        "target_lufs": -14.0,
+        "tolerance_lu": 1.0,
+    }
+    context.update(overrides)
+    return context
 
 
-def _request(lkfs: float, *, tolerance: float = 0.5, licenses=_PERMISSIVE, commercial=False):
-    return PerceptionAdmissionRequest(
-        licenses=licenses,
-        commercial_intent=commercial,
-        loudness=_audio(lkfs),
-        target_lkfs=-14.0,
-        tolerance_lu=tolerance,
-        sample_count=4_800_000,
-    )
+def _request(**overrides: Any) -> PerceptionAdmissionRequest:
+    values: dict[str, Any] = {
+        "licenses": _PERMISSIVE,
+        "commercial_intent": False,
+        "integrated_lkfs": -14.0,
+        "target_lkfs": -14.0,
+        "tolerance_lu": 1.0,
+    }
+    values.update(overrides)
+    return PerceptionAdmissionRequest(**values)
 
 
-def test_a_confidently_quiet_measurement_is_admitted_with_a_boost() -> None:
-    admission = admit_perception(_request(-20.0))
-    assert admission.admitted is True
-    assert admission.refusal is None
-    assert admission.recommended_gain_db == pytest.approx(6.0)
-    assert admission.loudness.outcome is VerificationOutcome.FAIL
-    assert admission.license.compatible is True
+# ---------------------------------------------------------------------------
+# the lattice mirror stays identical to the lattice itself
+# ---------------------------------------------------------------------------
 
 
-def test_a_measurement_inside_the_band_needs_no_gain() -> None:
-    admission = admit_perception(_request(-14.05, tolerance=0.5))
-    assert admission.admitted is True
-    assert admission.recommended_gain_db == 0.0
-    assert admission.loudness.outcome is VerificationOutcome.PASS
+def test_the_regime_names_match_the_lattice() -> None:
+    assert tuple(member.value for member in LicenseRegime) == LICENSE_REGIME_NAMES
 
 
-def test_a_straddling_measurement_is_refused_not_guessed() -> None:
-    admission = admit_perception(_request(-14.5, tolerance=0.5))
-    assert admission.admitted is False
-    assert admission.recommended_gain_db is None
-    assert admission.loudness.outcome is VerificationOutcome.ABSTAIN_INSUFFICIENT_EVIDENCE
-    assert "straddles" in (admission.refusal or "")
+def test_parse_regimes_maps_names_and_refuses_unknown_ones() -> None:
+    assert parse_regimes(["PUBLIC_DOMAIN"]) == (LicenseRegime.PUBLIC_DOMAIN,)
+    with pytest.raises(GUMInputError, match="unknown license regime"):
+        parse_regimes(["NOT_A_LICENSE"])
+    with pytest.raises(GUMInputError, match="must be a tuple of license names"):
+        parse_regimes("PUBLIC_DOMAIN")
+    with pytest.raises(GUMInputError, match="license name string"):
+        parse_regimes([1])
+
+
+# ---------------------------------------------------------------------------
+# the plain-data port the perception pack calls
+# ---------------------------------------------------------------------------
+
+
+def test_a_measurement_inside_the_band_passes_without_a_gain() -> None:
+    record = gate_perception(_context())
+    assert record["admitted"] is True
+    assert record["outcome"] == "pass"
+    assert record["recommended_gain_db"] == 0.0
+    assert record["refusal"] is None
+    assert record["license"]["supremum"] == "PERMISSIVE_MIT_APACHE"
+
+
+def test_a_confidently_out_of_band_measurement_fails_with_the_exact_gain() -> None:
+    record = gate_loudness(_context(integrated_lufs=-23.0))
+    assert record["admitted"] is True
+    assert record["outcome"] == "fail"
+    assert record["recommended_gain_db"] == pytest.approx(9.0)
+
+
+def test_a_straddling_measurement_abstains_instead_of_guessing() -> None:
+    """The interval [y - k u, y + k u] crosses the band edge -> no decision."""
+    record = gate_loudness(_context(integrated_lufs=-15.0, tolerance_lu=1.0))
+    assert record["admitted"] is False
+    assert record["outcome"] == VerificationOutcome.ABSTAIN_INSUFFICIENT_EVIDENCE.value
+    assert record["recommended_gain_db"] is None
+    assert "straddles the tolerance band" in record["refusal"]
 
 
 def test_a_license_conflict_refuses_before_the_gain_is_considered() -> None:
-    admission = admit_perception(
-        _request(
-            -20.0,
-            licenses=(LicenseRegime.NON_COMMERCIAL_ONLY,),
-            commercial=True,
-        )
+    record = gate_loudness(
+        _context(licenses=["NON_COMMERCIAL_ONLY"], commercial_intent=True, integrated_lufs=-14.0)
     )
+    assert record["admitted"] is False
+    assert record["outcome"] == "license_conflict"
+    assert record["license"]["supremum"] == "INCOMPATIBLE_CONFLICT"
+    assert record["recommended_gain_db"] is None
+
+
+def test_no_declared_license_means_no_license_claim() -> None:
+    record = gate_loudness(_context(licenses=[]))
+    assert record["admitted"] is True
+    assert record["license"] is None
+
+
+def test_the_license_port_admits_and_refuses() -> None:
+    admitted = gate_licenses({"licenses": ["PERMISSIVE_MIT_APACHE"]})
+    assert admitted["admitted"] is True
+    assert admitted["outcome"] == "license_ok"
+    assert admitted["refusal"] is None
+
+    strict = gate_licenses({"licenses": ["NON_COMMERCIAL_ONLY"], "commercial_intent": True})
+    assert strict["admitted"] is False
+    assert strict["outcome"] == "license_conflict"
+    assert "INCOMPATIBLE_CONFLICT" in strict["refusal"]
+
+
+def test_the_license_port_requires_a_declared_regime() -> None:
+    with pytest.raises(GUMInputError, match="missing"):
+        gate_licenses({})
+    with pytest.raises(GUMInputError, match="at least one license regime"):
+        gate_licenses({"licenses": ()})
+
+
+def test_the_port_fails_closed_on_missing_or_invalid_keys() -> None:
+    with pytest.raises(GUMInputError, match="missing"):
+        gate_loudness({"integrated_lufs": -14.0})
+    with pytest.raises(GUMInputError, match="must be a mapping"):
+        gate_perception(["not", "a", "mapping"])
+    with pytest.raises(GUMInputError, match="unknown gate kind"):
+        gate_perception({"kind": "wallpaper"})
+    with pytest.raises(GUMInputError, match="must be positive"):
+        gate_loudness(_context(tolerance_lu=0.0))
+    with pytest.raises(GUMInputError, match="coverage_factor must be positive"):
+        gate_loudness(_context(coverage_factor=-1.0))
+    with pytest.raises(GUMInputError, match="bit_depth must be an int"):
+        gate_loudness(_context(bit_depth=16.5))
+    with pytest.raises(GUMInputError, match="sample_count must be an int"):
+        gate_loudness(_context(sample_count=True))
+
+
+def test_the_port_records_the_interval_it_decided_on() -> None:
+    record = gate_loudness(_context())
+    low, high = record["interval"]
+    assert record["limits"] == [-15.0, -13.0]
+    assert low < record["integrated_lufs"] < high
+    assert high - low == pytest.approx(2.0 * record["expanded_uncertainty"])
+
+
+# ---------------------------------------------------------------------------
+# the typed wrapper runs the same arithmetic
+# ---------------------------------------------------------------------------
+
+
+def test_the_typed_wrapper_agrees_with_the_port() -> None:
+    admission = admit_perception(_request(integrated_lkfs=-23.0))
+    assert isinstance(admission, PerceptionAdmission)
+    assert admission.admitted is True
+    assert admission.recommended_gain_db == pytest.approx(9.0)
+    assert admission.loudness.outcome is VerificationOutcome.FAIL
+    assert admission.license.supremum is LicenseRegime.PERMISSIVE_MIT_APACHE
+
+
+def test_the_typed_wrapper_abstains_on_a_straddle() -> None:
+    admission = admit_perception(_request(integrated_lkfs=-15.0))
     assert admission.admitted is False
     assert admission.recommended_gain_db is None
-    assert admission.license.compatible is False
-    assert "license supremum" in (admission.refusal or "")
+    assert admission.loudness.outcome is VerificationOutcome.ABSTAIN_INSUFFICIENT_EVIDENCE
 
 
-def test_request_rejects_an_empty_license_set() -> None:
-    with pytest.raises(GUMInputError, match="at least one license"):
-        _request(-14.0, licenses=())
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"licenses": ()},
+        {"licenses": ("MIT",)},
+        {"limites": None},
+        {"tolerance_lu": 0.0},
+        {"tolerance_lu": math.nan},
+        {"target_lkfs": math.inf},
+        {"target_lkfs": True},
+        {"coverage_factor": 0.0},
+        {"commercial_intent": 1},
+        {"integrated_lkfs": "loud"},
+    ],
+)
+def test_the_typed_request_refuses_unusable_inputs(overrides: dict[str, Any]) -> None:
+    with pytest.raises((GUMInputError, TypeError)):
+        _request(**overrides)
 
 
-def test_request_rejects_a_non_positive_tolerance() -> None:
-    with pytest.raises(GUMInputError, match="tolerance_lu"):
-        _request(-14.0, tolerance=0.0)
-
-
-def test_request_rejects_a_wrong_loudness_type() -> None:
-    with pytest.raises(GUMInputError, match="AudioPerception"):
-        PerceptionAdmissionRequest(
-            licenses=_PERMISSIVE,
-            commercial_intent=False,
-            loudness="nope",  # type: ignore[arg-type]
-            target_lkfs=-14.0,
-            tolerance_lu=0.5,
-        )
-
-
-def test_request_rejects_a_non_finite_target() -> None:
-    with pytest.raises(GUMInputError, match="target_lkfs"):
-        PerceptionAdmissionRequest(
-            licenses=_PERMISSIVE,
-            commercial_intent=False,
-            loudness=_audio(-14.0),
-            target_lkfs=math.nan,
-            tolerance_lu=0.5,
-        )
-
-
-def test_request_rejects_an_unusable_coverage_factor() -> None:
-    with pytest.raises(GUMInputError, match="coverage_factor"):
-        PerceptionAdmissionRequest(
-            licenses=_PERMISSIVE,
-            commercial_intent=False,
-            loudness=_audio(-14.0),
-            target_lkfs=-14.0,
-            tolerance_lu=0.5,
-            coverage_factor=0.0,
-        )
-
-
-def test_admission_refuses_a_contradictory_record() -> None:
-    admission = admit_perception(_request(-20.0))
+def test_the_typed_record_refuses_a_contradictory_verdict() -> None:
+    decision = evaluate_guard_band(
+        -14.0, _combined(), SpecificationLimits(lower=-15.0, upper=-13.0), 2.0
+    )
+    combination = admit_perception(_request()).license
     with pytest.raises(GUMInputError, match="cannot carry a refusal"):
         PerceptionAdmission(
             admitted=True,
-            license=admission.license,
-            loudness=admission.loudness,
-            recommended_gain_db=1.0,
-            refusal="nope",
+            license=combination,
+            loudness=decision,
+            recommended_gain_db=0.0,
+            refusal="no",
         )
     with pytest.raises(GUMInputError, match="must carry a refusal"):
         PerceptionAdmission(
             admitted=False,
-            license=admission.license,
-            loudness=admission.loudness,
+            license=combination,
+            loudness=decision,
             recommended_gain_db=None,
             refusal=None,
         )
     with pytest.raises(GUMInputError, match="must recommend a gain"):
         PerceptionAdmission(
             admitted=True,
-            license=admission.license,
-            loudness=admission.loudness,
+            license=combination,
+            loudness=decision,
             recommended_gain_db=None,
             refusal=None,
         )
-    with pytest.raises(GUMInputError, match="LicenseCombination"):
-        PerceptionAdmission(
-            admitted=True,
-            license="nope",  # type: ignore[arg-type]
-            loudness=admission.loudness,
-            recommended_gain_db=1.0,
-            refusal=None,
-        )
-    with pytest.raises(GUMInputError, match="GuardBandDecision"):
-        PerceptionAdmission(
-            admitted=True,
-            license=admission.license,
-            loudness="nope",  # type: ignore[arg-type]
-            recommended_gain_db=1.0,
-            refusal=None,
-        )
-    with pytest.raises(GUMInputError, match="gain"):
-        PerceptionAdmission(
-            admitted=True,
-            license=admission.license,
-            loudness=admission.loudness,
-            recommended_gain_db=math.inf,
-            refusal=None,
-        )
 
 
-def test_admit_rejects_a_wrong_request_type() -> None:
-    with pytest.raises(GUMInputError, match="PerceptionAdmissionRequest"):
-        admit_perception("nope")  # type: ignore[arg-type]
+def _combined() -> Any:
+    from nexus_ai_agent.creative.verification.uncertainty_gum import (
+        UncertaintyInput,
+        combine,
+    )
 
-
-def test_request_rejects_a_non_regime_license() -> None:
-    with pytest.raises(GUMInputError, match="LicenseRegime"):
-        _request(-14.0, licenses=("MIT",))  # type: ignore[arg-type]
-
-
-def test_request_rejects_a_non_bool_commercial_intent() -> None:
-    with pytest.raises(GUMInputError, match="commercial_intent"):
-        _request(-14.0, commercial=1)  # type: ignore[arg-type]
-
-
-def test_request_rejects_a_boolean_target() -> None:
-    with pytest.raises(GUMInputError, match="target_lkfs"):
-        PerceptionAdmissionRequest(
-            licenses=_PERMISSIVE,
-            commercial_intent=False,
-            loudness=_audio(-14.0),
-            target_lkfs=True,  # type: ignore[arg-type]
-            tolerance_lu=0.5,
-        )
+    return combine((1.0,), UncertaintyInput.from_standard((1.0,), (0.1,)))

@@ -193,6 +193,34 @@ def _checked_ident(value: str) -> str:
     return value
 
 
+#: License regime names the admission gate understands.
+#:
+#: The pack may not import ``creative.composition.license_lattice`` (packs depend
+#: on the pack substrate and studio only), so the closed set is mirrored here as
+#: data and the gate maps it back to lattice elements.
+#: ``tests/unit/test_perception_gate.py::test_the_regime_names_match_the_lattice``
+#: keeps the two lists identical.
+LICENSE_REGIME_NAMES: tuple[str, ...] = (
+    "PUBLIC_DOMAIN",
+    "PERMISSIVE_MIT_APACHE",
+    "ATTRIBUTION_CC_BY",
+    "SHARE_ALIKE_COPYLEFT",
+    "NON_COMMERCIAL_ONLY",
+    "PROPRIETARY_COMMERCIAL_RESTRICTED",
+    "INCOMPATIBLE_CONFLICT",
+)
+
+
+def _checked_licenses(value: tuple[str, ...]) -> tuple[str, ...]:
+    for index, name in enumerate(value):
+        if name not in LICENSE_REGIME_NAMES:
+            raise ValueError(
+                f"licenses[{index}]={name!r} is not a license regime name; "
+                f"expected one of {list(LICENSE_REGIME_NAMES)}"
+            )
+    return value
+
+
 class _MarkInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -213,18 +241,30 @@ class _MarkInput(BaseModel):
         return value
 
 
-class MarkSilencesInput(_MarkInput):
+class _GatedInput(BaseModel):
+    """Inputs that carry the license evidence the admission gate joins."""
+
+    licenses: tuple[str, ...] = ()
+    commercial_intent: bool = False
+
+    @field_validator("licenses")
+    @classmethod
+    def _regime_names(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        return _checked_licenses(value)
+
+
+class MarkSilencesInput(_MarkInput, _GatedInput):
     label_prefix: str = Field(default="silence", min_length=1, max_length=MAX_LABEL_CHARS)
     evidence: SilenceEvidence
     edge: Literal["start", "end", "both"] = "start"
 
 
-class MarkSceneCutsInput(_MarkInput):
+class MarkSceneCutsInput(_MarkInput, _GatedInput):
     label_prefix: str = Field(default="scene", min_length=1, max_length=MAX_LABEL_CHARS)
     evidence: SceneCutEvidence
 
 
-class AssessLoudnessInput(BaseModel):
+class AssessLoudnessInput(_GatedInput):
     model_config = ConfigDict(extra="forbid")
 
     asset_id: str
@@ -232,6 +272,9 @@ class AssessLoudnessInput(BaseModel):
     target_lufs: float = Field(default=-14.0, ge=-40.0, le=-5.0, allow_inf_nan=False)
     true_peak_ceiling_dbfs: float = Field(default=-1.0, ge=-9.0, le=0.0, allow_inf_nan=False)
     tolerance_lu: float = Field(default=1.0, ge=0.1, le=6.0, allow_inf_nan=False)
+    coverage_factor: float = Field(default=2.0, gt=0.0, le=3.0, allow_inf_nan=False)
+    bit_depth: int = Field(default=16, ge=8, le=32)
+    sample_count: int = Field(default=48_000, ge=1)
 
     @field_validator("asset_id")
     @classmethod
@@ -241,6 +284,7 @@ class AssessLoudnessInput(BaseModel):
 
 __all__ = [
     "ANALYZER_FFMPEG",
+    "LICENSE_REGIME_NAMES",
     "DOMAIN",
     "EVIDENCE_SCHEMA",
     "MAX_LABEL_CHARS",

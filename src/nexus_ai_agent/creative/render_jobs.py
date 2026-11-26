@@ -612,7 +612,7 @@ def build_job_bus(
     for the operation being run and an explicit mapping still wins (tests need
     doubles, and a caller may deliberately withhold an engine).
     """
-    from nexus_ai_agent.creative.packs.runtime import build_runtime_registry
+    from nexus_ai_agent.creative.production_runtime import build_production_registry
     from nexus_ai_agent.creative.studio.bus import CommandBus
 
     if engine_ports is None:
@@ -620,7 +620,7 @@ def build_job_bus(
 
     return CommandBus(
         state=project,
-        registry=build_runtime_registry(),
+        registry=build_production_registry(),
         # Read at call time on purpose: the two sets are module-level policy, and
         # a test (or an operator tool) must be able to withdraw the opt-in by
         # rebinding them without rebuilding the module.
@@ -908,7 +908,7 @@ def _canonical_execution(
         )
 
     from nexus_ai_agent.adapters.sql_application_directory import SQLApplicationDirectory
-    from nexus_ai_agent.creative.packs.runtime import build_runtime_registry
+    from nexus_ai_agent.creative.production_runtime import build_production_registry
     from nexus_ai_agent.creative.studio.models import (
         ActorIdentity,
         AuthorizationError,
@@ -922,7 +922,7 @@ def _canonical_execution(
             payload.project_id,
         )
         binding = directory.require_binding(payload.channel_binding_id, principal)
-        required = build_runtime_registry().get_spec(canonical_id).effective_permissions
+        required = build_production_registry().get_spec(canonical_id).effective_permissions
         access.require_permissions(required)
     except AuthorizationError as exc:
         raise CreativeRenderError("invalid_request", f"AuthorizationError: {exc}") from exc

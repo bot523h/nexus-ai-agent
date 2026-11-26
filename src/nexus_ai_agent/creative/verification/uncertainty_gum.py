@@ -46,6 +46,14 @@ __all__ = [
 # a relative tolerance scaled by the magnitudes involved rather than exact zero.
 _RELATIVE_TOLERANCE = 1e-12
 
+# A covariance matrix is positive semi-definite up to this relative spectral
+# tolerance; below it, a negative eigenvalue is a real defect, not round-off.
+_SPECTRAL_TOLERANCE = 1e-9
+
+# Jacobi sweeps needed for a symmetric matrix of this size; the rotation is
+# quadratically convergent, so a handful of sweeps reach machine precision.
+_MAX_JACOBI_SWEEPS = 60
+
 
 class GUMError(ValueError):
     """Base class for every uncertainty-domain failure."""
@@ -86,6 +94,60 @@ def _finite_or_infinite(value: object, label: str) -> float:
 
 def _tolerance(*magnitudes: float) -> float:
     return _RELATIVE_TOLERANCE * max(1.0, *(abs(value) for value in magnitudes))
+
+
+def _gershgorin_floor(matrix: tuple[tuple[float, ...], ...]) -> float:
+    """Lower bound on ``lambda_min`` for a symmetric matrix.
+
+    A non-negative floor *proves* positive semi-definiteness, so the exact
+    spectrum is only computed for the matrices where the bound is inconclusive.
+    """
+    floor = math.inf
+    for index, row in enumerate(matrix):
+        radius = math.fsum(abs(entry) for position, entry in enumerate(row) if position != index)
+        floor = min(floor, row[index] - radius)
+    return floor
+
+
+def _symmetric_eigenvalues(matrix: tuple[tuple[float, ...], ...]) -> tuple[float, ...]:
+    """All eigenvalues of a small symmetric matrix by cyclic Jacobi rotations.
+
+    Deterministic (no library, no random start, no sign ambiguity) and exact to
+    the last few ulps, which is what a ``lambda_min < 0`` refusal needs.
+    """
+    size = len(matrix)
+    work = [list(row) for row in matrix]
+    for _ in range(_MAX_JACOBI_SWEEPS):
+        off_diagonal = math.fsum(
+            work[row][column] ** 2 for row in range(size) for column in range(size) if row != column
+        )
+        if off_diagonal <= (1e-30 * max(1.0, abs(work[0][0])) ** 2):
+            break
+        for pivot in range(size - 1):
+            for other in range(pivot + 1, size):
+                entry = work[pivot][other]
+                if entry == 0.0:
+                    continue
+                theta = (work[other][other] - work[pivot][pivot]) / (2.0 * entry)
+                if theta == 0.0:
+                    tangent = 1.0
+                else:
+                    tangent = math.copysign(1.0, theta) / (
+                        abs(theta) + math.sqrt(theta * theta + 1.0)
+                    )
+                cosine = 1.0 / math.sqrt(tangent * tangent + 1.0)
+                sine = tangent * cosine
+                for index in range(size):
+                    left = work[index][pivot]
+                    right = work[index][other]
+                    work[index][pivot] = cosine * left - sine * right
+                    work[index][other] = sine * left + cosine * right
+                for index in range(size):
+                    top = work[pivot][index]
+                    bottom = work[other][index]
+                    work[pivot][index] = cosine * top - sine * bottom
+                    work[other][index] = sine * top + cosine * bottom
+    return tuple(sorted(work[index][index] for index in range(size)))
 
 
 @dataclass(frozen=True, slots=True)
@@ -147,6 +209,15 @@ class UncertaintyInput:
                         f"covariance[{first}][{second}]={matrix[first][second]!r} violates the "
                         f"Cauchy-Schwarz bound {bound!r}"
                     )
+        if size >= 3 and _gershgorin_floor(matrix) < 0.0:
+            spectrum = _symmetric_eigenvalues(matrix)
+            lambda_min = spectrum[0]
+            spectral_tolerance = _SPECTRAL_TOLERANCE * max(1.0, abs(spectrum[-1]))
+            if lambda_min < -spectral_tolerance:
+                raise GUMCovarianceError(
+                    f"covariance is not positive semi-definite: lambda_min={lambda_min!r} "
+                    "(pairwise Cauchy-Schwarz is necessary but not sufficient)"
+                )
         object.__setattr__(self, "values", values)
         object.__setattr__(self, "standard_uncertainties", deviations)
         object.__setattr__(self, "covariance", matrix)
@@ -247,13 +318,9 @@ def combine(
     diagonal_sum = math.fsum(diagonal)
     cross_sum = math.fsum(cross)
     variance = math.fsum((diagonal_sum, cross_sum))
-    tolerance = _tolerance(diagonal_sum, cross_sum)
     if variance < 0.0:
-        if variance < -tolerance:
-            raise GUMCovarianceError(
-                f"g^T Sigma g = {variance!r} is negative: the covariance is not "
-                "positive semi-definite at this sensitivity vector"
-            )
+        # ``UncertaintyInput`` already proved ``Sigma_x`` is positive semi-definite,
+        # so ``g^T Sigma g >= 0`` exactly; a negative here is cancellation noise.
         variance = 0.0
     standard = math.sqrt(variance)
     effective_dof = welch_satterthwaite(diagonal, degrees_of_freedom)

@@ -25,6 +25,7 @@ from nexus_ai_agent.creative.temporal.biophysical_portrait import (
 )
 from nexus_ai_agent.observability.slo_burn_calculus import BurnWindowResult
 
+from .loudness import loudness_budget
 from .uncertainty_gum import (
     CombinedUncertainty,
     GuardBandDecision,
@@ -47,9 +48,8 @@ __all__ = [
     "slo_burn_uncertainty",
 ]
 
-# BS.1770-4 reference offset: L_K = -0.691 + 10 log10(mean square).
-_LUFS_OFFSET = -0.691
-_DECIBEL_PER_NEPER = 10.0 / math.log(10.0)
+# The BS.1770-4 model itself lives in the dependency-free :mod:`loudness` module,
+# so the perception pack can share it without importing this adapter.
 
 
 def _positive_int(value: object, label: str) -> int:
@@ -104,15 +104,11 @@ def loudness_uncertainty(
     lkfs = perception.integrated_lkfs
     if lkfs != -math.inf:
         lkfs = _finite_number(lkfs, "integrated_lkfs")
-    mean_square = 10.0 ** ((lkfs - _LUFS_OFFSET) / 10.0)
-    if not math.isfinite(mean_square) or mean_square <= 0.0:
-        raise GUMInputError(f"integrated_lkfs {lkfs!r} does not map to a positive mean square")
-    step = 2.0 / float(2**depth)
-    sample_variance = step * step / 12.0
-    mean_square_deviation = math.sqrt(sample_variance / samples)
-    sensitivity = _DECIBEL_PER_NEPER / mean_square
-    budget = UncertaintyInput.from_standard((mean_square,), (mean_square_deviation,))
-    combined = combine((sensitivity,), budget)
+    else:
+        raise GUMInputError(
+            "integrated_lkfs is -inf (digital silence) and has no positive mean square"
+        )
+    lkfs, mean_square, step, combined = loudness_budget(lkfs, bit_depth=depth, sample_count=samples)
     return LoudnessUncertainty(
         lkfs=lkfs,
         mean_square=mean_square,
@@ -135,6 +131,30 @@ class SceneCutUncertainty:
         return self.combined.expanded(coverage_factor)
 
 
+_NATURAL_LOG_OF_TWO = math.log(2.0)
+
+
+def _js_bin_contribution(p_value: float, q_value: float) -> float:
+    """One bin's Jensen-Shannon contribution in bits.
+
+    ``JS = 0.5 KL(p||m) + 0.5 KL(q||m)`` with ``m = (p + q)/2``. A bin where only
+    one histogram is populated still contributes: the surviving side carries
+    ``x log2(x/m)`` and ``lim_{x -> 0+} x log(x/m) = 0`` kills only the vanishing
+    side. Skipping bins where one side is zero therefore understates the
+    divergence -- two disjoint one-hot histograms are *maximally* different
+    (``1.0`` bit), not identical.
+    """
+    midpoint = 0.5 * (p_value + q_value)
+    if midpoint <= 0.0:
+        return 0.0
+    total = 0.0
+    if p_value > 0.0:
+        total += 0.5 * p_value * math.log(p_value / midpoint) / _NATURAL_LOG_OF_TWO
+    if q_value > 0.0:
+        total += 0.5 * q_value * math.log(q_value / midpoint) / _NATURAL_LOG_OF_TWO
+    return total
+
+
 def _js_gradient(first: Sequence[float], second: Sequence[float]) -> tuple[float, ...]:
     """``d JS / d p_i`` in bits for ``JS(p, q)`` with ``m = (p + q)/2``.
 
@@ -142,8 +162,8 @@ def _js_gradient(first: Sequence[float], second: Sequence[float]) -> tuple[float
     ``-0.5 q_i / m_i`` to the derivative; the ``p`` term contributes
     ``0.5 (ln(p_i/m_i) + 1 - 0.5 p_i/m_i)``. Because ``(p_i + q_i)/m_i = 2`` the
     ``+1`` and the ``-0.5(p_i+q_i)/m_i`` cancel exactly, leaving ``0.5 ln(p_i/m_i)``.
-    Bins with ``p_i <= 0`` carry zero variance, so their gradient is pinned to
-    zero to keep the product finite.
+    Bins with ``p_i <= 0`` carry zero variance in ``Sigma_P``, so their gradient
+    is pinned to zero -- the exact limit of ``g^2 sigma^2`` as ``p_i -> 0``.
     """
     gradient = []
     for p_value, q_value in zip(first, second, strict=False):
@@ -151,8 +171,51 @@ def _js_gradient(first: Sequence[float], second: Sequence[float]) -> tuple[float
         if p_value <= 0.0 or midpoint <= 0.0:
             gradient.append(0.0)
         else:
-            gradient.append(0.5 * math.log(p_value / midpoint) / math.log(2.0))
+            gradient.append(0.5 * math.log(p_value / midpoint) / _NATURAL_LOG_OF_TWO)
     return tuple(gradient)
+
+
+def _js_gradient_after(first: Sequence[float], second: Sequence[float]) -> tuple[float, ...]:
+    """``d JS / d q_i`` in bits, the mirror of :func:`_js_gradient`."""
+    gradient = []
+    for p_value, q_value in zip(first, second, strict=False):
+        midpoint = 0.5 * (p_value + q_value)
+        if q_value <= 0.0 or midpoint <= 0.0:
+            gradient.append(0.0)
+        else:
+            gradient.append(0.5 * math.log(q_value / midpoint) / _NATURAL_LOG_OF_TWO)
+    return tuple(gradient)
+
+
+def _multinomial_covariance(
+    histogram: Sequence[float], samples: int
+) -> tuple[tuple[float, ...], ...]:
+    """``Cov(p) = (diag(p) - p p^T) / N`` for one multinomial histogram."""
+    size = len(histogram)
+    return tuple(
+        tuple(
+            ((histogram[row] if row == column else 0.0) - histogram[row] * histogram[column])
+            / samples
+            for column in range(size)
+        )
+        for row in range(size)
+    )
+
+
+def _block_diagonal(
+    first: tuple[tuple[float, ...], ...], second: tuple[tuple[float, ...], ...]
+) -> tuple[tuple[float, ...], ...]:
+    """``diag(Sigma_P, Sigma_Q)``: the two histograms are estimated independently."""
+    size = len(first)
+    rows: list[tuple[float, ...]] = []
+    for row in range(2 * size):
+        block = first if row < size else second
+        offset = 0 if row < size else size
+        row_entries = [0.0] * (2 * size)
+        for column, entry in enumerate(block[row - offset]):
+            row_entries[offset + column] = entry
+        rows.append(tuple(row_entries))
+    return tuple(rows)
 
 
 def scene_cut_uncertainty(
@@ -160,21 +223,36 @@ def scene_cut_uncertainty(
     after: Sequence[float],
     *,
     samples_per_histogram: int,
+    samples_per_histogram_after: int | None = None,
     reported_divergence: float | None = None,
 ) -> SceneCutUncertainty:
     """Propagate histogram sampling noise into a JS-divergence score.
 
     Model: each histogram is a multinomial draw of ``N`` pixels over the bins, so
-    ``Cov(p) = (diag(p) - p p^T) / N``. The bins are therefore **correlated**,
-    which is why this adapter exercises the covariance path of
-    :func:`combine` instead of the diagonal one. ``reported_divergence`` is
-    optional; when given it must agree with the recomputed divergence to within
-    ``1e-9`` or the caller is looking at a different histogram than the engine.
+    ``Cov(p) = (diag(p) - p p^T) / N``. **Both** histograms are estimated from
+    finite samples, so the divergence ``J(P, Q)`` has two gradient blocks,
+
+    ``u_c^2(J) = grad_P J^T Sigma_P grad_P J + grad_Q J^T Sigma_Q grad_Q J``
+
+    which is exactly ``g^T diag(Sigma_P, Sigma_Q) g`` for the concatenated
+    ``g = (grad_P J, grad_Q J)``. Propagating only ``Sigma_P`` understates the
+    budget whenever the after-histogram is the noisier sample, which is the
+    common case for a short cut-in frame. ``samples_per_histogram_after``
+    defaults to ``samples_per_histogram``.
+
+    ``reported_divergence`` is optional; when given it must agree with the
+    recomputed divergence to within ``1e-9`` or the caller is looking at a
+    different histogram than the engine.
 
     Not modelled: spatial correlation between neighbouring pixels, which makes
     ``N`` an optimistic sample count.
     """
     samples = _positive_int(samples_per_histogram, "samples_per_histogram")
+    samples_after = (
+        samples
+        if samples_per_histogram_after is None
+        else _positive_int(samples_per_histogram_after, "samples_per_histogram_after")
+    )
     first = tuple(_finite_number(value, f"before[{index}]") for index, value in enumerate(before))
     second = tuple(_finite_number(value, f"after[{index}]") for index, value in enumerate(after))
     if len(first) != len(second):
@@ -189,23 +267,14 @@ def scene_cut_uncertainty(
             raise GUMInputError(f"{label} histogram must be normalised, sums to {total!r}")
         if any(value < 0.0 for value in histogram):
             raise GUMInputError(f"{label} histogram entries must be non-negative")
-    gradient = _js_gradient(first, second)
-    size = len(first)
-    covariance = tuple(
-        tuple(
-            ((first[row] if row == column else 0.0) - first[row] * first[column]) / samples
-            for column in range(size)
-        )
-        for row in range(size)
+    gradient = _js_gradient(first, second) + _js_gradient_after(first, second)
+    covariance = _block_diagonal(
+        _multinomial_covariance(first, samples),
+        _multinomial_covariance(second, samples_after),
     )
-    budget = UncertaintyInput.from_covariance(first, covariance)
+    budget = UncertaintyInput.from_covariance(first + second, covariance)
     combined = combine(gradient, budget)
-    divergence = math.fsum(
-        0.5 * p * math.log(p / (0.5 * (p + q))) / math.log(2.0)
-        + 0.5 * q * math.log(q / (0.5 * (p + q))) / math.log(2.0)
-        for p, q in zip(first, second, strict=False)
-        if p > 0.0 and q > 0.0
-    )
+    divergence = math.fsum(_js_bin_contribution(p, q) for p, q in zip(first, second, strict=False))
     if reported_divergence is not None:
         reported = _finite_number(reported_divergence, "reported_divergence")
         if abs(reported - divergence) > 1e-9:
@@ -273,6 +342,43 @@ def _gramian_inverse(
     )
 
 
+def _gramian_spectrum(
+    melanin_extinction: Sequence[float], hemoglobin_extinction: Sequence[float], ridge: float
+) -> tuple[float, float]:
+    """``(lambda_min, lambda_max)`` of the ridge-regularised ``E^T E``.
+
+    For the ``2x2`` Gramian ``[[a, b], [b, c]]`` the spectrum is closed form:
+    ``lambda_pm = ((a + c) +- sqrt((a - c)^2 + 4 b^2)) / 2``. The condition number
+    ``kappa_2 = lambda_max / lambda_min`` is the noise amplification of the
+    inversion; it must be read off the *Gramian*, not off the entries of its
+    inverse (for ``[[1, rho], [rho, 1]]`` the inverse's entries are all
+    ``1/(1 - rho^2)`` and their ratio is 1.0 for every ``rho``).
+    """
+    mel = tuple(
+        _finite_number(value, f"melanin_extinction[{index}]")
+        for index, value in enumerate(melanin_extinction)
+    )
+    hem = tuple(
+        _finite_number(value, f"hemoglobin_extinction[{index}]")
+        for index, value in enumerate(hemoglobin_extinction)
+    )
+    if len(mel) != len(hem):
+        raise GUMInputError(
+            f"extinction curves must share a band count, got {len(mel)} and {len(hem)}"
+        )
+    if not mel:
+        raise GUMInputError("extinction curves must not be empty")
+    regularisation = _finite_number(ridge, "ridge")
+    if regularisation < 0.0:
+        raise GUMInputError(f"ridge must be non-negative, got {regularisation!r}")
+    gramian_mel = math.fsum(value * value for value in mel) + regularisation
+    gramian_hem = math.fsum(value * value for value in hem) + regularisation
+    gramian_cross = math.fsum(a * b for a, b in zip(mel, hem, strict=False))
+    spread = math.hypot(gramian_mel - gramian_hem, 2.0 * gramian_cross)
+    trace = gramian_mel + gramian_hem
+    return 0.5 * (trace - spread), 0.5 * (trace + spread)
+
+
 def chromophore_uncertainty(
     estimate: SkinChromophoreEstimate,
     *,
@@ -287,8 +393,9 @@ def chromophore_uncertainty(
     standard deviation ``sigma``, the least-squares estimate has
     ``Cov(c) = sigma^2 (E^T E)^-1``. ``E^T E`` is the 2x2 Gramian of the two
     extinction curves; its inverse is computed in closed form. The condition
-    number of the Gramian is reported because it *is* the sensitivity: two
-    nearly parallel extinction curves amplify noise without bound.
+    number ``kappa_2 = lambda_max / lambda_min`` of the Gramian is reported because
+    it *is* the sensitivity: two nearly parallel extinction curves amplify noise
+    without bound. It is the spectral ratio, never a ratio read off the inverse.
 
     Not modelled: the active-set clamping itself. When ``estimate.clamped`` is
     true the covariance is a local linearisation at a boundary and is reported
@@ -310,9 +417,8 @@ def chromophore_uncertainty(
     budget = UncertaintyInput.from_covariance((estimate.melanin, estimate.hemoglobin), covariance)
     combined = combine((1.0, 0.0), budget)
     amplification = math.sqrt(max(0.0, inverse_mel + inverse_hem))
-    largest = max(inverse_mel, inverse_hem, abs(inverse_cross))
-    smallest = min(inverse_mel, inverse_hem)
-    condition = math.inf if smallest <= 0.0 else largest / smallest
+    lambda_min, lambda_max = _gramian_spectrum(mel, hem, ridge)
+    condition = math.inf if lambda_min <= 0.0 else lambda_max / lambda_min
     return ChromophoreUncertainty(
         melanin=estimate.melanin,
         hemoglobin=estimate.hemoglobin,

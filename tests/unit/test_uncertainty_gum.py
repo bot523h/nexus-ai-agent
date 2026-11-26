@@ -131,13 +131,32 @@ def test_tiny_negative_variance_is_clamped_to_zero() -> None:
     assert combined.standard == 0.0
 
 
-def test_materially_negative_variance_is_a_covariance_error() -> None:
-    # Pairwise |r| <= 1 passes, yet the matrix is not PSD: g^T Sigma g = -4.
-    budget = UncertaintyInput.from_covariance(
-        (1.0, 1.0, 1.0), ((1.0, 1.0, 1.0), (1.0, 1.0, -1.0), (1.0, -1.0, 1.0))
-    )
+def test_pairwise_cauchy_schwarz_is_not_enough_for_three_inputs() -> None:
+    """``|r_ij| <= 1`` everywhere and still not PSD: lambda = (1.6, 1.6, -0.2)."""
     with pytest.raises(GUMCovarianceError, match="not positive semi-definite"):
-        combine((-2.0, 1.0, 1.0), budget)
+        UncertaintyInput.from_covariance(
+            (1.0, 1.0, 1.0),
+            ((1.0, -0.6, -0.6), (-0.6, 1.0, -0.6), (-0.6, -0.6, 1.0)),
+        )
+
+
+def test_a_singular_psd_covariance_is_accepted_and_propagates_to_zero() -> None:
+    """Rank-deficient is legal (identical inputs); only a negative eigenvalue is not."""
+    budget = UncertaintyInput.from_covariance(
+        (1.0, 1.0, 1.0), ((1.0, 1.0, 1.0), (1.0, 1.0, 1.0), (1.0, 1.0, 1.0))
+    )
+    assert budget.standard_uncertainties == (1.0, 1.0, 1.0)
+    combined = combine((1.0, -1.0, 0.0), budget)
+    assert combined.variance == 0.0
+    assert combined.standard == 0.0
+
+
+def test_a_materially_negative_propagation_cannot_be_built() -> None:
+    """The defect is refused where the matrix enters, not where it is used."""
+    with pytest.raises(GUMCovarianceError):
+        UncertaintyInput.from_covariance(
+            (1.0, 1.0, 1.0), ((1.0, 1.0, 1.0), (1.0, 1.0, -1.0), (1.0, -1.0, 1.0))
+        )
 
 
 def test_expanded_uncertainty_scales_with_the_coverage_factor() -> None:

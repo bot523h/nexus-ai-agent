@@ -23,6 +23,7 @@ so a retimed clip is respected.  Instants outside the clip's window are *counted
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Callable, Mapping
 from typing import Any
 
 from nexus_ai_agent.creative.packs.perception.models import (
@@ -52,6 +53,39 @@ from nexus_ai_agent.creative.studio.models import (
 
 #: Gain (dB) is reported with centi-dB resolution; more digits are false precision.
 _GAIN_DIGITS = 2
+
+#: The admission port. The pack may not import the verification lane, so the
+#: composition root injects a *plain-data* callable: a gate context in, a gate
+#: record out (see ``MODULE_MAP.md`` R31).
+PerceptionGate = Callable[[Mapping[str, Any]], Mapping[str, Any]]
+
+_GATE_NOT_CONFIGURED: dict[str, Any] = {
+    "admitted": None,
+    "outcome": "not_configured",
+    "refusal": None,
+    "recommended_gain_db": None,
+}
+
+
+def _gate_record(gate: PerceptionGate | None, context: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Run the admission gate, or record honestly that none is bound.
+
+    A gate that answers with something other than a mapping is a wiring defect,
+    so it fails closed (:class:`CommandValidationError`) instead of admitting.
+    """
+    if gate is None or context is None:
+        return dict(_GATE_NOT_CONFIGURED)
+    record = gate(context)
+    if not isinstance(record, Mapping):
+        raise CommandValidationError(
+            f"the perception admission gate returned {type(record).__name__}, not a mapping"
+        )
+    if record.get("admitted") not in (True, False):
+        raise CommandValidationError(
+            "the perception admission gate must answer admitted=True/False, "
+            f"got {record.get('admitted')!r}"
+        )
+    return dict(record)
 
 
 def _find_clip(project: Project, track_id: str, clip_id: str) -> Clip:
@@ -132,11 +166,51 @@ def _add_markers(
     }
 
 
-def _mark_silences(project: Project, context: OperationContext) -> OperationOutcome:
+def _marker_admission(gate: PerceptionGate | None, payload: Any) -> dict[str, Any]:
+    """License join for a marker command, or a no-claim record when none is declared."""
+    if not payload.licenses:
+        return {
+            "admitted": None,
+            "outcome": "no_license_declared",
+            "refusal": None,
+            "recommended_gain_db": None,
+        }
+    return _gate_record(
+        gate,
+        {
+            "kind": "license",
+            "licenses": list(payload.licenses),
+            "commercial_intent": payload.commercial_intent,
+        },
+    )
+
+
+def _mark_silences(
+    project: Project,
+    context: OperationContext,
+    *,
+    gate: PerceptionGate | None = None,
+) -> OperationOutcome:
     payload = MarkSilencesInput.model_validate(context.input_data)
     clip = _find_clip(project, payload.track_id, payload.clip_id)
     evidence = payload.evidence
     _require_same_content(clip, evidence.asset_sha256, OPERATION_MARK_SILENCES)
+    admission = _marker_admission(gate, payload)
+    if admission.get("admitted") is False:
+        # Refused by the license superlattice: publish no markers at all.
+        return OperationOutcome(
+            project,
+            context.history,
+            {
+                "gate": admission,
+                "markers_added": 0,
+                "markers_skipped_existing": 0,
+                "skipped_outside_clip": 0,
+                "spans_in_evidence": len(evidence.spans),
+                "edge": payload.edge,
+                "refused": True,
+            },
+        )
 
     candidates: list[tuple[str, int, str]] = []
     for index, span in enumerate(evidence.spans, start=1):
@@ -154,28 +228,55 @@ def _mark_silences(project: Project, context: OperationContext) -> OperationOutc
                 ("silence_end", span.end_us, f"{payload.label_prefix} {index} out ({seconds:.2f}s)")
             )
     new_project, output = _add_markers(project, candidates, clip, evidence.evidence_hash, "silence")
+    output["gate"] = admission
     output["spans_in_evidence"] = len(evidence.spans)
     output["edge"] = payload.edge
     return OperationOutcome(new_project, context.history, output)
 
 
-def _mark_scene_cuts(project: Project, context: OperationContext) -> OperationOutcome:
+def _mark_scene_cuts(
+    project: Project,
+    context: OperationContext,
+    *,
+    gate: PerceptionGate | None = None,
+) -> OperationOutcome:
     payload = MarkSceneCutsInput.model_validate(context.input_data)
     clip = _find_clip(project, payload.track_id, payload.clip_id)
     evidence = payload.evidence
     _require_same_content(clip, evidence.asset_sha256, OPERATION_MARK_SCENE_CUTS)
+    admission = _marker_admission(gate, payload)
+    if admission.get("admitted") is False:
+        return OperationOutcome(
+            project,
+            context.history,
+            {
+                "gate": admission,
+                "markers_added": 0,
+                "markers_skipped_existing": 0,
+                "skipped_outside_clip": 0,
+                "cuts_in_evidence": len(evidence.cuts_us),
+                "threshold": evidence.threshold,
+                "refused": True,
+            },
+        )
 
     candidates = [
         ("scene_cut", cut_us, f"{payload.label_prefix} {index}")
         for index, cut_us in enumerate(evidence.cuts_us, start=1)
     ]
     new_project, output = _add_markers(project, candidates, clip, evidence.evidence_hash, "scenes")
+    output["gate"] = admission
     output["cuts_in_evidence"] = len(evidence.cuts_us)
     output["threshold"] = evidence.threshold
     return OperationOutcome(new_project, context.history, output)
 
 
-def _assess_loudness(project: Project, context: OperationContext) -> OperationOutcome:
+def _assess_loudness(
+    project: Project,
+    context: OperationContext,
+    *,
+    gate: PerceptionGate | None = None,
+) -> OperationOutcome:
     payload = AssessLoudnessInput.model_validate(context.input_data)
     asset = next((a for a in project.assets if a.asset_id == payload.asset_id), None)
     if asset is None:
@@ -194,7 +295,24 @@ def _assess_loudness(project: Project, context: OperationContext) -> OperationOu
         )
 
     measured = evidence.integrated_lufs
+    admission = _gate_record(
+        gate,
+        None
+        if measured is None
+        else {
+            "kind": "loudness",
+            "licenses": list(payload.licenses),
+            "commercial_intent": payload.commercial_intent,
+            "integrated_lufs": measured,
+            "target_lufs": payload.target_lufs,
+            "tolerance_lu": payload.tolerance_lu,
+            "coverage_factor": payload.coverage_factor,
+            "bit_depth": payload.bit_depth,
+            "sample_count": payload.sample_count,
+        },
+    )
     output: dict[str, Any] = {
+        "gate": admission,
         "asset_id": payload.asset_id,
         "evidence_hash": evidence.evidence_hash,
         "integrated_lufs": measured,
@@ -204,6 +322,18 @@ def _assess_loudness(project: Project, context: OperationContext) -> OperationOu
         "true_peak_ceiling_dbfs": payload.true_peak_ceiling_dbfs,
         "tolerance_lu": payload.tolerance_lu,
     }
+    if admission.get("admitted") is False:
+        # A refused admission is terminal: no gain, no normalize arguments, no
+        # projected peak -- nothing a downstream command could act on.
+        output.update(
+            verdict="refused",
+            gain_db=None,
+            projected_true_peak_dbfs=None,
+            limiting_required=False,
+            normalize_arguments=None,
+        )
+        return OperationOutcome(project, context.history, output)
+
     if measured is None:
         output.update(
             verdict="no_signal",
@@ -244,8 +374,30 @@ def _assess_loudness(project: Project, context: OperationContext) -> OperationOu
     return OperationOutcome(project, context.history, output)
 
 
-def register_perception_operations(registry: CapabilityRegistry) -> None:
-    """Register the perception operations with ``registry``."""
+def _bind(
+    handler: Callable[..., OperationOutcome], gate: PerceptionGate | None
+) -> Callable[[Project, OperationContext], OperationOutcome]:
+    """Bind the admission port into one handler (closure, not global state)."""
+
+    def bound(project: Project, context: OperationContext) -> OperationOutcome:
+        return handler(project, context, gate=gate)
+
+    bound.__name__ = handler.__name__
+    bound.__doc__ = handler.__doc__
+    return bound
+
+
+def register_perception_operations(
+    registry: CapabilityRegistry, *, gate: PerceptionGate | None = None
+) -> None:
+    """Register the perception operations with ``registry``.
+
+    ``gate`` is the admission port. Without it every operation still registers,
+    but each record says ``gate.outcome == "not_configured"`` and claims no
+    admission decision -- which is what the handler unit tests want, and what the
+    production composition root (:mod:`nexus_ai_agent.creative.production_runtime`)
+    never does.
+    """
     registry.register_operation(
         DOMAIN,
         "silence_marking",
@@ -254,7 +406,7 @@ def register_perception_operations(registry: CapabilityRegistry) -> None:
             description="Add markers at measured silence edges of a clip (Level B).",
             permission_level=PermissionLevel.REVERSIBLE,
             input_model=MarkSilencesInput,
-            handler=_mark_silences,
+            handler=_bind(_mark_silences, gate),
             required_packs=(PERCEPTION_PACKAGE_ID,),
             deterministic=True,
         ),
@@ -267,7 +419,7 @@ def register_perception_operations(registry: CapabilityRegistry) -> None:
             description="Add markers at measured scene changes of a clip (Level B).",
             permission_level=PermissionLevel.REVERSIBLE,
             input_model=MarkSceneCutsInput,
-            handler=_mark_scene_cuts,
+            handler=_bind(_mark_scene_cuts, gate),
             required_packs=(PERCEPTION_PACKAGE_ID,),
             deterministic=True,
         ),
@@ -280,18 +432,22 @@ def register_perception_operations(registry: CapabilityRegistry) -> None:
             description="Compare a measured EBU R128 summary with a target (Level A, read-only).",
             permission_level=PermissionLevel.IMMEDIATE,
             input_model=AssessLoudnessInput,
-            handler=_assess_loudness,
+            handler=_bind(_assess_loudness, gate),
             required_packs=(PERCEPTION_PACKAGE_ID,),
             deterministic=True,
         ),
     )
 
 
-def build_perception_registry() -> CapabilityRegistry:
+def build_perception_registry(*, gate: PerceptionGate | None = None) -> CapabilityRegistry:
     """A registry pre-loaded with the perception operations only."""
     registry = CapabilityRegistry()
-    register_perception_operations(registry)
+    register_perception_operations(registry, gate=gate)
     return registry
 
 
-__all__ = ["build_perception_registry", "register_perception_operations"]
+__all__ = [
+    "PerceptionGate",
+    "build_perception_registry",
+    "register_perception_operations",
+]

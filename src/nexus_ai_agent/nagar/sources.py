@@ -16,7 +16,7 @@ The five sources (each an independent predicate over the tree)
     catalogue row.
 
 ``runtime_registry``
-    ``build_runtime_registry()`` — the composed registry's own answer to
+    ``build_production_registry()`` — the composed registry's own answer to
     "which operations can this process dispatch".  Its size is a
     *measurement*, never a constant.
 
@@ -368,9 +368,9 @@ class Runtime:
 def read_runtime_registry(registry: CapabilityRegistry | None = None) -> Runtime:
     """Read the composed registry — the runtime's own answer."""
     if registry is None:
-        from nexus_ai_agent.creative.packs.runtime import build_runtime_registry
+        from nexus_ai_agent.creative.production_runtime import build_production_registry
 
-        registry = build_runtime_registry()
+        registry = build_production_registry()
     operations: list[RuntimeOperation] = []
     for operation_id in sorted(registry.list_operations()):
         spec = registry.get_spec(operation_id)
