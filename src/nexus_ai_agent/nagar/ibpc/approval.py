@@ -711,18 +711,41 @@ class CanonicalApprovalLedger(ApprovalLedger):
         super().__init__(now=now)
         self._key_provider = key_provider
         self._macs: dict[str, str] = {}
+        #: The signing key id of each binding, mirrored beside its MAC so a
+        #: rotation never orphans an approval (Wave 3-R1b).
+        self._key_ids: dict[str, str] = {}
 
     # -- key access ---------------------------------------------------------
 
-    def _active_key(self) -> bytes:
+    def _active_key_id(self) -> str:
         try:
             key_id = self._key_provider.active_key_id
-            return self._key_provider.key(key_id).material
         except (AttributeError, KeyError, KeyProviderError, ValueError) as exc:
             raise ApprovalBindingMismatchError("the approval key is unavailable") from exc
+        if not isinstance(key_id, str) or not key_id:
+            raise ApprovalBindingMismatchError("the approval key id is malformed")
+        return key_id
 
-    def _mac_for(self, payload: ApprovalBindingPayload) -> str:
-        return canonical_binding_mac(self._active_key(), payload)
+    def _key_for(self, key_id: str) -> bytes:
+        """The verification key recorded at signing time, by id.
+
+        Verification deliberately does NOT use the active key: after a rotation
+        to ``key-v2`` an approval signed by ``key-v1`` must still verify while
+        ``key-v1`` remains in the ring, and must fail closed once it is revoked.
+        """
+        try:
+            return self._key_provider.key(key_id).material
+        except (AttributeError, KeyError, KeyProviderError, ValueError) as exc:
+            raise ApprovalBindingMismatchError(
+                f"the approval key {key_id!r} is unknown or has been revoked"
+            ) from exc
+
+    def _active_key(self) -> bytes:
+        return self._key_for(self._active_key_id())
+
+    def _mac_for(self, payload: ApprovalBindingPayload, *, key_id: str | None = None) -> str:
+        key = self._active_key() if key_id is None else self._key_for(key_id)
+        return canonical_binding_mac(key, payload)
 
     # -- public contract ----------------------------------------------------
 
@@ -737,7 +760,8 @@ class CanonicalApprovalLedger(ApprovalLedger):
         refused: the MAC is bound once, exactly like the human decision it
         authenticates.
         """
-        mac = self._mac_for(payload)
+        key_id = self._active_key_id()
+        mac = self._mac_for(payload, key_id=key_id)
         with self._transaction():
             existing = self._macs.get(approval_id)
             if existing is not None and not hmac.compare_digest(existing, mac):
@@ -745,7 +769,8 @@ class CanonicalApprovalLedger(ApprovalLedger):
                     "an approval is bound once and cannot be re-bound"
                 )
             self._macs[approval_id] = mac
-            self._write_binding_columns(approval_id, payload, mac)
+            self._key_ids[approval_id] = key_id
+            self._write_binding_columns(approval_id, payload, mac, key_id)
             return mac
 
     def binding_mac(self, approval_id: str) -> str:
@@ -755,6 +780,17 @@ class CanonicalApprovalLedger(ApprovalLedger):
         if mac is None:
             raise ApprovalBindingMismatchError(f"approval {approval_id!r} has no canonical binding")
         return mac
+
+    def binding_key_id(self, approval_id: str) -> str:
+        """The key id that signed this binding (never the *current* active id)."""
+        key_id = self._key_ids.get(approval_id)
+        if key_id is None:
+            key_id = self._fetch_binding_key_id(approval_id)
+        if key_id is None:
+            raise ApprovalBindingMismatchError(
+                f"approval {approval_id!r} has no recorded signing key id"
+            )
+        return key_id
 
     def binding_payload(self, approval_id: str) -> ApprovalBindingPayload:
         stored = self._fetch_binding_payload(approval_id)
@@ -784,7 +820,7 @@ class CanonicalApprovalLedger(ApprovalLedger):
         """
         stored = self.binding_payload(approval_id)
         actual = self.binding_mac(approval_id)
-        expected = self._mac_for(stored)
+        expected = self._mac_for(stored, key_id=self.binding_key_id(approval_id))
         if not hmac.compare_digest(actual, expected):
             raise ApprovalBindingMismatchError("the stored binding MAC does not verify")
         if payload is not None:
@@ -828,29 +864,41 @@ class CanonicalApprovalLedger(ApprovalLedger):
         single-use compare-and-set.  A failure at any earlier step leaves the
         approval unconsumed (a refused request never burns a valid approval).
         """
-        mac = self.binding_mac(approval_id)
-        stored = self.binding_payload(approval_id)
-        expected = self._mac_for(stored)
-        if not hmac.compare_digest(mac, expected):
-            raise ApprovalBindingMismatchError("the stored binding MAC does not verify")
-        if payload is not None and payload.as_dict() != stored.as_dict():
-            raise ApprovalBindingMismatchError("presented payload differs from the stored binding")
-        expires = _utc_instant(stored.expires_at_utc)
-        if _utc_instant(self._now()) >= expires:
-            raise ApprovalExpiredError(f"token expired at {stored.expires_at_utc}")
-        current = self.get(approval_id)
-        if current.state is ApprovalState.CONSUMED:
-            raise ApprovalAlreadyConsumedError(approval_id)
-        return self.consume(approval_id, identity=identity, job_id=job_id, attempt=attempt)
+        # Wave 3-R1b: the read → key-id lookup → constant-time MAC verify →
+        # payload equality → expiry → ISSUED→CONSUMED compare-and-set is ONE
+        # ``BEGIN IMMEDIATE`` unit on ONE connection.  Splitting it let a
+        # competing writer commit between the verify and the transition, which
+        # is exactly how a verified-once token becomes consumeable twice.
+        with self._transaction():
+            mac = self.binding_mac(approval_id)
+            key_id = self.binding_key_id(approval_id)
+            stored = self.binding_payload(approval_id)
+            expected = self._mac_for(stored, key_id=key_id)
+            if not hmac.compare_digest(mac, expected):
+                raise ApprovalBindingMismatchError("the stored binding MAC does not verify")
+            if payload is not None and payload.as_dict() != stored.as_dict():
+                raise ApprovalBindingMismatchError(
+                    "presented payload differs from the stored binding"
+                )
+            expires = _utc_instant(stored.expires_at_utc)
+            if _utc_instant(self._now()) >= expires:
+                raise ApprovalExpiredError(f"token expired at {stored.expires_at_utc}")
+            current = self.get(approval_id)
+            if current.state is ApprovalState.CONSUMED:
+                raise ApprovalAlreadyConsumedError(approval_id)
+            return self.consume(approval_id, identity=identity, job_id=job_id, attempt=attempt)
 
     # -- storage seam (in-memory default) -----------------------------------
 
     def _write_binding_columns(
-        self, approval_id: str, payload: ApprovalBindingPayload, mac: str
+        self, approval_id: str, payload: ApprovalBindingPayload, mac: str, key_id: str
     ) -> None:
         """Base storage keeps the payload beside the MAC (durable overrides)."""
 
     def _fetch_binding_mac(self, approval_id: str) -> str | None:
+        return None
+
+    def _fetch_binding_key_id(self, approval_id: str) -> str | None:
         return None
 
     def _fetch_binding_payload(self, approval_id: str) -> tuple[str, ...] | None:
@@ -874,6 +922,7 @@ class DurableCanonicalApprovalLedger(CanonicalApprovalLedger, DurableApprovalLed
         DurableApprovalLedger.__init__(self, path, now=now)
         self._key_provider = key_provider
         self._macs: dict[str, str] = {}
+        self._key_ids: dict[str, str] = {}
         with self._transaction():
             self._conn.execute(
                 "CREATE TABLE IF NOT EXISTS approval_bindings ("
@@ -887,16 +936,32 @@ class DurableCanonicalApprovalLedger(CanonicalApprovalLedger, DurableApprovalLed
                 " scope_signature TEXT NOT NULL,"
                 " principal_id TEXT NOT NULL,"
                 " expires_at_utc TEXT NOT NULL,"
+                " key_id TEXT NOT NULL,"
                 " mac TEXT NOT NULL)"
             )
+            binding_columns = {
+                row[1] for row in self._conn.execute("PRAGMA table_info(approval_bindings)")
+            }
+            if "key_id" not in binding_columns:
+                # Deterministic, backwards-compatible migration: rows written by
+                # the pre-rotation schema were signed by the key active when they
+                # were issued, which in every single-key deployment that can have
+                # such rows is the active key id recorded here.
+                self._conn.execute(
+                    "ALTER TABLE approval_bindings ADD COLUMN key_id TEXT NOT NULL DEFAULT ''"
+                )
+                self._conn.execute(
+                    "UPDATE approval_bindings SET key_id = ? WHERE key_id = ''",
+                    (self._active_key_id(),),
+                )
 
     def _write_binding_columns(
-        self, approval_id: str, payload: ApprovalBindingPayload, mac: str
+        self, approval_id: str, payload: ApprovalBindingPayload, mac: str, key_id: str
     ) -> None:
         self._conn.execute(
             "INSERT INTO approval_bindings (approval_id, project_id, session_id, turn_id,"
             " base_revision_id, plan_sha256, preview_sha256, scope_signature, principal_id,"
-            " expires_at_utc, mac) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            " expires_at_utc, key_id, mac) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
             " ON CONFLICT(approval_id) DO UPDATE SET mac=excluded.mac",
             (
                 approval_id,
@@ -909,6 +974,7 @@ class DurableCanonicalApprovalLedger(CanonicalApprovalLedger, DurableApprovalLed
                 payload.scope_signature,
                 payload.principal_id,
                 payload.expires_at_utc,
+                key_id,
                 mac,
             ),
         )
@@ -916,6 +982,12 @@ class DurableCanonicalApprovalLedger(CanonicalApprovalLedger, DurableApprovalLed
     def _fetch_binding_mac(self, approval_id: str) -> str | None:
         row = self._conn.execute(
             "SELECT mac FROM approval_bindings WHERE approval_id = ?", (approval_id,)
+        ).fetchone()
+        return None if row is None else str(row[0])
+
+    def _fetch_binding_key_id(self, approval_id: str) -> str | None:
+        row = self._conn.execute(
+            "SELECT key_id FROM approval_bindings WHERE approval_id = ?", (approval_id,)
         ).fetchone()
         return None if row is None else str(row[0])
 
