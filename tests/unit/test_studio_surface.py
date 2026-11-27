@@ -86,6 +86,17 @@ def test_surface_declares_rtl_persian_and_no_inline_script(html: str) -> None:
     assert "<script>" not in html, "an inline script would need a CSP exception"
 
 
+def test_every_element_the_script_reaches_exists_in_the_markup(html: str) -> None:
+    """A renamed id is a silent `TypeError` in the browser, not a test failure."""
+    import re
+
+    script = (SURFACE_DIR / "studio.js").read_text(encoding="utf-8")
+    referenced = set(re.findall(r'\$\("([a-z0-9-]+)"\)', script))
+    declared = set(re.findall(r'id="([a-z0-9-]+)"', html))
+    assert referenced, "the script wires nothing"
+    assert referenced <= declared, f"script reaches missing ids: {sorted(referenced - declared)}"
+
+
 def test_surface_has_a_live_status_region(html: str) -> None:
     assert 'id="status"' in html and 'aria-live="polite"' in html
 
