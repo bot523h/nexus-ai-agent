@@ -41,10 +41,12 @@ __all__ = [
     "LoudnessUncertainty",
     "SceneCutUncertainty",
     "ScientificVerificationBridge",
+    "SilenceUncertainty",
     "SLOBurnUncertainty",
     "chromophore_uncertainty",
     "loudness_uncertainty",
     "scene_cut_uncertainty",
+    "silence_uncertainty",
     "slo_burn_uncertainty",
 ]
 
@@ -67,6 +69,84 @@ def _finite_number(value: object, label: str) -> float:
     if not math.isfinite(number):
         raise GUMInputError(f"{label} must be finite, got {number!r}")
     return number
+
+
+#: Acklam's rational approximation of the standard-normal quantile function,
+#: accurate to ~1.15e-9 over (0, 1); stdlib-only so the budget stays dependency-free.
+_NORMAL_A = (
+    -3.969683028665376e01,
+    2.209460984245205e02,
+    -2.759285104469687e02,
+    1.383577518672690e02,
+    -3.066479806614716e01,
+    2.506628277459239e00,
+)
+_NORMAL_B = (
+    -5.447609879822406e01,
+    1.615858368580409e02,
+    -1.556989798598866e02,
+    6.680131188771972e01,
+    -1.328068155288572e01,
+)
+_NORMAL_C = (
+    -7.784894002430293e-03,
+    -3.223964580411365e-01,
+    -2.400758277161838e00,
+    -2.549732539343734e00,
+    4.374664141464968e00,
+    2.938163982698783e00,
+)
+_NORMAL_D = (
+    7.784695709041462e-03,
+    3.224671290700398e-01,
+    2.445134137142996e00,
+    3.754408661907416e00,
+)
+
+
+def _normal_quantile(probability: float) -> float:
+    """Standard-normal quantile for ``probability`` in ``(0, 1)`` (Acklam)."""
+    p = _finite_number(probability, "coverage_probability")
+    if not 0.0 < p < 1.0:
+        raise GUMInputError(f"coverage_probability must be in (0, 1), got {p!r}")
+    lower = 0.02425
+    upper = 1.0 - lower
+    if p < lower:
+        q = math.sqrt(-2.0 * math.log(p))
+        numerator = (
+            (((_NORMAL_C[0] * q + _NORMAL_C[1]) * q + _NORMAL_C[2]) * q + _NORMAL_C[3]) * q
+            + _NORMAL_C[4]
+        ) * q + _NORMAL_C[5]
+        denominator = (
+            ((_NORMAL_D[0] * q + _NORMAL_D[1]) * q + _NORMAL_D[2]) * q + _NORMAL_D[3]
+        ) * q + 1.0
+        return numerator / denominator
+    if p > upper:
+        q = math.sqrt(-2.0 * math.log(1.0 - p))
+        numerator = (
+            (((_NORMAL_C[0] * q + _NORMAL_C[1]) * q + _NORMAL_C[2]) * q + _NORMAL_C[3]) * q
+            + _NORMAL_C[4]
+        ) * q + _NORMAL_C[5]
+        denominator = (
+            ((_NORMAL_D[0] * q + _NORMAL_D[1]) * q + _NORMAL_D[2]) * q + _NORMAL_D[3]
+        ) * q + 1.0
+        return -numerator / denominator
+    q = p - 0.5
+    r = q * q
+    numerator = (
+        (((_NORMAL_A[0] * r + _NORMAL_A[1]) * r + _NORMAL_A[2]) * r + _NORMAL_A[3]) * r
+        + _NORMAL_A[4]
+    ) * r + _NORMAL_A[5]
+    denominator = (
+        (((_NORMAL_B[0] * r + _NORMAL_B[1]) * r + _NORMAL_B[2]) * r + _NORMAL_B[3]) * r
+        + _NORMAL_B[4]
+    ) * r + 1.0
+    return numerator * q / denominator
+
+
+def _coverage_factor(probability: float) -> float:
+    """Coverage factor ``k`` for a two-sided interval of ``probability``."""
+    return _normal_quantile(0.5 * (1.0 + _finite_number(probability, "coverage_probability")))
 
 
 @dataclass(frozen=True, slots=True)
@@ -116,6 +196,132 @@ def loudness_uncertainty(
         standard=combined.standard,
         combined=combined,
     )
+
+
+@dataclass(frozen=True, slots=True)
+class SilenceUncertainty:
+    """Quantisation-limited uncertainty of one silence-segment RMS level."""
+
+    rms_db: float
+    threshold_db: float
+    mean_square: float
+    quantisation_step: float
+    standard: float
+    combined: CombinedUncertainty
+    decision: GuardBandDecision
+    coverage_probability: float
+
+    @property
+    def expanded(self) -> float:
+        return self.decision.expanded_uncertainty
+
+
+def silence_uncertainty(
+    rms_db: float,
+    threshold_db: float,
+    sample_count: int,
+    *,
+    bit_depth: int = 16,
+    window_duration_s: float = 0.0,
+    min_silence_duration_s: float = 0.0,
+    coverage_probability: float = 0.95,
+) -> SilenceUncertainty:
+    """Propagate quantisation and finite-window noise into a silence RMS level.
+
+    Model: ``rms_db`` is a measured RMS level in dBFS, so the mean square is
+    ``M = 10**(rms_db/10)``. Samples are quantised with step
+    ``q = 2/(2**bit_depth - 1)``; the exact second-order mean-square variance is
+
+    ``u^2(M) = q^2 M/(3N) + q^4/(180N)``
+
+    (the level-blind ``q^2/(12N)`` is *not* the variance of a mean-square
+    estimate and has the wrong dimension). When both a window duration and the
+    detector's minimum silence duration are given, an additional between-window
+    sampling term ``M^2 / (N * n_blocks)`` is added, where
+    ``n_blocks = window_duration_s / min_silence_duration_s``. It is zero when
+    either duration is unknown, so the default budget is the quantisation term.
+
+    ``L_dB = 10 log10(M)`` gives the first-order sensitivity
+    ``g = 10/(ln(10) * M)`` dB per unit mean square; the budget is propagated
+    through :func:`~.uncertainty_gum.combine` with ``nu_eff = N - 1``. The
+    three-valued decision checks ``rms_db < threshold_db`` with a guard band, so
+    an interval that straddles the threshold abstains instead of guessing.
+
+    ``coverage_probability`` is a two-sided probability; it is converted to the
+    GUM coverage factor ``k = Phi^-1((1 + p)/2)`` before expanding the interval.
+
+    Not modelled: K-weighting filter coefficient uncertainty and the
+    correlation between adjacent samples, so this is a lower bound.
+    """
+    level = _finite_number(rms_db, "rms_db")
+    threshold = _finite_number(threshold_db, "threshold_db")
+    if isinstance(sample_count, bool) or not isinstance(sample_count, int):
+        raise GUMInputError(f"sample_count must be an int, got {type(sample_count).__name__}")
+    if sample_count < 2:
+        raise GUMInputError(f"sample_count must be at least 2, got {sample_count}")
+    depth = _positive_int(bit_depth, "bit_depth")
+    window = _finite_number(window_duration_s, "window_duration_s")
+    if window < 0.0:
+        raise GUMInputError(f"window_duration_s must be non-negative, got {window!r}")
+    minimum = _finite_number(min_silence_duration_s, "min_silence_duration_s")
+    if minimum < 0.0:
+        raise GUMInputError(f"min_silence_duration_s must be non-negative, got {minimum!r}")
+    if minimum > 0.0 and window > 0.0 and minimum > window:
+        raise GUMInputError(
+            f"min_silence_duration_s {minimum!r} exceeds window_duration_s {window!r}; "
+            "the window cannot contain a qualifying silence"
+        )
+    factor = _coverage_factor(coverage_probability)
+
+    mean_square = 10.0 ** (level / 10.0)
+    if not math.isfinite(mean_square) or mean_square <= 0.0:
+        raise GUMInputError(f"rms_db {level!r} does not map to a positive mean square")
+    step = 2.0 / float(2**depth - 1)
+    quantisation_variance = step**2 * mean_square / (3.0 * sample_count) + step**4 / (
+        180.0 * sample_count
+    )
+    window_variance = 0.0
+    if window > 0.0 and minimum > 0.0:
+        blocks = window / minimum
+        window_variance = mean_square * mean_square / (sample_count * blocks)
+    variance = math.fsum((quantisation_variance, window_variance))
+    deviation = math.sqrt(variance)
+    sensitivity = 10.0 / (math.log(10.0) * mean_square)
+    combined = combine(
+        (sensitivity,),
+        UncertaintyInput.from_standard((mean_square,), (deviation,)),
+        degrees_of_freedom=(float(sample_count - 1),),
+    )
+    decision = evaluate_guard_band(level, combined, SpecificationLimits(upper=threshold), factor)
+    return SilenceUncertainty(
+        rms_db=level,
+        threshold_db=threshold,
+        mean_square=mean_square,
+        quantisation_step=step,
+        standard=combined.standard,
+        combined=combined,
+        decision=decision,
+        coverage_probability=coverage_probability,
+    )
+
+
+def synthetic_scene_cut_histograms(
+    strength: float,
+) -> tuple[tuple[float, float], tuple[float, float]]:
+    """TEST-ONLY synthetic two-bin histograms for one detector strength.
+
+    This is a **mathematical fixture generator**, not a measurement. It exists so
+    unit tests can exercise the JSD curve (monotone ``0`` at ``0``, ``1`` bit at
+    ``1``) without a real frame. It must never be called on the production gate
+    path: a divergence derived from the detector threshold would restate the
+    claim instead of measuring it, which is exactly the P0 defect this generator
+    used to hide. The gate requires empirical ``hist_before``/``hist_after``.
+    """
+    value = _finite_number(strength, "threshold")
+    if not 0.0 < value < 1.0:
+        raise GUMInputError(f"threshold must be in (0, 1), got {value!r}")
+    half = 0.5 * value
+    return (0.5 + half, 0.5 - half), (0.5 - half, 0.5 + half)
 
 
 @dataclass(frozen=True, slots=True)

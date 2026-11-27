@@ -33,6 +33,8 @@ PACK_ALLOWED = {
     "collections",
     "hashlib",
     "json",
+    # normalised-histogram validation uses isfinite/fsum/isclose (pure stdlib).
+    "math",
     "re",
     "typing",
     "pydantic",

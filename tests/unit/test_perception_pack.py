@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from pydantic import ValidationError
@@ -61,23 +61,29 @@ def _silence(
     sha: str = CONTENT,
     duration_s: float = 20.0,
 ) -> SilenceEvidence:
-    return SilenceEvidence.seal(
-        engine="ffmpeg 6.1.1",
-        asset_sha256=sha,
-        duration_us=int(duration_s * SEC),
-        noise_floor_db=-40.0,
-        min_silence_us=500_000,
-        spans=tuple(SilenceSpan(start_us=int(a * SEC), end_us=int(b * SEC)) for a, b in spans),
+    return cast(
+        SilenceEvidence,
+        SilenceEvidence.seal(
+            engine="ffmpeg 6.1.1",
+            asset_sha256=sha,
+            duration_us=int(duration_s * SEC),
+            noise_floor_db=-40.0,
+            min_silence_us=500_000,
+            spans=tuple(SilenceSpan(start_us=int(a * SEC), end_us=int(b * SEC)) for a, b in spans),
+        ),
     )
 
 
 def _scenes(cuts: list[float], *, sha: str = CONTENT) -> SceneCutEvidence:
-    return SceneCutEvidence.seal(
-        engine="ffmpeg 6.1.1",
-        asset_sha256=sha,
-        duration_us=20 * SEC,
-        threshold=0.3,
-        cuts_us=tuple(int(c * SEC) for c in cuts),
+    return cast(
+        SceneCutEvidence,
+        SceneCutEvidence.seal(
+            engine="ffmpeg 6.1.1",
+            asset_sha256=sha,
+            duration_us=20 * SEC,
+            threshold=0.3,
+            cuts_us=tuple(int(c * SEC) for c in cuts),
+        ),
     )
 
 
@@ -88,13 +94,16 @@ def _loudness(
     sha: str = CONTENT,
     lra: float | None = 4.0,
 ) -> LoudnessEvidence:
-    return LoudnessEvidence.seal(
-        engine="ffmpeg 6.1.1",
-        asset_sha256=sha,
-        duration_us=20 * SEC,
-        integrated_lufs=integrated,
-        loudness_range_lu=lra,
-        true_peak_dbfs=peak,
+    return cast(
+        LoudnessEvidence,
+        LoudnessEvidence.seal(
+            engine="ffmpeg 6.1.1",
+            asset_sha256=sha,
+            duration_us=20 * SEC,
+            integrated_lufs=integrated,
+            loudness_range_lu=lra,
+            true_peak_dbfs=peak,
+        ),
     )
 
 
@@ -114,9 +123,19 @@ def _clip(
     )
 
 
+def _admitting_gate(context: object) -> dict[str, object]:
+    """A stub port that admits everything; these tests exercise marker mapping."""
+    return {
+        "admitted": True,
+        "outcome": "pass",
+        "refusal": None,
+        "recommended_gain_db": 0.0,
+    }
+
+
 def _bus(clip: Clip | None = None, *, kind: str = "video") -> CommandBus:
     registry = build_wave1_registry()
-    register_perception_operations(registry)
+    register_perception_operations(registry, gate=_admitting_gate)
     track = Track(track_id="v1", name="V1", kind="video", clips=[clip or _clip()])
     timeline = Timeline(timeline_id="tl", duration_us=60 * SEC, tracks=[track])
     project: Project = new_project("perception_proj", "Perception", timeline)
@@ -159,6 +178,46 @@ def _silence_payload(evidence: SilenceEvidence, **extra: Any) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 # evidence contracts
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("hist_before", "hist_after", "match"),
+    [
+        ("not-a-histogram", [0.0, 1.0], "sequence of bin probabilities"),
+        ([1.0, 0.0], None, "must be supplied together"),
+        ([1.0, 0.0], [0.5, 0.25, 0.25], "share a bin count"),
+        ([], [], "non-empty and share a bin count"),
+        ([-0.5, 1.5], [0.0, 1.0], "finite and non-negative"),
+        ([0.2, 0.2], [0.0, 1.0], "must be normalised"),
+    ],
+)
+def test_scene_histograms_are_validated(hist_before: Any, hist_after: Any, match: str) -> None:
+    with pytest.raises(ValidationError, match=match):
+        SceneCutEvidence.seal(
+            engine="ffmpeg 6.1.1",
+            asset_sha256=CONTENT,
+            duration_us=20 * SEC,
+            threshold=0.3,
+            cuts_us=(),
+            hist_before=hist_before,
+            hist_after=hist_after,
+        )
+
+
+def test_scene_histograms_are_coerced_to_immutable_tuples() -> None:
+    evidence = SceneCutEvidence.seal(
+        engine="ffmpeg 6.1.1",
+        asset_sha256=CONTENT,
+        duration_us=20 * SEC,
+        threshold=0.3,
+        cuts_us=(),
+        hist_before=[1.0, 0.0],
+        hist_after=[0.0, 1.0],
+        sample_count_before=4096,
+    )
+    assert evidence.hist_before == (1.0, 0.0)
+    assert evidence.hist_after == (0.0, 1.0)
+    assert isinstance(evidence.hist_before, tuple)
 
 
 def test_sealed_evidence_round_trips_through_json() -> None:
@@ -208,7 +267,7 @@ def test_malformed_common_fields_are_rejected(field: str, value: Any) -> None:
 def test_evidence_is_immutable() -> None:
     evidence = _silence([(2.0, 3.5)])
     with pytest.raises(ValidationError):
-        evidence.duration_us = 1  # type: ignore[misc]
+        evidence.duration_us = 1
 
 
 @pytest.mark.parametrize(

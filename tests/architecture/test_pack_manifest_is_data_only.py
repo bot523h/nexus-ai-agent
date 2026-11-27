@@ -36,6 +36,8 @@ ALLOWED_TOP_LEVEL = {
     "hashlib",
     "importlib",
     "json",
+    # normalised-histogram validation uses isfinite/fsum/isclose (pure stdlib).
+    "math",
     "pathlib",
     "re",
     "typing",
