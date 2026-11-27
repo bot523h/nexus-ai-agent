@@ -217,19 +217,30 @@ def _timebase(value: Any) -> Fraction:
         if len(value) != 2:
             raise PreviewReadbackError("invalid_timebase", "timebase tuple must be (num, den)")
         numerator, denominator = value
+        # A rational frame rate has *integer* components.  ``int()`` would
+        # silently accept ``30.5`` (truncating to 30) and ``True`` (becoming 1),
+        # turning a nonsense timebase into a plausible wrong answer, so the type
+        # is checked exactly rather than coerced.
+        for component in (numerator, denominator):
+            if type(component) is not int:
+                raise PreviewReadbackError(
+                    "invalid_timebase",
+                    f"timebase components must be int, got {type(component).__name__}",
+                )
+        num, den = numerator, denominator
     elif isinstance(value, str) and "/" in value:
-        numerator, denominator = value.split("/", 1)
+        numerator_text, denominator_text = value.split("/", 1)
+        try:
+            num = int(numerator_text)
+            den = int(denominator_text)
+        except ValueError as exc:
+            raise PreviewReadbackError(
+                "invalid_timebase", f"timebase components must be integers ({exc})"
+            ) from exc
     else:
         raise PreviewReadbackError(
             "invalid_timebase", "timebase must be a (numerator, denominator) pair or 'n/d'"
         )
-    try:
-        num = int(numerator)
-        den = int(denominator)
-    except (TypeError, ValueError) as exc:
-        raise PreviewReadbackError(
-            "invalid_timebase", f"timebase components must be integers ({exc})"
-        ) from exc
     if num <= 0 or den <= 0:
         raise PreviewReadbackError(
             "invalid_timebase", f"timebase {num}/{den} must be strictly positive"
@@ -702,17 +713,17 @@ def compare_revisions(
                 f"readback {candidate.readback_id!r} no longer matches its preview_digest",
             )
 
-    base_map = {
-        (operation.operation, operation.target_clip_id): operation for operation in base.operations
-    }
-    head_map = {
-        (operation.operation, operation.target_clip_id): operation for operation in head.operations
-    }
-    added = tuple(sorted(key[0] + "@" + key[1] for key in head_map if key not in base_map))
-    removed = tuple(sorted(key[0] + "@" + key[1] for key in base_map if key not in head_map))
+    # Operations are keyed by (operation, target_clip_id, occurrence): a clip may
+    # legally carry several operations of one kind (three trims, two colour
+    # passes).  Keying on the pair alone silently overwrote every one but the
+    # last, so a revision that *added* a second trim compared as identical.
+    base_map = _operations_by_occurrence(base.operations)
+    head_map = _operations_by_occurrence(head.operations)
+    added = tuple(sorted(_operation_key_label(key) for key in head_map if key not in base_map))
+    removed = tuple(sorted(_operation_key_label(key) for key in base_map if key not in head_map))
     changed = tuple(
         sorted(
-            key[0] + "@" + key[1]
+            _operation_key_label(key)
             for key in base_map
             if key in head_map
             and _operation_signature(base_map[key]) != _operation_signature(head_map[key])
@@ -758,6 +769,37 @@ def compare_revisions(
         labels=resolved_labels,
         summary=resolved_labels,
     )
+
+
+def _operations_by_occurrence(
+    operations: Sequence[Any],
+) -> dict[tuple[str, str, int], Any]:
+    """Index operations by ``(operation, target_clip_id, occurrence)``.
+
+    ``occurrence`` is the 0-based ordinal of that ``(operation, target_clip_id)``
+    pair within the revision, so no operation is ever overwritten by a later one
+    of the same kind on the same clip.  The order is the readback's own, which is
+    canonical (it is part of the hashed payload), so the ordinal is stable.
+    """
+    counted: dict[tuple[str, str], int] = {}
+    indexed: dict[tuple[str, str, int], Any] = {}
+    for operation in operations:
+        pair = (str(operation.operation), str(operation.target_clip_id))
+        occurrence = counted.get(pair, 0)
+        counted[pair] = occurrence + 1
+        indexed[(pair[0], pair[1], occurrence)] = operation
+    return indexed
+
+
+def _operation_key_label(key: tuple[str, str, int]) -> str:
+    """The human-readable label for one comparison key.
+
+    The occurrence suffix appears only from the second occurrence on, so the
+    labels of single-operation revisions are unchanged from every earlier report.
+    """
+    operation, clip_id, occurrence = key
+    label = f"{operation}@{clip_id}"
+    return label if occurrence == 0 else f"{label}#{occurrence}"
 
 
 def _default_comparison_labels(
@@ -914,9 +956,14 @@ def lcm_timebase(*timebases: Any) -> Fraction:
     if not timebases:
         raise PreviewReadbackError("invalid_timebase", "at least one timebase is required")
     resolved = [_timebase(value) for value in timebases]
-    numerator = 1
-    denominator = 1
-    for rate in resolved:
+    # lcm(n1/d1, n2/d2) = lcm(n1, n2) / gcd(d1, d2) for reduced fractions.  The
+    # denominator accumulator therefore starts from the FIRST rate's denominator:
+    # seeding it with 1 makes every later gcd(1, d) equal 1, which silently
+    # demotes 30000/1001 and 24000/1001 to 120000/1 instead of 120000/1001.
+    first = resolved[0]
+    numerator = first.numerator
+    denominator = first.denominator
+    for rate in resolved[1:]:
         numerator = math.lcm(numerator, rate.numerator)
         denominator = math.gcd(denominator, rate.denominator)
     return Fraction(numerator, denominator)

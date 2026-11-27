@@ -154,6 +154,67 @@ def sha256_file_hex(path: Path) -> tuple[str, int]:
     return digest.hexdigest(), size
 
 
+def sha256_pinned_file(
+    path: Path,
+    *,
+    expected: os.stat_result,
+    authorized_root: Path,
+) -> tuple[str, int]:
+    """Hash the *exact inode* ``expected`` names, refusing any substitution.
+
+    ``lstat`` followed by ``open`` is a classic TOCTOU gap: between the two calls
+    the path can be replaced with a symlink, a FIFO, or a different file, and the
+    digest is then computed over something the security check never saw.
+
+    This closes it by taking one file descriptor and proving it is the same inode:
+
+    * ``O_NOFOLLOW`` makes the *open* refuse a symlink, rather than trusting the
+      earlier ``lstat`` to have caught it;
+    * ``O_CLOEXEC`` keeps the descriptor out of any child process;
+    * ``fstat(fd)`` must report a regular file whose ``(st_dev, st_ino)`` equal
+      the ``(st_dev, st_ino)`` from ``lstat`` — if the path was swapped, the pair
+      differs and the pin is refused;
+    * the bytes are read *through that descriptor*, never by re-opening the path,
+      and the count must match the pinned ``st_size``.
+    """
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+    try:
+        fd = os.open(str(path), flags)
+    except OSError as exc:
+        raise AssetPinViolationError(
+            "asset_open_failed", f"cannot open {path} without following links: {exc}"
+        ) from exc
+    try:
+        fd_stat = os.fstat(fd)
+        if not stat_module.S_ISREG(fd_stat.st_mode):
+            raise AssetPinViolationError(
+                "not_a_file", f"{path} is not a regular file (mode {fd_stat.st_mode:#o})"
+            )
+        if (fd_stat.st_dev, fd_stat.st_ino) != (expected.st_dev, expected.st_ino):
+            raise AssetPinViolationError(
+                "inode_substituted",
+                f"{path} changed between inspection and open "
+                f"({expected.st_dev}:{expected.st_ino} -> "
+                f"{fd_stat.st_dev}:{fd_stat.st_ino})",
+            )
+        digest = hashlib.sha256()
+        size = 0
+        with os.fdopen(fd, "rb", closefd=True) as handle:
+            fd = -1  # ownership transferred to the file object
+            for chunk in iter(lambda: handle.read(_CHUNK), b""):
+                digest.update(chunk)
+                size += len(chunk)
+        if size != fd_stat.st_size:
+            raise AssetPinViolationError(
+                "size_mismatch",
+                f"{path} grew or shrank while it was being read ({fd_stat.st_size} -> {size})",
+            )
+        return digest.hexdigest(), size
+    finally:
+        if fd != -1:
+            os.close(fd)
+
+
 @dataclass(frozen=True)
 class AssetVersionPin:
     """One input asset bound to its exact bytes.
@@ -347,7 +408,10 @@ _SCHEMA = (
         revision_jcs_sha256 TEXT NOT NULL,
         status TEXT NOT NULL DEFAULT 'LIVE',
         created_at_utc TEXT NOT NULL,
-        UNIQUE (project_id, revision_number)
+        UNIQUE (project_id, revision_number),
+        -- The composite key child rows reference, so a *real* SQLite foreign
+        -- key can bind them (PRAGMA foreign_keys = ON is set below).
+        UNIQUE (project_id, revision_id)
     )
     """,
     """
@@ -359,6 +423,19 @@ _SCHEMA = (
         updated_at_utc TEXT NOT NULL
     )
     """,
+    # The head may only ever name a revision that exists for its project, and a
+    # pinned revision may not be deleted out from under a live head.
+    """
+    CREATE TRIGGER IF NOT EXISTS nexus_studio_head_must_exist
+    BEFORE INSERT ON nexus_studio_project_revision_heads
+    WHEN NOT EXISTS (
+        SELECT 1 FROM nexus_studio_pinned_revisions
+        WHERE project_id = NEW.project_id AND revision_id = NEW.head_revision_id
+    )
+    BEGIN
+        SELECT RAISE(ABORT, 'head_reference_missing');
+    END
+    """,
     """
     CREATE TABLE IF NOT EXISTS nexus_studio_revision_pin_audit (
         audit_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -366,7 +443,14 @@ _SCHEMA = (
         project_id TEXT NOT NULL,
         event TEXT NOT NULL,
         detail TEXT NOT NULL DEFAULT '',
-        occurred_at_utc TEXT NOT NULL
+        occurred_at_utc TEXT NOT NULL,
+        -- A real relational reference, enforced by SQLite because the store sets
+        -- PRAGMA foreign_keys = ON: an audit row can never outlive -- or precede
+        -- -- the revision it describes, and a revision that still has audit
+        -- history cannot be deleted at all (ON DELETE RESTRICT).
+        FOREIGN KEY (project_id, revision_id)
+            REFERENCES nexus_studio_pinned_revisions (project_id, revision_id)
+            ON DELETE RESTRICT
     )
     """,
 )
@@ -481,7 +565,11 @@ class DurableRevisionPinningStore:
             raise AssetPinViolationError(
                 "path_escape", f"{resolved} is outside the authorized root {root}"
             )
-        content_sha256, byte_size = sha256_file_hex(resolved)
+        # Hash the inode ``lstat`` inspected, not whatever the path points at
+        # when the second lookup happens.
+        content_sha256, byte_size = sha256_pinned_file(
+            resolved, expected=stat_result, authorized_root=root
+        )
         relative = resolved.relative_to(root).as_posix()
         return AssetVersionPin(
             asset_id=asset_id,
@@ -791,7 +879,9 @@ class DurableRevisionPinningStore:
                 f"pinned asset {pin.asset_id!r} is {stat_result.st_size} bytes, "
                 f"pinned {pin.byte_size}",
             )
-        live_sha256, _ = sha256_file_hex(resolved)
+        # TOCTOU-safe: the digest is computed through a descriptor proven to be
+        # the very inode ``lstat`` just inspected.
+        live_sha256, _ = sha256_pinned_file(resolved, expected=stat_result, authorized_root=root)
         if not hmac.compare_digest(live_sha256, pin.content_sha256):
             raise AssetPinViolationError(
                 "content_drift",

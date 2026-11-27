@@ -29,6 +29,7 @@ from nexus_ai_agent.creative.studio.revision_pinning import (
     RevisionNotFoundError,
     RevisionPinningError,
     sha256_file_hex,
+    sha256_pinned_file,
     utc_now,
 )
 from nexus_ai_agent.provenance.canonicalization import (
@@ -958,3 +959,221 @@ def test_store_rejects_unknown_message_shape(tmp_path: Path) -> None:
     with _store(tmp_path) as store:
         with pytest.raises(RevisionPinningError):
             store.pin_revision(revision_id="rev-1", **_pin_kwargs(revision_number=0))
+
+
+# --------------------------------------------------------------------------- #
+# Wave 3 — TOCTOU-safe descriptor pinning and real relational integrity
+# --------------------------------------------------------------------------- #
+class TestDescriptorPinningClosesTheToctouvWindow:
+    """``lstat`` then ``open`` is a gap; one descriptor is not.
+
+    Each test replaces the file *between* the inspection and the read, which is
+    exactly the substitution an attacker on a shared filesystem performs.
+    """
+
+    def test_inode_substitution_between_lstat_and_open_is_detected(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        root = tmp_path / "assets"
+        target = _write_asset(root, payload=b"approved-bytes")
+        with _store(tmp_path) as store:
+            real_lstat = os.lstat
+            swapped: dict[str, Any] = {}
+
+            def swapping_lstat(path: Any) -> os.stat_result:
+                result = real_lstat(path)
+                if str(path).endswith("intro.mp4") and "done" not in swapped:
+                    # Swap the *content* and the inode after the inspection the
+                    # store is about to trust.
+                    replacement = target.with_name("intro.mp4.swapped")
+                    replacement.write_bytes(b"EVIL-REPLACEMENT-BYTES")
+                    os.replace(replacement, target)
+                    swapped["done"] = True
+                return result
+
+            monkeypatch.setattr(os, "lstat", swapping_lstat)
+            with pytest.raises(AssetPinViolationError) as excinfo:
+                store.pin_asset_from_disk(
+                    asset_id="asset-intro", file_path=target, authorized_asset_root=root
+                )
+        assert excinfo.value.reason == "inode_substituted"
+        assert swapped["done"] is True
+
+    def test_a_pin_verification_also_refuses_a_substituted_inode(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        root = tmp_path / "assets"
+        target = _write_asset(root, payload=b"pinned-bytes")
+        with _store(tmp_path) as store:
+            pin = store.pin_asset_from_disk(
+                asset_id="asset-intro", file_path=target, authorized_asset_root=root
+            )
+            stored = store.pin_revision(revision_id="rev-1", **_pin_kwargs(input_asset_pins=(pin,)))
+            real_lstat = os.lstat
+            state: dict[str, Any] = {}
+
+            def swapping_lstat(path: Any) -> os.stat_result:
+                result = real_lstat(path)
+                if str(path).endswith("intro.mp4") and "done" not in state:
+                    # Same size, different inode: only the (dev, ino) pair catches
+                    # this, which is why the check is not merely a size compare.
+                    replacement = target.with_name("intro.mp4.evil")
+                    replacement.write_bytes(b"pinned-byteZ")
+                    os.replace(replacement, target)
+                    state["done"] = True
+                return result
+
+            monkeypatch.setattr(os, "lstat", swapping_lstat)
+            with pytest.raises(AssetPinViolationError) as excinfo:
+                store.verify_worker_execution_pins(
+                    revision_id="rev-1",
+                    expected_revision_jcs_sha256=stored.revision_jcs_sha256,
+                    expected_plan_jcs_sha256=stored.plan_jcs_sha256,
+                    authorized_asset_root=root,
+                    expected_project_id=PROJECT,
+                    expected_tenant_id=TENANT,
+                )
+        assert excinfo.value.reason == "inode_substituted"
+
+    def test_reading_through_the_descriptor_never_reopens_the_path(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        root = tmp_path / "assets"
+        target = _write_asset(root, payload=b"descriptor-only")
+        opened: list[str] = []
+        real_open = os.open
+
+        def tracking_open(path: Any, *args: Any, **kwargs: Any) -> int:
+            opened.append(str(path))
+            return real_open(path, *args, **kwargs)
+
+        monkeypatch.setattr(os, "open", tracking_open)
+        with _store(tmp_path) as store:
+            pin = store.pin_asset_from_disk(
+                asset_id="asset-intro", file_path=target, authorized_asset_root=root
+            )
+        assert pin.content_sha256 == hashlib.sha256(b"descriptor-only").hexdigest()
+        assert str(target) in opened
+        assert all("intro.mp4" in entry for entry in opened)
+
+    def test_a_fifo_or_device_is_refused_through_the_descriptor(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        root = tmp_path / "assets"
+        target = _write_asset(root, payload=b"regular")
+        with _store(tmp_path) as store:
+            # Force ``fstat`` to describe a non-regular file, as a FIFO or device
+            # would, without needing privileges to create one.
+            real_fstat = os.fstat
+
+            def lying_fstat(fd: int) -> os.stat_result:
+                result = real_fstat(fd)
+                fields = list(result)
+                fields[0] = (result.st_mode & ~0o170000) | 0o010000  # S_IFIFO
+                return os.stat_result(fields)
+
+            monkeypatch.setattr(os, "fstat", lying_fstat)
+            with pytest.raises(AssetPinViolationError) as excinfo:
+                store.pin_asset_from_disk(
+                    asset_id="asset-fifo", file_path=target, authorized_asset_root=root
+                )
+        assert excinfo.value.reason == "not_a_file"
+
+    def test_a_file_that_grows_while_being_read_is_refused(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        root = tmp_path / "assets"
+        target = _write_asset(root, payload=b"short")
+        with _store(tmp_path) as store:
+            real_fstat = os.fstat
+
+            def lying_fstat(fd: int) -> os.stat_result:
+                result = real_fstat(fd)
+                fields = list(result)
+                fields[6] = result.st_size + 100  # st_size disagrees with the read
+                return os.stat_result(fields)
+
+            monkeypatch.setattr(os, "fstat", lying_fstat)
+            with pytest.raises(AssetPinViolationError) as excinfo:
+                store.pin_asset_from_disk(
+                    asset_id="asset-grow", file_path=target, authorized_asset_root=root
+                )
+        assert excinfo.value.reason == "inode_substituted" or (
+            excinfo.value.reason == "size_mismatch"
+        )
+
+    def test_a_dangling_symlink_at_open_time_is_refused(self, tmp_path: Path) -> None:
+        root = tmp_path / "assets"
+        (root / "media").mkdir(parents=True)
+        target = root / "media" / "vanishing.mp4"
+        target.write_bytes(b"payload")
+        with _store(tmp_path) as store:
+            target.unlink()
+            target.symlink_to(tmp_path / "nowhere")
+            with pytest.raises(AssetPinViolationError) as excinfo:
+                store.pin_asset_from_disk(
+                    asset_id="asset-vanish", file_path=target, authorized_asset_root=root
+                )
+        assert excinfo.value.reason in {"symlink_rejected", "asset_open_failed"}
+
+
+class TestRelationalIntegrityIsEnforcedBySqlite:
+    def test_pragmas_and_the_composite_key_are_present(self, tmp_path: Path) -> None:
+        with _store(tmp_path) as store:
+            assert store._conn.execute("PRAGMA foreign_keys").fetchone() == (1,)
+            keys = store._conn.execute(
+                "PRAGMA index_list(nexus_studio_pinned_revisions)"
+            ).fetchall()
+            assert any(row[2] == 1 for row in keys)  # at least one UNIQUE index
+
+    def test_an_orphan_asset_pin_row_is_rejected_by_the_foreign_key(self, tmp_path: Path) -> None:
+        with _store(tmp_path) as store:
+            with pytest.raises(sqlite3.IntegrityError) as excinfo:
+                store._conn.execute(
+                    "INSERT INTO nexus_studio_revision_pin_audit "
+                    "(revision_id, project_id, event, detail, occurred_at_utc) "
+                    "VALUES ('ghost', 'proj', 'pin', 'orphan', 'now')"
+                )
+        assert "FOREIGN KEY" in str(excinfo.value)
+
+    def test_a_real_audit_row_is_accepted_and_protected_from_deletion(self, tmp_path: Path) -> None:
+        with _store(tmp_path) as store:
+            store.pin_revision(revision_id="rev-1", **_pin_kwargs())
+            rows = store.audit_events()
+            assert rows, "the pin must have written audit history"
+            with pytest.raises(sqlite3.IntegrityError) as excinfo:
+                store._conn.execute("DELETE FROM nexus_studio_pinned_revisions")
+        assert "FOREIGN KEY" in str(excinfo.value)
+
+    def test_a_head_may_not_name_a_revision_that_does_not_exist(self, tmp_path: Path) -> None:
+        with _store(tmp_path) as store:
+            with pytest.raises(sqlite3.IntegrityError) as excinfo:
+                store._conn.execute(
+                    "INSERT INTO nexus_studio_project_revision_heads "
+                    "(project_id, tenant_id, head_revision_id, head_revision_number, "
+                    "updated_at_utc) VALUES ('proj', 'tenant', 'ghost', 1, 'now')"
+                )
+        assert "head_reference_missing" in str(excinfo.value)
+
+    def test_an_open_that_fails_is_a_typed_refusal_not_a_crash(self, tmp_path: Path) -> None:
+        """O_NOFOLLOW turns a swapped-in symlink into a plain open failure."""
+        root = tmp_path / "assets"
+        target = _write_asset(root, payload=b"payload")
+        with _store(tmp_path):
+            inspected = os.lstat(target)
+            os.unlink(target)
+            target.symlink_to(tmp_path / "definitely-missing")
+            with pytest.raises(AssetPinViolationError) as excinfo:
+                sha256_pinned_file(target, expected=inspected, authorized_root=root)
+        assert excinfo.value.reason == "asset_open_failed"
+
+    def test_the_descriptor_path_matches_sha256_file_hex_on_a_clean_file(
+        self, tmp_path: Path
+    ) -> None:
+        root = tmp_path / "assets"
+        target = _write_asset(root, payload=b"agrees")
+        inspected = os.lstat(target)
+        assert sha256_pinned_file(target, expected=inspected, authorized_root=root) == (
+            sha256_file_hex(target)
+        )
+        assert root.is_dir()

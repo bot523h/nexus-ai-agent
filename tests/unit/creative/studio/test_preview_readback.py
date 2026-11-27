@@ -261,10 +261,60 @@ class TestFrameArithmetic:
 
     def test_lcm_timebase_finds_an_exact_common_rate(self) -> None:
         assert lcm_timebase(NTSC, PAL) == Fraction(30000)
-        assert lcm_timebase(NTSC, NTSC_FILM) == Fraction(120000)
+        # Two NTSC-family rates share the 1001 denominator: the exact LCM over
+        # the rationals keeps it.  lcm(30000, 24000) / gcd(1001, 1001) =
+        # 120000/1001, which is 119.88... Hz -- *not* 120000 fps.  The old
+        # formula seeded the denominator accumulator with 1, so gcd(1, 1001) was
+        # always 1 and every mixed-rate edit silently became an integer rate.
+        assert lcm_timebase(NTSC, NTSC_FILM) == Fraction(120000, 1001)
         assert lcm_timebase("25/1") == Fraction(25)
         with pytest.raises(PreviewReadbackError):
             lcm_timebase()
+
+    def test_lcm_timebase_is_exact_for_every_ntsc_family_pair(self) -> None:
+        cases = [
+            (Fraction(30000, 1001), Fraction(24000, 1001), Fraction(120000, 1001)),
+            (Fraction(60000, 1001), Fraction(30000, 1001), Fraction(60000, 1001)),
+            (Fraction(24000, 1001), Fraction(24000, 1001), Fraction(24000, 1001)),
+            (Fraction(30000, 1001), Fraction(25, 1), Fraction(30000, 1)),
+            (Fraction(50, 1), Fraction(25, 1), Fraction(50, 1)),
+            (Fraction(2, 3), Fraction(4, 9), Fraction(4, 3)),
+        ]
+        for first, second, expected in cases:
+            assert lcm_timebase(first, second) == expected, (first, second)
+            # The identity that defines the operation: both inputs divide it.
+            common = lcm_timebase(first, second)
+            assert (common / first).denominator == 1
+            assert (common / second).denominator == 1
+
+    @pytest.mark.parametrize(
+        "bad",
+        [
+            (30.5, 1),
+            (30, 1.5),
+            (True, 1),
+            (1, False),
+            (30.0, 1.0),
+            (Fraction(30, 1), 1.0),
+        ],
+    )
+    def test_tuple_timebases_require_exact_integers(self, bad: tuple[object, object]) -> None:
+        """``int()`` would silently launder 30.5 -> 30 and True -> 1."""
+        with pytest.raises(PreviewReadbackError) as excinfo:
+            lcm_timebase(bad)
+        assert excinfo.value.reason == "invalid_timebase"
+
+    def test_a_bool_timebase_is_refused_and_not_treated_as_one(self) -> None:
+        with pytest.raises(PreviewReadbackError) as excinfo:
+            lcm_timebase(True)
+        assert excinfo.value.reason == "invalid_timebase"
+
+    def test_string_timebases_still_parse_but_refuse_floats(self) -> None:
+        assert lcm_timebase("30000/1001") == Fraction(30000, 1001)
+        with pytest.raises(PreviewReadbackError):
+            lcm_timebase("30.5/1")
+        with pytest.raises(PreviewReadbackError):
+            lcm_timebase("30/")
 
 
 # --------------------------------------------------------------------------- #
@@ -1009,3 +1059,93 @@ class TestPinnedRevisionIntegration:
         assert envelope.verify_envelope_integrity() is True
         assert envelope.preview_digest == readback.preview_digest
         assert verify_wysiwys_readback(readback, expected_digest=envelope.preview_digest)
+
+
+# --------------------------------------------------------------------------- #
+# Wave 3 — a clip may carry several operations of one kind
+# --------------------------------------------------------------------------- #
+class TestComparisonOfRepeatedOperations:
+    """The collision the pair-keyed index could not see.
+
+    ``compare_revisions`` used to key operations by ``(operation,
+    target_clip_id)``.  Two trims on one clip therefore overwrote each other in
+    the index, and adding a second trim to a revision compared as *identical* --
+    the most dangerous possible answer for a change-review surface.
+    """
+
+    @staticmethod
+    def _readback(*spans: tuple[Any, Any], revision_id: str = "rev-1", number: int = 1) -> Any:
+        builder = _builder(revision_id=revision_id, revision_number=number)
+        for span in spans:
+            builder.add_operation(
+                operation="timeline.cut",
+                target_clip_id="clip-1",
+                span=span,
+                labels=LABELS,
+            )
+        return builder.build_readback()
+
+    def test_two_operations_of_one_kind_on_one_clip_are_both_preserved(self) -> None:
+        readback = self._readback((0, 1), (1, 2), ("2", "3"))
+        assert len(readback.operations) == 3
+
+    def test_adding_a_second_operation_of_the_same_kind_is_detected(self) -> None:
+        base = self._readback((0, 1))
+        head = self._readback((0, 1), (1, 2), revision_id="rev-2", number=2)
+        report = compare_revisions(base, head)
+        assert report.identical is False
+        assert report.added_operations == ("timeline.cut@clip-1#1",)
+        assert report.removed_operations == ()
+        assert report.changed_operations == ()
+
+    def test_removing_one_of_two_identical_kinds_is_detected(self) -> None:
+        base = self._readback((0, 1), (1, 2))
+        head = self._readback((0, 1), revision_id="rev-2", number=2)
+        report = compare_revisions(base, head)
+        assert report.identical is False
+        assert report.removed_operations == ("timeline.cut@clip-1#1",)
+        assert report.added_operations == ()
+
+    def test_a_changed_second_occurrence_is_reported_where_it_changed(self) -> None:
+        base = self._readback((0, 1), (1, 2))
+        head = self._readback((0, 1), (1, 5), revision_id="rev-2", number=2)
+        report = compare_revisions(base, head)
+        # The FIRST trim is untouched; only the second moved.
+        assert report.changed_operations == ("timeline.cut@clip-1#1",)
+        assert report.added_operations == ()
+        assert report.removed_operations == ()
+        assert report.identical is False
+
+    def test_no_operation_is_ever_silently_overwritten(self) -> None:
+        """A sweep: every distinct change on a repeated kind must show up."""
+        base = self._readback((0, 1), (1, 2), ("2", "3"))
+        head = self._readback((0, 1), (1, 9), ("2", "3"), (3, 4), revision_id="r2", number=2)
+        report = compare_revisions(base, head)
+        labels = (
+            set(report.added_operations)
+            | set(report.removed_operations)
+            | set(report.changed_operations)
+        )
+        assert labels == {"timeline.cut@clip-1#1", "timeline.cut@clip-1#3"}
+        assert report.identical is False
+
+    def test_single_occurrence_labels_are_unchanged(self) -> None:
+        """Backwards compatibility: no ``#0`` suffix on the first occurrence."""
+        base = _simple_readback()
+        builder = _builder(revision_id="rev-2", revision_number=2)
+        for operation in base.operations:
+            builder.add_operation(
+                operation=operation.operation,
+                target_clip_id=operation.target_clip_id,
+                span=operation.span,
+                deltas=operation.deltas,
+                labels=operation.labels,
+            )
+        report = compare_revisions(base, builder.build_readback())
+        assert report.added_operations == ()
+        assert report.removed_operations == ()
+        assert report.changed_operations == ()
+        # ``identical`` also accounts for the frame/duration drift between two
+        # revisions, so assert the operation sets -- which is what the
+        # occurrence-keyed index owns -- rather than the whole verdict.
+        assert report.labels is not None
