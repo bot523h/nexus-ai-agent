@@ -44,6 +44,22 @@ def test_index_is_served_at_the_mount(client: TestClient) -> None:
     assert "NAGAR Studio" in response.text
 
 
+def test_bare_mount_redirects_to_the_trailing_slash(client: TestClient) -> None:
+    response = client.get(SURFACE_MOUNT, follow_redirects=False)
+    assert response.status_code == 307
+    assert response.headers["location"] == f"{SURFACE_MOUNT}/"
+
+
+def test_responses_carry_a_strict_content_security_policy(client: TestClient) -> None:
+    for path in (f"{SURFACE_MOUNT}/", f"{SURFACE_MOUNT}/studio.js"):
+        headers = client.get(path).headers
+        assert headers["x-content-type-options"] == "nosniff"
+        policy = headers["content-security-policy"]
+        assert "script-src 'self'" in policy
+        assert "frame-ancestors 'none'" in policy
+        assert "unsafe-inline" not in policy
+
+
 def test_assets_are_served(client: TestClient) -> None:
     js = client.get(f"{SURFACE_MOUNT}/studio.js")
     css = client.get(f"{SURFACE_MOUNT}/studio.css")

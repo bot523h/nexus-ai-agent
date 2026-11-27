@@ -63,17 +63,6 @@ jobs:
           else
             echo "mode=production" >> "$GITHUB_OUTPUT"
           fi
-      - name: CI self-test — real backup, restore drill and reconciliation
-        if: steps.mode.outputs.mode == 'ci'
-        run: |
-          set -o pipefail
-          bash scripts/ci_install.sh "."
-          python -m nexus_ai_agent.maintenance.ci_selftest \
-            --only all \
-            --db "${{ runner.temp }}/nexus_maintenance_ci.sqlite3" \
-            --tier "${{ runner.temp }}/nexus_maintenance_ci_tier" \
-            --workspace-root . \
-            --json-out maintenance_ci_selftest.json 2>&1 | tee maintenance_ci_selftest.log
       - name: Preflight — required production backup configuration
         if: steps.mode.outputs.mode == 'production'
         run: |
@@ -122,6 +111,17 @@ jobs:
       # This runs the exact production entry point `create_backup()`. The
       # step writes the machine-verifiable evidence (key, sha256, size,
       # timestamp) to the job log AND the step summary (task-164 AC).
+      - name: CI self-test — real backup, restore drill and reconciliation
+        if: steps.mode.outputs.mode == 'ci'
+        run: |
+          set -o pipefail
+          bash scripts/ci_install.sh "."
+          python -m nexus_ai_agent.maintenance.ci_selftest \
+            --only all \
+            --db "${{ runner.temp }}/nexus_maintenance_ci.sqlite3" \
+            --tier "${{ runner.temp }}/nexus_maintenance_ci_tier" \
+            --workspace-root . \
+            --json-out maintenance_ci_selftest.json 2>&1 | tee maintenance_ci_selftest.log
       - name: Nightly DB backup (round-trip + sidecar verified)
         if: steps.mode.outputs.mode == 'production'
         run: |

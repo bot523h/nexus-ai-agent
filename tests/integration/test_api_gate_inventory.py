@@ -66,6 +66,7 @@ from fastapi.testclient import TestClient
 from starlette.staticfiles import StaticFiles
 
 from nexus_ai_agent.api import studio_session
+from nexus_ai_agent.api.studio_surface import PUBLIC_SURFACE_PATHS
 from nexus_ai_agent.api.studio_web import PUBLIC_SHELL_PATHS
 from nexus_ai_agent.config import settings as settings_module
 from nexus_ai_agent.storage import db as db_module
@@ -88,6 +89,12 @@ from nexus_ai_agent.storage import db as db_module
 #: contain no user data — the app authenticates itself through the session
 #: lane below, not through its own delivery.
 #:
+#: The standalone ``/studio/app`` reference bundle follows the same rule via
+#: ``studio_surface.PUBLIC_SURFACE_PATHS``: literal routes over a fixed asset
+#: allow-list, no directory serving, no request-derived path, and the bytes are
+#: identical for every caller (the bundle authenticates through the session lane
+#: like the shell, never through its own delivery).
+#:
 #: ``GET /studio/session`` is a *status probe*, not a state read: it answers
 #: ``{"configured": …, "authenticated": …}`` and deliberately reports "no
 #: session" as a value instead of an error, so a browser can decide whether to
@@ -99,6 +106,7 @@ PUBLIC_OPERATIONS: frozenset[tuple[str, str]] = frozenset(
         ("GET", "/healthz"),
         ("GET", "/readyz"),
         *(("GET", path) for path in PUBLIC_SHELL_PATHS),
+        *(("GET", path) for path in PUBLIC_SURFACE_PATHS),
         ("GET", "/studio/session"),
     }
 )
