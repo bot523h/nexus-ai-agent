@@ -142,6 +142,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   edits, every anchor unique, every mutant parses and differs, every kill target a
   real `Class::test`, purge/kill-rule mechanics) in under a second, and holds the
   end-to-end 40/40 proof behind `NEXUS_RUN_MUTATION_CAMPAIGN=1`.
+- **Gate evidence, measured.** `docs/audits/STUDIO_WAVES_GATE_EVIDENCE_2026-11-27.md`
+  records the repository's eight gates at `3f80f9a` with the command and result for
+  each, and names the two this sandbox could not measure instead of ticking them.
+  The whole-suite run is reported with its real numbers — 17 264 passed / 46 failed
+  / 72 errors in 1 h 04 m — and every non-passing outcome is traced to its cause:
+  a missing `ffmpeg` binary (160 outcomes), a missing `ffprobe` (the wheel bundles
+  `ffmpeg` alone), and three pre-existing storyboard-worker timeouts. Installing
+  the bundled binary and re-running took the affected suites from 64 failures to 5;
+  no file those suites exercise is touched by this branch. Lint, format, types,
+  deptry, version lock-step, the truth gate, the 449 architecture guards and the
+  334 truth/board/docs tests are all green, and the 439-test targeted run across the
+  five module suites, the slice and the campaign guards is green in 10.6 s.
 - The three reviewed architecture gates (`test_nagar_studio_isolation`,
   `test_slideshow_adapter_boundary`, `test_command_capability_boundary`) gain an
   explicit, minimal durable-state allowlist: the new state modules may use
