@@ -30,6 +30,7 @@ from typing import Any
 
 import pytest
 
+from nexus_ai_agent.creative.studio import production_dr  # noqa: F401 - monkeypatch seam
 from nexus_ai_agent.creative.studio.production_dr import (
     HOT_BACKUP_FILENAME,
     MANIFEST_FILENAME,
@@ -372,13 +373,30 @@ class TestVerifyBundle:
         assert report.manifest is not None
         assert report.to_dict()["verified"] is True
 
-    def test_verification_does_not_mutate_the_bundle(self, tmp_path: Path, live_db: Any) -> None:
+    def test_verification_never_deletes_files_from_the_bundle(
+        self, tmp_path: Path, live_db: Any
+    ) -> None:
+        """Verification must not be a delete primitive.
+
+        The previous contract asserted that verification *removed* the ``-wal``
+        SQLite materialises.  That is exactly the behaviour Wave 2 makes
+        impossible: a read must never unlink a file beside a path it was merely
+        asked to inspect.  What is asserted instead is the property that
+        matters — every name present before the call is still present after it.
+        """
         manager, bundle = self._bundle(tmp_path, live_db)
-        before = sorted((path.name, path.stat().st_size) for path in bundle.iterdir())
+        before = {path.name for path in bundle.iterdir()}
         manager.verify_backup_bundle(bundle)
-        after = sorted((path.name, path.stat().st_size) for path in bundle.iterdir())
-        assert before == after
-        assert not (bundle / f"{HOT_BACKUP_FILENAME}-wal").exists()
+        after = {path.name for path in bundle.iterdir()}
+        assert before <= after
+        missing = before - after
+        assert missing == set()
+        # A second pass must not report the sidecars the first pass created as a
+        # *stale* bundle state, because it must not have created them at all.
+        # (SQLite materialises them from a read; both passes see the same set.)
+        second = manager.verify_backup_bundle(bundle)
+        assert set(path.name for path in bundle.iterdir()) == after
+        assert second.verified is True
 
     def test_a_missing_bundle_is_reported_not_raised(self, tmp_path: Path) -> None:
         manager = _manager(tmp_path)
@@ -631,7 +649,7 @@ class TestRestore:
 
         original = module._table_row_counts
 
-        def exploding(path: Path) -> dict[str, int]:
+        def exploding(path: Path, **_kwargs: Any) -> dict[str, int]:
             counts = original(path)
             if path.name.startswith("stage.sqlite3.restoring-"):
                 raise DisasterRecoveryError("staged_counts_mismatch", "simulated")
@@ -670,7 +688,7 @@ class TestRestore:
 
         original = module._integrity_check
 
-        def failing(path: Path) -> str:
+        def failing(path: Path, **_kwargs: Any) -> str:
             if ".restoring-" in path.name:
                 return "malformed"
             return original(path)
@@ -739,7 +757,7 @@ class TestRestore:
         state = {"swapped": False}
 
         # Post-restore verification runs *after* the swap: make it fail.
-        def failing_after_swap(path: Path) -> str:
+        def failing_after_swap(path: Path, **_kwargs: Any) -> str:
             if path == target and state["swapped"]:
                 return "malformed"
             return original(path)
@@ -767,7 +785,7 @@ class TestRestore:
 
         original = module._table_row_counts
 
-        def lying(path: Path) -> dict[str, int]:
+        def lying(path: Path, **_kwargs: Any) -> dict[str, int]:
             counts = original(path)
             if ".restoring-" in path.name:
                 return {name: count + 1 for name, count in counts.items()}
@@ -1135,3 +1153,624 @@ class TestReports:
         payload = result.to_dict()
         assert list(payload["tables"]) == ["clips", "markers"]
         assert payload["removed_sidecars"] == ["-wal", "-shm"]
+
+
+# --------------------------------------------------------------------------- #
+# Wave 2A — path traversal must be refused before any I/O happens
+# --------------------------------------------------------------------------- #
+class TestManifestPathTraversalDefence:
+    """A manifest is untrusted input until its HMAC verifies.
+
+    Two independent layers are attacked here, because either one alone is a
+    single point of failure: the manifest may not *hold* a path, and verification
+    may not *act* on one before authenticating it.
+    """
+
+    @staticmethod
+    def _valid_fields() -> dict[str, Any]:
+        return {
+            "manifest_id": "man-1",
+            "bundle_id": "bun-1",
+            "created_at_utc": "2026-11-27T00:00:00+00:00",
+            "source_name": "studio.sqlite3",
+            "backup_filename": HOT_BACKUP_FILENAME,
+            "backup_sha256": "a" * 64,
+            "backup_size_bytes": 10,
+            "key_id": "bk-1",
+        }
+
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "../victim.sqlite3",
+            "../../victim.sqlite3",
+            "/abs/path/victim.sqlite3",
+            "sub/dir/victim.sqlite3",
+            "sub\\victim.sqlite3",
+            "..",
+            ".",
+            ".hidden.sqlite3",
+            "victim.db",
+            "victim.sqlite3 ",
+            "",
+            "victim\x00.sqlite3",
+        ],
+    )
+    def test_a_traversing_or_non_canonical_filename_is_refused_at_construction(
+        self, name: str
+    ) -> None:
+        with pytest.raises(DisasterRecoveryError) as excinfo:
+            BackupManifest(**{**self._valid_fields(), "backup_filename": name})
+        assert excinfo.value.reason in {"invalid_backup_filename", "invalid_field"}
+
+    def test_canonical_sqlite3_names_are_still_accepted(self) -> None:
+        for name in (HOT_BACKUP_FILENAME, "hot_backup-2026_11_27.sqlite3", "A1.sqlite3"):
+            manifest = BackupManifest(**{**self._valid_fields(), "backup_filename": name})
+            assert manifest.backup_filename == name
+
+    def test_tampered_manifest_with_path_traversal_does_not_read_or_unlink_outside_bundle(
+        self, tmp_path: Path
+    ) -> None:
+        """The exact attack: an unsigned manifest pointing at a sibling victim."""
+        bundle = tmp_path / "bundle"
+        bundle.mkdir()
+        victim = tmp_path / "victim.sqlite3"
+        victim.write_bytes(b"PRECIOUS-HOST-DATA")
+        victim_wal = tmp_path / "victim.sqlite3-wal"
+        victim_wal.write_bytes(b"WAL")
+        victim_shm = tmp_path / "victim.sqlite3-shm"
+        victim_shm.write_bytes(b"SHM")
+
+        # An attacker-written manifest with a traversal in the filename.
+        payload = {
+            **self._valid_fields(),
+            "backup_filename": "../victim.sqlite3",
+            "manifest_hmac_sha256": "0" * 64,
+        }
+        (bundle / MANIFEST_FILENAME).write_text(json.dumps(payload), encoding="utf-8")
+
+        manager = _manager(tmp_path)
+        opened: list[str] = []
+        real_open = os.open
+        real_sha = production_dr._sha256_file
+
+        def tracking_open(path: Any, *args: Any, **kwargs: Any) -> Any:
+            opened.append(str(path))
+            return real_open(path, *args, **kwargs)
+
+        def tracking_sha(path: Path) -> tuple[str, int]:
+            opened.append(str(path))
+            return real_sha(path)
+
+        try:
+            production_dr.os.open = tracking_open  # type: ignore[assignment]
+            production_dr._sha256_file = tracking_sha  # type: ignore[assignment]
+            report = manager.verify_backup_bundle(bundle)
+        finally:
+            production_dr.os.open = real_open  # type: ignore[assignment]
+            production_dr._sha256_file = real_sha  # type: ignore[assignment]
+
+        assert report.verified is False
+        assert report.manifest is None
+        assert any("manifest_malformed" in problem for problem in report.problems)
+        # Nothing outside the bundle was opened, hashed, or unlinked.
+        assert opened == []
+        assert victim.read_bytes() == b"PRECIOUS-HOST-DATA"
+        assert victim_wal.exists()
+        assert victim_shm.exists()
+
+    def _signed_bundle_with_manifest(
+        self, tmp_path: Path, live_db: Any, **overrides: Any
+    ) -> tuple[StudioDisasterRecoveryManager, Path, BackupKeyMaterial]:
+        path, _connection = live_db
+        key = BackupKeyMaterial("bk-1", KEY_HEX)
+        manager = _manager(tmp_path, key=key)
+        manifest = manager.create_hot_backup(database_path=path)
+        bundle = manager.backup_root / manifest.bundle_id
+        stored = json.loads((bundle / MANIFEST_FILENAME).read_text("utf-8"))
+        stored.update(overrides)
+        # Re-sign whatever the attacker now claims, with a *different* key: the
+        # signature must not verify, which is the gate under test.
+        candidate = BackupManifest.from_dict({**stored, "manifest_hmac_sha256": "0" * 64})
+        rogue = BackupKeyMaterial("bk-1", "cd" * 32)
+        (bundle / MANIFEST_FILENAME).write_text(
+            json.dumps(candidate.with_signature(rogue).to_dict()), encoding="utf-8"
+        )
+        return manager, bundle, rogue
+
+    def test_an_invalid_signature_stops_before_any_backup_io(
+        self, tmp_path: Path, live_db: Any
+    ) -> None:
+        """A forged-but-parseable manifest names a *sibling* file: it must not be read."""
+        manager, bundle, _rogue = self._signed_bundle_with_manifest(tmp_path, live_db)
+        sibling = bundle.parent / "sibling.sqlite3"
+        sibling.write_bytes(b"NOT-A-BACKUP")
+        stored = json.loads((bundle / MANIFEST_FILENAME).read_text("utf-8"))
+        stored["backup_filename"] = "sibling.sqlite3"
+        rogue = BackupKeyMaterial("bk-1", "cd" * 32)
+        forged = BackupManifest.from_dict({**stored, "manifest_hmac_sha256": "0" * 64})
+        (bundle / MANIFEST_FILENAME).write_text(
+            json.dumps(forged.with_signature(rogue).to_dict()), encoding="utf-8"
+        )
+
+        touched: list[str] = []
+        real_sha = production_dr._sha256_file
+        real_integrity = production_dr._integrity_check
+
+        def tracking_sha(path: Path) -> tuple[str, int]:
+            touched.append("sha:" + path.name)
+            return real_sha(path)
+
+        def tracking_integrity(path: Path) -> str:
+            touched.append("integrity:" + path.name)
+            return real_integrity(path)
+
+        try:
+            production_dr._sha256_file = tracking_sha  # type: ignore[assignment]
+            production_dr._integrity_check = tracking_integrity  # type: ignore[assignment]
+            report = manager.verify_backup_bundle(bundle)
+        finally:
+            production_dr._sha256_file = real_sha  # type: ignore[assignment]
+            production_dr._integrity_check = real_integrity  # type: ignore[assignment]
+
+        assert report.verified is False
+        assert report.problems == ("signature_invalid",)
+        # The cryptographic gate ran first: no file was hashed or opened.
+        assert touched == []
+
+    def test_a_symlinked_backup_is_refused_even_when_signed(
+        self, tmp_path: Path, live_db: Any
+    ) -> None:
+        manager, bundle, _ = self._signed_bundle_with_manifest(tmp_path, live_db)
+        # Re-create a genuine bundle, then replace the backup with a symlink and
+        # sign the manifest honestly, so only the symlink gate can catch it.
+        path, _connection = live_db
+        key = BackupKeyMaterial("bk-1", KEY_HEX)
+        honest = _manager(tmp_path, key=key).create_hot_backup(database_path=path)
+        bundle = manager.backup_root / honest.bundle_id
+        backup = bundle / HOT_BACKUP_FILENAME
+        outside = tmp_path / "outside.sqlite3"
+        outside.write_bytes(b"OUTSIDE")
+        backup.unlink()
+        backup.symlink_to(outside)
+        report = manager.verify_backup_bundle(bundle)
+        assert report.verified is False
+        assert "backup_symlink_rejected" in report.problems
+        assert outside.read_bytes() == b"OUTSIDE"
+
+    def test_a_directory_named_like_the_backup_is_refused(
+        self, tmp_path: Path, live_db: Any
+    ) -> None:
+        path, _connection = live_db
+        key = BackupKeyMaterial("bk-1", KEY_HEX)
+        manager = _manager(tmp_path, key=key)
+        manifest = manager.create_hot_backup(database_path=path)
+        bundle = manager.backup_root / manifest.bundle_id
+        backup = bundle / HOT_BACKUP_FILENAME
+        backup.unlink()
+        backup.mkdir()
+        report = manager.verify_backup_bundle(bundle)
+        assert report.verified is False
+        assert "backup_not_a_regular_file" in report.problems
+
+    def test_unexpected_sidecars_are_reported_and_preserved(
+        self, tmp_path: Path, live_db: Any
+    ) -> None:
+        """Verification is read-only: it reports sidecars, it never deletes them."""
+        path, _connection = live_db
+        key = BackupKeyMaterial("bk-1", KEY_HEX)
+        manager = _manager(tmp_path, key=key)
+        manifest = manager.create_hot_backup(database_path=path)
+        bundle = manager.backup_root / manifest.bundle_id
+        wal = bundle / f"{HOT_BACKUP_FILENAME}-wal"
+        shm = bundle / f"{HOT_BACKUP_FILENAME}-shm"
+        wal.write_bytes(b"STALE-WAL")
+        shm.write_bytes(b"STALE-SHM")
+        # A read-only SQLite open still *materialises* sidecars for a WAL file, so
+        # they are (re)created after the check; what must never happen is a
+        # delete.  Planting them fresh before the call proves the report fires.
+        report = manager.verify_backup_bundle(bundle)
+        assert report.verified is False
+        assert report.problems == ("unexpected_sidecar: wal",)
+        # Preserved, never unlinked: reporting is the whole job here.
+        assert wal.exists() and shm.exists()
+        assert wal.read_bytes() == b"STALE-WAL"
+
+    def test_an_empty_wal_and_a_shm_are_bookkeeping_not_findings(
+        self, tmp_path: Path, live_db: Any
+    ) -> None:
+        """Verification must stay idempotent across its own read side-effects."""
+        path, _connection = live_db
+        manager = _manager(tmp_path, key=BackupKeyMaterial("bk-1", KEY_HEX))
+        manifest = manager.create_hot_backup(database_path=path)
+        bundle = manager.backup_root / manifest.bundle_id
+        (bundle / f"{HOT_BACKUP_FILENAME}-wal").write_bytes(b"")
+        (bundle / f"{HOT_BACKUP_FILENAME}-shm").write_bytes(b"x" * 32768)
+        report = manager.verify_backup_bundle(bundle)
+        assert report.verified is True
+        assert report.problems == ()
+
+
+# --------------------------------------------------------------------------- #
+# Wave 2B — a cancelled waiter must never leak governor capacity
+# --------------------------------------------------------------------------- #
+class TestCancelledWaiterLeaseLeak:
+    def test_cancelled_waiter_during_lease_acquire_never_leaks_governor_capacity(
+        self,
+    ) -> None:
+        governor = StudioResourceGovernor(max_concurrent_jobs=1, max_queue_depth=4)
+        holder_release = threading.Event()
+
+        def holder() -> None:
+            holder_release.wait(2.0)
+
+        async def main() -> dict[str, int | bool]:
+            first = asyncio.ensure_future(governor.run_with_lease(holder))
+            while governor.active_leases == 0:
+                await asyncio.sleep(0.01)
+
+            waiter_started = threading.Event()
+
+            def waiter_worker() -> str:
+                waiter_started.set()
+                return "ran"
+
+            second = asyncio.ensure_future(governor.run_with_lease(waiter_worker))
+            # Let the second task reach the blocking acquire in its worker thread.
+            for _ in range(200):
+                if governor.stats()["waiting"] == 1:
+                    break
+                await asyncio.sleep(0.005)
+            assert governor.stats()["waiting"] == 1
+
+            second.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await second
+            assert waiter_started.is_set() is False  # the work never started
+
+            # Release the holder: the abandoned thread must NOT take the slot.
+            holder_release.set()
+            await first
+
+            for _ in range(200):
+                if governor.active_leases == 0 and governor.stats()["waiting"] == 0:
+                    break
+                await asyncio.sleep(0.005)
+
+            # A third caller gets the slot immediately -- no leaked capacity.
+            third = await asyncio.wait_for(governor.run_with_lease(lambda: "ok"), timeout=2.0)
+            return {
+                "active": governor.active_leases,
+                "waiting": governor.stats()["waiting"],
+                "admitted": governor.stats()["admitted"],
+                "third": third == "ok",
+                "waiter_ran": waiter_started.is_set(),
+            }
+
+        try:
+            result = asyncio.run(main())
+        finally:
+            holder_release.set()
+            governor.shutdown()
+
+        assert result["active"] == 0
+        assert result["waiting"] == 0
+        assert result["third"] is True
+        assert result["waiter_ran"] is False
+        # Two admissions only: the holder and the third caller.  The cancelled
+        # waiter consumed nothing.
+        assert result["admitted"] == 2
+
+    def test_a_cancelled_waiter_that_wins_the_race_still_returns_its_lease(self) -> None:
+        """The narrow race: the slot opens in the same instant as the cancel."""
+        governor = StudioResourceGovernor(max_concurrent_jobs=1, max_queue_depth=2)
+        holder_release = threading.Event()
+
+        async def main() -> tuple[int, int]:
+            first = asyncio.ensure_future(governor.run_with_lease(holder_release.wait))
+            while governor.active_leases == 0:
+                await asyncio.sleep(0.005)
+            second = asyncio.ensure_future(governor.run_with_lease(lambda: "work"))
+            for _ in range(200):
+                if governor.stats()["waiting"] == 1:
+                    break
+                await asyncio.sleep(0.005)
+            # Free the slot *and* cancel at once: the acquire may already have won.
+            holder_release.set()
+            second.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await second
+            await first
+            for _ in range(400):
+                stats = governor.stats()
+                if governor.active_leases == 0 and stats["waiting"] == 0:
+                    break
+                await asyncio.sleep(0.005)
+            return governor.active_leases, governor.stats()["waiting"]
+
+        try:
+            active, waiting = asyncio.run(main())
+        finally:
+            holder_release.set()
+            governor.shutdown()
+        assert active == 0
+        assert waiting == 0
+        assert governor.stats()["admitted"] <= 2
+
+    def test_acquire_interruptible_honours_a_pre_set_cancel_event(self) -> None:
+        governor = StudioResourceGovernor(max_concurrent_jobs=1)
+        first = governor.acquire()
+        event = threading.Event()
+        event.set()
+        try:
+            with pytest.raises(GovernorSaturatedError) as excinfo:
+                governor._acquire_interruptible(cancel_event=event)
+            assert excinfo.value.reason == "cancelled"
+            assert governor.stats()["waiting"] == 0
+        finally:
+            first.release()
+            governor.shutdown()
+
+    def test_acquire_interruptible_honours_its_wait_budget(self) -> None:
+        governor = StudioResourceGovernor(max_concurrent_jobs=1)
+        first = governor.acquire()
+        ticks = iter([0.0, 0.0, 5.0, 9.0])
+
+        def clock() -> float:
+            try:
+                return next(ticks)
+            except StopIteration:  # pragma: no cover - defensive
+                return 9.0
+
+        governor._clock = clock  # type: ignore[assignment]
+        try:
+            with pytest.raises(GovernorSaturatedError) as excinfo:
+                governor._acquire_interruptible(timeout_s=1.0)
+            assert excinfo.value.reason == "acquire_timeout"
+        finally:
+            first.release()
+            governor.shutdown()
+
+    def test_a_non_string_filename_is_refused_before_any_path_join(self) -> None:
+        with pytest.raises(DisasterRecoveryError) as excinfo:
+            BackupManifest(
+                manifest_id="man-1",
+                bundle_id="bun-1",
+                created_at_utc="2026-11-27T00:00:00+00:00",
+                source_name="studio.sqlite3",
+                backup_filename=123,  # type: ignore[arg-type]
+                backup_sha256="a" * 64,
+                backup_size_bytes=10,
+                key_id="bk-1",
+            )
+        assert excinfo.value.reason == "invalid_field"
+
+    def test_a_resolved_backup_that_escapes_the_root_is_refused(
+        self, tmp_path: Path, live_db: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Layer 2 of the traversal defence, attacked directly.
+
+        The manifest can no longer *hold* a traversal, so this forces the
+        containment check by making ``Path.resolve`` lie about where the candidate
+        lands -- exactly the shape a symlinked or bind-mounted bundle would take.
+        """
+        path, _connection = live_db
+        manager = _manager(tmp_path, key=BackupKeyMaterial("bk-1", KEY_HEX))
+        manifest = manager.create_hot_backup(database_path=path)
+        bundle = manager.backup_root / manifest.bundle_id
+        outside = tmp_path / "elsewhere" / HOT_BACKUP_FILENAME
+        outside.parent.mkdir()
+
+        real_resolve = Path.resolve
+
+        def lying_resolve(self: Path, strict: bool = False) -> Path:
+            if self.name == HOT_BACKUP_FILENAME:
+                return outside
+            return real_resolve(self, strict=strict)
+
+        monkeypatch.setattr(Path, "resolve", lying_resolve)
+        report = manager.verify_backup_bundle(bundle)
+        assert report.verified is False
+        assert "backup_path_escape" in report.problems
+
+    def test_restore_refuses_a_bundle_with_a_blocking_problem(
+        self, tmp_path: Path, live_db: Any
+    ) -> None:
+        path, _connection = live_db
+        manager = _manager(tmp_path, key=BackupKeyMaterial("bk-1", KEY_HEX))
+        manifest = manager.create_hot_backup(database_path=path)
+        bundle = manager.backup_root / manifest.bundle_id
+        (bundle / HOT_BACKUP_FILENAME).write_bytes(b"corrupted")
+        with pytest.raises(DisasterRecoveryError) as excinfo:
+            manager.restore_from_backup(bundle, target_database_path=tmp_path / "restored.sqlite3")
+        assert excinfo.value.reason == "backup_unverified"
+
+    def test_restore_tolerates_only_the_bookkeeping_sidecar_finding(
+        self, tmp_path: Path, live_db: Any
+    ) -> None:
+        """A dirty WAL is fatal to verification but must not block a restore."""
+        path, _connection = live_db
+        manager = _manager(tmp_path, key=BackupKeyMaterial("bk-1", KEY_HEX))
+        manifest = manager.create_hot_backup(database_path=path)
+        bundle = manager.backup_root / manifest.bundle_id
+        (bundle / f"{HOT_BACKUP_FILENAME}-wal").write_bytes(b"STALE-FRAMES")
+        report = manager.verify_backup_bundle(bundle)
+        assert "unexpected_sidecar: wal" in report.problems
+        target = tmp_path / "restored.sqlite3"
+        result = manager.restore_from_backup(bundle, target_database_path=target)
+        assert result.restored_sha256 == manifest.backup_sha256
+        assert target.is_file()
+
+    def test_a_lease_won_by_the_abandoned_thread_is_released(self) -> None:
+        """The narrow race, forced deterministically instead of hoped for.
+
+        The waiter's acquire keeps running in its thread and *wins* the slot
+        after the coroutine has already been cancelled.  That lease must come
+        back: the old code handed it to a dead coroutine, which lost the capacity
+        for the lifetime of the governor.
+        """
+        governor = StudioResourceGovernor(max_concurrent_jobs=1, max_queue_depth=1)
+        won: list[AdmissionLease] = []
+        original_acquire = governor._acquire_interruptible
+
+        def slow_acquire(
+            *, cancel_event: threading.Event | None = None, timeout_s: float | None = None
+        ) -> AdmissionLease:
+            # Deliberately ignore ``cancel_event``: this *is* the race where the
+            # thread registers a lease after the cancellation was requested.
+            time.sleep(0.15)
+            lease = original_acquire(cancel_event=None, timeout_s=None)
+            won.append(lease)
+            return lease
+
+        governor._acquire_interruptible = slow_acquire  # type: ignore[assignment]
+
+        held = governor.acquire()
+        assert governor.active_leases == 1
+
+        async def main() -> tuple[int, int]:
+            task = asyncio.ensure_future(governor.run_with_lease(lambda: "never"))
+            for _ in range(400):
+                if governor.stats()["waiting"] == 1:
+                    break
+                await asyncio.sleep(0.005)
+            assert governor.stats()["waiting"] == 1
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+            # The thread is still sleeping; free the slot so it can win it.
+            held.release()
+            await asyncio.sleep(0.4)
+            return governor.active_leases, governor.stats()["waiting"]
+
+        try:
+            active, waiting = asyncio.run(main())
+        finally:
+            held.release() if held.held else None
+            for lease in won:
+                lease.release()
+            governor.shutdown()
+        # The abandoned thread did win a lease, and it was returned (held=False)
+        # by the done-callback rather than leaked.
+        assert len(won) >= 1
+        assert all(lease.held is False for lease in won)
+        assert active == 0
+        assert waiting == 0
+        # And the capacity is genuinely usable again.
+        fresh = governor.acquire()
+        assert governor.active_leases == 1
+        fresh.release()
+        assert governor.active_leases == 0
+
+    def test_the_orphan_release_swallows_a_failing_future(self) -> None:
+        """A cancellation path must never mask the CancelledError with a new error."""
+        governor = StudioResourceGovernor(max_concurrent_jobs=1)
+
+        class _FailingFuture:
+            def add_done_callback(self, callback: Any) -> None:
+                callback(self)
+
+            def cancelled(self) -> bool:
+                return False
+
+            def result(self, timeout: float | None = None) -> Any:
+                raise GovernorSaturatedError("cancelled", "no slot")
+
+        class _CancelledFuture:
+            def add_done_callback(self, callback: Any) -> None:
+                callback(self)
+
+            def cancelled(self) -> bool:
+                return True
+
+            def result(self, timeout: float | None = None) -> Any:  # pragma: no cover
+                raise AssertionError("must not be read once cancelled")
+
+        for future in (_FailingFuture(), _CancelledFuture()):
+            governor._release_orphaned_lease(future)  # type: ignore[arg-type]
+        assert governor.active_leases == 0
+        governor.shutdown()
+
+    def test_the_orphan_release_ignores_a_non_lease_result(self) -> None:
+        """A future that resolves to something else must not be "released"."""
+        governor = StudioResourceGovernor(max_concurrent_jobs=1)
+
+        class _OddFuture:
+            def add_done_callback(self, callback: Any) -> None:
+                callback(self)
+
+            def cancelled(self) -> bool:
+                return False
+
+            def result(self, timeout: float | None = None) -> Any:
+                return "not a lease"
+
+        governor._release_orphaned_lease(_OddFuture())  # type: ignore[arg-type]
+        assert governor.active_leases == 0
+        governor.shutdown()
+
+    def test_a_cancelled_waiter_releases_even_when_the_thread_is_slow(self) -> None:
+        """Cancellation stays prompt: it must not block on the slow thread."""
+        governor = StudioResourceGovernor(max_concurrent_jobs=1, max_queue_depth=1)
+        held = governor.acquire()
+
+        async def main() -> int:
+            start = time.monotonic()
+            task = asyncio.ensure_future(governor.run_with_lease(lambda: "never"))
+            for _ in range(400):
+                if governor.stats()["waiting"] == 1:
+                    break
+                await asyncio.sleep(0.005)
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+            elapsed = time.monotonic() - start
+            assert elapsed < 0.5, f"cancellation took {elapsed:.3f}s"
+            # The waiter's thread may still be polling; once the holder lets go it
+            # must either see the flag (and raise) or return its lease to us.
+            held.release()
+            for _ in range(400):
+                if governor.active_leases == 0 and governor.stats()["waiting"] == 0:
+                    break
+                await asyncio.sleep(0.005)
+            return governor.active_leases
+
+        try:
+            active = asyncio.run(main())
+        finally:
+            held.release()
+            governor.shutdown()
+        assert active == 0
+        assert governor.active_leases == 0
+
+    def test_the_filename_validator_refuses_a_blank_name_directly(self) -> None:
+        """Belt and braces: the guard is reachable without a full manifest."""
+        for blank in ("", "   "):
+            with pytest.raises(DisasterRecoveryError) as excinfo:
+                production_dr._validate_backup_filename(blank)
+            assert excinfo.value.reason == "invalid_backup_filename"
+
+    def test_a_cancellation_that_lands_inside_the_lock_still_allocates_nothing(self) -> None:
+        """The last-check window: the flag flips between the poll and the lock."""
+        governor = StudioResourceGovernor(max_concurrent_jobs=1, max_queue_depth=2)
+
+        class _LateEvent(threading.Event):
+            """Reports clear on the first read, set on the second."""
+
+            def __init__(self) -> None:
+                super().__init__()
+                self.reads = 0
+
+            def is_set(self) -> bool:
+                self.reads += 1
+                return self.reads >= 2
+
+        late = _LateEvent()
+        try:
+            with pytest.raises(GovernorSaturatedError) as excinfo:
+                governor._acquire_interruptible(cancel_event=late)
+            assert excinfo.value.reason == "cancelled"
+            assert governor.active_leases == 0
+            assert governor.stats()["waiting"] == 0
+        finally:
+            governor.shutdown()

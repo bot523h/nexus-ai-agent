@@ -36,8 +36,10 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import shutil
 import sqlite3
+import stat as stat_module
 import threading
 import time
 import uuid
@@ -73,6 +75,41 @@ HOT_BACKUP_FILENAME = "hot_backup.sqlite3"
 MANIFEST_FILENAME = "backup_manifest.json"
 MANIFEST_SCHEMA = "nexus.studio.dr_backup_manifest.v1"
 _KEY_BYTES = 32
+
+#: A bundle filename is a *name*, never a path: lowercase/uppercase letters,
+#: digits, ``_``, ``.`` and ``-``, ending in ``.sqlite3``.  Anything that could
+#: traverse (``/``, ``\``, ``..``), hide (a leading dot) or name an absolute
+#: location is refused by :class:`BackupManifest` before it can be joined onto a
+#: bundle directory at all.
+_BACKUP_FILENAME_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]*\.sqlite3$")
+
+
+def _validate_backup_filename(name: str) -> str:
+    """Refuse anything that is not a plain ``*.sqlite3`` file name.
+
+    This is the first of the two independent path-traversal defences: the
+    manifest can never *hold* a traversal, so a bundle directory join cannot
+    *produce* one.  The second (in :meth:`verify_backup_bundle`) re-proves
+    containment on the resolved path, because a defence that only exists in one
+    layer is a defence that disappears with one mutation.
+    """
+    if not isinstance(name, str) or not name.strip():
+        raise DisasterRecoveryError("invalid_backup_filename", "backup_filename must be a name")
+    if "/" in name or "\\" in name or ".." in name or "\x00" in name:
+        raise DisasterRecoveryError(
+            "invalid_backup_filename",
+            f"{name!r} is a path, not a filename (separator or '..' present)",
+        )
+    if Path(name).is_absolute() or Path(name).name != name:
+        raise DisasterRecoveryError(
+            "invalid_backup_filename", f"{name!r} names a location, not a file"
+        )
+    if _BACKUP_FILENAME_RE.match(name) is None:
+        raise DisasterRecoveryError(
+            "invalid_backup_filename",
+            f"{name!r} must match ^[A-Za-z0-9_][A-Za-z0-9_.-]*\\.sqlite3$",
+        )
+    return name
 
 
 def utc_now() -> str:
@@ -225,6 +262,9 @@ class BackupManifest:
         object.__setattr__(
             self, "labels", {str(key): str(value) for key, value in sorted(self.labels.items())}
         )
+        # Path-traversal defence, layer 1: the manifest may only ever name a
+        # canonical ``*.sqlite3`` file, never a relative or absolute path.
+        _validate_backup_filename(self.backup_filename)
         if self.schema != MANIFEST_SCHEMA:
             raise DisasterRecoveryError("invalid_schema", f"unsupported schema {self.schema!r}")
 
@@ -481,9 +521,25 @@ class StudioDisasterRecoveryManager:
     ) -> BackupBundleReport:
         """Verify signature, digest, size, integrity and row counts.
 
-        Every problem is collected rather than short-circuited, so an operator
-        sees the whole picture; ``verified`` is True only for an empty problem
-        list.  Nothing here mutates the bundle (the copy is opened ``mode=ro``).
+        The order of operations is the security property, not an implementation
+        detail:
+
+        1. **Authenticate the manifest before any I/O on its say-so.**  If the
+           HMAC does not verify, nothing else happens — no ``backup_path`` is
+           opened, no byte is hashed, no SQLite handle is created.  An attacker
+           who can write a manifest but not sign it therefore cannot use
+           verification as a read primitive.
+        2. **Prove path containment on the resolved path.**  ``lstat`` rejects
+           symlinks and non-regular files, and ``resolve(strict=True)`` must land
+           inside the bundle root.
+        3. **Never mutate.**  Verification is read-only: unexpected ``-wal`` /
+           ``-shm`` sidecars are *reported*, never unlinked.  Deleting files
+           beside an arbitrary caller-supplied path is how a "verify" turns into
+           a delete primitive.
+
+        Every problem is collected rather than short-circuited so an operator
+        sees the whole picture, except for the two gates above, which return
+        immediately by design.
         """
         key = key_material or self._key
         bundle_dir = Path(bundle)
@@ -522,34 +578,90 @@ class StudioDisasterRecoveryManager:
                 actual_sha256="",
                 actual_size_bytes=0,
             )
+
+        # -- GATE 1: cryptographic gate, before any untrusted-path I/O -------- #
         if not manifest.verify_signature(key):
-            problems.append("signature_invalid")
-        backup_path = bundle_dir / manifest.backup_filename
-        if not backup_path.is_file():
             return BackupBundleReport(
                 bundle_id=manifest.bundle_id,
                 verified=False,
                 manifest=manifest,
-                problems=tuple(problems + ["backup_missing"]),
+                problems=("signature_invalid",),
                 integrity_check="not_checked",
                 actual_sha256="",
                 actual_size_bytes=0,
             )
+
+        # -- GATE 2: containment, on the *resolved* path ---------------------- #
+        try:
+            bundle_root = bundle_dir.resolve(strict=True)
+            candidate = bundle_root / manifest.backup_filename
+            linked = os.lstat(candidate)
+        except OSError:
+            return BackupBundleReport(
+                bundle_id=manifest.bundle_id,
+                verified=False,
+                manifest=manifest,
+                problems=("backup_missing",),
+                integrity_check="not_checked",
+                actual_sha256="",
+                actual_size_bytes=0,
+            )
+        if stat_module.S_ISLNK(linked.st_mode):
+            return BackupBundleReport(
+                bundle_id=manifest.bundle_id,
+                verified=False,
+                manifest=manifest,
+                problems=("backup_symlink_rejected",),
+                integrity_check="not_checked",
+                actual_sha256="",
+                actual_size_bytes=0,
+            )
+        if not stat_module.S_ISREG(linked.st_mode):
+            return BackupBundleReport(
+                bundle_id=manifest.bundle_id,
+                verified=False,
+                manifest=manifest,
+                problems=("backup_not_a_regular_file",),
+                integrity_check="not_checked",
+                actual_sha256="",
+                actual_size_bytes=0,
+            )
+        backup_path = candidate.resolve(strict=True)
+        if not backup_path.is_relative_to(bundle_root):
+            return BackupBundleReport(
+                bundle_id=manifest.bundle_id,
+                verified=False,
+                manifest=manifest,
+                problems=("backup_path_escape",),
+                integrity_check="not_checked",
+                actual_sha256="",
+                actual_size_bytes=0,
+            )
+
+        # -- GATE 3: read-only verification ---------------------------------- #
+        # A ``-wal`` that still holds frames is un-checkpointed data the bundle
+        # does *not* account for: that is a real finding.  An empty ``-wal`` and
+        # a ``-shm`` are pure bookkeeping that SQLite itself materialises on any
+        # open (including the read this method performs), so flagging those would
+        # make verification non-idempotent -- the second pass would condemn the
+        # sidecars the first pass created.
+        wal = backup_path.with_name(backup_path.name + "-wal")
+        if wal.exists() and wal.stat().st_size > 0:
+            problems.append("unexpected_sidecar: wal")
         actual_digest, actual_size = _sha256_file(backup_path)
         if not hmac.compare_digest(actual_digest, manifest.backup_sha256):
             problems.append("digest_mismatch")
         if actual_size != manifest.backup_size_bytes:
             problems.append("size_mismatch")
-        integrity = _integrity_check(backup_path)
+        integrity = _integrity_check(backup_path, cleanup=False)
         if integrity != "ok":
             problems.append(f"integrity_check_failed: {integrity}")
-        actual_tables = _table_row_counts(backup_path)
+        actual_tables = _table_row_counts(backup_path, cleanup=False)
         if dict(actual_tables) != dict(manifest.tables):
             problems.append("table_counts_mismatch")
         actual_total = sum(actual_tables.values())
         if actual_total != manifest.total_rows:
             problems.append("total_rows_mismatch")
-        _remove_sidecars(backup_path)
         return BackupBundleReport(
             bundle_id=manifest.bundle_id,
             verified=not problems,
@@ -589,11 +701,21 @@ class StudioDisasterRecoveryManager:
         key = key_material or self._key
         report = self.verify_backup_bundle(bundle_dir, key_material=key)
         if not report.verified or report.manifest is None:
-            raise DisasterRecoveryError(
-                "backup_unverified",
-                f"refusing to restore bundle {bundle_dir.name!r}: "
-                f"{', '.join(report.problems) or 'unknown problem'}",
+            # ``unexpected_sidecar`` alone is *not* enough to refuse a restore:
+            # a read-only verification legitimately makes SQLite materialise a
+            # ``-wal``/``-shm`` beside a WAL-mode backup, and the restore below
+            # supersedes them anyway (step 5).  Every other problem is fatal.
+            blocking = tuple(
+                problem
+                for problem in report.problems
+                if not problem.startswith("unexpected_sidecar:")
             )
+            if blocking or report.manifest is None:
+                raise DisasterRecoveryError(
+                    "backup_unverified",
+                    f"refusing to restore bundle {bundle_dir.name!r}: "
+                    f"{', '.join(blocking) or 'unknown problem'}",
+                )
         manifest = report.manifest
         backup_path = bundle_dir / manifest.backup_filename
         target = Path(target_database_path)
@@ -705,8 +827,14 @@ def _fsync_file(path: Path) -> None:
         os.close(handle)
 
 
-def _integrity_check(path: Path) -> str:
-    """``PRAGMA integrity_check`` on a read-only connection."""
+def _integrity_check(path: Path, *, cleanup: bool = True) -> str:
+    """``PRAGMA integrity_check`` on a read-only connection.
+
+    ``cleanup`` is True for the internal staging/restore paths, which own the
+    directory they are working in.  A *verification* read passes False: opening
+    someone else's database read-only must not delete their files, even the
+    ``-wal``/``-shm`` SQLite happens to materialise.
+    """
     try:
         connection = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
     except sqlite3.Error as exc:  # pragma: no cover - unopenable file
@@ -718,23 +846,27 @@ def _integrity_check(path: Path) -> str:
         return f"error: {exc}"
     finally:
         connection.close()
-        _remove_sidecars(path)
+        if cleanup:
+            _remove_sidecars(path)
 
 
-def _table_row_counts(path: Path) -> dict[str, int]:
+def _table_row_counts(path: Path, *, cleanup: bool = True) -> dict[str, int]:
     """Row count for every user table, read through a read-only connection.
 
     A damaged file is a *finding*, not an exception: verification must be able to
     report "this bundle is corrupt", so an unreadable database yields an empty
     count map that then fails the manifest comparison.
+
+    ``cleanup`` mirrors :func:`_integrity_check`: an internal staging path owns
+    its sidecars, a verification target does not.
     """
     try:
-        return _table_row_counts_or_raise(path)
+        return _table_row_counts_or_raise(path, cleanup=cleanup)
     except sqlite3.Error:
         return {}
 
 
-def _table_row_counts_or_raise(path: Path) -> dict[str, int]:
+def _table_row_counts_or_raise(path: Path, *, cleanup: bool = True) -> dict[str, int]:
     connection = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
     try:
         names = [
@@ -754,7 +886,8 @@ def _table_row_counts_or_raise(path: Path) -> dict[str, int]:
         return counts
     finally:
         connection.close()
-        _remove_sidecars(path)
+        if cleanup:
+            _remove_sidecars(path)
 
 
 def _remove_sidecars(path: Path) -> tuple[str, ...]:
@@ -932,6 +1065,25 @@ class StudioResourceGovernor:
 
     def acquire(self) -> AdmissionLease:
         """Take a slot, or refuse (never block indefinitely)."""
+        return self._acquire_interruptible(cancel_event=None)
+
+    def _acquire_interruptible(
+        self,
+        *,
+        cancel_event: threading.Event | None = None,
+        timeout_s: float | None = None,
+    ) -> AdmissionLease:
+        """Acquire a slot, abandoning the wait when ``cancel_event`` is set.
+
+        The waiter polls ``cancel_event`` between slot checks, so an abandoned
+        ``asyncio`` task can tell its worker thread to *stop waiting* rather than
+        leaving it to acquire a slot nobody will ever release.  The final
+        acquire-and-register step is decided under the governor's lock with a
+        last cancellation check, so a cancellation that races the slot opening
+        cannot leak a lease: either the event is seen (no lease is allocated) or
+        the lease is allocated and returned to the caller, who releases it.
+        """
+        deadline = None if timeout_s is None else self._clock() + timeout_s
         with self._lock:
             if len(self._active) >= self._max_jobs:
                 if self._waiting >= self._max_queue:
@@ -944,7 +1096,15 @@ class StudioResourceGovernor:
                 self._waiting += 1
         try:
             while True:
+                if cancel_event is not None and cancel_event.is_set():
+                    raise GovernorSaturatedError(
+                        "cancelled", "the waiter was cancelled before a slot opened"
+                    )
                 with self._lock:
+                    if cancel_event is not None and cancel_event.is_set():
+                        raise GovernorSaturatedError(
+                            "cancelled", "the waiter was cancelled before a slot opened"
+                        )
                     if len(self._active) < self._max_jobs:
                         lease = AdmissionLease(self, "lse_" + uuid.uuid4().hex)
                         self._active[lease.lease_id] = lease
@@ -952,6 +1112,10 @@ class StudioResourceGovernor:
                         self._peak = max(self._peak, len(self._active))
                         self._waiting = max(0, self._waiting - 1)
                         return lease
+                if deadline is not None and self._clock() >= deadline:
+                    raise GovernorSaturatedError(
+                        "acquire_timeout", "no slot opened inside the wait budget"
+                    )
                 time.sleep(0.001)
         except BaseException:
             with self._lock:
@@ -984,16 +1148,39 @@ class StudioResourceGovernor:
     ) -> _T:
         """Run blocking ``fn`` in a bounded worker thread under one lease.
 
-        If the awaiting coroutine is cancelled, the lease is **detached**, not
-        released: the slot returns to the pool from a done-callback when the
-        thread actually finishes.  ``CancelledError`` still propagates to the
-        caller, so cancellation is prompt even though the slot is held.
+        Both cancellation windows are handled, and they are different:
+
+        * **Cancelled while *waiting* for a slot.**  ``asyncio.to_thread`` cannot
+          interrupt a running thread, so cancelling the await would leave an OS
+          thread spinning for a slot that, when it finally opens, nobody owns.
+          That thread would hand the lease to a dead coroutine — a permanent
+          one-slot leak.  A per-waiter ``threading.Event`` is therefore passed
+          into the interruptible acquire, and the coroutine sets it in its
+          ``finally``.  The thread either sees it before allocating (no lease is
+          created) or allocates and returns it to the coroutine, which releases
+          it; a lease can never be orphaned.
+        * **Cancelled while the worker runs.**  The lease is *detached*, not
+          released: the slot returns from a done-callback when the thread
+          actually finishes, so cancellation stays prompt without over-admitting
+          the box.
         """
         # Acquiring blocks (it spins until a slot frees), so it must NOT run on the
         # event loop: with a bounded pool the slot only frees when a *worker*
         # finishes, and spinning here would keep the loop from ever resuming the
         # futures that free it -- a self-deadlock.
-        lease = await asyncio.to_thread(self.acquire)
+        cancel_event = threading.Event()
+        lease_future = await self._start_acquire(cancel_event)
+        try:
+            lease: AdmissionLease = await asyncio.shield(lease_future)
+        except BaseException:
+            # Cancelled while waiting: tell the worker thread to stop waiting and
+            # arrange for anything it still produces to be released.  This must
+            # NOT await the thread: it may be sleeping or blocked, and a
+            # cancellation path has to return *promptly* -- awaiting here is how a
+            # "fix" for a lease leak becomes an unkillable task.
+            cancel_event.set()
+            self._release_orphaned_lease(lease_future)
+            raise
         executor = self._ensure_executor()
         future = executor.submit(fn, *args, **kwargs)
         try:
@@ -1015,6 +1202,37 @@ class StudioResourceGovernor:
             raise
         lease.release()
         return result
+
+    async def _start_acquire(self, cancel_event: threading.Event) -> asyncio.Future[AdmissionLease]:
+        """Start the interruptible acquire on a worker thread; return its future."""
+        return asyncio.ensure_future(
+            asyncio.to_thread(self._acquire_interruptible, cancel_event=cancel_event)
+        )
+
+    @staticmethod
+    def _release_orphaned_lease(lease_future: asyncio.Future[AdmissionLease]) -> None:
+        """Arrange for a lease the cancelled coroutine can no longer own to return.
+
+        Two outcomes are correct and both leak-free: the thread sees the flag and
+        raises (nothing to release), or it had already registered a lease and the
+        done-callback releases it, because nobody else will ever hold it.
+
+        Deliberately synchronous: it runs on a cancellation path, so it attaches a
+        callback rather than awaiting the thread.  A thread that ignores the flag
+        cannot delay the ``CancelledError``, and a failing future cannot mask it.
+        """
+
+        def _release(future: asyncio.Future[AdmissionLease]) -> None:
+            if future.cancelled():
+                return
+            try:
+                orphaned = future.result()
+            except BaseException:
+                return
+            if isinstance(orphaned, AdmissionLease):
+                orphaned.release()
+
+        lease_future.add_done_callback(_release)
 
     def _ensure_executor(self) -> ThreadPoolExecutor:
         with self._lock:
