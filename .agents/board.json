@@ -8922,7 +8922,7 @@
       "title_fa": "موج ۳.۵: دفاع در عمق رضایت و محدوده IBPC، ممیزی DENIED در SQLite و بستن حاکمیت برد",
       "zone": "nagar-ibpc-wave3-durability",
       "priority": "P0",
-      "status": "active_in_review",
+      "status": "completed_merged",
       "scope": "Post-PR #365 Wave 3.5 defense-in-depth closure on PR #366: align durable vs in-memory provider_id consent matching, fail-closed empty/mismatched tenant_id at both DurablePrivacyConsentStore and PrivacyPolicy layers with persisted SQLite DENIED audit rows, enforce auth-first (401 before 400) and shared _resolve_scoped_project_id() conflict rejection in Studio IBPC API, reconcile .agents/board.json provenance (PR #355-#365), close superseded PR #364, and expand AST campaign M37-M40 (40-mutant AST campaign).",
       "prerequisites": [
         "task-w3-ibpc-durability"
@@ -8940,13 +8940,15 @@
         "ruff check, ruff format --check, mypy --strict, check_board_integrity.py, nagar --check"
       ],
       "exclusive_paths": [],
-      "owner_hint": "arena/aac14be0-nexus-ai-agent",
-      "agent_branch": "arena/aac14be0-nexus-ai-agent",
-      "claimed_at": "2026-11-26T20:00:00Z",
+      "owner_hint": "",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 24,
       "gates_owner": false,
       "delivered_pr": 366,
-      "note": "PR #366 open in review on arena/aac14be0-nexus-ai-agent (based on main 1a914457) with 40/40 AST mutants (M01-M40) and no held path/gate locks."
+      "note": "Merged via PR #366 (squash b8dee44c) before PR #368; the board record was left as active_in_review until this reconciliation. Wave 3-R7 follow-up lives in PR #367.",
+      "merge_commit_sha": "b8dee44c5f430e65acb28e80356fd502f17cfefa",
+      "evidence": "PR #366 state=MERGED at b8dee44c5f430e65acb28e80356fd502f17cfefa (2026-11-26T22:17:58Z) into main; no live lease (released on merge). Superseded lineage: PR #364 closed, re-landed as PR #367 (Wave 3-R7 authorization closure)."
     },
     {
       "task": "pr-repair-247-phase3",
