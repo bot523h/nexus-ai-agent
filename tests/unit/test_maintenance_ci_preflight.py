@@ -159,7 +159,7 @@ def test_cli_writes_the_evidence_document(
     )
     assert code == 0
     payload = json.loads(out.read_text(encoding="utf-8"))
-    assert payload["mode"] == "ci-selftest"
+    assert payload["mode"] == ci_selftest.MODE_LABEL
     assert payload["backup"]["verified"] is True
     assert "✅ maintenance self-test" in capsys.readouterr().out
     get_settings.cache_clear()
@@ -192,3 +192,194 @@ def test_workflow_wires_the_self_test_when_the_secret_is_absent() -> None:
     assert "--only reconcile" in text
     assert "steps.mode.outputs.mode == 'ci'" in text
     assert "maintenance_ci_selftest.json" in text
+
+
+# ---------------------------------------------------------------------------
+# Storage-tier containment: the CI self-test must never reach a real bucket.
+# ---------------------------------------------------------------------------
+
+_COMPLETE_B2 = {
+    "NEXUS_B2_KEY_ID": "key-id",
+    "NEXUS_B2_APPLICATION_KEY": "application-key",
+    "NEXUS_B2_BUCKET": "production-bucket",
+    "NEXUS_B2_ENDPOINT": "https://s3.eu-central-003.backblazeb2.com",
+    "NEXUS_B2_REGION": "eu-central-003",
+}
+
+_COMPLETE_R2 = {
+    "R2_ACCOUNT_ID": "account",
+    "R2_ACCESS_KEY_ID": "access",
+    "R2_SECRET_ACCESS_KEY": "secret",
+    "R2_BUCKET": "production-bucket",
+}
+
+
+def _forbid_remote_io(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """Make every B2/R2 network entry point fail loudly; return the call log."""
+    from nexus_ai_agent.storage.providers.b2 import B2Provider
+    from nexus_ai_agent.storage.providers.r2 import R2Provider
+
+    calls: list[str] = []
+
+    def _boom(name: str):
+        def _fail(*args: object, **kwargs: object) -> None:
+            calls.append(name)
+            raise AssertionError(f"remote storage was contacted: {name}")
+
+        return _fail
+
+    async def _afail(name: str, *args: object, **kwargs: object) -> None:
+        calls.append(name)
+        raise AssertionError(f"remote storage was contacted: {name}")
+
+    for cls, label in ((B2Provider, "b2"), (R2Provider, "r2")):
+        for method in ("upload", "download", "list_files", "delete_objects"):
+            monkeypatch.setattr(
+                cls,
+                method,
+                lambda *a, _n=f"{label}.{method}", **k: _afail(_n, *a, **k),
+            )
+        monkeypatch.setattr(cls, "client", property(_boom(f"{label}.client")))
+    return calls
+
+
+def test_self_test_never_uses_a_complete_b2_tier_in_the_environment(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A real bucket must not receive a synthetic SQLite artifact."""
+    _fresh_settings(monkeypatch, **_COMPLETE_B2)
+    calls = _forbid_remote_io(monkeypatch)
+    evidence = ci_selftest.run(
+        only="all",
+        database=tmp_path / "db.sqlite3",
+        tier=tmp_path / "tier",
+        workspace_root=tmp_path,
+    )
+    assert calls == [], "the self-test must make zero remote calls"
+    assert evidence["backup"]["storage_tier"] == "local_cache"
+    assert evidence["backup"]["tier"] == "local_cache"
+    assert evidence["storage_tier"] == "local_cache"
+    assert sorted(evidence["remote_tier_env_suppressed"]) == sorted(_COMPLETE_B2)
+    get_settings.cache_clear()
+
+
+def test_self_test_never_uses_a_complete_r2_tier_in_the_environment(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _fresh_settings(monkeypatch, **_COMPLETE_R2)
+    calls = _forbid_remote_io(monkeypatch)
+    evidence = ci_selftest.run(
+        only="all",
+        database=tmp_path / "db.sqlite3",
+        tier=tmp_path / "tier",
+        workspace_root=tmp_path,
+    )
+    assert calls == []
+    assert evidence["backup"]["tier"] == "local_cache"
+    assert sorted(evidence["remote_tier_env_suppressed"]) == sorted(_COMPLETE_R2)
+    get_settings.cache_clear()
+
+
+def test_local_only_settings_carry_no_remote_credentials(tmp_path: Path) -> None:
+    settings = ci_selftest.local_only_settings(tmp_path / "db.sqlite3", tmp_path / "tier")
+    for field in ci_selftest.REMOTE_TIER_FIELDS:
+        assert getattr(settings, field) is None, f"{field} must be cleared on the CI copy"
+    assert settings.database_url is None
+    assert settings.maintenance_local_tier == str(tmp_path / "tier")
+
+
+def test_evidence_never_claims_a_production_drill(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _fresh_settings(monkeypatch)
+    evidence = ci_selftest.run(
+        only="backup",
+        database=tmp_path / "db.sqlite3",
+        tier=tmp_path / "tier",
+        workspace_root=tmp_path,
+    )
+    assert evidence["mode"] == "ci_local_sqlite_selftest"
+    assert evidence["production_postgres_dr_verified"] is False
+    assert evidence["storage_tier"] == "local_cache"
+    get_settings.cache_clear()
+
+
+def test_partial_b2_without_a_complete_r2_fails_closed(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A half-configured tier is a mistake, not a silent fallback."""
+    from nexus_ai_agent.storage.providers.base import ProviderUnavailable
+
+    _fresh_settings(
+        monkeypatch,
+        NEXUS_B2_KEY_ID="key-id",
+        NEXUS_B2_BUCKET="bucket",
+        R2_ACCOUNT_ID="account",
+    )
+    settings = Settings(_env_file=None)
+    with pytest.raises(ProviderUnavailable):
+        build_blob_provider(settings)
+    get_settings.cache_clear()
+
+
+def test_production_selection_prefers_b2_then_r2(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Outside the CI lane the factory still honours the real tiers."""
+    _fresh_settings(monkeypatch, **_COMPLETE_B2, **_COMPLETE_R2)
+    settings = Settings(_env_file=None).model_copy(
+        update={"maintenance_local_tier": str(tmp_path / "tier")}
+    )
+    assert build_blob_provider(settings).name == "b2"
+
+    _fresh_settings(monkeypatch, **_COMPLETE_R2)
+    settings = Settings(_env_file=None).model_copy(
+        update={"maintenance_local_tier": str(tmp_path / "tier")}
+    )
+    assert build_blob_provider(settings).name == "r2"
+    get_settings.cache_clear()
+
+
+def test_tampered_upload_never_reports_a_verified_backup(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The round-trip check is the thing that makes ``verified`` mean something."""
+    from nexus_ai_agent.storage.providers.local_cache import LocalCacheProvider
+
+    _fresh_settings(monkeypatch)
+    original_upload = LocalCacheProvider.upload
+
+    async def _corrupt(self, *, local_path: Path, remote_key: str) -> None:
+        await original_upload(self, local_path=local_path, remote_key=remote_key)
+        target = self.cache_dir / remote_key
+        target.write_bytes(target.read_bytes() + b"-- tampered")
+
+    monkeypatch.setattr(LocalCacheProvider, "upload", _corrupt)
+    code = ci_selftest.main(
+        [
+            "--only",
+            "backup",
+            "--db",
+            str(tmp_path / "db.sqlite3"),
+            "--tier",
+            str(tmp_path / "tier"),
+            "--workspace-root",
+            str(tmp_path),
+        ]
+    )
+    assert code == 1, "a corrupted upload must exit non-zero"
+    get_settings.cache_clear()
+
+
+def test_backup_job_keeps_blob_credentials_out_of_the_job_environment() -> None:
+    """The CI self-test shares this job; a job-level credential is a live risk."""
+    text = (Path(__file__).resolve().parents[2] / ".github/workflows/maintenance.yml").read_text(
+        encoding="utf-8"
+    )
+    backup_job = text.split("  backup-db:", 1)[1].split("  restore-drill:", 1)[0]
+    job_env = backup_job.split("    steps:", 1)[0]
+    assert "NEXUS_B2_KEY_ID" not in job_env, "blob credentials must not be job-level"
+    assert "R2_SECRET_ACCESS_KEY" not in job_env
+    # ...but the production steps that need them still have them.
+    assert backup_job.count("NEXUS_B2_KEY_ID: ${{ secrets.NEXUS_B2_KEY_ID }}") == 2
+    assert backup_job.count("R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}") == 2

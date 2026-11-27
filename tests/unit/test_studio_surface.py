@@ -17,7 +17,12 @@ import pytest
 from fastapi.testclient import TestClient
 
 from nexus_ai_agent.api.app import app
-from nexus_ai_agent.api.studio_surface import REQUIRED_FILES, SURFACE_DIR, SURFACE_MOUNT
+from nexus_ai_agent.api.studio_surface import (
+    API_PREFIX,
+    REQUIRED_FILES,
+    SURFACE_DIR,
+    SURFACE_MOUNT,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -120,8 +125,17 @@ const out = {
     uncertainty: 0.5,
     sequence_number: 2,
   }),
-  sessions: surface.sessionItems({ projects: [{ id: "p1", jobs: [1, 2] }, "p2"] }),
+  sessions: surface.sessionItems({
+    sessions: [
+      { session_id: "s-1", status: "ACTIVE", max_sequence: 2, session_epoch: 3 },
+      { status: "CLOSED" },
+    ],
+  }),
   emptySessions: surface.sessionItems({}),
+  nextFromTurns: surface.nextSequence({ turns: [{ sequence_number: 1 }, { sequence_number: 4 }] }),
+  nextFromMax: surface.nextSequence({ max_sequence: 7 }),
+  nextEmpty: surface.nextSequence({}),
+  idempotency: surface.idempotencyKey("p1", "s1", "t1"),
   message: surface.statusMessage("unavailable"),
 };
 process.stdout.write(JSON.stringify(out));
@@ -164,9 +178,170 @@ def test_presentation_logic_under_node(tmp_path: Path) -> None:
     assert turn["subtitle"] == "نوبت 2"
     assert turn["title"].endswith("…") and len(turn["title"]) <= 80
     assert [b["label"] for b in turn["badges"]] == ["completed", "PASS", "مجاز", "u ±0.500"]
-    assert out["sessions"] == [
-        {"id": "p1", "title": "p1", "detail": "2 کار"},
-        {"id": "p2", "title": "p2", "detail": "0 کار"},
-    ]
+    assert out["sessions"][0]["id"] == "s-1"
+    assert out["sessions"][0]["detail"] == "ACTIVE · 2 نوبت · epoch 3"
+    assert out["sessions"][1]["title"] == "بدون شناسه"
     assert out["emptySessions"] == []
+    # A hardcoded sequence number would collide on the second turn of a session.
+    assert out["nextFromTurns"] == 5
+    assert out["nextFromMax"] == 8
+    assert out["nextEmpty"] == 1
+    assert out["idempotency"] == "studio:p1:s1:t1"
     assert "در دسترس نیست" in out["message"]
+
+
+# ---------------------------------------------------------------------------
+# The authenticated lane: a public bundle, private data.
+# ---------------------------------------------------------------------------
+
+PRINCIPAL = "prn_" + "a" * 32
+PRINCIPAL_TOKEN = "tok-prin-w11x-secret"
+PROJECT = "proj-w11x"
+
+
+@pytest.fixture()
+def lane(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
+    """A real principal store, a real workspace, and a cookie-carrying client."""
+    import base64
+
+    from nexus_ai_agent.adapters.studio_principal_auth import StudioPrincipalAuthStore
+    from nexus_ai_agent.api.studio_surface import session_registry
+    from nexus_ai_agent.nagar.ibpc.authority import StudioRole
+
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    auth_db = tmp_path / "auth.sqlite3"
+    monkeypatch.setenv("NEXUS_STUDIO_AUTH_DB", str(auth_db))
+    monkeypatch.setenv("NEXUS_STUDIO_WORKSPACE_ROOT", str(workspace))
+    monkeypatch.setenv("NEXUS_STUDIO_ASSET_ROOT", str(workspace))
+    monkeypatch.setenv("NEXUS_STUDIO_ACTIVE_REVISION", "0")
+    key = base64.b64encode(b"z" * 32).decode("ascii")
+    monkeypatch.setenv("NEXUS_IBPC_APPROVAL_KEY_RING", json.dumps({"active": key}))
+    monkeypatch.setenv("NEXUS_IBPC_APPROVAL_ACTIVE_KEY_ID", "active")
+
+    store = StudioPrincipalAuthStore(auth_db)
+    store.register_principal(
+        PRINCIPAL,
+        tenant_id="ten-1",
+        raw_token=PRINCIPAL_TOKEN,
+        display_name="Owner",
+        allow_system_bootstrap=True,
+    )
+    store.bind_channel(
+        PRINCIPAL,
+        channel="studio",
+        external_subject="sub-w11x",
+        user_id=1,
+        chat_id=1,
+        allow_system_bootstrap=True,
+    )
+    store.ensure_project(PROJECT, tenant_id="ten-1", active_revision_id="0")
+    store.grant_membership(
+        PROJECT, PRINCIPAL, role=StudioRole.OWNER, granted_by="system", allow_system_bootstrap=True
+    )
+    store.close()
+
+    session_registry.clear()
+    # https base_url: the cookie is Secure, and a test client on http would
+    # never send it back — the same rule a browser enforces.
+    client = TestClient(app, base_url="https://testserver")
+    yield client
+    session_registry.clear()
+
+
+def _login(client: TestClient) -> None:
+    response = client.post(
+        f"{API_PREFIX}/login",
+        json={"principal_token": PRINCIPAL_TOKEN},
+        headers={"x-nagar-studio": "1"},
+    )
+    assert response.status_code == 200, response.text
+
+
+def test_lane_requires_a_session(lane: TestClient) -> None:
+    assert lane.get(f"{API_PREFIX}/me").status_code == 401
+    assert lane.get(f"{API_PREFIX}/sessions", params={"project_id": PROJECT}).status_code == 401
+    assert lane.post(f"{API_PREFIX}/projects/{PROJECT}/ibpc/sessions", json={}).status_code == 401
+
+
+def test_login_requires_the_csrf_marker(lane: TestClient) -> None:
+    response = lane.post(f"{API_PREFIX}/login", json={"principal_token": PRINCIPAL_TOKEN})
+    assert response.status_code == 403
+
+
+def test_login_rejects_a_wrong_token(lane: TestClient) -> None:
+    response = lane.post(
+        f"{API_PREFIX}/login",
+        json={"principal_token": "not-the-token"},
+        headers={"x-nagar-studio": "1"},
+    )
+    assert response.status_code == 401
+
+
+def test_login_sets_an_opaque_httponly_cookie_and_never_echoes_the_token(
+    lane: TestClient,
+) -> None:
+    response = lane.post(
+        f"{API_PREFIX}/login",
+        json={"principal_token": PRINCIPAL_TOKEN},
+        headers={"x-nagar-studio": "1"},
+    )
+    assert response.status_code == 200, response.text
+    assert PRINCIPAL_TOKEN not in response.text
+    assert response.json()["principal_id"] == PRINCIPAL
+    cookie = response.headers["set-cookie"].lower()
+    assert "httponly" in cookie and "secure" in cookie and "samesite=strict" in cookie
+    assert PRINCIPAL_TOKEN.lower() not in cookie
+    me = lane.get(f"{API_PREFIX}/me")
+    assert me.status_code == 200
+    assert me.json()["principal_id"] == PRINCIPAL
+
+
+def test_logout_revokes_the_server_side_session(lane: TestClient) -> None:
+    _login(lane)
+    assert lane.get(f"{API_PREFIX}/me").status_code == 200
+    out = lane.post(f"{API_PREFIX}/logout", json={}, headers={"x-nagar-studio": "1"})
+    assert out.status_code == 200
+    assert lane.get(f"{API_PREFIX}/me").status_code == 401
+
+
+def test_sessions_panel_lists_a_real_durable_session(lane: TestClient) -> None:
+    _login(lane)
+    empty = lane.get(f"{API_PREFIX}/sessions", params={"project_id": PROJECT})
+    assert empty.status_code == 200 and empty.json()["sessions"] == []
+
+    opened = lane.post(f"{API_PREFIX}/projects/{PROJECT}/ibpc/sessions", json={})
+    assert opened.status_code == 201, opened.text
+    session_id = opened.json()["session_id"]
+
+    listed = lane.get(f"{API_PREFIX}/sessions", params={"project_id": PROJECT})
+    assert listed.status_code == 200, listed.text
+    ids = [row["session_id"] for row in listed.json()["sessions"]]
+    assert session_id in ids, "the listing must read the durable store, not a cache"
+
+    detail = lane.get(f"{API_PREFIX}/projects/{PROJECT}/ibpc/sessions/{session_id}")
+    assert detail.status_code == 200
+    assert detail.json()["session_id"] == session_id
+
+
+def test_sessions_panel_refuses_a_project_the_caller_cannot_read(lane: TestClient) -> None:
+    _login(lane)
+    response = lane.get(f"{API_PREFIX}/sessions", params={"project_id": "proj-someone-else"})
+    assert response.status_code == 403, response.text
+
+
+def test_lane_rejects_an_invalid_body_with_422(lane: TestClient) -> None:
+    _login(lane)
+    response = lane.post(f"{API_PREFIX}/projects/{PROJECT}/ibpc/sessions", json={"nope": 1})
+    assert response.status_code == 422, response.text
+
+
+def test_the_bundle_never_touches_persistent_storage() -> None:
+    """A token in localStorage is a token in every XSS payload's reach."""
+    script = (SURFACE_DIR / "studio.js").read_text(encoding="utf-8")
+    html = (SURFACE_DIR / "index.html").read_text(encoding="utf-8")
+    for forbidden in ("localStorage.", "localStorage[", "sessionStorage.", "document.cookie"):
+        assert forbidden not in script, forbidden
+        assert forbidden not in html, forbidden
+    assert "principal_token" in script  # posted once, then cleared
+    assert "sequence_number: 1," not in script, "a hardcoded sequence number would collide"

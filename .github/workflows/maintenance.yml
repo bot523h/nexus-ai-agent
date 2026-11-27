@@ -35,18 +35,12 @@ jobs:
     env:
       # Production pg_dump target. The preflight refuses SQLite and an
       # incomplete blob tier; this job never backs up CI-local state.
+      #
+      # The B2/R2 credentials are deliberately NOT job-level: they are attached
+      # only to the production steps below. The CI self-test runs in this same
+      # job, and a job-level credential would put a real bucket one bug away
+      # from receiving a synthetic SQLite artifact.
       NEXUS_DATABASE_URL: ${{ secrets.NEXUS_DATABASE_URL }}
-      # Backblaze B2 (preferred maintenance tier). Only these five names.
-      NEXUS_B2_KEY_ID: ${{ secrets.NEXUS_B2_KEY_ID }}
-      NEXUS_B2_APPLICATION_KEY: ${{ secrets.NEXUS_B2_APPLICATION_KEY }}
-      NEXUS_B2_BUCKET: ${{ secrets.NEXUS_B2_BUCKET }}
-      NEXUS_B2_ENDPOINT: ${{ secrets.NEXUS_B2_ENDPOINT }}
-      NEXUS_B2_REGION: ${{ secrets.NEXUS_B2_REGION }}
-      # Cloudflare R2 (legacy fallback tier, kept intact).
-      R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
-      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-      R2_BUCKET: ${{ secrets.R2_BUCKET }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -65,6 +59,18 @@ jobs:
           fi
       - name: Preflight — required production backup configuration
         if: steps.mode.outputs.mode == 'production'
+        env:
+          # Production-only step: the blob credentials live here and nowhere
+          # else in this job (see the job-level comment).
+          NEXUS_B2_KEY_ID: ${{ secrets.NEXUS_B2_KEY_ID }}
+          NEXUS_B2_APPLICATION_KEY: ${{ secrets.NEXUS_B2_APPLICATION_KEY }}
+          NEXUS_B2_BUCKET: ${{ secrets.NEXUS_B2_BUCKET }}
+          NEXUS_B2_ENDPOINT: ${{ secrets.NEXUS_B2_ENDPOINT }}
+          NEXUS_B2_REGION: ${{ secrets.NEXUS_B2_REGION }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
         run: |
           set -uo pipefail
           missing=()
@@ -124,6 +130,17 @@ jobs:
             --json-out maintenance_ci_selftest.json 2>&1 | tee maintenance_ci_selftest.log
       - name: Nightly DB backup (round-trip + sidecar verified)
         if: steps.mode.outputs.mode == 'production'
+        env:
+          # The only other step in this job that may touch a real bucket.
+          NEXUS_B2_KEY_ID: ${{ secrets.NEXUS_B2_KEY_ID }}
+          NEXUS_B2_APPLICATION_KEY: ${{ secrets.NEXUS_B2_APPLICATION_KEY }}
+          NEXUS_B2_BUCKET: ${{ secrets.NEXUS_B2_BUCKET }}
+          NEXUS_B2_ENDPOINT: ${{ secrets.NEXUS_B2_ENDPOINT }}
+          NEXUS_B2_REGION: ${{ secrets.NEXUS_B2_REGION }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
         run: |
           set -o pipefail
           nexus maintenance backup 2>&1 | tee backup.log
@@ -141,6 +158,10 @@ jobs:
           report = json.loads(path.read_text(encoding="utf-8"))
           lines = [
               "## Maintenance CI self-test (no cloud secrets configured)",
+              f"- mode: {report.get('mode')} (production PostgreSQL DR verified: "
+              f"{report.get('production_postgres_dr_verified')})",
+              f"- storage tier: {report.get('storage_tier')} — remote tier env vars "
+              f"suppressed: {len(report.get('remote_tier_env_suppressed') or [])}",
               f"- database: {report['database']['path']} ({report['database']['journal_mode']}, "
               f"{report['database']['tables']} tables)",
               f"- backup verified: {report['backup'].get('verified')}",

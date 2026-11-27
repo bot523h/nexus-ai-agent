@@ -208,7 +208,6 @@ placeholder text.
 | [history/todo-v2.0.0.md](history/todo-v2.0.0.md) | Session checklist, v2.0.0 era. |
 | [history/todo-v2.1.0.md](history/todo-v2.1.0.md) | Session checklist, v2.1.0 era. |
 | [history/todo-step3-pending.md](history/todo-step3-pending.md) | Unfinished items from the v1.x step-3 plan. |
-| [memory_archive/MEMORY_ARCHIVE_2026-11-27.md](memory_archive/MEMORY_ARCHIVE_2026-11-27.md) | Verbatim archive of the project agent memory (`.openhands/memory/MEMORY.md`) before it was compressed to an architectural summary; the body is byte-identical to the source, whose SHA-256 is recorded in the header. |
 
 ---
 

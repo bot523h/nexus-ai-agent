@@ -92,7 +92,7 @@
     }
   },
   "fixed_sites": {
-    "src/nexus_ai_agent/maintenance/backup.py": "b657e033b434138c5ad7ebdd674c1220bff07f8330cf85ca4890ac9ad836cf4e",
+    "src/nexus_ai_agent/maintenance/backup.py": "2ebcfaf446c0692aa2ea57e4c412bf2a7d26378607e84337a26b02773fe10cae",
     "src/nexus_ai_agent/maintenance/restore.py": "30be8de65e190c8716999f53db596d53971e4b050dbdd8d2f5c25134540dcd6d",
     "src/nexus_ai_agent/storage/db.py": "1119283f40fe26087dbd5c729595f64dcfe953f61d1057a4f1bdd41a4b027a8c"
   },
@@ -109,5 +109,15 @@
     "all_content_matches": true,
     "reasons": []
   },
-  "all_checks_passed": true
+  "all_checks_passed": true,
+  "rebindings": [
+    {
+      "file": "src/nexus_ai_agent/maintenance/backup.py",
+      "previous_sha256": "b657e033b434138c5ad7ebdd674c1220bff07f8330cf85ca4890ac9ad836cf4e",
+      "sha256": "2ebcfaf446c0692aa2ea57e4c412bf2a7d26378607e84337a26b02773fe10cae",
+      "reason": "create_backup() gained an explicit provider override so the CI self-test lane can never hand a synthetic SQLite artifact to a configured B2/R2 tier",
+      "recorded_at": "2026-11-27",
+      "recorded_by": "PR #371 maintenance-lane audit"
+    }
+  ]
 }

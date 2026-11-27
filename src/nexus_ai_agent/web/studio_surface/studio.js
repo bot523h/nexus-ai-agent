@@ -1,9 +1,14 @@
 /*
- * NAGAR Studio — reference product client.
+ * NAGAR Studio — authenticated product client.
  *
- * Pure presentation helpers live in the factory and are exported for Node so
- * the mapping from API payloads to what a human sees is unit-tested without a
- * browser. DOM wiring runs only when a document exists.
+ * Pure presentation/mapping helpers live in the factory and are exported for
+ * Node so the mapping from API payloads to what a human sees is unit-tested
+ * without a browser. DOM wiring runs only when a document exists.
+ *
+ * Security model: the principal token is posted once to
+ * `/studio/app/api/login` and never kept by this script. The server returns an
+ * opaque handle in an HttpOnly cookie, so nothing here reads, stores or
+ * forwards a credential — no localStorage, no sessionStorage, no query string.
  */
 (function (root, factory) {
   const api = factory();
@@ -11,6 +16,9 @@
   if (root) root.StudioSurface = api;
 })(typeof globalThis !== "undefined" ? globalThis : this, function () {
   "use strict";
+
+  const API = "/studio/app/api";
+  const MARKER = { "x-nagar-studio": "1" };
 
   const GATES = {
     PASS: { label: "PASS", tone: "ok" },
@@ -61,7 +69,8 @@
 
   function turnView(turn) {
     const t = turn && typeof turn === "object" ? turn : {};
-    const state = typeof t.state === "string" ? t.state : typeof t.status === "string" ? t.status : "unknown";
+    const state =
+      typeof t.state === "string" ? t.state : typeof t.status === "string" ? t.status : "unknown";
     const sequence = Number.isFinite(Number(t.sequence_number)) ? Number(t.sequence_number) : null;
     const badges = [
       { label: state, tone: state === "failed" ? "bad" : state === "completed" ? "ok" : "" },
@@ -77,14 +86,51 @@
     };
   }
 
-  function sessionItems(overview) {
-    const payload = overview && typeof overview === "object" ? overview : {};
-    const projects = Array.isArray(payload.projects) ? payload.projects : [];
-    return projects.map(function (project) {
-      const id = typeof project === "string" ? project : String((project && project.id) || "");
-      const jobs = project && Array.isArray(project.jobs) ? project.jobs.length : 0;
-      return { id: id, title: id || "بدون شناسه", detail: jobs + " کار" };
+  /* The sessions panel shows what the durable store really holds. */
+  function sessionItems(payload) {
+    const body = payload && typeof payload === "object" ? payload : {};
+    const rows = Array.isArray(body.sessions) ? body.sessions : [];
+    return rows.map(function (row) {
+      const session = row && typeof row === "object" ? row : {};
+      const id = typeof session.session_id === "string" ? session.session_id : "";
+      const status = typeof session.status === "string" ? session.status : "unknown";
+      const turns = Number.isFinite(Number(session.max_sequence)) ? Number(session.max_sequence) : 0;
+      return {
+        id: id,
+        title: id ? truncate(id, 18) : "بدون شناسه",
+        detail: status + " · " + turns + " نوبت · epoch " + (session.session_epoch || "?"),
+        status: status,
+        maxSequence: turns,
+      };
     });
+  }
+
+  /*
+   * The next sequence number is derived from the session the server returned,
+   * never hardcoded: a constant would collide with the store's ordering rules
+   * on the second turn of any session.
+   */
+  function nextSequence(sessionDetail) {
+    const detail = sessionDetail && typeof sessionDetail === "object" ? sessionDetail : {};
+    const turns = Array.isArray(detail.turns) ? detail.turns : [];
+    let max = Number.isFinite(Number(detail.max_sequence)) ? Number(detail.max_sequence) : 0;
+    turns.forEach(function (turn) {
+      const value = Number(turn && turn.sequence_number);
+      if (Number.isFinite(value) && value > max) max = value;
+    });
+    return max + 1;
+  }
+
+  /* One idempotency key per intent; retrying the same submit reuses it. */
+  function idempotencyKey(projectId, sessionId, turnId) {
+    return ["studio", projectId, sessionId, turnId].join(":");
+  }
+
+  function newId() {
+    if (globalThis.crypto && typeof globalThis.crypto.randomUUID === "function") {
+      return globalThis.crypto.randomUUID();
+    }
+    return "id-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 10);
   }
 
   function statusFromError(error) {
@@ -104,11 +150,16 @@
   }
 
   return {
+    API: API,
+    MARKER: MARKER,
     gateBadge: gateBadge,
     permissionBadge: permissionBadge,
     uncertaintyLabel: uncertaintyLabel,
     turnView: turnView,
     sessionItems: sessionItems,
+    nextSequence: nextSequence,
+    idempotencyKey: idempotencyKey,
+    newId: newId,
     statusFromError: statusFromError,
     statusMessage: statusMessage,
   };
@@ -117,32 +168,32 @@
 if (typeof document !== "undefined") {
   (function wire(api) {
     const $ = (id) => document.getElementById(id);
-    const status = $("status");
-    const list = $("session-list");
-    const empty = $("sessions-empty");
-    const turns = $("turn-list");
-    const turnsEmpty = $("turns-empty");
-    const hint = $("composer-hint");
-    const form = $("composer-form");
-    let session = null;
+    const state = { me: null, projectId: "", session: null, turn: null };
 
     function setStatus(text, tone) {
-      status.textContent = text;
-      if (tone) status.dataset.tone = tone;
+      const el = $("status");
+      el.textContent = text;
+      if (tone) el.dataset.tone = tone;
     }
 
     async function call(path, options) {
-      const response = await fetch(path, {
-        credentials: "same-origin",
-        headers: { "Content-Type": "application/json" },
-        ...options,
-      });
+      const settings = Object.assign({ method: "GET", credentials: "same-origin" }, options || {});
+      const headers = Object.assign({ Accept: "application/json" }, api.MARKER);
+      if (settings.body !== undefined) headers["Content-Type"] = "application/json";
+      settings.headers = headers;
+      const response = await fetch(api.API + path, settings);
       if (!response.ok) {
         const error = new Error("HTTP " + response.status);
         error.status = response.status;
         throw error;
       }
       return response.status === 204 ? null : response.json();
+    }
+
+    function showLogin(visible) {
+      $("login").hidden = !visible;
+      $("workspace").hidden = visible;
+      $("logout").hidden = visible;
     }
 
     function badge(text, tone) {
@@ -154,8 +205,9 @@ if (typeof document !== "undefined") {
     }
 
     function renderTurns(items) {
+      const turns = $("turn-list");
       turns.textContent = "";
-      turnsEmpty.hidden = items.length > 0;
+      $("turns-empty").hidden = items.length > 0;
       items.forEach(function (item) {
         const view = api.turnView(item);
         const li = document.createElement("li");
@@ -167,7 +219,9 @@ if (typeof document !== "undefined") {
         sub.textContent = view.subtitle;
         const badges = document.createElement("div");
         badges.className = "badges";
-        view.badges.forEach(function (entry) { badges.appendChild(badge(entry.label, entry.tone)); });
+        view.badges.forEach(function (entry) {
+          badges.appendChild(badge(entry.label, entry.tone));
+        });
         li.appendChild(title);
         li.appendChild(sub);
         li.appendChild(badges);
@@ -175,79 +229,196 @@ if (typeof document !== "undefined") {
       });
     }
 
-    async function loadOverview() {
-      try {
-        const overview = await call("/api/studio/overview");
-        const items = api.sessionItems(overview);
-        list.textContent = "";
-        empty.hidden = items.length > 0;
-        items.forEach(function (item) {
-          const li = document.createElement("li");
-          const title = document.createElement("p");
-          title.className = "turn-title";
-          title.textContent = item.title;
-          const sub = document.createElement("p");
-          sub.className = "turn-sub";
-          sub.textContent = item.detail;
-          li.appendChild(title);
-          li.appendChild(sub);
-          list.appendChild(li);
+    function renderSessions(items) {
+      const list = $("session-list");
+      list.textContent = "";
+      $("sessions-empty").hidden = items.length > 0;
+      items.forEach(function (item) {
+        const li = document.createElement("li");
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "link";
+        button.textContent = item.title;
+        button.addEventListener("click", function () {
+          selectSession(item.id);
         });
-        setStatus(api.statusMessage("ok"), "ok");
+        const sub = document.createElement("p");
+        sub.className = "turn-sub";
+        sub.textContent = item.detail;
+        li.appendChild(button);
+        li.appendChild(sub);
+        list.appendChild(li);
+      });
+    }
+
+    function renderDigests(turn) {
+      $("digests").hidden = false;
+      $("digest-intent").textContent = turn.intent_digest || "—";
+      $("digest-plan").textContent = turn.plan_digest || "—";
+      $("digest-preview").textContent = turn.preview_digest || "—";
+      $("digest-approval").textContent = "—";
+      $("execute-state").textContent = "—";
+      $("approval-actions").hidden = !turn.approval_id;
+    }
+
+    async function loadMe() {
+      try {
+        state.me = await call("/me");
+        showLogin(false);
+        setStatus("متصل به‌عنوان " + state.me.principal_id, "ok");
+        return true;
       } catch (error) {
-        const kind = api.statusFromError(error);
-        setStatus(api.statusMessage(kind), kind === "error" ? "bad" : "warn");
+        showLogin(true);
+        setStatus(api.statusMessage(api.statusFromError(error)), "warn");
+        return false;
       }
     }
 
-    async function submit(event) {
+    async function loadSessions() {
+      const projectId = String(new FormData($("sessions-form")).get("project_id") || "").trim();
+      if (!projectId) return;
+      state.projectId = projectId;
+      try {
+        const payload = await call("/sessions?project_id=" + encodeURIComponent(projectId));
+        renderSessions(api.sessionItems(payload));
+      } catch (error) {
+        $("sessions-empty").hidden = false;
+        $("sessions-empty").textContent = api.statusMessage(api.statusFromError(error));
+      }
+    }
+
+    async function openSession() {
+      if (!state.projectId) return;
+      try {
+        const opened = await call(
+          "/projects/" + encodeURIComponent(state.projectId) + "/ibpc/sessions",
+          { method: "POST", body: JSON.stringify({ privacy_mode: "LOCAL_VAULT" }) },
+        );
+        await selectSession(opened.session_id);
+        await loadSessions();
+      } catch (error) {
+        $("session-state").textContent = api.statusMessage(api.statusFromError(error));
+      }
+    }
+
+    async function selectSession(sessionId) {
+      try {
+        const detail = await call(
+          "/projects/" + encodeURIComponent(state.projectId) + "/ibpc/sessions/" +
+            encodeURIComponent(sessionId),
+        );
+        state.session = detail;
+        $("session-state").textContent =
+          "نشست " + detail.session_id + " · " + detail.status + " · epoch " + detail.session_epoch;
+        renderTurns(Array.isArray(detail.turns) ? detail.turns : []);
+      } catch (error) {
+        $("session-state").textContent = api.statusMessage(api.statusFromError(error));
+      }
+    }
+
+    async function submitTurn(event) {
       event.preventDefault();
-      const data = new FormData(form);
-      const projectId = String(data.get("project_id") || "").trim();
+      if (!state.session) {
+        $("composer-hint").textContent = "نخست یک نشست باز یا انتخاب کنید.";
+        return;
+      }
+      const data = new FormData($("composer-form"));
       const text = String(data.get("text") || "").trim();
       const assetId = String(data.get("asset_id") || "").trim();
       const sourcePath = String(data.get("source_path") || "").trim();
-      if (!projectId || !text || !assetId || !sourcePath) return;
+      if (!text || !assetId || !sourcePath) return;
+      const turnId = api.newId();
+      const body = {
+        turn_id: turnId,
+        sequence_number: api.nextSequence(state.session),
+        text: text,
+        asset_id: assetId,
+        source_path: sourcePath,
+        idempotency_key: api.idempotencyKey(state.projectId, state.session.session_id, turnId),
+        expected_epoch: state.session.session_epoch,
+      };
       const button = $("submit-turn");
       button.disabled = true;
-      hint.textContent = "در حال ارسال…";
+      $("composer-hint").textContent = "در حال ارسال…";
       try {
-        if (!session || session.project !== projectId) {
-          session = await call("/api/studio/projects/" + encodeURIComponent(projectId) + "/ibpc/sessions", {
-            method: "POST",
-            body: JSON.stringify({}),
-          });
-          session.project = projectId;
-        }
-        const turnId = (globalThis.crypto && globalThis.crypto.randomUUID)
-          ? globalThis.crypto.randomUUID()
-          : "turn-" + Date.now();
-        const turn = await call(
-          "/api/studio/projects/" + encodeURIComponent(projectId) + "/ibpc/sessions/" +
-            encodeURIComponent(session.session_id || session.id) + "/turns",
-          {
-            method: "POST",
-            body: JSON.stringify({
-              turn_id: turnId,
-              sequence_number: 1,
-              text: text,
-              asset_id: assetId,
-              source_path: sourcePath,
-            }),
-          },
+        state.turn = await call(
+          "/projects/" + encodeURIComponent(state.projectId) + "/ibpc/sessions/" +
+            encodeURIComponent(state.session.session_id) + "/turns",
+          { method: "POST", body: JSON.stringify(body) },
         );
-        renderTurns([turn]);
-        hint.textContent = "ارسال شد.";
+        renderDigests(state.turn);
+        $("composer-hint").textContent = "در انتظار تأیید.";
       } catch (error) {
-        const kind = api.statusFromError(error);
-        hint.textContent = api.statusMessage(kind);
+        $("composer-hint").textContent = api.statusMessage(api.statusFromError(error));
       } finally {
         button.disabled = false;
       }
     }
 
-    form.addEventListener("submit", submit);
-    $("reload").addEventListener("click", loadOverview);
-    loadOverview();
+    async function decide(action) {
+      if (!state.turn || !state.turn.approval_id) return;
+      const path =
+        "/projects/" + encodeURIComponent(state.projectId) + "/ibpc/sessions/" +
+        encodeURIComponent(state.session.session_id) + "/turns/" +
+        encodeURIComponent(state.turn.turn_id) + "/" + action;
+      try {
+        const result = await call(path, {
+          method: "POST",
+          body: JSON.stringify({ approval_id: state.turn.approval_id }),
+        });
+        if (action === "approve") {
+          $("digest-approval").textContent = result.approval_hash || result.state || "—";
+        } else {
+          $("execute-state").textContent = (result.status || "—") + " · " + (result.job_id || "—");
+        }
+      } catch (error) {
+        $("composer-hint").textContent = api.statusMessage(api.statusFromError(error));
+      }
+    }
+
+    async function login(event) {
+      event.preventDefault();
+      const input = $("principal-token");
+      const token = input.value;
+      if (!token) return;
+      $("login-hint").textContent = "در حال ورود…";
+      try {
+        await call("/login", { method: "POST", body: JSON.stringify({ principal_token: token }) });
+        input.value = "";
+        $("login-hint").textContent = "";
+        await loadMe();
+      } catch (error) {
+        $("login-hint").textContent = api.statusMessage(api.statusFromError(error));
+      }
+    }
+
+    async function logout() {
+      try {
+        await call("/logout", { method: "POST", body: JSON.stringify({}) });
+      } catch (error) {
+        /* a failed logout still clears the local view */
+      }
+      state.me = null;
+      state.session = null;
+      showLogin(true);
+      setStatus("خارج شدید.", "warn");
+    }
+
+    $("login-form").addEventListener("submit", login);
+    $("logout").addEventListener("click", logout);
+    $("sessions-form").addEventListener("submit", function (event) {
+      event.preventDefault();
+      loadSessions();
+    });
+    $("open-session").addEventListener("click", openSession);
+    $("composer-form").addEventListener("submit", submitTurn);
+    $("approve-turn").addEventListener("click", function () {
+      decide("approve");
+    });
+    $("execute-turn").addEventListener("click", function () {
+      decide("execute");
+    });
+
+    loadMe();
   })(globalThis.StudioSurface);
 }

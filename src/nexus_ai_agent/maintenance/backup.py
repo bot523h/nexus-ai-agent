@@ -380,11 +380,22 @@ def _build_sidecar(*, key: str, summary: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def create_backup(*, settings: Settings, dry_run: bool = False) -> dict[str, Any]:
+def create_backup(
+    *,
+    settings: Settings,
+    dry_run: bool = False,
+    provider: BlobProvider | None = None,
+) -> dict[str, Any]:
     """Dump the active database, verify the artifact, upload, re-verify.
 
     See the module docstring for the full success contract. In ``dry_run``
     mode nothing is written or uploaded and the summary says so explicitly.
+
+    ``provider`` is an explicit override for callers that must not consult the
+    environment at all — the CI self-test passes a ``LocalCacheProvider`` so a
+    complete B2/R2 tier in ``os.environ`` can never receive a synthetic
+    artifact. When it is supplied the remote-tier preflight is relaxed, because
+    the caller has already decided where the bytes go.
     """
     now = dt.datetime.now(dt.timezone.utc)
     stamp = now.strftime(STAMP_FORMAT)
@@ -418,7 +429,7 @@ def create_backup(*, settings: Settings, dry_run: bool = False) -> dict[str, Any
     # Validate both the supplied settings and the database URL actually selected
     # by the canonical backend policy, before provider creation or dumping.
     local_tier = local_maintenance_tier(settings)
-    require_remote_tier = local_tier is None
+    require_remote_tier = local_tier is None and provider is None
     verify_production_backup_preflight(
         settings,
         allow_local_database=database_url is None,
@@ -429,7 +440,8 @@ def create_backup(*, settings: Settings, dry_run: bool = False) -> dict[str, Any
             settings.model_copy(update={"database_url": database_url}),
             require_remote_tier=require_remote_tier,
         )
-    provider = _build_provider(settings)
+    provider = provider or _build_provider(settings)
+    summary["tier"] = getattr(provider, "name", type(provider).__name__)
     if not provider.is_configured():
         # Fail loudly: a silently skipped backup is worse than a red job.
         raise ProviderUnavailable(

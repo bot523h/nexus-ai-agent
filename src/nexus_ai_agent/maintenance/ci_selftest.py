@@ -18,6 +18,15 @@ same three production entry points against it:
 Every leg writes machine-readable evidence, and the process exits non-zero when
 any leg fails. It refuses to run when ``NEXUS_DATABASE_URL`` is set: the CI lane
 must never be pointed at production by accident.
+
+The storage tier is pinned the same way. The self-test builds its settings with
+every remote-tier field cleared **and** injects a ``LocalCacheProvider``
+directly into ``create_backup``, so a complete ``NEXUS_B2_*`` or ``R2_*`` tier
+in the runner's environment cannot receive a synthetic SQLite artifact: the
+provider factory is never consulted. The evidence document says so explicitly
+(``mode`` and ``production_postgres_dr_verified``), because a green local
+self-test is not a PostgreSQL + object-storage disaster-recovery drill and must
+never be read as one.
 """
 
 from __future__ import annotations
@@ -32,9 +41,32 @@ import time
 from collections.abc import Sequence
 from contextlib import redirect_stdout
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from nexus_ai_agent.config.settings import Settings
 
 PRODUCTION_URL_ENV = "NEXUS_DATABASE_URL"
+
+#: Environment prefixes that select a remote maintenance tier.
+REMOTE_TIER_ENV_PREFIXES = ("NEXUS_B2_", "R2_")
+
+#: Settings fields that carry remote-tier credentials; cleared on the copy the
+#: self-test hands to ``create_backup``.
+REMOTE_TIER_FIELDS = (
+    "b2_key_id",
+    "b2_application_key",
+    "b2_bucket",
+    "b2_endpoint",
+    "b2_region",
+    "r2_account_id",
+    "r2_access_key_id",
+    "r2_secret_access_key",
+    "r2_bucket",
+)
+
+#: Evidence label for the lane. Deliberately not "production".
+MODE_LABEL = "ci_local_sqlite_selftest"
 
 
 class SelfTestError(RuntimeError):
@@ -67,27 +99,57 @@ def prepare_database(path: Path) -> dict[str, Any]:
     }
 
 
-def run_backup(database: Path, tier: Path) -> dict[str, Any]:
-    """Dump -> verify -> upload -> re-verify through ``create_backup``."""
+def suppressed_remote_env() -> list[str]:
+    """Names — never values — of the remote-tier variables visible to the runner."""
+    return sorted(name for name in os.environ if name.startswith(REMOTE_TIER_ENV_PREFIXES))
+
+
+def local_only_settings(database: Path, tier: Path) -> Settings:
+    """Settings whose storage tier is *structurally* local.
+
+    Every remote-tier credential field is cleared, so even a code path that
+    consulted ``build_blob_provider`` would find nothing to select. The provider
+    itself is injected by :func:`run_backup`; this is the second lock.
+    """
     from nexus_ai_agent.config.settings import Settings
-    from nexus_ai_agent.maintenance.backup import create_backup
 
     # ``model_copy`` (not constructor kwargs) because these fields are declared
     # with validation aliases, which pydantic treats as env-only inputs.
-    settings = Settings.model_validate({}).model_copy(
+    return Settings.model_validate({}).model_copy(
         update={
             "db_path": str(database),
             "maintenance_local_tier": str(tier),
             "database_url": None,
+            **{field: None for field in REMOTE_TIER_FIELDS},
         }
     )
-    result = create_backup(settings=settings)
+
+
+def run_backup(database: Path, tier: Path) -> dict[str, Any]:
+    """Dump -> verify -> upload -> re-verify through ``create_backup``.
+
+    The provider is injected, so the CI lane never asks the environment which
+    tier to use.
+    """
+    from nexus_ai_agent.maintenance.backup import create_backup
+    from nexus_ai_agent.storage.providers.local_cache import LocalCacheProvider
+
+    provider = LocalCacheProvider(tier)
+    try:
+        result = create_backup(settings=local_only_settings(database, tier), provider=provider)
+    except RuntimeError as exc:
+        # StorageError, ProviderUnavailable, MaintenanceOperationError and the
+        # round-trip mismatch all derive from RuntimeError: one clean message
+        # and exit 1 instead of a traceback.
+        raise SelfTestError(f"backup leg failed: {exc}") from exc
     if not result.get("verified"):
         raise SelfTestError(f"backup artifact was not verified: {result}")
+    if result.get("tier") != provider.name:
+        raise SelfTestError(f"backup used tier {result.get('tier')!r}, expected {provider.name!r}")
     artifact = tier / str(result["key"])
     if not artifact.is_file():
         raise SelfTestError(f"backup artifact missing from the local tier: {artifact}")
-    return {**result, "artifact_path": str(artifact)}
+    return {**result, "artifact_path": str(artifact), "storage_tier": provider.name}
 
 
 def run_drill(artifact: Path, workdir: Path) -> dict[str, Any]:
@@ -155,8 +217,13 @@ def run(
         )
     evidence: dict[str, Any] = {
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        "mode": "ci-selftest",
+        "mode": MODE_LABEL,
         "only": only,
+        # A local SQLite self-test is not a PostgreSQL + object-storage DR
+        # drill; saying so in the document keeps the two from being confused.
+        "production_postgres_dr_verified": False,
+        "storage_tier": "local_cache",
+        "remote_tier_env_suppressed": suppressed_remote_env(),
     }
     evidence["database"] = prepare_database(database)
     if only in ("backup", "all"):

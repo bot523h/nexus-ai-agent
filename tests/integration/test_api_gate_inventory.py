@@ -277,6 +277,23 @@ SURFACES: tuple[Surface, ...] = (
         unauthenticated_status=403,
         configuration="x-nagar-studio request marker",
     ),
+    Surface(
+        # The /studio/app lane: the bundle is public bytes, but every operation
+        # behind it needs a principal session. The lane fails closed the same
+        # way whether or not the deployment has principals registered — a
+        # caller with no session is refused, never redirected to a login page
+        # that the probe would read as success. ``/login`` is the
+        # pre-authentication endpoint, so the probe presents the CSRF marker and
+        # a *wrong* principal token in the body: the only way to reach the
+        # credential comparison instead of FastAPI's validation layer.
+        name="studio-app-principal",
+        path_prefix="/studio/app/api/",
+        unconfigured_status=401,
+        unauthenticated_status=401,
+        configuration="principal token exchange (NEXUS_STUDIO_AUTH_DB)",
+        probe_body={"principal_token": "not-the-principal-token"},
+        probe_headers={studio_session.CSRF_HEADER: studio_session.CSRF_VALUE},
+    ),
 )
 
 

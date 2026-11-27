@@ -240,6 +240,32 @@ def test_external_artifact_ingress_and_cold_replay(tmp_path: Path) -> None:
     assert (before.st_ino, before.st_mtime_ns) == (after.st_ino, after.st_mtime_ns)
 
 
+def _expire_durable_lease(database: Path, plan_id: str) -> None:
+    """Move a plan's stored lease deadline into the past.
+
+    The child in the subprocess-death test really dies (exit 73) and really
+    leaves the plan ``EXECUTING``. Its lease is deliberately wide (60 s) so no
+    loaded runner can expire it mid-step and turn the crash boundary into a
+    ``PlanRollbackError``. Recovery consults ``plans.lease_expires_at`` and
+    nothing else, so moving that one column is the deterministic equivalent of
+    waiting out the lease — without a 60 s sleep that would still be a race.
+
+    The deadline lives in the store's **monotonic** clock domain
+    (``time.monotonic_ns()/1e9``, never epoch), so the backdate must use the
+    same domain: the parent and the child share one boot, which is exactly what
+    the store's clock-domain guard requires of two instances on one database.
+    """
+    import sqlite3
+    import time
+
+    with sqlite3.connect(database) as conn:
+        changed = conn.execute(
+            "UPDATE plans SET lease_expires_at=? WHERE project_id='project' AND plan_id=?",
+            (time.monotonic() - 1.0, plan_id),
+        ).rowcount
+    assert changed == 1, f"expected exactly one leased plan row, updated {changed}"
+
+
 @pytest.mark.parametrize("published", [False, True])
 def test_subprocess_death_and_authenticated_external_recovery(
     tmp_path: Path, published: bool
@@ -249,7 +275,6 @@ def test_subprocess_death_and_authenticated_external_recovery(
     import sqlite3
     import subprocess
     import sys
-    import time
 
     from nexus_ai_agent.adapters.fenced_filesystem_destination import (
         FencedFilesystemEffectDestination,
@@ -270,10 +295,11 @@ original = FencedFilesystemEffectDestination.apply
 def crash(self, **kwargs):
     if sys.argv[3] == 'present':
         original(self, **kwargs)
+    (root / 'crash_boundary.json').write_text(json.dumps({'exit': 73}))
     os._exit(73)
 FencedFilesystemEffectDestination.apply = crash
 runtime.execute_approved_plan_ir(ir, token, commands=commands,
-    credential=credential, lease_ttl_seconds=0.1)
+    credential=credential, lease_ttl_seconds=60.0)
 raise AssertionError('child unexpectedly returned')
 """
     child = subprocess.Popen(
@@ -291,8 +317,9 @@ raise AssertionError('child unexpectedly returned')
     )
     stdout, stderr = child.communicate(timeout=15)
     assert child.returncode == 73, (stdout, stderr)
-    time.sleep(0.15)  # Wait past the real monotonic lease, not an injected clock.
+    assert (tmp_path / "crash_boundary.json").is_file(), "the child never reached the crash"
     runtime, ir, _, credential = external_runtime(tmp_path)
+    _expire_durable_lease(tmp_path / "external.db", ir.plan_id)
     plan_hash = json.loads((tmp_path / "token.json").read_text())[0]["binding"]["plan_hash"]
     with pytest.raises(AuthorizationError):
         runtime.inspect_recovery(
