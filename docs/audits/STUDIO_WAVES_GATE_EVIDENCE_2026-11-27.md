@@ -327,11 +327,14 @@ per path, each in a **fresh temporary directory** so no trial inherits warmth:
 
 | # | Path | Median | p95 | Stddev |
 |---|---|---:|---:|---:|
-| a | authority-bridge proof + integrity | 0.662 ms | 1.317 ms | 0.437 ms |
-| b | revision pinning + worker verification | 4.793 ms | 5.478 ms | 0.449 ms |
-| c | rational preview readback + WYSIWYS | 1.904 ms | 2.121 ms | 0.144 ms |
-| d | execution-outbox full cycle | 19.382 ms | 20.855 ms | 0.976 ms |
-| e | DR hot backup → verify → restore | 30.697 ms | 33.933 ms | 2.178 ms |
+| a | authority-bridge proof + integrity | 0.437 ms | 1.029 ms | 0.344 ms |
+| b | revision pinning + worker verification | 4.592 ms | 7.145 ms | 1.477 ms |
+| c | rational preview readback + WYSIWYS | 1.691 ms | 1.733 ms | 0.052 ms |
+| d | execution-outbox full cycle | 20.084 ms | 23.079 ms | 2.988 ms |
+| e | DR hot backup → verify → restore | 29.202 ms | 33.208 ms | 2.823 ms |
+
+Measured at `ec1ad5ea`, report `docs/audits/benchmarks/wave4_studio_e2e_benchmark_ec1ad5ead2d8.{json,md}`
+(`sha256:2b9c8f0a5c797fe6fde8076fba687a7b9038b7ee6ec65ce00a88ecfd4a9e0dfa`).
 
 p95 is **nearest-rank**, not interpolated: at N=3 an interpolated p95 is a number
 no observation supports, and the honest answer is the maximum observation. The
