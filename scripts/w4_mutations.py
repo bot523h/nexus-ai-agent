@@ -302,10 +302,13 @@ REGISTRY = (
         "W3-R7-M01",
         NAGAR + "ibpc/service.py",
         "IBPCService._authorize_studio_action",
-        "if action in _EXECUTION_AND_APPROVAL_ACTIONS:",
-        "if False and action in _EXECUTION_AND_APPROVAL_ACTIONS:",
+        "if (\n"
+        "                action in _AUTHORIZER_REQUIRED_ACTIONS\n"
+        "                or action not in _PLAN_ONLY_ACTIONS_WITHOUT_AUTHORIZER\n"
+        "            ):",
+        "if False:",
         "tests/unit/test_ibpc_authorization_closure.py::TestTheUnconfiguredRoleGate::"
-        "test_each_privileged_action_refuses_without_an_authorizer",
+        "test_each_role_gated_action_refuses_without_an_authorizer",
     ),
     Mutation(
         "W3-R7-M02",
@@ -324,6 +327,58 @@ REGISTRY = (
         "if resolved_principal != principal_id:",
         "tests/unit/test_ibpc_authorization_closure.py::TestTheCanonicalFactsAreValidated::"
         "test_a_mismatched_or_malformed_identity_is_refused",
+    ),
+    Mutation(
+        "W3-R7-M04",
+        NAGAR + "ibpc/service.py",
+        "IBPCService._authorize_studio_action",
+        "if (\n"
+        "                action in _AUTHORIZER_REQUIRED_ACTIONS\n"
+        "                or action not in _PLAN_ONLY_ACTIONS_WITHOUT_AUTHORIZER\n"
+        "            ):",
+        "if action in frozenset({\n"
+        "                StudioAction.APPROVE_PLAN,\n"
+        "                StudioAction.EXECUTE_PLAN,\n"
+        "                StudioAction.MANAGE_MEMBERSHIP,\n"
+        "            }):",
+        "tests/unit/test_ibpc_authorization_closure.py::"
+        "TestAuthorizerLessConsentAuditAndLifecycle::test_grant_privacy_consent_fails_closed",
+    ),
+    Mutation(
+        "W3-R7-M05",
+        NAGAR + "ibpc/service.py",
+        "IBPCService._verify_studio_decision",
+        "if type(decision.allowed) is not bool or decision.allowed is not True:",
+        "if False:",
+        "tests/unit/test_ibpc_authorization_closure.py::TestTheStudioDecisionContract::"
+        "test_a_denied_decision_without_an_exception_is_refused",
+    ),
+    Mutation(
+        "W3-R7-M06",
+        NAGAR + "ibpc/service.py",
+        "IBPCService._verify_studio_decision",
+        "if resolved_principal != principal_id:",
+        "if False:",
+        "tests/unit/test_ibpc_authorization_closure.py::TestTheStudioDecisionContract::"
+        "test_a_decision_minted_for_another_scope_is_refused",
+    ),
+    Mutation(
+        "W3-R7-M07",
+        NAGAR + "ibpc/service.py",
+        "IBPCService._verify_studio_decision",
+        "if decision.action != expected_action:",
+        "if False:",
+        "tests/unit/test_ibpc_authorization_closure.py::TestTheStudioDecisionContract::"
+        "test_a_decision_minted_for_another_scope_is_refused",
+    ),
+    Mutation(
+        "W3-R7-M08",
+        NAGAR + "ibpc/service.py",
+        "IBPCService._authorize_studio_action",
+        "                or action not in _PLAN_ONLY_ACTIONS_WITHOUT_AUTHORIZER\n",
+        "",
+        "tests/unit/test_ibpc_authorization_closure.py::TestTheUnconfiguredRoleGate::"
+        "test_an_action_the_allowlist_does_not_name_is_refused",
     ),
 )
 

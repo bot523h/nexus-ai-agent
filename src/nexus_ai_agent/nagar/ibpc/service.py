@@ -61,6 +61,7 @@ from nexus_ai_agent.nagar.ibpc.authority import (
     CanonicalAuthorityPort,
     PrincipalFacts,
     StudioAction,
+    StudioAuthorizationDecision,
     StudioAuthorizerPort,
 )
 from nexus_ai_agent.nagar.ibpc.canonical import digest_of
@@ -124,12 +125,29 @@ from nexus_ai_agent.provenance.canonicalization import (
 #: diagnostic travels in ``detail`` and in ``str()`` — never concatenated onto it.
 AUTHORIZATION_REFUSAL_REASON: Final[str] = "unauthorized_principal"
 
-#: Actions that approve, execute or administer a project.  The role gate is the
-#: only thing that distinguishes a VIEWER from an EDITOR, so a service composed
-#: without a Studio authorizer must not reach one of these: an unconfigured gate
-#: is a refusal, never a silent no-op (Wave 3-R7).
-_EXECUTION_AND_APPROVAL_ACTIONS: Final[frozenset[StudioAction]] = frozenset(
-    {StudioAction.APPROVE_PLAN, StudioAction.EXECUTE_PLAN, StudioAction.MANAGE_MEMBERSHIP}
+#: The ONLY actions a service composed without a Studio authorizer may perform:
+#: read a session and submit an intent for a plan.  This is an allowlist on
+#: purpose — every other action (including ones added to :class:`StudioAction`
+#: later) is refused by default, so an unconfigured role gate is a refusal and
+#: never a silent no-op (Wave 3-R7).
+_PLAN_ONLY_ACTIONS_WITHOUT_AUTHORIZER: Final[frozenset[StudioAction]] = frozenset(
+    {StudioAction.SUBMIT_INTENT, StudioAction.READ_SESSION}
+)
+
+#: Actions that must never be reachable without a configured Studio authorizer.
+#: Listed explicitly (in addition to the allowlist above) so the refusal reasons
+#: and the security contract stay readable and independently testable; approving,
+#: executing, membership, privacy consent, audit reads and session lifecycle
+#: transitions are all role-gated operations, not planning.
+_AUTHORIZER_REQUIRED_ACTIONS: Final[frozenset[StudioAction]] = frozenset(
+    {
+        StudioAction.APPROVE_PLAN,
+        StudioAction.EXECUTE_PLAN,
+        StudioAction.MANAGE_MEMBERSHIP,
+        StudioAction.MANAGE_CONSENT,
+        StudioAction.READ_AUDIT,
+        StudioAction.CLOSE_SESSION,
+    }
 )
 
 JOB_TYPE = "creative_render"
@@ -138,6 +156,11 @@ SURFACE_OPERATION = "trim"
 CANONICAL_OPERATION: Literal["timeline.trim"] = "timeline.trim"
 WORKSPACE_PREFIX = "creative_"
 DRAIN_TIMEOUT_S = 300.0
+
+
+def _action_name(action: Any) -> str:
+    """Stable string form of a :class:`StudioAction` (or of a plain string)."""
+    return str(getattr(action, "value", action))
 
 
 class ScopeSignatureMismatchError(ApprovalError):
@@ -466,25 +489,98 @@ class IBPCService:
         binding_ref: str | None = None,
     ) -> None:
         authorizer = self._deps.authorizer
+        action_name = _action_name(action)
         if authorizer is None:
-            # Wave 3-R7: an unconfigured role gate refuses the actions that mint,
-            # burn or administer — never a silent grant.  Planning actions keep
-            # their historical behaviour so a read-only composition still works.
-            if action in _EXECUTION_AND_APPROVAL_ACTIONS:
+            # Wave 3-R7: an unconfigured role gate fails CLOSED.  Only the explicit
+            # plan-only allowlist survives; anything role-gated — or anything the
+            # allowlist does not name, including actions added later — is refused
+            # before a single byte of state changes.
+            if (
+                action in _AUTHORIZER_REQUIRED_ACTIONS
+                or action not in _PLAN_ONLY_ACTIONS_WITHOUT_AUTHORIZER
+            ):
                 raise AuthorizationError(
-                    "role_verification_required",
-                    f"{action.value} requires a configured Studio authorizer",
+                    AUTHORIZATION_REFUSAL_REASON,
+                    f"{action_name} requires a configured Studio authorizer",
                 )
             return
         resolved_ref = (
             (self._deps.channel_binding_ref or "") if binding_ref is None else binding_ref
         )
-        authorizer.authorize_action(
+        decision = authorizer.authorize_action(
             principal_id=principal_id,
             project_id=project_id,
             action=action,
             binding_ref=resolved_ref,
         )
+        self._verify_studio_decision(
+            decision,
+            principal_id=principal_id,
+            project_id=project_id,
+            action=action,
+            binding_ref=resolved_ref,
+        )
+
+    @staticmethod
+    def _verify_studio_decision(
+        decision: Any,
+        *,
+        principal_id: str,
+        project_id: str,
+        action: StudioAction,
+        binding_ref: str,
+    ) -> None:
+        """Wave 3-R7: a role decision is evidence only when it is fully consistent.
+
+        An authorizer that returns ``allowed=False`` instead of raising, a decision
+        minted for another principal / project / action / binding, or anything that
+        is not a :class:`StudioAuthorizationDecision` at all is a refusal.  This
+        runs before any approval is minted or consumed, any consent is granted or
+        revoked, any audit row is disclosed, any session transitions or any job is
+        enqueued.
+        """
+        expected_action = _action_name(action)
+        if not isinstance(decision, StudioAuthorizationDecision):
+            raise AuthorizationError(
+                AUTHORIZATION_REFUSAL_REASON,
+                f"the Studio authorizer returned {type(decision).__name__}, "
+                "not a StudioAuthorizationDecision",
+            )
+        if type(decision.allowed) is not bool or decision.allowed is not True:
+            raise AuthorizationError(
+                AUTHORIZATION_REFUSAL_REASON,
+                f"the Studio authorizer did not allow {expected_action}",
+            )
+        resolved_principal = (
+            decision.principal_id.strip() if isinstance(decision.principal_id, str) else None
+        )
+        resolved_project = (
+            decision.project_id.strip() if isinstance(decision.project_id, str) else None
+        )
+        if resolved_principal != principal_id:
+            raise AuthorizationError(
+                AUTHORIZATION_REFUSAL_REASON,
+                f"the Studio authorization decision names principal {resolved_principal!r}, "
+                f"not the requesting {principal_id!r}",
+            )
+        if resolved_project != project_id:
+            raise AuthorizationError(
+                AUTHORIZATION_REFUSAL_REASON,
+                f"the Studio authorization decision names project {resolved_project!r}, "
+                f"not the requesting {project_id!r}",
+            )
+        if decision.action != expected_action:
+            raise AuthorizationError(
+                AUTHORIZATION_REFUSAL_REASON,
+                f"the Studio authorization decision names action {decision.action!r}, "
+                f"not {expected_action!r}",
+            )
+        if decision.binding_ref != binding_ref:
+            raise AuthorizationError(
+                AUTHORIZATION_REFUSAL_REASON,
+                "the Studio authorization decision names a different channel binding "
+                "than the one presented",
+            )
 
     def _validate_session_binding(
         self,

@@ -414,6 +414,13 @@ jobs:
       - run: python scripts/ibpc_security_mutations.py
       - name: the working tree must be unchanged after IBPC security mutation testing
         run: git diff --exit-code
+      # Wave 3-R7: the IBPC *authorization closure* (role gate + decision/facts
+      # contracts) is attacked by the 38-mutant W4 campaign, which includes the
+      # five W3-R7-M04..M08 authorization mutants. Run it here so every CI run
+      # proves each one is killed, and prove byte-identical restoration.
+      - run: PYTHONDONTWRITEBYTECODE=1 python scripts/w4_mutations.py
+      - name: the working tree must be unchanged after the W4 authorization mutation campaign
+        run: git diff --exit-code
       # Same evidence rule for the P0 creative redelivery boundary
       # (task-nagar-workspace-redelivery-01): the surface/worker content-identity,
       # symlink, containment and private-permission invariants re-attacked. The

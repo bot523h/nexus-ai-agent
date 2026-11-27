@@ -1,20 +1,29 @@
-"""Wave 3-R7 — the two authorization gaps in the post-#365 IBPC service.
+"""Wave 3-R7 — the authorization gaps in the post-#365 IBPC service.
 
 1. **An unconfigured role gate used to be a no-op.** ``_authorize_studio_action``
-   returns early whenever ``deps.authorizer is None`` — the *default* — so a
+   returned early whenever ``deps.authorizer is None`` — the *default* — so a
    service composed without a Studio authorizer still minted (``approve``) and
-   burned (``execute``) approval tokens with no role proof at all.  Identity
-   verification (``_resolve_authority``) fails closed when its port is missing;
-   the role gate now does the same for the actions that approve, execute or
-   administer.
-2. **Canonical facts were trusted unchecked.** ``_resolve_authority`` returned
+   burned (``execute``) approval tokens, granted and revoked privacy consent,
+   disclosed the audit log and drove session lifecycle transitions with no role
+   proof at all.  Identity verification (``_resolve_authority``) fails closed when
+   its port is missing; the role gate now does the same, with an explicit
+   plan-only **allowlist** (``SUBMIT_INTENT``, ``READ_SESSION``) instead of a
+   partial denylist: anything else — including an action added to
+   ``StudioAction`` later — is refused by default.
+2. **The authorizer's answer was trusted unchecked.**  When a Studio authorizer
+   *was* configured, its return value was discarded: an ``allowed=False`` decision
+   returned without raising, or a decision minted for a different principal,
+   project, action or channel binding, was accepted as a grant.  Every decision is
+   now verified field-by-field before any state changes.
+3. **Canonical facts were trusted unchecked.** ``_resolve_authority`` returned
    whatever ``resolve_principal`` produced; callers copied
    ``facts.channel_binding_id`` straight into the queue payload and only compared
    it against the context at consume time.  A ``None``/``""``/whitespace binding,
    or a different ``principal_id``/``project_id``, was accepted.
 
-Both refusals keep the canonical public reason (``AUTHORIZATION_REFUSAL_REASON``)
-and leave the world untouched: no approval minted or consumed, no queued job.
+Every refusal keeps the canonical public reason (``AUTHORIZATION_REFUSAL_REASON``)
+and leaves the world untouched: no approval minted or consumed, no consent granted
+or revoked, no audit row disclosed, no session transition, no queued job.
 """
 
 from __future__ import annotations
@@ -27,6 +36,11 @@ import types
 import pytest
 
 import nexus_ai_agent.nagar.ibpc.service as service_mod
+from nexus_ai_agent.adapters.studio_principal_auth import (
+    ROLE_ACTIONS,
+    ProjectMembershipAuthorizer,
+    StudioPrincipalAuthStore,
+)
 from nexus_ai_agent.creative.packs.runtime import build_runtime_registry
 from nexus_ai_agent.nagar.ibpc.approval_mac import StaticKeyRing
 from nexus_ai_agent.nagar.ibpc.authority import (
@@ -34,11 +48,14 @@ from nexus_ai_agent.nagar.ibpc.authority import (
     CanonicalAuthorityError,
     StudioAction,
     StudioAuthorizationDecision,
+    StudioRole,
 )
 from nexus_ai_agent.nagar.ibpc.intent import Refusal
 from nexus_ai_agent.nagar.ibpc.models import ApprovalState
+from nexus_ai_agent.nagar.ibpc.privacy import DataCategory, PrivacyMode, ProcessingScope
 from nexus_ai_agent.nagar.ibpc.service import (
-    _EXECUTION_AND_APPROVAL_ACTIONS,
+    _AUTHORIZER_REQUIRED_ACTIONS,
+    _PLAN_ONLY_ACTIONS_WITHOUT_AUTHORIZER,
     AUTHORIZATION_REFUSAL_REASON,
     IBPCService,
     IBPCServiceDeps,
@@ -71,9 +88,20 @@ class _Queue:
 
 
 class _AllowAll:
-    """``StudioAuthorizerPort`` double: allows every action."""
+    """``StudioAuthorizerPort`` double: returns a consistent ``allowed`` decision."""
+
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
 
     def authorize_action(self, *, principal_id, project_id, action, binding_ref=""):
+        self.calls.append(
+            {
+                "principal_id": principal_id,
+                "project_id": project_id,
+                "action": action,
+                "binding_ref": binding_ref,
+            }
+        )
         return StudioAuthorizationDecision(
             allowed=True,
             principal_id=principal_id,
@@ -83,6 +111,30 @@ class _AllowAll:
             reason="test_double",
             binding_ref=binding_ref,
         )
+
+
+class _Scripted:
+    """``StudioAuthorizerPort`` double returning whatever the script says."""
+
+    def __init__(self, make) -> None:
+        self._make = make
+
+    def authorize_action(self, *, principal_id, project_id, action, binding_ref=""):
+        return self._make(principal_id, project_id, action, binding_ref)
+
+
+def _decision(**overrides) -> StudioAuthorizationDecision:
+    fields = {
+        "allowed": True,
+        "principal_id": PRINCIPAL,
+        "project_id": PROJECT,
+        "role": "OWNER",
+        "action": StudioAction.APPROVE_PLAN.value,
+        "reason": "authorized",
+        "binding_ref": BINDING,
+    }
+    fields.update(overrides)
+    return StudioAuthorizationDecision(**fields)
 
 
 def _facts(**overrides):
@@ -159,16 +211,24 @@ def media(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch):
 _UNSET = object()
 
 
-def _service(*, authority=_UNSET, authorizer=_UNSET, binding: str | None = BINDING):
+def _service(
+    *,
+    authority=_UNSET,
+    authorizer=_UNSET,
+    binding: str | None = BINDING,
+    workspace: pathlib.Path | None = None,
+    durable: bool = False,
+):
     queue = _Queue()
     deps = IBPCServiceDeps(
         queue=queue,  # type: ignore[arg-type]
         registry=build_runtime_registry(),
-        workspace_root=pathlib.Path("/tmp/ibpc-r7-closure"),
+        workspace_root=pathlib.Path(workspace or "/tmp/ibpc-r7-closure"),
         revision_provider=lambda: 7,
         authority=_Port() if authority is _UNSET else authority,
         authorizer=None if authorizer is _UNSET else authorizer,
         channel_binding_ref=binding,
+        durable=durable,
         approval_key_provider=StaticKeyRing({"unit": b"r" * 32}, active_key_id="unit"),
     )
     return IBPCService(deps), queue
@@ -200,31 +260,47 @@ def _submit(service: IBPCService, clip: pathlib.Path, session_id: str):
 # 1) an unconfigured role gate is a refusal, not a no-op
 # --------------------------------------------------------------------------- #
 class TestTheUnconfiguredRoleGate:
-    def test_the_execution_actions_are_exactly_the_privileged_ones(self) -> None:
-        assert _EXECUTION_AND_APPROVAL_ACTIONS == {
-            StudioAction.APPROVE_PLAN,
-            StudioAction.EXECUTE_PLAN,
-            StudioAction.MANAGE_MEMBERSHIP,
-        }
+    def test_the_policy_is_an_explicit_disjoint_allowlist(self) -> None:
+        assert _PLAN_ONLY_ACTIONS_WITHOUT_AUTHORIZER == frozenset(
+            {StudioAction.SUBMIT_INTENT, StudioAction.READ_SESSION}
+        )
+        assert _AUTHORIZER_REQUIRED_ACTIONS == frozenset(
+            {
+                StudioAction.APPROVE_PLAN,
+                StudioAction.EXECUTE_PLAN,
+                StudioAction.MANAGE_MEMBERSHIP,
+                StudioAction.MANAGE_CONSENT,
+                StudioAction.READ_AUDIT,
+                StudioAction.CLOSE_SESSION,
+            }
+        )
+        assert not (_PLAN_ONLY_ACTIONS_WITHOUT_AUTHORIZER & _AUTHORIZER_REQUIRED_ACTIONS)
+        # READ_JOB is in neither set: the allowlist still refuses it (default deny)
+        assert StudioAction.READ_JOB not in _PLAN_ONLY_ACTIONS_WITHOUT_AUTHORIZER
+        assert StudioAction.READ_JOB not in _AUTHORIZER_REQUIRED_ACTIONS
 
     @pytest.mark.parametrize(
         "action",
-        [StudioAction.APPROVE_PLAN, StudioAction.EXECUTE_PLAN, StudioAction.MANAGE_MEMBERSHIP],
+        [
+            StudioAction.APPROVE_PLAN,
+            StudioAction.EXECUTE_PLAN,
+            StudioAction.MANAGE_MEMBERSHIP,
+            StudioAction.MANAGE_CONSENT,
+            StudioAction.READ_AUDIT,
+            StudioAction.CLOSE_SESSION,
+        ],
     )
-    def test_each_privileged_action_refuses_without_an_authorizer(self, action) -> None:
+    def test_each_role_gated_action_refuses_without_an_authorizer(self, action) -> None:
         service, queue = _service()
         with pytest.raises(AuthorizationError) as exc:
             service._authorize_studio_action(
                 principal_id=PRINCIPAL, project_id=PROJECT, action=action
             )
-        assert exc.value.reason == "role_verification_required"
+        assert exc.value.reason == AUTHORIZATION_REFUSAL_REASON
         assert action.value in str(exc.value)
         assert queue.enqueued == []
 
-    @pytest.mark.parametrize(
-        "action",
-        [StudioAction.READ_SESSION, StudioAction.SUBMIT_INTENT, StudioAction.CLOSE_SESSION],
-    )
+    @pytest.mark.parametrize("action", [StudioAction.SUBMIT_INTENT, StudioAction.READ_SESSION])
     def test_planning_actions_keep_working_without_one(self, action) -> None:
         service, _queue = _service()
         assert (
@@ -234,24 +310,22 @@ class TestTheUnconfiguredRoleGate:
             is None
         )
 
+    def test_an_action_the_allowlist_does_not_name_is_refused(self) -> None:
+        service, _queue = _service()
+        with pytest.raises(AuthorizationError) as exc:
+            service._authorize_studio_action(
+                principal_id=PRINCIPAL, project_id=PROJECT, action=StudioAction.READ_JOB
+            )
+        assert exc.value.reason == AUTHORIZATION_REFUSAL_REASON
+
     def test_a_configured_authorizer_is_consulted(self) -> None:
-        seen: list[StudioAction] = []
-
-        class _Recording(_AllowAll):
-            def authorize_action(self, *, principal_id, project_id, action, binding_ref=""):
-                seen.append(action)
-                return super().authorize_action(
-                    principal_id=principal_id,
-                    project_id=project_id,
-                    action=action,
-                    binding_ref=binding_ref,
-                )
-
-        service, _queue = _service(authorizer=_Recording())
+        authorizer = _AllowAll()
+        service, _queue = _service(authorizer=authorizer)
         service._authorize_studio_action(
             principal_id=PRINCIPAL, project_id=PROJECT, action=StudioAction.APPROVE_PLAN
         )
-        assert seen == [StudioAction.APPROVE_PLAN]
+        assert [call["action"] for call in authorizer.calls] == [StudioAction.APPROVE_PLAN]
+        assert authorizer.calls[0]["binding_ref"] == BINDING
 
     def test_an_authorizer_less_service_cannot_approve(self, media) -> None:
         service, queue = _service()
@@ -260,7 +334,7 @@ class TestTheUnconfiguredRoleGate:
         assert type(proposal).__name__ == "PipelineResult", proposal
         with pytest.raises(AuthorizationError) as exc:
             service.approve(session_id, "turn-1", proposal.approval_id, principal_id=PRINCIPAL)
-        assert exc.value.reason == "role_verification_required"
+        assert exc.value.reason == AUTHORIZATION_REFUSAL_REASON
         # the proposal was never minted into an approval, nothing is queued
         assert service.approvals.get(proposal.approval_id).state is ApprovalState.PENDING
         assert queue.enqueued == []
@@ -279,13 +353,303 @@ class TestTheUnconfiguredRoleGate:
             asyncio.run(
                 service.execute(session_id, "turn-1", proposal.approval_id, principal_id=PRINCIPAL)
             )
-        assert exc.value.reason == "role_verification_required"
+        assert exc.value.reason == AUTHORIZATION_REFUSAL_REASON
         assert service.approvals.get(proposal.approval_id).state is ApprovalState.APPROVED
         assert queue.enqueued == []
 
 
+class TestAuthorizerLessConsentAuditAndLifecycle:
+    """The three surfaces the old denylist let through untouched."""
+
+    @pytest.fixture()
+    def durable(self, tmp_path: pathlib.Path):
+        service, queue = _service(workspace=tmp_path, durable=True)
+        try:
+            yield service, queue, tmp_path
+        finally:
+            service.close()
+
+    def test_grant_privacy_consent_fails_closed(self, durable) -> None:
+        service, _queue, _tmp = durable
+        with pytest.raises(AuthorizationError) as exc:
+            service.grant_privacy_consent(
+                project_id=PROJECT,
+                principal_id=PRINCIPAL,
+                mode=PrivacyMode.LOCAL_VAULT,
+                processing_scope=ProcessingScope.LOCAL_PROCESSING,
+                data_category=DataCategory.VIDEO,
+            )
+        assert exc.value.reason == AUTHORIZATION_REFUSAL_REASON
+        store = service._privacy_store
+        assert store is not None
+        assert store.list_consents(project_id=PROJECT) == ()
+        assert store.list_audit(project_id=PROJECT) == ()
+
+    def test_revoke_privacy_consent_fails_closed(self, durable) -> None:
+        service, _queue, _tmp = durable
+        grant = service._privacy.grant_durable_consent(
+            project_id=PROJECT,
+            principal_id=PRINCIPAL,
+            mode=PrivacyMode.LOCAL_VAULT,
+            processing_scope=ProcessingScope.LOCAL_PROCESSING,
+            data_category=DataCategory.VIDEO,
+        )
+        with pytest.raises(AuthorizationError) as exc:
+            service.revoke_privacy_consent(grant.consent_id, project_id=PROJECT, actor_id=PRINCIPAL)
+        assert exc.value.reason == AUTHORIZATION_REFUSAL_REASON
+        store = service._privacy_store
+        assert store is not None
+        still = store.get_consent(grant.consent_id)
+        assert still is not None and still.revoked_at_utc == ""
+
+    def test_list_privacy_audit_discloses_nothing(self, durable) -> None:
+        service, _queue, _tmp = durable
+        grant = service._privacy.grant_durable_consent(
+            project_id=PROJECT,
+            principal_id=PRINCIPAL,
+            mode=PrivacyMode.LOCAL_VAULT,
+            processing_scope=ProcessingScope.LOCAL_PROCESSING,
+            data_category=DataCategory.VIDEO,
+        )
+        store = service._privacy_store
+        assert store is not None
+        assert store.list_audit(project_id=PROJECT)  # the row the gate must not leak
+        with pytest.raises(AuthorizationError) as exc:
+            service.list_privacy_audit(project_id=PROJECT, principal_id=PRINCIPAL)
+        assert exc.value.reason == AUTHORIZATION_REFUSAL_REASON
+        assert grant.consent_id  # seeded, still present
+
+    @pytest.mark.parametrize("operation", ["close", "pause", "abort", "resume"])
+    def test_session_lifecycle_fails_closed(self, operation: str) -> None:
+        service, _queue = _service()
+        session_id = _open(service)
+        session = service.sessions.get_session(session_id)
+        before = session.status
+        method = getattr(service, f"{operation}_session")
+        with pytest.raises(AuthorizationError) as exc:
+            method(session_id, principal_id=PRINCIPAL)
+        assert exc.value.reason == AUTHORIZATION_REFUSAL_REASON
+        assert service.sessions.get_session(session_id).status == before
+
+
 # --------------------------------------------------------------------------- #
-# 2) the canonical authority's answer is validated, never trusted
+# 2) the authorizer's decision is verified, never trusted
+# --------------------------------------------------------------------------- #
+class TestTheStudioDecisionContract:
+    def test_a_denied_decision_without_an_exception_is_refused(self) -> None:
+        service, _queue = _service(
+            authorizer=_Scripted(lambda p, pr, a, b: _decision(allowed=False, binding_ref=b))
+        )
+        with pytest.raises(AuthorizationError) as exc:
+            service._authorize_studio_action(
+                principal_id=PRINCIPAL, project_id=PROJECT, action=StudioAction.APPROVE_PLAN
+            )
+        assert exc.value.reason == AUTHORIZATION_REFUSAL_REASON
+        assert "did not allow" in exc.value.detail
+
+    def test_a_non_boolean_allow_flag_is_refused(self) -> None:
+        forged = StudioAuthorizationDecision.model_construct(
+            allowed="yes",
+            principal_id=PRINCIPAL,
+            project_id=PROJECT,
+            role="OWNER",
+            action=StudioAction.APPROVE_PLAN.value,
+            reason="authorized",
+            binding_ref=BINDING,
+        )
+        service, _queue = _service(authorizer=_Scripted(lambda p, pr, a, b: forged))
+        with pytest.raises(AuthorizationError) as exc:
+            service._authorize_studio_action(
+                principal_id=PRINCIPAL, project_id=PROJECT, action=StudioAction.APPROVE_PLAN
+            )
+        assert exc.value.reason == AUTHORIZATION_REFUSAL_REASON
+
+    def test_anything_that_is_not_a_decision_is_refused(self) -> None:
+        service, _queue = _service(
+            authorizer=_Scripted(lambda p, pr, a, b: types.SimpleNamespace(allowed=True))
+        )
+        with pytest.raises(AuthorizationError) as exc:
+            service._authorize_studio_action(
+                principal_id=PRINCIPAL, project_id=PROJECT, action=StudioAction.APPROVE_PLAN
+            )
+        assert exc.value.reason == AUTHORIZATION_REFUSAL_REASON
+        assert "StudioAuthorizationDecision" in exc.value.detail
+
+    @pytest.mark.parametrize(
+        ("field", "value", "expected_detail"),
+        [
+            ("principal_id", "someone-else", "principal"),
+            ("project_id", "another-project", "project"),
+            ("action", StudioAction.EXECUTE_PLAN.value, "action"),
+            ("binding_ref", OTHER_BINDING, "channel binding"),
+        ],
+    )
+    def test_a_decision_minted_for_another_scope_is_refused(
+        self, field: str, value: str, expected_detail: str
+    ) -> None:
+        service, _queue = _service(
+            authorizer=_Scripted(
+                lambda p, pr, a, b: _decision(**{field: value}),  # noqa: B023
+            )
+        )
+        with pytest.raises(AuthorizationError) as exc:
+            service._authorize_studio_action(
+                principal_id=PRINCIPAL, project_id=PROJECT, action=StudioAction.APPROVE_PLAN
+            )
+        assert exc.value.reason == AUTHORIZATION_REFUSAL_REASON
+        assert expected_detail in exc.value.detail
+
+    def test_a_consistent_decision_is_accepted_and_whitespace_is_normalised(self) -> None:
+        service, _queue = _service(
+            authorizer=_Scripted(
+                lambda p, pr, a, b: _decision(principal_id=f"  {p}  ", project_id=f"{pr} ")
+            )
+        )
+        assert (
+            service._authorize_studio_action(
+                principal_id=PRINCIPAL, project_id=PROJECT, action=StudioAction.APPROVE_PLAN
+            )
+            is None
+        )
+
+    def test_a_denied_decision_blocks_a_real_consent_grant(self, tmp_path: pathlib.Path) -> None:
+        # end-to-end: the contract is enforced before the privacy store is written
+        service, _queue = _service(
+            workspace=tmp_path,
+            durable=True,
+            authorizer=_Scripted(lambda p, pr, a, b: _decision(allowed=False, binding_ref=b)),
+        )
+        try:
+            with pytest.raises(AuthorizationError):
+                service.grant_privacy_consent(
+                    project_id=PROJECT,
+                    principal_id=PRINCIPAL,
+                    mode=PrivacyMode.LOCAL_VAULT,
+                    processing_scope=ProcessingScope.LOCAL_PROCESSING,
+                    data_category=DataCategory.VIDEO,
+                )
+            store = service._privacy_store
+            assert store is not None
+            assert store.list_consents(project_id=PROJECT) == ()
+        finally:
+            service.close()
+
+
+# --------------------------------------------------------------------------- #
+# 3) the real RBAC authority: role x action matrix
+# --------------------------------------------------------------------------- #
+def _real_store(
+    tmp_path: pathlib.Path, role_map: dict[str, StudioRole]
+) -> StudioPrincipalAuthStore:
+    store = StudioPrincipalAuthStore(tmp_path / "studio_auth.sqlite3")
+    store.ensure_project(PROJECT, tenant_id="ten-1", active_revision_id="0")
+    for role, principal in role_map.items():
+        store.register_principal(
+            principal,
+            tenant_id="ten-1",
+            raw_token=f"tok-{principal}-secret",
+            display_name=principal,
+            allow_system_bootstrap=True,
+        )
+        store.bind_channel(
+            principal,
+            channel="studio",
+            external_subject=f"sub-{principal}",
+            allow_system_bootstrap=True,
+        )
+        store.grant_membership(
+            PROJECT, principal, role=role, granted_by="system", allow_system_bootstrap=True
+        )
+    return store
+
+
+@pytest.fixture(scope="module")
+def rbac_store(tmp_path_factory: pytest.TempPathFactory) -> StudioPrincipalAuthStore:
+    """One real durable RBAC store for the whole role x action matrix."""
+    path = tmp_path_factory.mktemp("rbac")
+    store = _real_store(path, TestRealProjectMembershipAuthorizerMatrix.ROLE_PRINCIPALS)
+    try:
+        yield store
+    finally:
+        store.close()
+
+
+class TestRealProjectMembershipAuthorizerMatrix:
+    """`ProjectMembershipAuthorizer` + `StudioPrincipalAuthStore`, every role."""
+
+    ROLE_PRINCIPALS = {
+        StudioRole.OWNER: "prn_" + "a" * 32,
+        StudioRole.EDITOR: "prn_" + "b" * 32,
+        StudioRole.VIEWER: "prn_" + "c" * 32,
+        StudioRole.AUDITOR: "prn_" + "d" * 32,
+    }
+
+    @pytest.fixture()
+    def store(self, rbac_store: StudioPrincipalAuthStore) -> StudioPrincipalAuthStore:
+        return rbac_store
+
+    @pytest.mark.parametrize("role", list(StudioRole))
+    @pytest.mark.parametrize("action", list(StudioAction))
+    def test_role_action_matrix(self, store: StudioPrincipalAuthStore, role, action) -> None:
+        principal = self.ROLE_PRINCIPALS[role]
+        service, _queue = _service(authorizer=ProjectMembershipAuthorizer(store), binding=None)
+        expected_allowed = action in ROLE_ACTIONS[role]
+        if expected_allowed:
+            assert (
+                service._authorize_studio_action(
+                    principal_id=principal, project_id=PROJECT, action=action
+                )
+                is None
+            )
+        else:
+            with pytest.raises(AuthorizationError) as exc:
+                service._authorize_studio_action(
+                    principal_id=principal, project_id=PROJECT, action=action
+                )
+            # the deny comes from the RBAC store's own typed refusal
+            assert exc.value.reason in {
+                "insufficient_role",
+                "not_a_project_member",
+                "principal_not_found",
+            }
+
+    def test_a_viewer_cannot_approve_or_grant_consent(
+        self, store: StudioPrincipalAuthStore
+    ) -> None:
+        service, _queue = _service(authorizer=ProjectMembershipAuthorizer(store), binding=None)
+        for action in (
+            StudioAction.APPROVE_PLAN,
+            StudioAction.EXECUTE_PLAN,
+            StudioAction.MANAGE_CONSENT,
+            StudioAction.READ_AUDIT,
+            StudioAction.CLOSE_SESSION,
+        ):
+            with pytest.raises(AuthorizationError):
+                service._authorize_studio_action(
+                    principal_id=self.ROLE_PRINCIPALS[StudioRole.VIEWER],
+                    project_id=PROJECT,
+                    action=action,
+                )
+
+    def test_an_auditor_reads_the_audit_but_cannot_approve(
+        self, store: StudioPrincipalAuthStore
+    ) -> None:
+        service, _queue = _service(authorizer=ProjectMembershipAuthorizer(store), binding=None)
+        auditor = self.ROLE_PRINCIPALS[StudioRole.AUDITOR]
+        assert (
+            service._authorize_studio_action(
+                principal_id=auditor, project_id=PROJECT, action=StudioAction.READ_AUDIT
+            )
+            is None
+        )
+        with pytest.raises(AuthorizationError):
+            service._authorize_studio_action(
+                principal_id=auditor, project_id=PROJECT, action=StudioAction.APPROVE_PLAN
+            )
+
+
+# --------------------------------------------------------------------------- #
+# 4) the canonical authority's answer is validated, never trusted
 # --------------------------------------------------------------------------- #
 class TestTheCanonicalFactsAreValidated:
     @pytest.mark.parametrize("binding", [None, "", "   ", 12345, object()])
@@ -338,7 +702,7 @@ class TestTheCanonicalFactsAreValidated:
 
 
 # --------------------------------------------------------------------------- #
-# 3) one canonical reason literal, no concatenated spellings
+# 5) one canonical reason literal, no concatenated spellings
 # --------------------------------------------------------------------------- #
 def test_the_reason_literal_exists_exactly_once_in_the_module() -> None:
     tree = ast.parse(pathlib.Path(service_mod.__file__).read_text(encoding="utf-8"))
