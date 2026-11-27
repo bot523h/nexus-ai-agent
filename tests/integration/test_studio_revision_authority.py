@@ -21,6 +21,7 @@ from typing import Any
 import pytest
 
 from nexus_ai_agent.creative.studio.revision_pinning import (
+    AssetPinViolationError,
     AssetVersionPin,
     DurableRevisionPinningStore,
     RevisionConcurrencyConflictError,
@@ -204,7 +205,9 @@ def test_worker_verification_checks_the_pinned_asset_bytes(tmp_path: Path) -> No
     # Swap the bytes for a DIFFERENT payload of the SAME length, so the size
     # check cannot be what catches it: this must fail on the content digest.
     (assets / "clip.mp4").write_bytes(b"X" * len(payload))
-    with pytest.raises(Exception) as excinfo:
+    # Exactly the typed pin violation: a bare Exception would also accept an
+    # AttributeError or a crash, which is not what this test is claiming.
+    with pytest.raises(AssetPinViolationError) as excinfo:
         pins.verify_worker_execution_pins(
             revision_id="rev-1",
             expected_revision_jcs_sha256=envelope.revision_jcs_sha256,
@@ -213,6 +216,7 @@ def test_worker_verification_checks_the_pinned_asset_bytes(tmp_path: Path) -> No
             expected_project_id=PROJECT,
             expected_tenant_id=TENANT,
         )
+    assert excinfo.value.reason == "content_drift", excinfo.value.reason
     violation = str(excinfo.value).lower()
     assert "content_drift" in violation, violation
     assert "size_mismatch" not in violation, "the size check must not mask a content swap"

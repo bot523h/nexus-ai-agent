@@ -39,6 +39,7 @@ BEARER = "studio-bearer-token"
 def deployment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Any:
     from nexus_ai_agent.api import app as app_module
     from nexus_ai_agent.config.settings import get_settings
+    from nexus_ai_agent.nagar.ibpc.composition import RUNTIME_STORE_FILENAMES
 
     workspace = tmp_path / "ws"
     assets = tmp_path / "assets"
@@ -86,7 +87,14 @@ def deployment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Any:
 
     client = TestClient(app_module.app)
     try:
-        yield {"client": client, "auth_db": auth_db, "workspace": workspace}
+        yield {
+            "client": client,
+            "auth_db": auth_db,
+            "workspace": workspace,
+            # The pinning store's real on-disk location, so a test can assert
+            # that a refused request wrote nothing at all.
+            "pins_db": workspace / RUNTIME_STORE_FILENAMES["revision_pins"],
+        }
     finally:
         get_settings.cache_clear()
 
@@ -231,12 +239,18 @@ class TestFailurePaths:
         assert response.status_code == 403, response.text[:400]
         assert "tenant_mismatch" in response.text
 
-    def test_an_unknown_project_is_404_not_500(self, deployment: Any) -> None:
-        """The pointer write fails on a project that does not exist.
+    def test_an_unknown_project_is_refused_before_any_pin(self, deployment: Any) -> None:
+        """An unknown project is refused at the membership gate: 403, not 404.
 
-        The pin itself is project-scoped in its own store, so a well-formed pin
-        for an unknown project pins first and then cannot advance a pointer that
-        has no row.  That must surface as 404, never as an unhandled error.
+        Worth pinning down, because the *ordering* is the property.  The pin
+        route authorizes before it writes anything, so a project the actor has
+        no membership in is a 403 and the pinning store is never touched.  The
+        404 branch exists (the pointer write refuses a project with no row) but
+        it is unreachable from here: by the time the pointer write runs, the
+        membership check has already accepted the actor.
+
+        The old assertion accepted ``in (403, 404)`` while the docstring claimed
+        404, which is how a test can be green and wrong at the same time.
         """
         client = deployment["client"]
         response = client.post(
@@ -244,7 +258,20 @@ class TestFailurePaths:
             json=_pin_body(),
             headers=_headers(),
         )
-        assert response.status_code in (403, 404), response.text[:400]
+        assert response.status_code == 403, response.text[:400]
+        assert "not_a_project_member" in response.text
+        # The store was never consulted: check the durable pins are untouched
+        # rather than trusting the status code alone.
+        from nexus_ai_agent.creative.studio.revision_pinning import (
+            DurableRevisionPinningStore,
+        )
+
+        pins = DurableRevisionPinningStore(deployment["pins_db"])
+        try:
+            assert pins.list_revisions("proj-does-not-exist") == ()
+            assert pins.list_revisions(PROJECT) == ()
+        finally:
+            pins.close()
 
     def test_repinning_with_a_different_payload_is_a_conflict(self, deployment: Any) -> None:
         """Same revision id, different bytes: a typed conflict, not a silent swap."""

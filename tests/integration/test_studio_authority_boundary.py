@@ -116,6 +116,9 @@ def test_a_membership_revoked_after_approval_refuses_at_the_boundary(
     )
     assert refusal is not None
     assert refusal.startswith("authority_refused:")
+    # Not just "some refusal": the revoked *membership* is the named cause, so a
+    # refusal for an unrelated reason cannot satisfy this test.
+    assert "membership" in refusal, refusal
 
 
 def test_a_tenant_mismatch_is_refused_not_widened(tmp_path: Path, store: Any) -> None:
@@ -127,6 +130,8 @@ def test_a_tenant_mismatch_is_refused_not_widened(tmp_path: Path, store: Any) ->
         principal_id=OWNER, project_id=PROJECT, tenant_id="ten-someone-else", ctx=_ctx(binding_ref)
     )
     assert refusal is not None
+    assert refusal.startswith("authority_refused:")
+    assert "ten-someone-else" in refusal or "tenant" in refusal, refusal
 
 
 def test_a_missing_binding_is_refused(tmp_path: Path, store: Any) -> None:
@@ -147,6 +152,8 @@ def test_a_missing_binding_is_refused(tmp_path: Path, store: Any) -> None:
         principal_id=OWNER, project_id=PROJECT, tenant_id=TENANT, ctx=_ctx("")
     )
     assert refusal is not None
+    assert refusal.startswith("authority_refused:")
+    assert "binding" in refusal, refusal
 
 
 def test_a_raising_bridge_is_a_refusal_never_a_pass(tmp_path: Path) -> None:
@@ -161,7 +168,10 @@ def test_a_raising_bridge_is_a_refusal_never_a_pass(tmp_path: Path) -> None:
         principal_id=OWNER, project_id=PROJECT, tenant_id=TENANT, ctx=_ctx("bind-1")
     )
     assert refusal is not None
-    assert "authority_refused" in refusal
+    assert refusal.startswith("authority_refused:")
+    # The exception TYPE is the reason, so an unrelated refusal cannot pass.
+    assert "RuntimeError" in refusal, refusal
+    assert "unreachable" in refusal, refusal
 
 
 def test_an_unwired_bridge_keeps_the_legacy_path(tmp_path: Path) -> None:
