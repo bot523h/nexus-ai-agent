@@ -107,6 +107,30 @@ def _clip(path: Path, *, seconds: float | None = None) -> None:
         pytest.skip(f"could not synthesize clip: {proc.stderr.decode('utf-8', 'replace')[-200:]}")
 
 
+class _PermissiveAuthorizer:
+    """Test double for ``StudioAuthorizerPort``: allows every action.
+
+    Wave 3-R7 makes an *unconfigured* role gate refuse approvals/executions, so a
+    full-pipeline e2e must compose an authorizer; role enforcement itself is
+    covered by the RBAC suites (``tests/unit/test_studio_principal_auth.py``).
+    """
+
+    def authorize_action(
+        self, *, principal_id: str, project_id: str, action, binding_ref: str = ""
+    ):
+        from nexus_ai_agent.nagar.ibpc.authority import StudioAuthorizationDecision
+
+        return StudioAuthorizationDecision(
+            allowed=True,
+            principal_id=principal_id,
+            project_id=project_id,
+            role="OWNER",
+            action=getattr(action, "value", str(action)),
+            reason="test_double",
+            binding_ref=binding_ref,
+        )
+
+
 @pytest.fixture()
 def harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     creative_root = tmp_path / "creative_tmp"
@@ -140,6 +164,7 @@ def harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
             facts_provider=queue,
             attempt_provider=queue.get_attempt_history,
             authority=DirectoryAuthority(directory),
+            authorizer=_PermissiveAuthorizer(),
             channel_binding_ref=channel_binding_id(binding),
             approval_key_provider=StaticKeyRing({"test-v1": b"t" * 32}, active_key_id="test-v1"),
         )
@@ -655,6 +680,7 @@ async def test_voice_turn_flows_through_the_same_pipeline(harness, tmp_path: Pat
         facts_provider=service._deps.facts_provider,
         attempt_provider=service._deps.attempt_provider,
         authority=service._deps.authority,
+        authorizer=service._deps.authorizer,
         channel_binding_ref=service._deps.channel_binding_ref,
         caption_engine=_FakeCaptionEngine("trim from 0.5 to 1.5 seconds"),
         approval_key_provider=service._deps.approval_key_provider,
@@ -891,6 +917,7 @@ async def test_voice_intent_runs_parse_body_off_the_event_loop(harness, tmp_path
         facts_provider=service._deps.facts_provider,
         attempt_provider=service._deps.attempt_provider,
         authority=service._deps.authority,
+        authorizer=service._deps.authorizer,
         channel_binding_ref=service._deps.channel_binding_ref,
         caption_engine=_FakeCaptionEngine("trim from 0.5 to 1.5 seconds"),
     )
@@ -958,6 +985,7 @@ async def test_corrupt_source_voice_is_a_typed_refusal_not_a_crash(harness, tmp_
         facts_provider=service._deps.facts_provider,
         attempt_provider=service._deps.attempt_provider,
         authority=service._deps.authority,
+        authorizer=service._deps.authorizer,
         channel_binding_ref=service._deps.channel_binding_ref,
         caption_engine=_FakeCaptionEngine("trim from 0.5 to 1.5 seconds"),
     )

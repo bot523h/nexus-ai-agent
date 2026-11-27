@@ -29,6 +29,7 @@ sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[1]
 STUDIO = "src/nexus_ai_agent/creative/studio/"
 ADAPTER = "src/nexus_ai_agent/adapters/"
+NAGAR = "src/nexus_ai_agent/nagar/"
 CP1 = "tests/unit/test_w4_cp1_durable_dedupe_and_approvals.py::"
 CP4 = "tests/unit/test_w4_cp4_coverage.py::"
 DEST = "tests/integration/test_w4_fenced_filesystem_destination.py::"
@@ -296,6 +297,34 @@ REGISTRY = (
         "False",
         INGRESS + "test_runtime_port_wiring_and_unauthorized_repair",
     ),
+    # Wave 3-R7: the role gate and the canonical-facts fence added on top of #365.
+    Mutation(
+        "W3-R7-M01",
+        NAGAR + "ibpc/service.py",
+        "IBPCService._authorize_studio_action",
+        "if action in _EXECUTION_AND_APPROVAL_ACTIONS:",
+        "if False and action in _EXECUTION_AND_APPROVAL_ACTIONS:",
+        "tests/unit/test_ibpc_authorization_closure.py::TestTheUnconfiguredRoleGate::"
+        "test_each_privileged_action_refuses_without_an_authorizer",
+    ),
+    Mutation(
+        "W3-R7-M02",
+        NAGAR + "ibpc/service.py",
+        "IBPCService._verify_canonical_facts",
+        "if binding_ref and resolved_binding != binding_ref:",
+        "if False and binding_ref and resolved_binding != binding_ref:",
+        "tests/unit/test_ibpc_authorization_closure.py::TestTheCanonicalFactsAreValidated::"
+        "test_a_binding_that_is_not_the_configured_one_is_refused",
+    ),
+    Mutation(
+        "W3-R7-M03",
+        NAGAR + "ibpc/service.py",
+        "IBPCService._verify_canonical_facts",
+        "if resolved_principal != principal_id or resolved_project != project_id:",
+        "if resolved_principal != principal_id:",
+        "tests/unit/test_ibpc_authorization_closure.py::TestTheCanonicalFactsAreValidated::"
+        "test_a_mismatched_or_malformed_identity_is_refused",
+    ),
 )
 
 
@@ -451,11 +480,12 @@ def main() -> int:
     output_path = ROOT / "ci-artifacts/w4/mutations.json"
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(report, indent=2) + "\n")
+    total = len(REGISTRY)
     print(
-        f"SUMMARY total=30 killed={counts['KILLED']} survived={counts['SURVIVED']} "
-        f"invalid={counts['INVALID']} not_run={30 - len(results)}"
+        f"SUMMARY total={total} killed={counts['KILLED']} survived={counts['SURVIVED']} "
+        f"invalid={counts['INVALID']} not_run={total - len(results)}"
     )
-    return 0 if counts["KILLED"] == 30 and final.returncode == 0 else 1
+    return 0 if counts["KILLED"] == total and final.returncode == 0 else 1
 
 
 if __name__ == "__main__":

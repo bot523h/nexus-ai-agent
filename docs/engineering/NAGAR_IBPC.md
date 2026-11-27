@@ -135,6 +135,32 @@ killed** (suite RED per mutant, restored GREEN after), exit 0, verified in the f
 the minimal CI env (28 packages) — same interpreter recipe the `trust-mutations` CI job now uses.
 Worktree unchanged after the run (`git diff --exit-code` in CI).
 
+## Wave 3-R7 — authorization closure (2026-11, on top of #365)
+
+Two authorization gaps survived the #365 merge; both are fail-closed now.
+
+| Gap (as it existed) | Root cause | Invariant after this change | Regression test | Mutant |
+|---|---|---|---|---|
+| A composition with **no Studio authorizer** silently skipped *every* role check: `_authorize_studio_action` returned early whenever `deps.authorizer is None` — which is the default — so `approve()` minted an approval and `execute()` burned it with no role proof at all, while identity resolution already failed closed. | early `return` on a missing port | An unconfigured gate refuses the actions that mint, burn or administer (`APPROVE_PLAN`, `EXECUTE_PLAN`, `MANAGE_MEMBERSHIP`) with the typed `AuthorizationError("role_verification_required", …)`; planning/read actions keep their historical behaviour so a read-only composition still works. Nothing is minted, nothing is consumed, nothing is queued. | `TestTheUnconfiguredRoleGate` (10) | `W3-R7-M01` |
+| The **canonical authority's answer was trusted unchecked**: `_resolve_authority` returned whatever `resolve_principal` produced and callers copied `facts.channel_binding_id` straight into the queue payload; a `None`/`""`/whitespace binding, or a different `principal_id`/`project_id`, was accepted and only surfaced (sometimes) at consume time. | no validation of the returned facts | *3-way consistency*: `principal_id`, `project_id` and `channel_binding_id` must each be a non-empty, non-whitespace `str`, must equal the requested `(principal_id, project_id)`, and the binding must equal the composition's `channel_binding_ref`. Violations raise `CanonicalAuthorityError("identity_mismatch" \| "binding_inconsistent")` at the request boundary — before any context, approval or job exists. | `TestTheCanonicalFactsAreValidated` (21) | `W3-R7-M02`, `W3-R7-M03` |
+
+**One canonical reason literal.** `AUTHORIZATION_REFUSAL_REASON: Final[str] = "unauthorized_principal"`
+is defined once and used by both refusal sites; an AST fence (`tests/unit/test_ibpc_authorization_closure.py`, 32 tests total)
+(`test_the_reason_literal_exists_exactly_once_in_the_module`) fails on any second literal or on an
+interpolated `Refusal`/`ApprovalError` reason, so the wire reason can never drift into
+`unauthorized_principal: binding_inconsistent`.
+
+**Composition rule.** Any service that can approve or execute must be built with an authorizer:
+`build_studio_ibpc_service` already wires a `ProjectMembershipAuthorizer` over the durable
+`StudioPrincipalAuthStore`; test harnesses pass an explicit double. An authorizer-less service can
+only plan.
+
+### Mutation evidence (Wave 3-R7)
+
+`scripts/w4_mutations.py` (the campaign was extended from 30 to 33 mutants; `W3-R7-M01…M03` target the
+gate and the facts fence). Serial run, byte-exact restoration verified per mutant:
+**33/33 killed, 0 survived, 0 invalid, 0 not run** (`ci-artifacts/w4/mutations.json`).
+
 ## Lifecycle & durability (Phase E — honest accounting)
 
 | Entity | Current storage | After process restart | Multi-process | Production claim |

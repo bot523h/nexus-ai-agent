@@ -34,7 +34,7 @@ import stat
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Literal, Protocol
+from typing import Any, Final, Literal, Protocol
 
 from nexus_ai_agent.application.creative_intent import CanonicalCreativeIntent
 from nexus_ai_agent.application.ports.caption_engine import CaptionEnginePort
@@ -119,6 +119,19 @@ from nexus_ai_agent.provenance.canonicalization import (
 #: Closed surface constants. Pinned against the canonical worker's own map by
 #: tests/architecture/test_ibpc_boundary.py (which may import render_jobs; this
 #: module may not): SURFACE_TO_CANONICAL[("edit", "trim")] == "timeline.trim".
+#: The ONE reason an authorization refusal of the canonical form ever carries.
+#: ``reason`` is a caller contract (``reason == "unauthorized_principal"``), so the
+#: diagnostic travels in ``detail`` and in ``str()`` — never concatenated onto it.
+AUTHORIZATION_REFUSAL_REASON: Final[str] = "unauthorized_principal"
+
+#: Actions that approve, execute or administer a project.  The role gate is the
+#: only thing that distinguishes a VIEWER from an EDITOR, so a service composed
+#: without a Studio authorizer must not reach one of these: an unconfigured gate
+#: is a refusal, never a silent no-op (Wave 3-R7).
+_EXECUTION_AND_APPROVAL_ACTIONS: Final[frozenset[StudioAction]] = frozenset(
+    {StudioAction.APPROVE_PLAN, StudioAction.EXECUTE_PLAN, StudioAction.MANAGE_MEMBERSHIP}
+)
+
 JOB_TYPE = "creative_render"
 COMMAND = "edit"
 SURFACE_OPERATION = "trim"
@@ -453,16 +466,25 @@ class IBPCService:
         binding_ref: str | None = None,
     ) -> None:
         authorizer = self._deps.authorizer
-        if authorizer is not None:
-            resolved_ref = (
-                (self._deps.channel_binding_ref or "") if binding_ref is None else binding_ref
-            )
-            authorizer.authorize_action(
-                principal_id=principal_id,
-                project_id=project_id,
-                action=action,
-                binding_ref=resolved_ref,
-            )
+        if authorizer is None:
+            # Wave 3-R7: an unconfigured role gate refuses the actions that mint,
+            # burn or administer — never a silent grant.  Planning actions keep
+            # their historical behaviour so a read-only composition still works.
+            if action in _EXECUTION_AND_APPROVAL_ACTIONS:
+                raise AuthorizationError(
+                    "role_verification_required",
+                    f"{action.value} requires a configured Studio authorizer",
+                )
+            return
+        resolved_ref = (
+            (self._deps.channel_binding_ref or "") if binding_ref is None else binding_ref
+        )
+        authorizer.authorize_action(
+            principal_id=principal_id,
+            project_id=project_id,
+            action=action,
+            binding_ref=resolved_ref,
+        )
 
     def _validate_session_binding(
         self,
@@ -936,7 +958,7 @@ class IBPCService:
             # No trusted identity → typed refusal before job admission. Never a
             # synthetic binding, never broad service permissions (Phase 1).
             self._sessions.mark_failed(session_id, turn_id)
-            return Refusal("unauthorized_principal", f"{exc.reason}: {exc.detail}")
+            return Refusal(AUTHORIZATION_REFUSAL_REASON, f"{exc.reason}: {exc.detail}")
         if not src.is_file():
             self._sessions.mark_failed(session_id, turn_id)
             return Refusal("missing_source", f"source media not found: {source_path!r}")
@@ -1210,7 +1232,7 @@ class IBPCService:
             verified = self._resolve_authority(session.principal_id, session.project_id)
         except CanonicalAuthorityError as exc:
             self._sessions.mark_failed(session_id, turn_id)
-            return Refusal("unauthorized_principal", f"{exc.reason}: {exc.detail}")
+            return Refusal(AUTHORIZATION_REFUSAL_REASON, f"{exc.reason}: {exc.detail}")
         src = self._validate_source_path(source_path)
         if not src.is_file():
             self._sessions.mark_failed(session_id, turn_id)
@@ -1327,11 +1349,52 @@ class IBPCService:
             raise CanonicalAuthorityError(
                 "missing_binding", "no canonical channel binding was configured for this service"
             )
-        return authority.resolve_principal(
+        facts = authority.resolve_principal(
             principal_id=principal_id,
             project_id=project_id,
             binding_ref=binding_ref,
         )
+        self._verify_canonical_facts(
+            facts, principal_id=principal_id, project_id=project_id, binding_ref=binding_ref
+        )
+        return facts
+
+    @staticmethod
+    def _verify_canonical_facts(
+        facts: Any, *, principal_id: str, project_id: str, binding_ref: str
+    ) -> None:
+        """Wave 3-R7: never trust a field the canonical port returned unchecked.
+
+        ``principal_id``, ``project_id`` and ``channel_binding_id`` must each be a
+        non-empty, non-whitespace ``str`` and must equal the requested tuple; the
+        binding must also equal the composition's ``channel_binding_ref`` (the
+        reference every downstream fence compares against).  A ``None`` / ``""``
+        / ``"   "`` binding used to be accepted and copied into the job payload.
+        """
+
+        def field(name: str, reason: str) -> str:
+            value = getattr(facts, name, None)
+            if not isinstance(value, str) or not value.strip():
+                raise CanonicalAuthorityError(
+                    reason, f"the canonical authority returned a missing or malformed {name}"
+                )
+            return value
+
+        resolved_principal = field("principal_id", "identity_mismatch")
+        resolved_project = field("project_id", "identity_mismatch")
+        resolved_binding = field("channel_binding_id", "binding_inconsistent")
+        if resolved_principal != principal_id or resolved_project != project_id:
+            raise CanonicalAuthorityError(
+                "identity_mismatch",
+                "the canonical authority returned a different principal_id/project_id "
+                "than requested",
+            )
+        if binding_ref and resolved_binding != binding_ref:
+            raise CanonicalAuthorityError(
+                "binding_inconsistent",
+                "the canonical authority returned a channel_binding_id that is not the "
+                "configured binding",
+            )
 
     # -- approval -------------------------------------------------------------
 
