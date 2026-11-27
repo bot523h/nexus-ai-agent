@@ -265,6 +265,7 @@ def build_unified_studio_runtime(
     max_queue_depth: int = 64,
     enable_execution_outbox: bool = False,
     enable_disaster_recovery: bool = False,
+    execution_authority_bridge: Any | None = None,
     report: Any | None = None,
 ) -> UnifiedStudioRuntime:
     """Assemble the Studio runtime with every Wave-1..4 module wired in.
@@ -344,19 +345,17 @@ def build_unified_studio_runtime(
         _note("disaster_recovery", "disabled by the caller")
 
     # -- the authority bridge ---------------------------------------------- #
-    # A bridge over the SAME studio auth store the deps already authorize
-    # against: one durable principal/membership truth, read twice by two
-    # different callers, beats two stores that could disagree.
-    authority_bridge = None
-    authority_store = getattr(deps, "authority", None)
-    if authority_store is None:
-        _note("authority_bridge", "deps carry no StudioPrincipalAuthStore")
-    else:
-        from nexus_ai_agent.adapters.studio_directory_bridge import (
-            StudioUnifiedAuthorityBridge,
+    # INJECTED, never constructed here.  ``nagar/ibpc`` may not import
+    # ``nexus_ai_agent.adapters`` (tests/architecture/test_ibpc_boundary.py), and
+    # that boundary is the point: the slice talks to authority through the
+    # injected port, so a second authority implementation can replace the bridge
+    # without editing anything in this package.
+    authority_bridge = execution_authority_bridge
+    if authority_bridge is None:
+        _note(
+            "authority_bridge",
+            "no bridge supplied; the caller injects one (the API layer does)",
         )
-
-        authority_bridge = StudioUnifiedAuthorityBridge(authority_store, now=deps.now)
 
     # -- the service itself ------------------------------------------------ #
     # ``execution_coordinator`` stays the raw store at this point: the real

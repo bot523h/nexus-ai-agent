@@ -160,6 +160,13 @@ def _build_runtime(
         # second copy that can drift.
         project_revision_resolver=auth_store.get_project_revision,
     )
+    # The bridge is built HERE, in the API layer, and injected.  ``nagar/ibpc``
+    # is forbidden from importing ``nexus_ai_agent.adapters`` (the IBPC boundary
+    # guard), so the slice receives authority as a port and this is the seam that
+    # binds it to the durable principal store -- the same store the deps already
+    # authorize against, so there is one principal truth, not two.
+    from nexus_ai_agent.adapters.studio_directory_bridge import StudioUnifiedAuthorityBridge
+
     return build_unified_studio_runtime(
         deps,
         key_provider=key_provider,
@@ -168,6 +175,7 @@ def _build_runtime(
         # DR needs a key; when one is not configured the runtime reports dr=None
         # with a reason instead of inventing a key that would verify nothing.
         enable_disaster_recovery=True,
+        execution_authority_bridge=StudioUnifiedAuthorityBridge(auth_store, now=utc_now),
     )
 
 

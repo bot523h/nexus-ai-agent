@@ -1,190 +1,190 @@
 {
-  "head_sha": "ec1ad5ead2d8b0c5b0b64144ab5c5fbe662e46a6",
+  "head_sha": "7134db5b0293f9c6a8d68e45e36a3d7a46e7642f",
   "iterations_per_trial": 5,
-  "measured_at_utc": "2026-11-27T14:52:29+00:00",
+  "measured_at_utc": "2026-11-27T19:22:23+00:00",
   "ok": true,
   "paths": {
     "authority_bridge_proof": {
-      "max_ms": 1.0289040001225658,
-      "median_ms": 0.437014000453928,
-      "min_ms": 0.42913699962809915,
+      "max_ms": 1.257642998098163,
+      "median_ms": 0.5233060001046397,
+      "min_ms": 0.5192030002945103,
       "n": 3.0,
       "ok": true,
-      "p95_ms": 1.0289040001225658,
+      "p95_ms": 1.257642998098163,
       "samples_ms": [
-        1.0289040001225658,
-        0.437014000453928,
-        0.42913699962809915
+        1.257642998098163,
+        0.5233060001046397,
+        0.5192030002945103
       ],
-      "stddev_ms": 0.3440242902596365,
+      "stddev_ms": 0.42515904702159013,
       "trials": [
         {
           "error": "",
           "name": "authority_bridge_proof#trial1",
           "samples_ms": [
-            1.0289040001225658
+            1.257642998098163
           ]
         },
         {
           "error": "",
           "name": "authority_bridge_proof#trial2",
           "samples_ms": [
-            0.437014000453928
+            0.5233060001046397
           ]
         },
         {
           "error": "",
           "name": "authority_bridge_proof#trial3",
           "samples_ms": [
-            0.42913699962809915
+            0.5192030002945103
           ]
         }
       ]
     },
     "disaster_recovery_backup_verify_restore": {
-      "max_ms": 33.20819300006406,
-      "median_ms": 29.20168000036938,
-      "min_ms": 27.759149000303296,
+      "max_ms": 37.64888899968355,
+      "median_ms": 36.138668001513,
+      "min_ms": 35.822406000079354,
       "n": 3.0,
       "ok": true,
-      "p95_ms": 33.20819300006406,
+      "p95_ms": 37.64888899968355,
       "samples_ms": [
-        27.759149000303296,
-        33.20819300006406,
-        29.20168000036938
+        37.64888899968355,
+        35.822406000079354,
+        36.138668001513
       ],
-      "stddev_ms": 2.8232700489031877,
+      "stddev_ms": 0.9761172457504966,
       "trials": [
         {
           "error": "",
           "name": "disaster_recovery_backup_verify_restore#trial1",
           "samples_ms": [
-            27.759149000303296
+            37.64888899968355
           ]
         },
         {
           "error": "",
           "name": "disaster_recovery_backup_verify_restore#trial2",
           "samples_ms": [
-            33.20819300006406
+            35.822406000079354
           ]
         },
         {
           "error": "",
           "name": "disaster_recovery_backup_verify_restore#trial3",
           "samples_ms": [
-            29.20168000036938
+            36.138668001513
           ]
         }
       ]
     },
     "execution_outbox_full_cycle": {
-      "max_ms": 23.07876499980921,
-      "median_ms": 20.083733999854303,
-      "min_ms": 17.102228000112518,
+      "max_ms": 26.815240002179053,
+      "median_ms": 25.952590000088094,
+      "min_ms": 20.713033998617902,
       "n": 3.0,
       "ok": true,
-      "p95_ms": 23.07876499980921,
+      "p95_ms": 26.815240002179053,
       "samples_ms": [
-        17.102228000112518,
-        23.07876499980921,
-        20.083733999854303
+        20.713033998617902,
+        26.815240002179053,
+        25.952590000088094
       ],
-      "stddev_ms": 2.98827105045517,
+      "stddev_ms": 3.3023736470541807,
       "trials": [
         {
           "error": "",
           "name": "execution_outbox_full_cycle#trial1",
           "samples_ms": [
-            17.102228000112518
+            20.713033998617902
           ]
         },
         {
           "error": "",
           "name": "execution_outbox_full_cycle#trial2",
           "samples_ms": [
-            23.07876499980921
+            26.815240002179053
           ]
         },
         {
           "error": "",
           "name": "execution_outbox_full_cycle#trial3",
           "samples_ms": [
-            20.083733999854303
+            25.952590000088094
           ]
         }
       ]
     },
     "preview_readback_wysiwys": {
-      "max_ms": 1.7326039996987674,
-      "median_ms": 1.691295000455284,
-      "min_ms": 1.6285530000459403,
+      "max_ms": 2.432953999232268,
+      "median_ms": 1.9067379980697297,
+      "min_ms": 1.8909390018961858,
       "n": 3.0,
       "ok": true,
-      "p95_ms": 1.7326039996987674,
+      "p95_ms": 2.432953999232268,
       "samples_ms": [
-        1.7326039996987674,
-        1.6285530000459403,
-        1.691295000455284
+        1.8909390018961858,
+        1.9067379980697297,
+        2.432953999232268
       ],
-      "stddev_ms": 0.052392115441506466,
+      "stddev_ms": 0.3084728906232597,
       "trials": [
         {
           "error": "",
           "name": "preview_readback_wysiwys#trial1",
           "samples_ms": [
-            1.7326039996987674
+            1.8909390018961858
           ]
         },
         {
           "error": "",
           "name": "preview_readback_wysiwys#trial2",
           "samples_ms": [
-            1.6285530000459403
+            1.9067379980697297
           ]
         },
         {
           "error": "",
           "name": "preview_readback_wysiwys#trial3",
           "samples_ms": [
-            1.691295000455284
+            2.432953999232268
           ]
         }
       ]
     },
     "revision_pinning_worker_verify": {
-      "max_ms": 7.144627999878139,
-      "median_ms": 4.5916740000393474,
-      "min_ms": 4.5819309998478275,
+      "max_ms": 5.7398930002818815,
+      "median_ms": 5.73539800097933,
+      "min_ms": 5.509747003088705,
       "n": 3.0,
       "ok": true,
-      "p95_ms": 7.144627999878139,
+      "p95_ms": 5.7398930002818815,
       "samples_ms": [
-        4.5916740000393474,
-        7.144627999878139,
-        4.5819309998478275
+        5.73539800097933,
+        5.7398930002818815,
+        5.509747003088705
       ],
-      "stddev_ms": 1.4767692758919144,
+      "stddev_ms": 0.13159645251791957,
       "trials": [
         {
           "error": "",
           "name": "revision_pinning_worker_verify#trial1",
           "samples_ms": [
-            4.5916740000393474
+            5.73539800097933
           ]
         },
         {
           "error": "",
           "name": "revision_pinning_worker_verify#trial2",
           "samples_ms": [
-            7.144627999878139
+            5.7398930002818815
           ]
         },
         {
           "error": "",
           "name": "revision_pinning_worker_verify#trial3",
           "samples_ms": [
-            4.5819309998478275
+            5.509747003088705
           ]
         }
       ]

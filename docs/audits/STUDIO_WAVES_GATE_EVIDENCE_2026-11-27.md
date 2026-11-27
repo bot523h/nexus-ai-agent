@@ -1,16 +1,31 @@
 # Studio waves 1–6 — gate evidence, measured
 
-Branch: `arena/948924cb-nexus-ai-agent` · base: `main` at `1a91445` · head: `3f80f9a`
+Branch: `arena/0dae31cc-nexus-ai-agent` (PR #370) · base: `main` at
+`61add8383d3756bfa878065f049d15e12f74802e` · gates measured at `7134db5b`
 
 Every number below was **measured on this branch** at the revision named beside
 it. Nothing is projected from a plan, and the two gates this environment could
 not measure are listed as such in §4 instead of being filled in with a green
 tick.
 
-Scope of the branch: six commits adding ~12 600 lines across five production
-modules (identity/authority, revision pinning, crash-safe outbox, WYSIWYS
-readback, disaster recovery), five zero-mock unit suites, one end-to-end vertical
-slice, and one adversarial mutation campaign.
+## 0. Provenance: two bodies of work, not one
+
+This branch continues an earlier one, and the split matters when reading any
+commit-bound number below.
+
+| Phase | Branch | Commits | What it is |
+|---|---|---|---|
+| Foundation | `arena/948924cb-nexus-ai-agent` | `21b0401d` … `26ca8b4b` (11) | The five Wave-1..3 modules, their unit suites, the vertical slice and the mutation campaign. Written by the prior agent and carried forward unchanged in substance. |
+| Hardening + production wiring | `arena/0dae31cc-nexus-ai-agent` | this branch | Closed the four recorded production gaps: one composition root instead of two, the outbox driven by `execute()` itself, the durable pin as the single revision truth with a pin route, and the authority bridge re-verifying at the worker boundary. |
+
+Numbers tagged `3f80f9a` were measured at the end of the foundation phase and are
+preserved as recorded; numbers tagged `7134db5b` were re-measured here, after the
+wiring changed what the code actually does.
+
+Scope of the branch as a whole: five production modules (identity/authority,
+revision pinning, crash-safe outbox, WYSIWYS readback, disaster recovery), their
+zero-mock unit suites, one end-to-end vertical slice, three adversarial
+integration suites, and one 50-mutant campaign.
 
 ---
 
@@ -22,7 +37,7 @@ measured at the commit named in each subsection. The whole-suite run in §2.2 wa
 measured once, earlier, at `3f80f9a`, and is kept as recorded rather than
 re-stated.
 
-| # | Gate | Command | Result at `3f80f9a` |
+| # | Gate | Command | Result at `7134db5b` |
 |---|---|---|---|
 | 1 | Lint | `ruff check .` | **PASS** — all checks passed, 1665 files |
 | 2 | Format | `ruff format --check .` | **PASS** — 1665 files already formatted |
@@ -327,14 +342,22 @@ per path, each in a **fresh temporary directory** so no trial inherits warmth:
 
 | # | Path | Median | p95 | Stddev |
 |---|---|---:|---:|---:|
-| a | authority-bridge proof + integrity | 0.437 ms | 1.029 ms | 0.344 ms |
-| b | revision pinning + worker verification | 4.592 ms | 7.145 ms | 1.477 ms |
-| c | rational preview readback + WYSIWYS | 1.691 ms | 1.733 ms | 0.052 ms |
-| d | execution-outbox full cycle | 20.084 ms | 23.079 ms | 2.988 ms |
-| e | DR hot backup → verify → restore | 29.202 ms | 33.208 ms | 2.823 ms |
+| a | authority-bridge proof + integrity | 0.523 ms | 1.258 ms | 0.425 ms |
+| b | revision pinning + worker verification | 5.735 ms | 5.740 ms | 0.132 ms |
+| c | rational preview readback + WYSIWYS | 1.907 ms | 2.433 ms | 0.308 ms |
+| d | execution-outbox full cycle | 25.953 ms | 26.815 ms | 3.302 ms |
+| e | DR hot backup → verify → restore | 36.139 ms | 37.649 ms | 0.976 ms |
 
-Measured at `ec1ad5ea`, report `docs/audits/benchmarks/wave4_studio_e2e_benchmark_ec1ad5ead2d8.{json,md}`
-(`sha256:2b9c8f0a5c797fe6fde8076fba687a7b9038b7ee6ec65ce00a88ecfd4a9e0dfa`).
+Measured at `7134db5b` (`2026-11-27T19:22:23+00:00`), report
+`docs/audits/benchmarks/wave4_studio_e2e_benchmark_7134db5b0293.{json,md}`
+(`sha256:9ebaf7041cd65fcb753afdc3eff0c561c44366890b092c2a81e76c7ff9eaa409`).
+
+Re-measured after the Wave-1..4 wiring, not carried over. The numbers moved and
+the movement is the expected one: the authority path is slower because it now
+reads a durable bridge instead of returning `None`, and the outbox path is slower
+because it now stages and commits a real intent row instead of calling
+`queue.enqueue` directly. A faster number here would have meant the wiring was not
+happening.
 
 p95 is **nearest-rank**, not interpolated: at N=3 an interpolated p95 is a number
 no observation supports, and the honest answer is the maximum observation. The

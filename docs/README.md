@@ -134,8 +134,8 @@ placeholder text.
 
 | Document | What it is |
 |---|---|
-| [audits/benchmarks/wave4_studio_e2e_benchmark_ec1ad5ead2d8.md](audits/benchmarks/wave4_studio_e2e_benchmark_ec1ad5ead2d8.md) | N=3 latency benchmark (JSON + Markdown) for the five Studio execution paths, bound to `ec1ad5ea`: authority proof, revision pinning, rational preview readback, the full outbox cycle, and DR backup/verify/restore. |
-| [audits/STUDIO_WAVES_GATE_EVIDENCE_2026-11-27.md](audits/STUDIO_WAVES_GATE_EVIDENCE_2026-11-27.md) | Studio waves 1-6: durable revision pinning, the crash-safe execution outbox, exact rational preview readback and production DR — each module at 100 % line *and* branch coverage, the 50/50 mutation campaign, the N=3 benchmark bound to `ec1ad5ea`, and the gates this sandbox could not measure. |
+| [audits/benchmarks/wave4_studio_e2e_benchmark_7134db5b0293.md](audits/benchmarks/wave4_studio_e2e_benchmark_7134db5b0293.md) | N=3 latency benchmark (JSON + Markdown) for the five Studio execution paths, bound to `7134db5b`: authority proof, revision pinning, rational preview readback, the full outbox cycle, and DR backup/verify/restore. |
+| [audits/STUDIO_WAVES_GATE_EVIDENCE_2026-11-27.md](audits/STUDIO_WAVES_GATE_EVIDENCE_2026-11-27.md) | Studio waves 1-6: durable revision pinning, the crash-safe execution outbox, exact rational preview readback and production DR — each module at 100 % line *and* branch coverage, the 50/50 mutation campaign, the N=3 benchmark bound to `7134db5b`, and the gates this sandbox could not measure. |
 | [audits/AUDIT_REPORT_2026-09-21.md](audits/AUDIT_REPORT_2026-09-21.md) | Full architecture audit (P0 findings + command honesty matrix). |
 | [audits/HANDOFF_ANALYSIS_2026-09-21.md](audits/HANDOFF_ANALYSIS_2026-09-21.md) | Board GC + engineered handoff analysis (agent D session). |
 | [audits/REPO_HYGIENE_REPORT_2026-09-21.md](audits/REPO_HYGIENE_REPORT_2026-09-21.md) | Repository hygiene pass: docs reorganisation, release alignment, branch janitorial work. |

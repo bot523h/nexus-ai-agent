@@ -1029,3 +1029,34 @@ class TestTheUnavailableDeployments:
         )
         assert response.status_code == 409, response.text[:300]
         assert "manifest_unreadable" in response.json()["detail"]
+
+
+class TestRuntimeCloseIsIdempotent:
+    def test_the_same_store_is_never_closed_twice(self, tmp_path: Path) -> None:
+        """``service.close()`` closes its own stores; the runtime must not redo it.
+
+        Before the runtime adopted them as owned closables, the two lists could
+        name the same SQLite handle and a second ``close()`` on an
+        already-closed connection raises.  Closing the same resource twice is a
+        bug whether or not the driver happens to tolerate it.
+        """
+        from nexus_ai_agent.nagar.ibpc.composition import UnifiedStudioRuntime
+
+        closes: list[str] = []
+
+        class _Store:
+            def __init__(self, name: str) -> None:
+                self.name = name
+
+            def close(self) -> None:
+                closes.append(self.name)
+
+        shared = _Store("shared")
+        runtime = UnifiedStudioRuntime(
+            workspace_root=tmp_path,
+            authorized_asset_root=tmp_path,
+            service=object(),  # type: ignore[arg-type]
+            owned_closables=(shared, shared, _Store("other")),
+        )
+        runtime.close()
+        assert closes == ["shared", "other"]
