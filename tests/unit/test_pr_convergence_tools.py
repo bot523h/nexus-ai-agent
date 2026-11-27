@@ -62,7 +62,7 @@ def board() -> ModuleType:
 # analyze.py — AST contract extraction
 # --------------------------------------------------------------------------- #
 def test_extract_symbols_records_module_class_and_method(analyze: ModuleType) -> None:
-    source = '''
+    source = """
 def module_function(a, b=1):
     def inner(x):
         return x
@@ -74,7 +74,7 @@ class Service:
 
     async def run(self, request, *args, **kwargs):
         return request
-'''
+"""
     keys = analyze.extract_symbols(source, "src/pkg/mod.py")
     assert ("src/pkg/mod.py", "module_function", ("a", "b")) in keys
     assert ("src/pkg/mod.py", "module_function.inner", ("x",)) in keys

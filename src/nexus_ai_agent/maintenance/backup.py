@@ -46,13 +46,14 @@ from nexus_ai_agent.storage.db import enforce_postgres_policy
 from nexus_ai_agent.storage.encrypted_backup_drill import verify_production_backup_preflight
 from nexus_ai_agent.storage.providers.b2 import B2Provider
 from nexus_ai_agent.storage.providers.base import ProviderUnavailable, StorageError
+from nexus_ai_agent.storage.providers.local_cache import LocalCacheProvider
 from nexus_ai_agent.storage.providers.r2 import R2Provider
 
 log = get_logger(__name__)
 
 #: The two interchangeable S3-compatible maintenance tiers. Both implement the
 #: same ``StorageProvider`` surface, so the maintenance lane is provider-neutral.
-BlobProvider = R2Provider | B2Provider
+BlobProvider = R2Provider | B2Provider | LocalCacheProvider
 
 # Blob-tier prefix — recognized by AIStorageManager.is_blob_key.
 BLOB_BACKUP_PREFIX = "backups/db"
@@ -263,6 +264,19 @@ def _verify_round_trip(
     return {"roundtrip": "byte-identical"}
 
 
+def local_maintenance_tier(settings: Settings) -> Path | None:
+    """The CI self-test blob directory, or ``None`` when the lane is production.
+
+    Only an explicit ``NEXUS_MAINTENANCE_LOCAL_TIER`` activates it, and a
+    complete B2/R2 tier always wins (see :func:`build_blob_provider`), so a
+    stray value can never redirect production backups to local disk.
+    """
+    raw = (getattr(settings, "maintenance_local_tier", None) or "").strip()
+    if not raw:
+        return None
+    return Path(raw).expanduser()
+
+
 def build_blob_provider(settings: Settings) -> BlobProvider:
     """Select the maintenance blob tier: Backblaze B2 when configured, else R2.
 
@@ -294,7 +308,13 @@ def build_blob_provider(settings: Settings) -> BlobProvider:
         if not r2.is_configured():
             raise ProviderUnavailable(b2.configuration_error() or "B2 configuration is incomplete")
         return r2
-    return R2Provider.from_settings(settings)
+    r2 = R2Provider.from_settings(settings)
+    if r2.is_configured():
+        return r2
+    local_tier = local_maintenance_tier(settings)
+    if local_tier is not None:
+        return LocalCacheProvider(local_tier)
+    return r2
 
 
 #: Backwards-compatible alias — the maintenance lane has always called this
@@ -387,6 +407,7 @@ def create_backup(*, settings: Settings, dry_run: bool = False) -> dict[str, Any
         "key": key,
         "uploaded": False,
         "verified": False,
+        "local_tier": str(local_maintenance_tier(settings) or "") or None,
     }
 
     if dry_run:
@@ -396,10 +417,17 @@ def create_backup(*, settings: Settings, dry_run: bool = False) -> dict[str, Any
 
     # Validate both the supplied settings and the database URL actually selected
     # by the canonical backend policy, before provider creation or dumping.
-    verify_production_backup_preflight(settings, allow_local_database=database_url is None)
+    local_tier = local_maintenance_tier(settings)
+    require_remote_tier = local_tier is None
+    verify_production_backup_preflight(
+        settings,
+        allow_local_database=database_url is None,
+        require_remote_tier=require_remote_tier,
+    )
     if database_url is not None:
         verify_production_backup_preflight(
-            settings.model_copy(update={"database_url": database_url})
+            settings.model_copy(update={"database_url": database_url}),
+            require_remote_tier=require_remote_tier,
         )
     provider = _build_provider(settings)
     if not provider.is_configured():
