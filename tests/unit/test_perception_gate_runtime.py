@@ -66,7 +66,7 @@ def _project() -> Project:
     )
 
 
-def _silence_evidence(spans: list[tuple[float, float]]) -> Any:
+def _silence_evidence(spans: list[tuple[float, float]], *, noise_floor_db: float = -40.0) -> Any:
     from nexus_ai_agent.creative.packs.perception.models import (
         SilenceEvidence,
         SilenceSpan,
@@ -76,7 +76,7 @@ def _silence_evidence(spans: list[tuple[float, float]]) -> Any:
         engine="ffmpeg 6.1.1",
         asset_sha256=CONTENT,
         duration_us=20 * SEC,
-        noise_floor_db=-40.0,
+        noise_floor_db=noise_floor_db,
         min_silence_us=500_000,
         spans=tuple(
             SilenceSpan(start_us=int(start * SEC), end_us=int(end * SEC)) for start, end in spans
@@ -318,7 +318,22 @@ def test_a_gate_that_does_not_answer_yes_or_no_fails_closed() -> None:
     assert "admitted=True/False" in str(error.value)
 
 
-def test_an_unbound_gate_still_records_a_marker_license_claim_as_unverified() -> None:
+def test_an_unbound_gate_fails_closed_for_marker_operations() -> None:
+    """Law R31: ``admitted is None`` is not permission; it is a wiring defect."""
+    from nexus_ai_agent.creative.packs.runtime import build_runtime_registry
+
+    outcome = _dispatch(
+        "analysis.mark_silences",
+        _silence_payload(),
+        registry=build_runtime_registry(),
+    )
+    assert outcome.output["uncertainty"]["outcome"] == "not_configured"
+    assert outcome.output["uncertainty"]["admitted"] is None
+    assert outcome.output["markers_added"] == 0
+    assert outcome.output["refused"] is True
+
+
+def test_an_unbound_license_gate_fails_closed_when_a_license_is_declared() -> None:
     from nexus_ai_agent.creative.packs.runtime import build_runtime_registry
 
     outcome = _dispatch(
@@ -327,7 +342,35 @@ def test_an_unbound_gate_still_records_a_marker_license_claim_as_unverified() ->
         registry=build_runtime_registry(),
     )
     assert outcome.output["gate"]["outcome"] == "not_configured"
-    assert outcome.output["markers_added"] == 1
+    assert outcome.output["markers_added"] == 0
+    assert outcome.output["refused"] is True
+
+
+def test_an_unbound_gate_fails_closed_for_loudness_normalisation() -> None:
+    from nexus_ai_agent.creative.packs.runtime import build_runtime_registry
+
+    outcome = _dispatch(
+        "analysis.assess_loudness", _loudness_payload(), registry=build_runtime_registry()
+    )
+    assert outcome.output["gate"]["outcome"] == "not_configured"
+    assert outcome.output["verdict"] == "refused"
+    assert outcome.output["normalize_arguments"] is None
+
+
+def test_an_unbound_gate_fails_closed_for_scene_cuts() -> None:
+    from nexus_ai_agent.creative.packs.runtime import build_runtime_registry
+
+    outcome = _dispatch(
+        "analysis.mark_scene_cuts",
+        {
+            "track_id": "a1",
+            "clip_id": "clip_a",
+            "evidence": _scene_evidence([5.0]).model_dump(mode="json"),
+        },
+        registry=build_runtime_registry(),
+    )
+    assert outcome.output["markers_added"] == 0
+    assert outcome.output["refused"] is True
 
 
 def test_no_signal_evidence_is_never_gated() -> None:
@@ -351,6 +394,86 @@ def test_a_license_conflict_publishes_no_scene_markers() -> None:
     assert outcome.output["markers_added"] == 0
     assert outcome.output["refused"] is True
     assert outcome.output["gate"]["outcome"] == "license_conflict"
+
+
+def test_a_clear_scene_cut_publishes_markers_with_gum_telemetry() -> None:
+    outcome = _dispatch(
+        "analysis.mark_scene_cuts",
+        {
+            "track_id": "a1",
+            "clip_id": "clip_a",
+            "evidence": _scene_evidence([5.0]).model_dump(mode="json"),
+        },
+    )
+    assert outcome.output["markers_added"] == 1
+    assert outcome.output["uncertainty"]["admitted"] is True
+    assert outcome.output["uncertainty"]["outcome"] == "pass"
+    for key in ("js_divergence", "combined_u", "expanded_U", "nu_eff", "decision"):
+        assert key in outcome.output["uncertainty"]
+
+
+def test_a_borderline_scene_cut_abstains_and_publishes_no_markers() -> None:
+    from nexus_ai_agent.creative.verification.adapters import scene_cut_uncertainty
+    from nexus_ai_agent.creative.verification.perception_gate import scene_cut_histograms
+
+    before, after = scene_cut_histograms(0.3)
+    limit = scene_cut_uncertainty(before, after, samples_per_histogram=4096).js_divergence
+    outcome = _dispatch(
+        "analysis.mark_scene_cuts",
+        {
+            "track_id": "a1",
+            "clip_id": "clip_a",
+            "evidence": _scene_evidence([5.0]).model_dump(mode="json"),
+            "cut_threshold_bits": limit,
+        },
+    )
+    assert outcome.output["markers_added"] == 0
+    assert outcome.output["refused"] is True
+    assert outcome.output["uncertainty"]["outcome"] == "abstain_insufficient_evidence"
+
+
+def test_a_weak_scene_cut_fails_and_publishes_no_markers() -> None:
+    outcome = _dispatch(
+        "analysis.mark_scene_cuts",
+        {
+            "track_id": "a1",
+            "clip_id": "clip_a",
+            "evidence": _scene_evidence([5.0]).model_dump(mode="json"),
+            "cut_threshold_bits": 0.5,
+        },
+    )
+    assert outcome.output["markers_added"] == 0
+    assert outcome.output["refused"] is True
+    assert outcome.output["uncertainty"]["outcome"] == "fail"
+
+
+def test_a_clear_silence_publishes_markers_with_gum_telemetry() -> None:
+    outcome = _dispatch("analysis.mark_silences", _silence_payload())
+    assert outcome.output["markers_added"] == 1
+    assert outcome.output["uncertainty"]["admitted"] is True
+    assert outcome.output["uncertainty"]["outcome"] == "pass"
+    for key in ("rms_db", "threshold_db", "combined_u", "expanded_U", "nu_eff", "decision"):
+        assert key in outcome.output["uncertainty"]
+
+
+def test_a_borderline_silence_abstains_and_publishes_no_markers() -> None:
+    payload = _silence_payload(
+        evidence=_silence_evidence([(2.0, 3.5)], noise_floor_db=-30.0).model_dump(mode="json")
+    )
+    outcome = _dispatch("analysis.mark_silences", payload)
+    assert outcome.output["markers_added"] == 0
+    assert outcome.output["refused"] is True
+    assert outcome.output["uncertainty"]["outcome"] == "abstain_insufficient_evidence"
+
+
+def test_a_loud_segment_fails_the_silence_gate() -> None:
+    payload = _silence_payload(
+        evidence=_silence_evidence([(2.0, 3.5)], noise_floor_db=-20.0).model_dump(mode="json")
+    )
+    outcome = _dispatch("analysis.mark_silences", payload)
+    assert outcome.output["markers_added"] == 0
+    assert outcome.output["refused"] is True
+    assert outcome.output["uncertainty"]["outcome"] == "fail"
 
 
 def _registry_with_gate(gate: Any) -> Any:

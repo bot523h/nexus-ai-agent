@@ -54,6 +54,19 @@ from nexus_ai_agent.creative.studio.models import (
 #: Gain (dB) is reported with centi-dB resolution; more digits are false precision.
 _GAIN_DIGITS = 2
 
+#: Policy ceiling for a silence claim: a segment is silence only when its RMS is
+#: below this level. It is deliberately a *policy* value, not derived from the
+#: measurement, so the gate checks the claim instead of restating it.
+_SILENCE_CEILING_DBFS = -30.0
+_SILENCE_SAMPLE_RATE = 48_000
+_SILENCE_BIT_DEPTH = 16
+_SILENCE_COVERAGE = 0.95
+
+#: Scene-cut gate defaults: the surrogate histogram sample count and the coverage
+#: factor used to expand the divergence interval.
+_SCENE_CUT_SAMPLES = 4096
+_SCENE_CUT_COVERAGE = 2.0
+
 #: The admission port. The pack may not import the verification lane, so the
 #: composition root injects a *plain-data* callable: a gate context in, a gate
 #: record out (see ``MODULE_MAP.md`` R31).
@@ -185,6 +198,57 @@ def _marker_admission(gate: PerceptionGate | None, payload: Any) -> dict[str, An
     )
 
 
+def _silence_gate_context(evidence: Any) -> dict[str, Any]:
+    """GUM request for the worst (shortest) silence span in the evidence."""
+    durations = [(span.end_us - span.start_us) / 1_000_000 for span in evidence.spans]
+    window = min(durations, default=0.0)
+    minimum = min(evidence.min_silence_us / 1_000_000, window) if window > 0.0 else 0.0
+    return {
+        "kind": "silence",
+        "rms_db": evidence.noise_floor_db,
+        "threshold_db": _SILENCE_CEILING_DBFS,
+        "sample_count": max(2, int(window * _SILENCE_SAMPLE_RATE)),
+        "bit_depth": _SILENCE_BIT_DEPTH,
+        "window_duration_s": window,
+        "min_silence_duration_s": minimum,
+        "coverage_probability": _SILENCE_COVERAGE,
+    }
+
+
+def _scene_gate_context(evidence: Any, cut_threshold_bits: float) -> dict[str, Any]:
+    """GUM request for the detector strength reported with a scene-cut evidence."""
+    return {
+        "kind": "scene_cut",
+        "threshold": evidence.threshold,
+        "cut_threshold_bits": cut_threshold_bits,
+        "samples_per_histogram": _SCENE_CUT_SAMPLES,
+        "coverage_factor": _SCENE_CUT_COVERAGE,
+    }
+
+
+def _marker_refusal(
+    project: Project,
+    context: OperationContext,
+    license_admission: Mapping[str, Any],
+    gum_admission: Mapping[str, Any],
+    extra: Mapping[str, Any],
+) -> OperationOutcome:
+    """Publish nothing when either the licence or the GUM gate refuses."""
+    return OperationOutcome(
+        project,
+        context.history,
+        {
+            "gate": dict(license_admission),
+            "uncertainty": dict(gum_admission),
+            "markers_added": 0,
+            "markers_skipped_existing": 0,
+            "skipped_outside_clip": 0,
+            **extra,
+            "refused": True,
+        },
+    )
+
+
 def _mark_silences(
     project: Project,
     context: OperationContext,
@@ -195,22 +259,16 @@ def _mark_silences(
     clip = _find_clip(project, payload.track_id, payload.clip_id)
     evidence = payload.evidence
     _require_same_content(clip, evidence.asset_sha256, OPERATION_MARK_SILENCES)
-    admission = _marker_admission(gate, payload)
-    if admission.get("admitted") is False:
-        # Refused by the license superlattice: publish no markers at all.
-        return OperationOutcome(
-            project,
-            context.history,
-            {
-                "gate": admission,
-                "markers_added": 0,
-                "markers_skipped_existing": 0,
-                "skipped_outside_clip": 0,
-                "spans_in_evidence": len(evidence.spans),
-                "edge": payload.edge,
-                "refused": True,
-            },
-        )
+    license_admission = _marker_admission(gate, payload)
+    gum_admission = _gate_record(gate, _silence_gate_context(evidence))
+    # Law R31: a gated claim is published only when the gate answers True. An
+    # unbound gate (``admitted is None``) and an abstention both fail closed.
+    silence_extra = {"spans_in_evidence": len(evidence.spans), "edge": payload.edge}
+    license_ok = (not payload.licenses) or license_admission.get("admitted") is True
+    if not license_ok:
+        return _marker_refusal(project, context, license_admission, gum_admission, silence_extra)
+    if gum_admission.get("admitted") is not True:
+        return _marker_refusal(project, context, license_admission, gum_admission, silence_extra)
 
     candidates: list[tuple[str, int, str]] = []
     for index, span in enumerate(evidence.spans, start=1):
@@ -228,7 +286,8 @@ def _mark_silences(
                 ("silence_end", span.end_us, f"{payload.label_prefix} {index} out ({seconds:.2f}s)")
             )
     new_project, output = _add_markers(project, candidates, clip, evidence.evidence_hash, "silence")
-    output["gate"] = admission
+    output["gate"] = license_admission
+    output["uncertainty"] = gum_admission
     output["spans_in_evidence"] = len(evidence.spans)
     output["edge"] = payload.edge
     return OperationOutcome(new_project, context.history, output)
@@ -244,28 +303,22 @@ def _mark_scene_cuts(
     clip = _find_clip(project, payload.track_id, payload.clip_id)
     evidence = payload.evidence
     _require_same_content(clip, evidence.asset_sha256, OPERATION_MARK_SCENE_CUTS)
-    admission = _marker_admission(gate, payload)
-    if admission.get("admitted") is False:
-        return OperationOutcome(
-            project,
-            context.history,
-            {
-                "gate": admission,
-                "markers_added": 0,
-                "markers_skipped_existing": 0,
-                "skipped_outside_clip": 0,
-                "cuts_in_evidence": len(evidence.cuts_us),
-                "threshold": evidence.threshold,
-                "refused": True,
-            },
-        )
+    license_admission = _marker_admission(gate, payload)
+    gum_admission = _gate_record(gate, _scene_gate_context(evidence, payload.cut_threshold_bits))
+    scene_extra = {"cuts_in_evidence": len(evidence.cuts_us), "threshold": evidence.threshold}
+    license_ok = (not payload.licenses) or license_admission.get("admitted") is True
+    if not license_ok:
+        return _marker_refusal(project, context, license_admission, gum_admission, scene_extra)
+    if gum_admission.get("admitted") is not True:
+        return _marker_refusal(project, context, license_admission, gum_admission, scene_extra)
 
     candidates = [
         ("scene_cut", cut_us, f"{payload.label_prefix} {index}")
         for index, cut_us in enumerate(evidence.cuts_us, start=1)
     ]
     new_project, output = _add_markers(project, candidates, clip, evidence.evidence_hash, "scenes")
-    output["gate"] = admission
+    output["gate"] = license_admission
+    output["uncertainty"] = gum_admission
     output["cuts_in_evidence"] = len(evidence.cuts_us)
     output["threshold"] = evidence.threshold
     return OperationOutcome(new_project, context.history, output)
@@ -322,11 +375,10 @@ def _assess_loudness(
         "true_peak_ceiling_dbfs": payload.true_peak_ceiling_dbfs,
         "tolerance_lu": payload.tolerance_lu,
     }
-    if admission.get("admitted") is False:
-        # A refused admission is terminal: no gain, no normalize arguments, no
-        # projected peak -- nothing a downstream command could act on.
+    if measured is None:
+        # No measurement means no gated claim: the honest verdict is "no signal".
         output.update(
-            verdict="refused",
+            verdict="no_signal",
             gain_db=None,
             projected_true_peak_dbfs=None,
             limiting_required=False,
@@ -334,9 +386,11 @@ def _assess_loudness(
         )
         return OperationOutcome(project, context.history, output)
 
-    if measured is None:
+    if admission.get("admitted") is not True:
+        # Law R31: a refused or unbound admission is terminal -- no gain, no
+        # normalize arguments, no projected peak.
         output.update(
-            verdict="no_signal",
+            verdict="refused",
             gain_db=None,
             projected_true_peak_dbfs=None,
             limiting_required=False,

@@ -1,11 +1,11 @@
 """W11X phase-2 AST mutation campaign: GUM math, adapters, gate and pack wiring.
 
-Twenty-three surgical mutations, each attacking one mathematical invariant of the
-JCGM 100:2008 propagation, the three-valued guard band, or the licence/GUM
-admission composition. The kill oracle is the strict one used by the
-creative-graph campaign: ``KILLED`` requires ``returncode == 1``, at least one
-reported test failure, no crash/collection tokens, and a failure message that
-carries the expected invariant token.
+Thirty surgical mutations, each attacking one mathematical invariant of the
+JCGM 100:2008 propagation, the three-valued guard band, the licence/GUM
+admission composition, or the runtime scene-cut/silence wiring. The kill oracle
+is the strict one used by the creative-graph campaign: ``KILLED`` requires
+``returncode == 1``, at least one reported test failure, no crash/collection
+tokens, and a failure message that carries the expected invariant token.
 
 Hygiene is identical to the other campaigns: ``sys.dont_write_bytecode``,
 ``PYTHONDONTWRITEBYTECODE=1``, a ``__pycache__`` purge before and after every
@@ -228,6 +228,32 @@ def _set_constant(node: ast.AST, value: float) -> ast.AST:
 def _use_objective(node: ast.AST) -> ast.AST:
     assert isinstance(node, ast.Assign)
     node.value = ast.Name(id="objective", ctx=ast.Load())
+    return node
+
+
+def _admitted_is_false(node: ast.AST) -> ast.AST:
+    assert isinstance(node, ast.If)
+    node.test = ast.parse("gum_admission.get('admitted') is False", mode="eval").body
+    return node
+
+
+def _bypass_when_measured(node: ast.AST) -> ast.AST:
+    assert isinstance(node, ast.If)
+    node.test = ast.parse(
+        "admission.get('admitted') is not True and measured is None", mode="eval"
+    ).body
+    return node
+
+
+def _level_blind_silence_variance(node: ast.AST) -> ast.AST:
+    assert isinstance(node, ast.Assign)
+    node.value = ast.parse("step**2 / (12.0 * sample_count)", mode="eval").body
+    return node
+
+
+def _admit_abstain(node: ast.AST) -> ast.AST:
+    assert isinstance(node, ast.Assign)
+    node.value = ast.parse("decision.outcome is not VerificationOutcome.FAIL", mode="eval").body
     return node
 
 
@@ -469,13 +495,13 @@ MUTATIONS: tuple[MutationSpec, ...] = (
     ),
     MutationSpec(
         mutant_id="W22_marker_refusal_ignored",
-        invariant="a refused admission publishes no markers",
+        invariant="a refused licence publishes no markers",
         target_file=OPERATIONS_FILE,
         func_name="_mark_silences",
         test_file=RUNTIME_TESTS,
         test_selector="test_a_license_conflict_publishes_no_markers_through_the_runtime",
         expected_error_tokens=("assert", "markers_added"),
-        predicate=lambda n: _is_if(n, "admission.get('admitted') is False"),
+        predicate=lambda n: _is_if(n, "not license_ok"),
         transform=_weaken_to_false,
     ),
     MutationSpec(
@@ -488,6 +514,83 @@ MUTATIONS: tuple[MutationSpec, ...] = (
         expected_error_tokens=("assert",),
         predicate=lambda n: _is_assign(n, "sensitivity"),
         transform=lambda n: _set_constant(n, 1.0),
+    ),
+    MutationSpec(
+        mutant_id="W24_unbound_admission_not_fail_closed",
+        invariant="admitted=None (unbound gate) fails closed, not only admitted=False",
+        target_file=OPERATIONS_FILE,
+        func_name="_mark_silences",
+        test_file=RUNTIME_TESTS,
+        test_selector="test_an_unbound_gate_fails_closed_for_marker_operations",
+        expected_error_tokens=("assert",),
+        predicate=lambda n: _is_if(n, "gum_admission.get('admitted') is not True"),
+        transform=_admitted_is_false,
+    ),
+    MutationSpec(
+        mutant_id="W25_loudness_gate_bypassed_for_normalisation",
+        invariant="a refused/unbound loudness gate publishes no normalize arguments",
+        target_file=OPERATIONS_FILE,
+        func_name="_assess_loudness",
+        test_file=RUNTIME_TESTS,
+        test_selector="test_an_unbound_gate_fails_closed_for_loudness_normalisation",
+        expected_error_tokens=("assert",),
+        predicate=lambda n: _is_if(n, "admission.get('admitted') is not True"),
+        transform=_bypass_when_measured,
+    ),
+    MutationSpec(
+        mutant_id="W26_scene_cut_gum_gate_ignored",
+        invariant="a borderline scene-cut JSD abstains instead of publishing markers",
+        target_file=OPERATIONS_FILE,
+        func_name="_mark_scene_cuts",
+        test_file=RUNTIME_TESTS,
+        test_selector="test_a_borderline_scene_cut_abstains_and_publishes_no_markers",
+        expected_error_tokens=("assert",),
+        predicate=lambda n: _is_if(n, "gum_admission.get('admitted') is not True"),
+        transform=_weaken_to_false,
+    ),
+    MutationSpec(
+        mutant_id="W27_silence_gum_gate_ignored",
+        invariant="a borderline silence RMS abstains instead of publishing markers",
+        target_file=OPERATIONS_FILE,
+        func_name="_mark_silences",
+        test_file=RUNTIME_TESTS,
+        test_selector="test_a_borderline_silence_abstains_and_publishes_no_markers",
+        expected_error_tokens=("assert",),
+        predicate=lambda n: _is_if(n, "gum_admission.get('admitted') is not True"),
+        transform=_weaken_to_false,
+    ),
+    MutationSpec(
+        mutant_id="W28_silence_level_blind_variance",
+        invariant="silence u^2(M) = q^2 M/(3N) + q^4/(180N), not q^2/(12N)",
+        target_file=ADAPTERS_FILE,
+        func_name="silence_uncertainty",
+        test_file=ADAPTER_TESTS,
+        test_selector="test_silence_uncertainty_matches_the_mean_square_variance_model",
+        expected_error_tokens=("assert",),
+        predicate=lambda n: _is_assign(n, "variance"),
+        transform=_level_blind_silence_variance,
+    ),
+    MutationSpec(
+        mutant_id="W29_scene_cut_abstain_admitted",
+        invariant="scene-cut ABSTAIN is not an admission",
+        target_file=GATE_FILE,
+        func_name="gate_scene_cut",
+        test_file=GATE_TESTS,
+        test_selector="test_a_borderline_scene_cut_abstains_instead_of_admitting",
+        expected_error_tokens=("assert",),
+        predicate=lambda n: _is_assign(n, "admitted"),
+        transform=_admit_abstain,
+    ),
+    MutationSpec(
+        mutant_id="W30_silence_abstain_admitted",
+        invariant="silence ABSTAIN is not an admission",
+        target_file=GATE_FILE,
+        func_name="gate_silence",
+        test_file=GATE_TESTS,
+        test_selector="test_a_borderline_silence_abstains_instead_of_admitting",
+        expected_error_tokens=("assert",),
+        predicate=lambda n: _is_assign(n, "admitted"),
+        transform=_admit_abstain,
     ),
 )
 
@@ -584,7 +687,7 @@ def test_w11x_mutation_campaign_zero_survived() -> None:
 
     # The pin is deliberate: a silently dropped mutant would otherwise look like
     # a clean campaign. Raise it whenever a mutant is added, never lower it.
-    assert len(MUTATIONS) == 23
+    assert len(MUTATIONS) == 30
     assert invalid == [], f"Invalid mutants ({len(invalid)}): {invalid}"
     assert survived == [], f"Survived mutants ({len(survived)}): {survived}"
     assert len(killed) == len(MUTATIONS)

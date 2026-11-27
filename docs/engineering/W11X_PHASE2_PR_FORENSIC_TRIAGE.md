@@ -1,7 +1,20 @@
 # W11X Phase 2 — forensic triage of the open pull requests
 
-Status: measured on 2026-11-25 from a fresh clone. Base: `origin/main` @ `bc089847`.
-Every number below is recomputed from git, not copied from a PR description.
+Status: **phase-3 refresh, measured 2026-11-27 from live GitHub**, base `origin/main` @ `8421c05a55bc08f013217c81db444790ac74862e` (the squash merge of PR #363). The original phase-2 snapshot was measured on 2026-11-25 against `bc089847`; the table below is recomputed for every currently open PR with the GitHub compare API (`main...<head>`), so the `behind/ahead`, diff totals and `src` counts are current. Verdicts are carried forward unless a PR changed state (see *State changes* below). Every number is recomputed, not copied from a PR description.
+
+## State changes since the phase-2 snapshot
+
+| PR | new state | evidence |
+|---|---|---|
+| #362 | **MERGED** into main (`403cf834`) | the base of the phase-2 snapshot; no longer open |
+| #365 | **MERGED** into main (`1a914457`) | supersedes the closed #364 |
+| #366 | **MERGED** into main (`b8dee44c`) | IBPC/board repair, 40/40 mutants |
+| #363 | **MERGED** into main (`8421c05a`) | W11X phase 2: GUM engine + perception pack harvest; this document's new baseline |
+| #364 | **CLOSED** (superseded by #365) | not in the open set |
+| #247 | **OPEN, harvested** | its perception pack landed through #363; close it as superseded |
+
+The open set is now 44 PRs (was 46, 45 with a pull ref). `#247` remains open only because no
+actor has closed it; its content is on `main` and its verdict is `HARVESTED_IN_#363`.
 
 ## Method
 
@@ -26,51 +39,50 @@ Verdicts: `SUPERSEDED_ON_MAIN`, `PARTIAL_SUPERSEDED`, `HARVESTED_IN_THIS_PR`,
 
 | PR | HEAD | merge-base | + | − | files | behind/ahead | src absent | src differ | verdict |
 |---|---|---|---|---|---|---|---|---|---|
-| #33 | `99429397` | `48f280c5` | 2353 | 158 | 40 | 1225/15 | 2 | 15 | `UNIQUE_CONTENT_PENDING` |
-| #57 | `2f591618` | `a997aab5` | 2375 | 9 | 14 | 1402/2 | 5 | 1 | `UNIQUE_CONTENT_PENDING` |
-| #58 | `bb06da1c` | `a997aab5` | 331 | 27 | 12 | 1402/2 | 0 | 10 | `SUPERSEDED_ON_MAIN` |
-| #60 | `efea9bae` | `a997aab5` | 5837 | 19 | 29 | 1402/6 | 9 | 4 | `PARTIAL_SUPERSEDED` |
-| #63 | `3e376bea` | `a997aab5` | 3710 | 40 | 35 | 1402/1 | 4 | 5 | `UNIQUE_CONTENT_PENDING` |
-| #64 | `ab564d7c` | `85c502ed` | 8329 | 209 | 38 | 846/24 | 7 | 13 | `UNIQUE_CONTENT_PENDING` |
-| #66 | `db18cf66` | `2cf22137` | 4342 | 286 | 37 | 1393/3 | 2 | 20 | `UNIQUE_CONTENT_PENDING` |
-| #69 | `74980748` | `035a896d` | 24028 | 503 | 99 | 1384/18 | 13 | 25 | `UNIQUE_CONTENT_PENDING` |
-| #73 | `1a35ec06` | `035a896d` | 7755 | 2 | 20 | 1384/5 | 0 | 4 | `SUPERSEDED_ON_MAIN` |
-| #84 | `89e04c6a` | `2351f099` | 2422 | 8 | 15 | 1344/9 | 0 | 0 | `TEST_OR_DOCS_ONLY` |
-| #89 | `2f0df4f1` | `2351f099` | 1677 | 80 | 7 | 1344/4 | 0 | 2 | `SUPERSEDED_ON_MAIN` |
-| #92 | `40c11633` | `d52a2434` | 143 | 2 | 4 | 616/11 | 0 | 1 | `TEST_OR_DOCS_ONLY` |
-| #97 | `3307d397` | `9145c5f2` | 997 | 1 | 17 | 760/4 | 3 | 9 | `PARTIAL_SUPERSEDED` |
-| #99 | `9a862e26` | `6122c9bf` | 3191 | 212 | 34 | 1230/1 | 2 | 20 | `UNIQUE_CONTENT_PENDING` |
-| #113 | `6a867a77` | `e5b326b2` | 2003 | 78 | 14 | 1294/8 | 1 | 7 | `UNIQUE_CONTENT_PENDING` |
-| #114 | `6ca1b13b` | `cf8b7f66` | 7792 | 0 | 16 | 1077/4 | 12 | 0 | `UNIQUE_CONTENT_PENDING` |
-| #115 | `f1987348` | `6122c9bf` | 1320 | 121 | 14 | 1230/5 | 1 | 10 | `UNIQUE_CONTENT_PENDING` |
-| #117 | `4a4b30c2` | `e5b326b2` | 5245 | 193 | 41 | 1294/30 | 2 | 6 | `UNIQUE_CONTENT_PENDING` |
-| #118 | `d5a205f4` | `e5b326b2` | 23786 | 353 | 52 | 1294/26 | 10 | 11 | `UNIQUE_CONTENT_PENDING` |
-| #121 | `b4a59653` | `e5b326b2` | 4658 | 733 | 20 | 1294/2 | 4 | 9 | `UNIQUE_CONTENT_PENDING` |
-| #122 | `8b8ba31d` | `cf8b7f66` | 3464 | 5 | 11 | 1077/17 | 0 | 1 | `TEST_OR_DOCS_ONLY` |
-| #129 | `75f646a5` | `e5b326b2` | 713 | 12 | 6 | 1294/6 | 0 | 4 | `SUPERSEDED_ON_MAIN` |
-| #135 | `f83b1283` | `e5b326b2` | 1207 | 11 | 8 | 1294/7 | 0 | 3 | `SUPERSEDED_ON_MAIN` |
-| #137 | `e2a46144` | `e5b326b2` | 1554 | 10 | 9 | 1294/9 | 0 | 0 | `TEST_OR_DOCS_ONLY` |
-| #140 | `25da5629` | `e5b326b2` | 1216 | 13 | 9 | 1294/5 | 0 | 3 | `SUPERSEDED_ON_MAIN` |
-| #149 | `e865c146` | `e5b326b2` | 2322 | 467 | 51 | 1294/1 | 0 | 10 | `SUPERSEDED_ON_MAIN` |
-| #150 | `5f84be4d` | `e5b326b2` | 6807 | 76 | 29 | 1294/2 | 7 | 14 | `UNIQUE_CONTENT_PENDING` |
-| #157 | `00ccf903` | `5a228ea9` | 2977 | 106 | 24 | 1261/16 | 0 | 6 | `SUPERSEDED_ON_MAIN` |
-| #193 | `d505d80a` | `48f280c5` | 8626 | 52 | 15 | 1225/6 | 0 | 0 | `TEST_OR_DOCS_ONLY` |
-| #204 | `13078d79` | `d52a2434` | 486 | 54 | 4 | 616/9 | 0 | 1 | `SUPERSEDED_ON_MAIN` |
-| #205 | `ff2792b7` | `df3c9d16` | 12330 | 29 | 43 | 1182/15 | 0 | 11 | `SUPERSEDED_ON_MAIN` |
-| #230 | `9f572aae` | `cf8b7f66` | 5860 | 39 | 52 | 1077/8 | 0 | 0 | `TEST_OR_DOCS_ONLY` |
-| #247 | `d9176f9b` | `9145c5f2` | 3817 | 49 | 33 | 760/18 | 5 | 7 | `HARVESTED_IN_THIS_PR` |
-| #257 | `b057ef5f` | `cf16beaa` | 109 | 7 | 4 | 1027/2 | 0 | 2 | `TEST_OR_DOCS_ONLY` |
-| #273 | `9d29722e` | `cd7e2e65` | 1898 | 1 | 19 | 753/12 | 5 | 3 | `SUPERSEDED_ON_MAIN` |
-| #284 | `82d9be01` | `ecb07312` | 2733 | 5 | 13 | 723/5 | 4 | 2 | `SUPERSEDED_ON_MAIN` |
-| #285 | `ce1ede4e` | `b3e20f93` | 14 | 6 | 1 | 720/2 | 0 | 0 | `TEST_OR_DOCS_ONLY` |
-| #295 | `c641154d` | `87744dda` | 843 | 0 | 2 | 636/3 | 1 | 0 | `UNIQUE_CONTENT_PENDING` |
-| #297 | `f142f2e9` | `87744dda` | 8375 | 4 | 5 | 636/3 | 0 | 0 | `TEST_OR_DOCS_ONLY` |
-| #301 | `9cef96a7` | `d52a2434` | 3983 | 0 | 11 | 616/14 | 0 | 0 | `TEST_OR_DOCS_ONLY` |
-| #313 | `ca7f9ea8` | `cf427874` | 59 | 1 | 1 | 535/1 | 0 | 0 | `TEST_OR_DOCS_ONLY` |
-| #327 | `d5d5ead3` | `5ed6d4e1` | 14869 | 58 | 73 | 453/25 | 9 | 15 | `PARTIAL_SUPERSEDED` |
-| #328 | `4f6ca1d1` | `5fe94512` | 2339 | 10 | 26 | 448/5 | 0 | 4 | `SUPERSEDED_ON_MAIN` |
-| #329 | `56f34094` | `5fe94512` | 196 | 1 | 1 | 448/2 | 0 | 0 | `TEST_OR_DOCS_ONLY` |
-| #362 | `3760a3d5` | `3ee52c4f` | 3189 | 131 | 18 | 2/3 | 1 | 6 | `UNIQUE_CONTENT_PENDING` |
+| #329 | `56f34094` | `5fe94512` | 196 | 1 | 1 | 478/2 | 0 | 0 | `TEST_OR_DOCS_ONLY` |
+| #328 | `4f6ca1d1` | `5fe94512` | 2339 | 10 | 26 | 478/5 | 16 | 2 | `SUPERSEDED_ON_MAIN` |
+| #327 | `d5d5ead3` | `5ed6d4e1` | 14869 | 58 | 73 | 483/25 | 14 | 10 | `PARTIAL_SUPERSEDED` |
+| #313 | `ca7f9ea8` | `cf427874` | 59 | 1 | 1 | 565/1 | 0 | 0 | `TEST_OR_DOCS_ONLY` |
+| #301 | `9cef96a7` | `d52a2434` | 3983 | 0 | 11 | 646/14 | 0 | 0 | `TEST_OR_DOCS_ONLY` |
+| #297 | `f142f2e9` | `87744dda` | 8375 | 4 | 5 | 666/3 | 0 | 0 | `TEST_OR_DOCS_ONLY` |
+| #295 | `c641154d` | `87744dda` | 843 | 0 | 2 | 666/3 | 1 | 0 | `UNIQUE_CONTENT_PENDING` |
+| #285 | `ce1ede4e` | `b3e20f93` | 14 | 6 | 1 | 750/2 | 0 | 0 | `TEST_OR_DOCS_ONLY` |
+| #284 | `82d9be01` | `ecb07312` | 2733 | 5 | 13 | 753/5 | 6 | 0 | `SUPERSEDED_ON_MAIN` |
+| #273 | `9d29722e` | `cd7e2e65` | 1898 | 1 | 19 | 783/12 | 7 | 1 | `SUPERSEDED_ON_MAIN` |
+| #257 | `b057ef5f` | `cf16beaa` | 109 | 7 | 4 | 1057/2 | 0 | 2 | `TEST_OR_DOCS_ONLY` |
+| #247 | `d9176f9b` | `9145c5f2` | 3817 | 49 | 33 | 790/18 | 7 | 5 | `HARVESTED_IN_#363` |
+| #230 | `9f572aae` | `cf8b7f66` | 5860 | 39 | 52 | 1107/8 | 0 | 0 | `TEST_OR_DOCS_ONLY` |
+| #205 | `ff2792b7` | `df3c9d16` | 12330 | 29 | 43 | 1212/15 | 10 | 4 | `SUPERSEDED_ON_MAIN` |
+| #204 | `13078d79` | `d52a2434` | 486 | 54 | 4 | 646/9 | 0 | 1 | `SUPERSEDED_ON_MAIN` |
+| #193 | `d505d80a` | `48f280c5` | 8626 | 52 | 15 | 1255/6 | 0 | 0 | `TEST_OR_DOCS_ONLY` |
+| #157 | `00ccf903` | `5a228ea9` | 2977 | 106 | 24 | 1291/16 | 0 | 6 | `SUPERSEDED_ON_MAIN` |
+| #150 | `5f84be4d` | `e5b326b2` | 6807 | 76 | 29 | 1324/2 | 16 | 7 | `UNIQUE_CONTENT_PENDING` |
+| #149 | `e865c146` | `e5b326b2` | 2322 | 467 | 51 | 1324/1 | 0 | 11 | `SUPERSEDED_ON_MAIN` |
+| #140 | `25da5629` | `e5b326b2` | 1216 | 13 | 9 | 1324/5 | 3 | 1 | `SUPERSEDED_ON_MAIN` |
+| #137 | `e2a46144` | `e5b326b2` | 1554 | 10 | 9 | 1324/9 | 0 | 0 | `TEST_OR_DOCS_ONLY` |
+| #135 | `f83b1283` | `e5b326b2` | 1207 | 11 | 8 | 1324/7 | 3 | 1 | `SUPERSEDED_ON_MAIN` |
+| #129 | `75f646a5` | `e5b326b2` | 713 | 12 | 6 | 1324/6 | 0 | 4 | `SUPERSEDED_ON_MAIN` |
+| #122 | `8b8ba31d` | `cf8b7f66` | 3464 | 5 | 11 | 1107/17 | 0 | 1 | `TEST_OR_DOCS_ONLY` |
+| #121 | `b4a59653` | `e5b326b2` | 4658 | 733 | 20 | 1324/2 | 3 | 10 | `UNIQUE_CONTENT_PENDING` |
+| #118 | `d5a205f4` | `e5b326b2` | 18486 | 351 | 52 | 1324/26 | 12 | 9 | `UNIQUE_CONTENT_PENDING` |
+| #117 | `4a4b30c2` | `e5b326b2` | 5245 | 193 | 41 | 1324/30 | 2 | 6 | `UNIQUE_CONTENT_PENDING` |
+| #115 | `f1987348` | `6122c9bf` | 1320 | 121 | 14 | 1260/5 | 1 | 10 | `UNIQUE_CONTENT_PENDING` |
+| #114 | `6ca1b13b` | `cf8b7f66` | 7792 | 0 | 16 | 1107/4 | 12 | 0 | `UNIQUE_CONTENT_PENDING` |
+| #113 | `6a867a77` | `e5b326b2` | 2003 | 78 | 14 | 1324/8 | 1 | 7 | `UNIQUE_CONTENT_PENDING` |
+| #99 | `9a862e26` | `6122c9bf` | 3191 | 212 | 34 | 1260/1 | 4 | 18 | `UNIQUE_CONTENT_PENDING` |
+| #97 | `3307d397` | `9145c5f2` | 997 | 1 | 17 | 790/4 | 11 | 1 | `PARTIAL_SUPERSEDED` |
+| #92 | `40c11633` | `d52a2434` | 143 | 2 | 4 | 646/11 | 0 | 1 | `TEST_OR_DOCS_ONLY` |
+| #89 | `2f0df4f1` | `2351f099` | 1677 | 80 | 7 | 1374/4 | 0 | 2 | `SUPERSEDED_ON_MAIN` |
+| #84 | `89e04c6a` | `2351f099` | 2422 | 8 | 15 | 1374/9 | 0 | 0 | `TEST_OR_DOCS_ONLY` |
+| #73 | `1a35ec06` | `035a896d` | 7755 | 2 | 20 | 1414/5 | 4 | 0 | `SUPERSEDED_ON_MAIN` |
+| #69 | `74980748` | `035a896d` | 24028 | 503 | 99 | 1414/18 | 23 | 16 | `UNIQUE_CONTENT_PENDING` |
+| #66 | `db18cf66` | `2cf22137` | 4342 | 286 | 37 | 1423/3 | 2 | 20 | `UNIQUE_CONTENT_PENDING` |
+| #64 | `ab564d7c` | `85c502ed` | 8329 | 209 | 38 | 876/24 | 15 | 5 | `UNIQUE_CONTENT_PENDING` |
+| #63 | `3e376bea` | `a997aab5` | 3710 | 40 | 35 | 1432/1 | 4 | 5 | `UNIQUE_CONTENT_PENDING` |
+| #60 | `efea9bae` | `a997aab5` | 5837 | 19 | 29 | 1432/6 | 9 | 4 | `PARTIAL_SUPERSEDED` |
+| #58 | `bb06da1c` | `a997aab5` | 331 | 27 | 12 | 1432/2 | 0 | 10 | `SUPERSEDED_ON_MAIN` |
+| #57 | `2f591618` | `a997aab5` | 2375 | 9 | 14 | 1432/2 | 5 | 1 | `UNIQUE_CONTENT_PENDING` |
+| #33 | `99429397` | `48f280c5` | 2353 | 158 | 40 | 1255/15 | 2 | 15 | `UNIQUE_CONTENT_PENDING` |
 
 ## The sixteen PRs named in the mission
 
@@ -82,9 +94,9 @@ Verdicts: `SUPERSEDED_ON_MAIN`, `PARTIAL_SUPERSEDED`, `HARVESTED_IN_THIS_PR`,
 
 ### #247 — feat(creative): perception lane — measured silence/scene/loudness evidence (free offline FFmpeg)
 
-- **verdict**: `HARVESTED_IN_THIS_PR`
-- **why**: pack + parsers absent on main and now shipped; the PR's own 80 tests pass on main
-- **measured**: `+3817/−49` over 33 files, 760 commits behind main, head `d9176f9b`, merge-base `9145c5f2`; 5 added `src/` paths absent on main, 7 present-but-different.
+- **verdict**: `HARVESTED_IN_#363`
+- **why**: pack + parsers absent on main and now shipped through PR #363 (squash `8421c05a`); the pack registers `88 -> 91` operations on main
+- **measured (phase 3)**: `+3817/−49` over 33 files, 790 commits behind main, head `d9176f9b`, merge-base `9145c5f2`; 7 added `src/` paths absent on main, 5 present-but-different.
 
 ### #284 — feat(nagar): add read-only Causal Memory and bounded Director preview (task-278)
 

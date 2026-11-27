@@ -114,9 +114,19 @@ def _clip(
     )
 
 
+def _admitting_gate(context: object) -> dict[str, object]:
+    """A stub port that admits everything; these tests exercise marker mapping."""
+    return {
+        "admitted": True,
+        "outcome": "pass",
+        "refusal": None,
+        "recommended_gain_db": 0.0,
+    }
+
+
 def _bus(clip: Clip | None = None, *, kind: str = "video") -> CommandBus:
     registry = build_wave1_registry()
-    register_perception_operations(registry)
+    register_perception_operations(registry, gate=_admitting_gate)
     track = Track(track_id="v1", name="V1", kind="video", clips=[clip or _clip()])
     timeline = Timeline(timeline_id="tl", duration_us=60 * SEC, tracks=[track])
     project: Project = new_project("perception_proj", "Perception", timeline)

@@ -262,6 +262,9 @@ class MarkSilencesInput(_MarkInput, _GatedInput):
 class MarkSceneCutsInput(_MarkInput, _GatedInput):
     label_prefix: str = Field(default="scene", min_length=1, max_length=MAX_LABEL_CHARS)
     evidence: SceneCutEvidence
+    #: Minimum Jensen-Shannon divergence (bits) a candidate cut must clear, with
+    #: the whole expanded GUM interval, before a marker is published.
+    cut_threshold_bits: float = Field(default=0.02, gt=0.0, lt=1.0, allow_inf_nan=False)
 
 
 class AssessLoudnessInput(_GatedInput):

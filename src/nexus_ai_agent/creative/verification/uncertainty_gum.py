@@ -9,11 +9,19 @@ Implements three things and refuses to pretend about a fourth:
    expanded interval is inside/outside the specification, otherwise
    ``ABSTAIN_INSUFFICIENT_EVIDENCE``.
 
-It does **not** implement Monte Carlo propagation (JCGM 101) or second-order
-terms (JCGM 102). First-order propagation is only as honest as the
-linearisation, so every result carries ``linearisation_penalty``: the ratio of
-the covariance contribution to the diagonal contribution. A value far from 1.0
-means the cross terms dominate and the first-order model deserves suspicion.
+**Theoretical scope.** This engine implements exactly **JCGM 100:2008 (GUM)
+first-order Taylor-series propagation**, ``u_c^2(y) = g^T Sigma_x g``, together
+with the **classical Welch-Satterthwaite effective degrees of freedom**
+(JCGM 100:2008 G.4). It deliberately does **not** implement **JCGM 101**
+(Monte Carlo propagation of distributions) or the **JCGM 102** second-order
+nonlinear Taylor terms. Callers that need a distributional or strongly nonlinear
+budget must use a dedicated Monte Carlo engine; here the honest answer is the
+three-valued abstention.
+
+First-order propagation is only as honest as the linearisation, so every result
+carries ``linearisation_penalty``: the ratio of the covariance contribution to
+the diagonal contribution. A value far from 1.0 means the cross terms dominate
+and the first-order model deserves suspicion.
 
 Every float is validated with :func:`math.isfinite` and ``bool`` is rejected
 explicitly, because ``True`` is an ``int`` in Python and would otherwise slip
