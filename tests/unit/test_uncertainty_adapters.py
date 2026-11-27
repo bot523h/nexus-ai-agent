@@ -14,10 +14,13 @@ from nexus_ai_agent.creative.perception.radiometric_scene_cut import (
 from nexus_ai_agent.creative.temporal.biophysical_portrait import SkinChromophoreEstimate
 from nexus_ai_agent.creative.verification.adapters import (
     ScientificVerificationBridge,
+    _normal_quantile,
     chromophore_uncertainty,
     loudness_uncertainty,
     scene_cut_uncertainty,
+    silence_uncertainty,
     slo_burn_uncertainty,
+    synthetic_scene_cut_histograms,
 )
 from nexus_ai_agent.creative.verification.uncertainty_gum import (
     GUMInputError,
@@ -496,3 +499,116 @@ def test_a_bin_empty_in_both_histograms_contributes_exactly_zero() -> None:
     # both sides. The empty bin must contribute exactly zero, not an error.
     assert budget.js_divergence == pytest.approx(0.5, rel=1e-12)
     assert budget.standard > 0.0
+
+
+# ---------------------------------------------------------------------------
+# silence-segment RMS uncertainty (Wave B)
+# ---------------------------------------------------------------------------
+
+
+def test_silence_uncertainty_matches_the_mean_square_variance_model() -> None:
+    rms = -40.0
+    samples = 48_000
+    bit_depth = 16
+    budget = silence_uncertainty(rms, -30.0, samples, bit_depth=bit_depth)
+    step = 2.0 / (2**bit_depth - 1)
+    mean_square = 10.0 ** (rms / 10.0)
+    expected_variance = step**2 * mean_square / (3.0 * samples) + step**4 / (180.0 * samples)
+    expected_u_db = 10.0 / (math.log(10.0) * mean_square) * math.sqrt(expected_variance)
+    assert budget.mean_square == pytest.approx(mean_square)
+    assert budget.quantisation_step == pytest.approx(step)
+    assert budget.standard == pytest.approx(expected_u_db, rel=1e-12)
+    assert budget.combined.variance == pytest.approx(expected_u_db**2, rel=1e-12)
+    assert budget.combined.effective_dof == pytest.approx(samples - 1)
+
+
+def test_silence_uncertainty_scales_with_sqrt_of_the_mean_square() -> None:
+    quiet = silence_uncertainty(-40.0, -30.0, 48_000)
+    loud = silence_uncertainty(-20.0, -30.0, 48_000)
+    quiet_u_m = math.sqrt(quiet.combined.variance) / quiet.combined.sensitivity[0]
+    loud_u_m = math.sqrt(loud.combined.variance) / loud.combined.sensitivity[0]
+    # u(M) ~ sqrt(M) in the high-SNR regime, so a 100x level is a 10x deviation.
+    assert loud_u_m / quiet_u_m == pytest.approx(10.0, rel=1e-6)
+    # u(dB) = g u(M) with g ~ 1/M, so the reported deviation shrinks by 10x.
+    assert loud.standard / quiet.standard == pytest.approx(0.1, rel=1e-6)
+
+
+def test_silence_guard_band_passes_below_and_fails_above() -> None:
+    below = silence_uncertainty(
+        -40.0, -30.0, 72_000, window_duration_s=1.5, min_silence_duration_s=0.5
+    )
+    assert below.decision.outcome is VerificationOutcome.PASS
+    above = silence_uncertainty(
+        -20.0, -30.0, 72_000, window_duration_s=1.5, min_silence_duration_s=0.5
+    )
+    assert above.decision.outcome is VerificationOutcome.FAIL
+
+
+def test_silence_guard_band_abstains_on_a_straddle() -> None:
+    budget = silence_uncertainty(
+        -30.0, -30.0, 72_000, window_duration_s=1.5, min_silence_duration_s=0.5
+    )
+    assert budget.decision.outcome is VerificationOutcome.ABSTAIN_INSUFFICIENT_EVIDENCE
+    assert budget.decision.interval_low < -30.0 < budget.decision.interval_high
+
+
+def test_the_finite_window_term_is_zero_without_durations() -> None:
+    quantisation_only = silence_uncertainty(-40.0, -30.0, 48_000)
+    with_window = silence_uncertainty(
+        -40.0, -30.0, 48_000, window_duration_s=1.5, min_silence_duration_s=0.5
+    )
+    assert with_window.combined.variance > quantisation_only.combined.variance
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"sample_count": 1},
+        {"bit_depth": 0},
+        {"window_duration_s": -1.0},
+        {"min_silence_duration_s": -1.0},
+        {"window_duration_s": 0.5, "min_silence_duration_s": 1.0},
+        {"coverage_probability": 0.0},
+        {"coverage_probability": 1.0},
+        {"sample_count": True},
+    ],
+)
+def test_silence_uncertainty_refuses_unusable_inputs(overrides: dict[str, object]) -> None:
+    base: dict[str, object] = {"rms_db": -40.0, "threshold_db": -30.0, "sample_count": 48_000}
+    base.update(overrides)
+    with pytest.raises(GUMInputError):
+        silence_uncertainty(**base)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    ("rms", "threshold"),
+    [(math.inf, -30.0), (-40.0, math.nan), (-40.0, math.inf)],
+)
+def test_silence_uncertainty_refuses_non_finite_levels(rms: float, threshold: float) -> None:
+    with pytest.raises(GUMInputError):
+        silence_uncertainty(rms, threshold, 48_000)
+
+
+def test_the_normal_quantile_covers_both_tails_and_is_symmetric() -> None:
+    low = _normal_quantile(0.01)
+    high = _normal_quantile(0.99)
+    assert low == pytest.approx(-high, rel=1e-12)
+    assert low < 0.0 < high
+    assert _normal_quantile(0.5) == pytest.approx(0.0, abs=1e-12)
+
+
+def test_silence_expanded_property_matches_the_decision() -> None:
+    budget = silence_uncertainty(-40.0, -30.0, 48_000)
+    assert budget.expanded == budget.decision.expanded_uncertainty
+
+
+def test_silence_refuses_a_level_that_underflows_to_zero() -> None:
+    with pytest.raises(GUMInputError):
+        silence_uncertainty(-4000.0, -30.0, 48_000)
+
+
+@pytest.mark.parametrize("strength", [0.0, 1.0, -0.1, 1.1])
+def test_synthetic_scene_cut_histograms_refuse_out_of_range_strengths(strength: float) -> None:
+    """The test-only generator still validates its input."""
+    with pytest.raises(GUMInputError, match="threshold must be in"):
+        synthetic_scene_cut_histograms(strength)

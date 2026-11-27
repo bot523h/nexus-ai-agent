@@ -2982,7 +2982,7 @@ positive semi-definiteness for `n >= 3` at construction (Gershgorin bound, then 
 deterministic Jacobi spectrum) while `combine` clamps cancellation noise instead
 of raising, because construction now owns the invariant. `W02`, `W11`, `W12`,
 `W18` and `W19`–`W23` are the mutants that pin these decisions
-(`tests/mutation/test_w11x_mutations.py`, 23/23 killed).
+(`tests/mutation/test_w11x_mutations.py`, **30/30 killed** after phase 3 added `W24`–`W30`).
 
 **Consequence.** A singular-but-PSD covariance stays legal (identical inputs are
 a legitimate degenerate case) and propagates to `u = 0`; a materially negative
@@ -3018,3 +3018,44 @@ check that no production caller builds an ungated registry).
 **Consequence.** The license dimension is a *claim*: a caller that declares no
 contributing sources makes no license claim (`outcome == "no_license_declared"`)
 and the guard band still runs; a declared incompatible set refuses outright.
+
+**Phase-3 addendum (2026-11-27).** The gate's *runtime* wiring had two holes that
+the phase-2 policy tests could not see. First, `admitted is False` was treated as
+the only refusal, so an unbound gate (`admitted is None`, `outcome ==
+"not_configured"`) slipped through every handler — a violation of law R31. Every
+handler now requires `admitted is True`; an unbound or abstained gate refuses.
+Second, only `assess_loudness` called the gate for its measurement kind;
+`mark_scene_cuts` and `mark_silences` checked the licence only. Both now call
+`gate_perception(kind="scene_cut"|"silence")` and fail closed on
+`ABSTAIN_INSUFFICIENT_EVIDENCE`, attaching the GUM telemetry (`combined_u`,
+`expanded_U`, `nu_eff`, `decision`) to the refusal record. `silence_uncertainty`
+propagates the level-aware mean-square variance with `q = 2/(2**bit_depth - 1)`
+and a finite-window term, and expands a two-sided `coverage_probability` through
+the normal quantile. `W24`–`W30` pin these decisions; the campaign is 30/30.
+
+**Phase-3b addendum (2026-11-27) — measurement integrity (invariant 8).** The
+runtime wiring was correct but the *inputs* were circular. `mark_silences` sent
+`rms_db = evidence.noise_floor_db`, and `mark_scene_cuts` let the gate synthesise
+histograms from `SceneCutEvidence.threshold`. Both are **detector configuration**,
+not measurements: changing the threshold would have moved the estimate, and a
+`PASS` would have restated the claim it was supposed to test. The fix is a data
+contract, not a heuristic:
+
+* `SilenceSpan` / `SilenceEvidence` carry optional `measured_rms_db` and
+  `sample_count` (plus a real `sample_rate_hz`); `noise_floor_db` is passed to
+  the gate only as the **decision threshold**. Without a measured level (or a
+  positive sample count) `gate_silence` returns
+  `ABSTAIN_INSUFFICIENT_EVIDENCE` with
+  `refusal == "insufficient_evidence: missing_measured_rms_db"` (or
+  `missing_sample_count`). `_mark_silences` publishes nothing.
+* `SceneCutEvidence` carries optional normalised `hist_before` / `hist_after`
+  (validated: equal bin count, finite, non-negative, sum to 1) and
+  `sample_count_before` / `sample_count_after`. `gate_scene_cut` refuses without
+  them (`insufficient_evidence: missing_frame_histograms`); it never calls the
+  synthetic generator, which moved to `adapters.synthetic_scene_cut_histograms`
+  and is documented as a test-only mathematical fixture.
+* `W31`–`W34` pin the four new refusals; the campaign is 34/34. The falsifiability
+  tests prove the *estimate* stays at the measured level when the detector
+  threshold moves, and that two cuts with the same threshold but different frames
+  get different JSD verdicts.
+

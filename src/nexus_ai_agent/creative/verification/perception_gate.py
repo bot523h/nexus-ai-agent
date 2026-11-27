@@ -13,7 +13,8 @@ such a command is worth dispatching:
 ``creative.packs``/``studio``/``temporal`` only, see ``MODULE_MAP.md`` R31), so the
 public port is *plain data*: a mapping in, a mapping out.
 
-``{"kind": "loudness"|"license", ...}`` -> ``{"admitted", "outcome", "refusal", ...}``
+``{"kind": "loudness"|"scene_cut"|"silence"|"license", ...}``
+-> ``{"admitted", "outcome", "refusal", ...}``
 
 :func:`gate_perception` is the single entry point
 (:class:`~nexus_ai_agent.creative.packs.perception.operations.PerceptionGate`),
@@ -34,6 +35,7 @@ from nexus_ai_agent.creative.composition.license_lattice import (
     combine_licenses,
 )
 
+from .adapters import scene_cut_uncertainty, silence_uncertainty
 from .loudness import loudness_budget
 from .uncertainty_gum import (
     GuardBandDecision,
@@ -50,6 +52,8 @@ __all__ = [
     "gate_licenses",
     "gate_loudness",
     "gate_perception",
+    "gate_scene_cut",
+    "gate_silence",
     "parse_regimes",
 ]
 
@@ -207,15 +211,171 @@ def gate_loudness(context: object) -> dict[str, Any]:
     return record
 
 
+def _insufficient_evidence(reason: str, **extra: Any) -> dict[str, Any]:
+    """A fail-closed abstention: no measurement means no gated claim."""
+    record: dict[str, Any] = {
+        "outcome": VerificationOutcome.ABSTAIN_INSUFFICIENT_EVIDENCE.value,
+        "admitted": False,
+        "refusal": f"insufficient_evidence: {reason}",
+        "recommended_gain_db": None,
+    }
+    record.update(extra)
+    return record
+
+
+def gate_scene_cut(context: object) -> dict[str, Any]:
+    """GUM guard band over one candidate scene cut's *measured* divergence.
+
+    The gate only accepts **empirical** frame histograms (``hist_before`` /
+    ``hist_after``, normalised bin probabilities) with a positive sample count.
+    The detector ``threshold`` is *not* a measurement and is never used to
+    synthesise a histogram: a divergence built from the threshold would restate
+    the claim. Without real histograms the honest answer is
+    ``ABSTAIN_INSUFFICIENT_EVIDENCE``.
+    """
+    payload = _mapping(context, "gate context")
+    cut_threshold = _finite(payload.get("cut_threshold_bits", 0.02), "cut_threshold_bits")
+    if cut_threshold <= 0.0:
+        raise GUMInputError(f"cut_threshold_bits must be positive, got {cut_threshold!r}")
+    coverage = _finite(payload.get("coverage_factor", 2.0), "coverage_factor")
+    if coverage <= 0.0:
+        raise GUMInputError("coverage_factor must be positive")
+    samples = payload.get("samples_per_histogram", 4096)
+    if isinstance(samples, bool) or not isinstance(samples, int):
+        raise GUMInputError("samples_per_histogram must be an int")
+    before = payload.get("hist_before")
+    after = payload.get("hist_after")
+    if before is None or after is None:
+        return _insufficient_evidence(
+            "missing_frame_histograms",
+            limit=cut_threshold,
+            coverage_factor=coverage,
+        )
+    if not isinstance(before, Sequence) or not isinstance(after, Sequence):
+        raise GUMInputError("hist_before/hist_after must be sequences of bin probabilities")
+    if len(before) != len(after) or not before:
+        return _insufficient_evidence(
+            "inconsistent_frame_histograms",
+            limit=cut_threshold,
+            coverage_factor=coverage,
+        )
+    budget = scene_cut_uncertainty(
+        before,
+        after,
+        samples_per_histogram=samples,
+        samples_per_histogram_after=payload.get("samples_per_histogram_after"),
+    )
+    decision = evaluate_guard_band(
+        budget.js_divergence,
+        budget.combined,
+        SpecificationLimits(lower=cut_threshold),
+        coverage,
+    )
+    admitted = decision.outcome is VerificationOutcome.PASS
+    record: dict[str, Any] = {
+        "outcome": decision.outcome.value,
+        "admitted": admitted,
+        "refusal": None,
+        "recommended_gain_db": None,
+        "js_divergence": budget.js_divergence,
+        "combined_u": budget.combined.standard,
+        "expanded_U": decision.expanded_uncertainty,
+        "nu_eff": decision.effective_dof,
+        "decision": decision.outcome.value,
+        "interval": [decision.interval_low, decision.interval_high],
+        "limit": cut_threshold,
+        "samples_per_histogram": samples,
+        "coverage_factor": coverage,
+    }
+    if not admitted:
+        record["refusal"] = (
+            f"scene-cut divergence {budget.js_divergence:.6f} bits does not clear the "
+            f"{cut_threshold:.6f}-bit threshold outside the guard band "
+            f"[{decision.interval_low:.6f}, {decision.interval_high:.6f}]"
+        )
+    return record
+
+
+def gate_silence(context: object) -> dict[str, Any]:
+    """GUM guard band over one candidate silence segment's **measured** RMS level.
+
+    ``measured_rms_db`` is the empirical level of the signal; ``threshold_db`` is
+    the decision threshold (normally the detector's ``noise_floor_db``). The two
+    must never be the same value by construction: substituting the threshold for
+    the measurement is a circular claim, so a missing measurement abstains.
+    """
+    payload = _mapping(context, "gate context")
+    measured = payload.get("measured_rms_db")
+    if measured is None:
+        measured = payload.get("rms_db")
+    if measured is None:
+        return _insufficient_evidence("missing_measured_rms_db")
+    samples = payload.get("sample_count")
+    if samples is None:
+        return _insufficient_evidence("missing_sample_count")
+    if isinstance(samples, bool) or not isinstance(samples, int):
+        raise GUMInputError("sample_count must be an int")
+    if samples <= 0:
+        return _insufficient_evidence("non_positive_sample_count", sample_count=samples)
+    _required(payload, ("threshold_db",))
+    rms = _finite(measured, "measured_rms_db")
+    threshold = _finite(payload["threshold_db"], "threshold_db")
+    bit_depth = payload.get("bit_depth", 16)
+    if isinstance(bit_depth, bool) or not isinstance(bit_depth, int):
+        raise GUMInputError("bit_depth must be an int")
+    probability = _finite(payload.get("coverage_probability", 0.95), "coverage_probability")
+    budget = silence_uncertainty(
+        rms,
+        threshold,
+        samples,
+        bit_depth=bit_depth,
+        window_duration_s=_finite(payload.get("window_duration_s", 0.0), "window_duration_s"),
+        min_silence_duration_s=_finite(
+            payload.get("min_silence_duration_s", 0.0), "min_silence_duration_s"
+        ),
+        coverage_probability=probability,
+    )
+    decision = budget.decision
+    admitted = decision.outcome is VerificationOutcome.PASS
+    record: dict[str, Any] = {
+        "outcome": decision.outcome.value,
+        "admitted": admitted,
+        "refusal": None,
+        "recommended_gain_db": None,
+        "rms_db": budget.rms_db,
+        "threshold_db": budget.threshold_db,
+        "mean_square": budget.mean_square,
+        "combined_u": budget.combined.standard,
+        "expanded_U": decision.expanded_uncertainty,
+        "nu_eff": decision.effective_dof,
+        "decision": decision.outcome.value,
+        "interval": [decision.interval_low, decision.interval_high],
+        "coverage_probability": probability,
+    }
+    if not admitted:
+        record["refusal"] = (
+            f"silence RMS {budget.rms_db:.3f} dBFS is not below {budget.threshold_db:.3f} dBFS "
+            f"outside the guard band [{decision.interval_low:.3f}, "
+            f"{decision.interval_high:.3f}]"
+        )
+    return record
+
+
 def gate_perception(context: object) -> dict[str, Any]:
     """The pack's single admission port: dispatch on ``context["kind"]``."""
     payload = _mapping(context, "gate context")
     kind = payload.get("kind", "loudness")
     if kind == "loudness":
         return gate_loudness(payload)
+    if kind == "scene_cut":
+        return gate_scene_cut(payload)
+    if kind == "silence":
+        return gate_silence(payload)
     if kind == "license":
         return gate_licenses(payload)
-    raise GUMInputError(f"unknown gate kind {kind!r}; expected 'loudness' or 'license'")
+    raise GUMInputError(
+        f"unknown gate kind {kind!r}; expected 'loudness', 'scene_cut', 'silence' or 'license'"
+    )
 
 
 @dataclass(frozen=True, slots=True)
