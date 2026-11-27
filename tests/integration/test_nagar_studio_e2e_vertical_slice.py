@@ -65,6 +65,7 @@ from nexus_ai_agent.nagar.ibpc.authority import StudioAction, StudioRole
 from nexus_ai_agent.nagar.ibpc.execution_outbox import (
     DurableExecutionOutboxStore,
     ExecutionOutboxCoordinator,
+    derive_idempotency_key,
 )
 from nexus_ai_agent.nagar.ibpc.models import ApprovalBinding, PrivacyMode
 from nexus_ai_agent.nagar.ibpc.privacy import PrivacyPolicy
@@ -900,6 +901,225 @@ class TestSecondRevisionAndDisasterRecovery:
             assert governor.active_leases == 0
         finally:
             governor.shutdown()
+
+
+# --------------------------------------------------------------------------- #
+# 12. Negative paths, through the *wired* deployment
+# --------------------------------------------------------------------------- #
+class TestTheWiredDeploymentHasTeeth:
+    """The slice must not merely prove the happy path works.
+
+    A composition test earns its keep by refusing what the production objects
+    refuse.  Each test below drives a real negative case through the same seeded
+    deployment the happy path used, so the refusal is the wired system's answer
+    rather than a unit test's.
+    """
+
+    def test_a_tampered_readback_is_not_wysiwys_verifiable(self, world: _Slice) -> None:
+        import dataclasses
+
+        readback = world.readback(revision_id="rev-1", revision_number=1)
+        assert verify_wysiwys_readback(readback, expected_digest=readback.preview_digest)
+
+        # A forger pastes a raw timebase tuple straight onto the stored object,
+        # bypassing the coercing constructor — the exact attack the digest exists
+        # to defeat.
+        forged = dataclasses.replace(readback, preview_digest="")
+        object.__setattr__(forged, "timebase", (25, 1))
+        object.__setattr__(forged, "preview_digest", readback.preview_digest)
+        assert verify_wysiwys_readback(forged) is False, (
+            "a readback with a swapped timebase must never verify"
+        )
+
+    def test_an_approval_bound_to_another_digest_is_refused(self, world: _Slice) -> None:
+        readback = world.readback(revision_id="rev-1", revision_number=1)
+        other_digest = "sha256:" + "e" * 64
+        assert verify_wysiwys_readback(readback, expected_digest=other_digest) is False, (
+            "a readback must not verify against a digest it does not hash to"
+        )
+
+    def test_a_symlinked_asset_cannot_be_pinned(self, world: _Slice) -> None:
+        from nexus_ai_agent.creative.studio.revision_pinning import (
+            AssetPinViolationError,
+        )
+
+        world.write_asset("real.mp4", b"real bytes")
+        link = world.assets / "link.mp4"
+        link.symlink_to(world.assets / "real.mp4")
+        with pytest.raises(AssetPinViolationError) as excinfo:
+            world.pins.pin_asset_from_disk(
+                asset_id="asset-link",
+                file_path=link,
+                authorized_asset_root=world.assets,
+            )
+        assert excinfo.value.reason == "symlink_rejected"
+
+    def test_an_asset_outside_the_authorized_root_cannot_be_pinned(self, world: _Slice) -> None:
+        from nexus_ai_agent.creative.studio.revision_pinning import (
+            AssetPinViolationError,
+        )
+
+        outside = world.root / "outside.mp4"
+        outside.write_bytes(b"secret")
+        with pytest.raises(AssetPinViolationError) as excinfo:
+            world.pins.pin_asset_from_disk(
+                asset_id="asset-escape",
+                file_path=outside,
+                authorized_asset_root=world.assets,
+            )
+        assert excinfo.value.reason == "path_escape"
+
+    def test_a_payload_naming_another_scope_is_refused_before_any_write(
+        self, world: _Slice
+    ) -> None:
+        from nexus_ai_agent.nagar.ibpc.execution_outbox import ExecutionOutboxConflictError
+
+        world.seed()
+        session = world.open_session()
+        turn = world.sessions.begin_turn(
+            session.session_id, "turn-1", sequence_number=1, project_revision=0
+        )
+        readback = world.readback(revision_id="rev-1", revision_number=1)
+        payload = _plan_payload(
+            session_id=session.session_id,
+            turn_id=turn.turn_id,
+            revision_id="rev-1",
+            preview_hex=readback.preview_digest.split(":", 1)[1],
+        )
+        # The payload claims a *different* tenant than the row it is staged on.
+        payload["tenant_id"] = "tenant-other"
+        key = derive_idempotency_key(
+            tenant_id=TENANT,
+            project_id=PROJECT,
+            session_id=session.session_id,
+            turn_id=turn.turn_id,
+            approval_id="appr-1",
+            revision_jcs_sha256="sha256:" + "d" * 64,
+        )
+        with pytest.raises(ExecutionOutboxConflictError) as excinfo:
+            world.outbox.stage_intent(
+                idempotency_key=key,
+                tenant_id=TENANT,
+                project_id=PROJECT,
+                session_id=session.session_id,
+                turn_id=turn.turn_id,
+                principal_id=OWNER_ID,
+                approval_id="appr-1",
+                revision_id="rev-1",
+                revision_jcs_sha256="sha256:" + "d" * 64,
+                plan_payload=payload,
+            )
+        assert excinfo.value.reason == "payload_scope_mismatch"
+        # Nothing was written: the refusal happens before the insert.
+        assert world.outbox.list_in_flight(limit=10) == ()
+
+    def test_the_same_intent_key_with_a_different_payload_conflicts(self, world: _Slice) -> None:
+        from nexus_ai_agent.nagar.ibpc.execution_outbox import ExecutionOutboxConflictError
+
+        world.seed()
+        session = world.open_session()
+        turn = world.sessions.begin_turn(
+            session.session_id, "turn-1", sequence_number=1, project_revision=0
+        )
+        readback = world.readback(revision_id="rev-1", revision_number=1)
+        payload = _plan_payload(
+            session_id=session.session_id,
+            turn_id=turn.turn_id,
+            revision_id="rev-1",
+            preview_hex=readback.preview_digest.split(":", 1)[1],
+        )
+        key = derive_idempotency_key(
+            tenant_id=TENANT,
+            project_id=PROJECT,
+            session_id=session.session_id,
+            turn_id=turn.turn_id,
+            approval_id="appr-1",
+            revision_jcs_sha256="sha256:" + "d" * 64,
+        )
+        common = dict(
+            idempotency_key=key,
+            tenant_id=TENANT,
+            project_id=PROJECT,
+            session_id=session.session_id,
+            turn_id=turn.turn_id,
+            principal_id=OWNER_ID,
+            approval_id="appr-1",
+            revision_id="rev-1",
+            revision_jcs_sha256="sha256:" + "d" * 64,
+        )
+        row, created = world.outbox.stage_intent(plan_payload=payload, **common)
+        assert created is True
+        # The same key replayed with the *same* payload is idempotent ...
+        replay, created_again = world.outbox.stage_intent(plan_payload=payload, **common)
+        assert created_again is False
+        assert replay.outbox_id == row.outbox_id
+        # ... but with a different payload it is a conflict, never an overwrite.
+        changed = dict(payload)
+        changed["operations"] = [{"op": "preview.sample_cut", "clip": "clip-2"}]
+        with pytest.raises(ExecutionOutboxConflictError) as excinfo:
+            world.outbox.stage_intent(plan_payload=changed, **common)
+        assert excinfo.value.reason == "payload_conflict"
+        # The stored row still describes the *first* payload.
+        stored = world.outbox.get(idempotency_key=key)
+        assert stored is not None
+        assert stored.outbox_id == row.outbox_id
+        assert stored.plan_payload["operations"] == payload["operations"]
+
+    def test_the_real_builder_refuses_a_float_before_it_reaches_the_digest(
+        self, world: _Slice
+    ) -> None:
+        from nexus_ai_agent.creative.studio.preview_readback import PreviewReadbackError
+
+        world.seed()
+        builder = StudioPreviewReadbackBuilder(
+            tenant_id=TENANT,
+            project_id=PROJECT,
+            revision_id="rev-float",
+            revision_number=1,
+            principal_id=OWNER_ID,
+            timebase=NTSC,
+        )
+        # A float is the one input that would silently reintroduce rounding into
+        # a system whose whole timing contract is exact.
+        with pytest.raises(PreviewReadbackError) as excinfo:
+            ParameterReadbackDelta.numeric(
+                "opacity",
+                1,
+                0.5,
+                labels={"fa": "شفافیت", "en": "Opacity"},
+                unit="%",
+            )
+        assert excinfo.value.reason == "invalid_time"
+        with pytest.raises(PreviewReadbackError):
+            builder.add_operation(
+                operation="preview.sample_cut",
+                target_clip_id="clip-float",
+                span=RationalTimeSpan.of(0.0, 1.0),
+                labels={"fa": "برش", "en": "Cut"},
+            )
+
+    def test_a_restore_of_a_tampered_bundle_is_never_performed(self, world: _Slice) -> None:
+        from nexus_ai_agent.creative.studio.production_dr import DisasterRecoveryError
+
+        world.seed()
+        key = BackupKeyMaterial.generate("bk-teeth")
+        manager = StudioDisasterRecoveryManager(world.root / "dr-teeth", key_material=key)
+        bundle = manager.create_hot_backup(database_path=world.auth_path, labels={"wave": "6a"})
+        # Flip one byte of the snapshot: the manifest digest no longer matches.
+        snapshot = manager.backup_root / bundle.bundle_id / bundle.backup_filename
+        assert snapshot.is_file(), snapshot
+        raw = bytearray(snapshot.read_bytes())
+        raw[-1] ^= 0xFF
+        snapshot.write_bytes(bytes(raw))
+        target = world.root / "restored" / "auth.sqlite3"
+        with pytest.raises(DisasterRecoveryError) as excinfo:
+            manager.restore_from_backup(
+                manager.backup_root / bundle.bundle_id,
+                target_database_path=target,
+                key_material=key,
+            )
+        assert excinfo.value.reason == "backup_unverified"
+        assert not target.exists(), "a refused restore must leave no target behind"
 
 
 # --------------------------------------------------------------------------- #

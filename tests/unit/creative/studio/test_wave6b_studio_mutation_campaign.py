@@ -250,6 +250,57 @@ class TestHarnessMechanics:
         # never seed the cache it is about to reason about.
         assert sys.dont_write_bytecode is True
 
+    def test_the_suite_for_a_mutant_is_the_module_that_owns_its_kill_target(
+        self, harness: ModuleType
+    ) -> None:
+        for mutation in harness.MUTATIONS:
+            suite = harness._suite_for(mutation)
+            assert suite == mutation.expected_node_ids[0].split("::", 1)[0], mutation.name
+            assert (ROOT / suite).is_file(), suite
+
+    def test_the_redundancy_probe_runs_both_the_unit_suite_and_the_slice(
+        self, harness: ModuleType, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The planner must ask *both* questions and fail when nothing catches it."""
+        calls: list[tuple[str, ...]] = []
+
+        class _Result:
+            def __init__(self, returncode: int) -> None:
+                self.returncode = returncode
+                self.stdout = ""
+                self.stderr = ""
+
+        # First call (the unit suite) fails, second (the slice) fails, third and
+        # fourth pass -- so one mutant is "both" and one is "neither".
+        verdicts = iter([1, 1, 0, 0])
+        seen: list[str] = []
+
+        def _fake_run_pytest(targets: list[str]) -> _Result:
+            calls.append(tuple(targets))
+            return _Result(next(verdicts))
+
+        monkeypatch.setattr(harness, "_run_pytest", _fake_run_pytest)
+        monkeypatch.setattr(harness, "MUTATIONS", harness.MUTATIONS[:2])
+        original_write_bytes = Path.write_bytes
+
+        def _noop_write_bytes(self: Path, data: bytes) -> int:
+            # The planner mutates real files; keep them untouched here.
+            seen.append(str(self))
+            return len(data)
+
+        monkeypatch.setattr(Path, "write_bytes", _noop_write_bytes)
+        try:
+            exit_code = harness.redundancy_report()
+        finally:
+            monkeypatch.setattr(Path, "write_bytes", original_write_bytes)
+
+        assert exit_code == 1, "a mutant nothing catches must make the probe fail"
+        assert len(calls) == 4
+        for mutation in harness.MUTATIONS[:2]:
+            assert (harness._suite_for(mutation),) in calls
+            assert (harness.SLICE,) in calls
+        assert seen, "the planner must actually attempt to apply each mutant"
+
     def test_the_pytest_runner_is_pyc_free_and_repo_rooted(
         self, harness: ModuleType, monkeypatch: pytest.MonkeyPatch
     ) -> None:

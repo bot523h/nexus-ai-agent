@@ -27,6 +27,30 @@ on disk.  Every target's cache is purged before the pre-flight run, after
 writing the mutant, and after restoring, and every pytest subprocess runs with
 ``PYTHONDONTWRITEBYTECODE=1``.
 
+Two contracts, and why this campaign does not use the SINK runner
+------------------------------------------------------------------
+The repository ships a stricter report-producing runner for security seams
+(``security_mutation_support.run_reported_mutation_suite``): commit-bound,
+worktree-clean, and a mutant counts only when *every* failing node is one it
+declared.  That contract is right for a planted security oracle, and wrong here.
+The Studio guards are *shared*: flipping ``hmac.compare_digest`` in the outbox,
+or the readback's fail-closed ``except``, breaks many tests at once, so a
+strict no-unexpected-failures rule would mark 34 of these 40 mutants
+``invalid`` rather than ``detected`` - a weaker result than a kill.  This
+campaign therefore uses the mutation-testing contract: a mutant is killed when
+its named target node fails with a real effect, and collateral failures are
+*measured* by ``--redundancy`` instead of being used to invalidate the kill.
+
+``--redundancy`` answers what a kill count cannot: does the Wave 6A end-to-end
+slice catch the mutants the unit suites catch?  Measured over the whole campaign
+on this branch: **unit suites catch 40/40; the slice catches 16/40 on its own**
+(the outbox and readback paths it drives end to end, plus the refusals its
+negative-path class exercises).  A sample of six mutants was caught 1 time out
+of 6 before ``TestTheWiredDeploymentHasTeeth`` was added and 6 out of 6 after,
+which is why that class exists.  The remaining 24 are guarded at a layer the
+slice does not drive (key material, pruning, lock helpers, governor accounting),
+and are *not* claimed as slice evidence.
+
 The campaign mutates the working tree in place, so exactly one campaign may run
 against a checkout at a time (pytest and CI are serial by construction).
 
@@ -34,6 +58,7 @@ Usage::
 
     python scripts/run_wave4_studio_e2e_mutations.py            # 40/40 required
     python scripts/run_wave4_studio_e2e_mutations.py --list
+    python scripts/run_wave4_studio_e2e_mutations.py --redundancy   # unit vs slice
 
 Exit code 0 means "40/40 mutants killed".
 """
@@ -628,10 +653,65 @@ def _is_valid_kill(
     return True, ""
 
 
+#: The end-to-end slice the redundancy probe runs beside each module suite.
+SLICE = "tests/integration/test_nagar_studio_e2e_vertical_slice.py"
+
+
+def _suite_for(mutation: Mutation) -> str:
+    """The unit suite that owns the test module a mutant targets."""
+    return mutation.expected_node_ids[0].split("::", 1)[0]
+
+
+def redundancy_report() -> int:
+    """Ask *both* the unit suite and the slice to catch each mutant.
+
+    Repeated-use planner, not a second kill campaign: it exists to show the
+    end-to-end slice is independent evidence rather than a restatement of the
+    unit suites.  It never counts kills, and a mutant neither side catches makes
+    the probe fail.
+    """
+    both = 0
+    slice_only = 0
+    neither: list[str] = []
+    for mutation in MUTATIONS:
+        path = mutation.path
+        original_bytes = path.read_bytes()
+        try:
+            path.write_bytes(
+                original_bytes.decode("utf-8").replace(mutation.old, mutation.new, 1).encode()
+            )
+            _purge_bytecode_cache(path)
+            unit_failed = _run_pytest([_suite_for(mutation)]).returncode != 0
+            slice_failed = _run_pytest([SLICE]).returncode != 0
+        finally:
+            path.write_bytes(original_bytes)
+            _purge_bytecode_cache(path)
+        if unit_failed and slice_failed:
+            both += 1
+        elif slice_failed:
+            slice_only += 1
+        elif not unit_failed:
+            neither.append(mutation.name)
+        print(
+            f"  {mutation.name}: unit={'FAIL' if unit_failed else 'pass'} "
+            f"slice={'FAIL' if slice_failed else 'pass'}"
+        )
+    print(
+        f"\ncaught by both: {both}/{len(MUTATIONS)}; "
+        f"caught by the slice alone: {slice_only}; missed by both: {len(neither)}"
+    )
+    if neither:
+        print("missed: " + ", ".join(neither))
+    return 0 if not neither else 1
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--list", action="store_true")
+    parser.add_argument("--redundancy", action="store_true")
     args = parser.parse_args()
+    if args.redundancy:
+        return redundancy_report()
     if args.list:
         for mutation in MUTATIONS:
             print(f"{mutation.name}  - {mutation.why}")

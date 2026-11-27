@@ -121,6 +121,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The bytecode lesson from W6.7 is applied throughout: every target's `__pycache__`
   is purged before the pre-flight run, after writing a mutant, and after restoring,
   and each pytest subprocess runs with `PYTHONDONTWRITEBYTECODE=1`.
+  **The slice is independent evidence, measured.** `--redundancy` applies every
+  mutant against both its unit suite and the Wave 6A slice: the unit suites catch
+  40/40, and the slice catches 16/40 on its own. A six-mutant sample went from
+  1/6 to 6/6 after the slice grew `TestTheWiredDeploymentHasTeeth` — negative
+  paths (a tampered readback, an approval bound to another digest, a symlinked and
+  an escaping asset, a payload naming another scope, a same-key-different-payload
+  conflict, a float at the builder, a tampered bundle refused by restore) driven
+  through the same seeded deployment as the happy path. The other 24 are guarded
+  at a layer the slice does not drive and are *not* claimed as slice evidence.
+  One contract note is recorded rather than discovered later: this campaign uses
+  the mutation-testing kill rule (named target node + real failure), not the SINK
+  runner's strict no-collateral-failures rule, because these Studio guards are
+  shared and 34 of 40 would be marked `invalid` under it — a weaker result than a
+  kill. Bumping `security_mutation_support`'s hardcoded `len(expected_ids) == 14`
+  to reuse that runner was deliberately avoided: it would change the acceptance
+  semantics of the two security campaigns that ship with it.
   `tests/unit/creative/studio/test_wave6b_studio_mutation_campaign.py` pins the
   campaign's shape offline (40 mutants, M01-M40, eight per module, no duplicate
   edits, every anchor unique, every mutant parses and differs, every kill target a
