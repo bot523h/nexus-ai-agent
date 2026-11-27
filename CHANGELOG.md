@@ -95,6 +95,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   restored file is usable, not merely byte-identical. A governor test runs the
   slice under real threads, and two invariants assert no float ever reaches a
   persisted readback payload and nothing is written outside the temp root.
+- **Wave 6B — the adversarial mutation campaign.** `scripts/run_wave4_studio_e2e_mutations.py`
+  takes the five shipped Studio execution modules and rewrites one guard at a
+  time: **40 mutants, eight per module**, every one anchored on a single source
+  occurrence, every one restored byte-for-byte in a `finally` block and verified
+  by SHA-256. A mutant is credited `VALID_KILL` only when pytest exits 1, the
+  output carries no infrastructure marker, a named target node appears on a
+  `FAILED` line, and the failure is a real effect (an assertion, a raised
+  exception, or a `DID NOT RAISE`).
+  Campaign result: **40/40 killed**.
+  The harness also fixes a truth about this codebase worth writing down: it is
+  the campaign, not the test suite, that found the gaps. Six mutants survived the
+  first honest run for three distinct reasons, and each is now recorded in the
+  campaign rather than glossed over —
+  * **redundant defence-in-depth** (asset pins are sorted twice, the envelope and
+    the store; the approval ledger and the outbox both refuse a replay) is
+    *unobservable* at the store layer, so those mutants were re-pointed at the
+    guard that is actually load-bearing;
+  * **`JCS_RFC8785_V2` and `LEGACY_JSON_V1` produce byte-identical digests** for
+    every payload these modules can build (no floats, no `-0.0`, no `NaN`), so
+    swapping the scheme is a *true equivalent mutant* and a poor mutation — those
+    six were replaced by payload-field deletions that the suites do see;
+  * **a mutated guard can be lethal to a different test than the one you guessed**,
+    which is why targets are now read off an actual failure run, not assumed.
+  The bytecode lesson from W6.7 is applied throughout: every target's `__pycache__`
+  is purged before the pre-flight run, after writing a mutant, and after restoring,
+  and each pytest subprocess runs with `PYTHONDONTWRITEBYTECODE=1`.
+  `tests/unit/creative/studio/test_wave6b_studio_mutation_campaign.py` pins the
+  campaign's shape offline (40 mutants, M01-M40, eight per module, no duplicate
+  edits, every anchor unique, every mutant parses and differs, every kill target a
+  real `Class::test`, purge/kill-rule mechanics) in under a second, and holds the
+  end-to-end 40/40 proof behind `NEXUS_RUN_MUTATION_CAMPAIGN=1`.
 - The three reviewed architecture gates (`test_nagar_studio_isolation`,
   `test_slideshow_adapter_boundary`, `test_command_capability_boundary`) gain an
   explicit, minimal durable-state allowlist: the new state modules may use
