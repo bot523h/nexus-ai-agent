@@ -75,6 +75,18 @@ def test_ai_layers_cannot_import_nagar_executors_or_pack_handlers() -> None:
                 )
 
 
+#: The reviewed durable-state modules (pins, readback, disaster recovery).  They
+#: own files, SQLite snapshots and POSIX locks, so ``os``/``shutil`` are their
+#: working vocabulary — but never shells, sockets or UI automation.  Keep this
+#: set identical to ``DURABLE_STATE_MODULES`` in test_nagar_studio_isolation.py.
+DURABLE_STATE_MODULES = frozenset(
+    {"revision_pinning.py", "preview_readback.py", "production_dr.py"}
+)
+
+#: What a durable-state module still may never import here.
+DURABLE_STATE_STILL_FORBIDDEN = {"subprocess", "socket", "telegram", "playwright", "selenium"}
+
+
 def test_studio_core_cannot_execute_shell_media_or_ui_automation() -> None:
     """Narrow structural supplement to test_nagar_studio_isolation.py."""
     forbidden = {
@@ -91,6 +103,14 @@ def test_studio_core_cannot_execute_shell_media_or_ui_automation() -> None:
     }
     for path in sorted(STUDIO.rglob("*.py")):
         imports = _imports(_tree(path))
+        if path.name in DURABLE_STATE_MODULES:
+            # A durable-state module may own files, but not run anything: shells,
+            # sockets and UI drivers stay forbidden, and so does the renderer.
+            deny = (forbidden - {"os", "shutil"}) | DURABLE_STATE_STILL_FORBIDDEN
+            assert not imports & deny, (
+                f"{path.relative_to(ROOT)} (durable state) imports {sorted(imports & deny)}"
+            )
+            continue
         assert not imports & forbidden, f"{path.relative_to(ROOT)} imports {imports & forbidden}"
 
 

@@ -69,6 +69,9 @@ DURABLE_STATE_TOP_LEVEL = frozenset(
         "tempfile",
         "time",
         "collections",
+        # ``production_dr`` runs admitted blocking work in a bounded thread pool;
+        # ``concurrent.futures`` is the stdlib primitive, not a new dependency.
+        "concurrent",
     }
 )
 

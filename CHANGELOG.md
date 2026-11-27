@@ -58,10 +58,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   projection that is never used to decide identity); an NTSC one-frame move is
   `1001/30000` s exactly, and 10,000 cuts at 24000/1001, 30000/1001, 25/1 or 24/1
   land on their frame boundaries with zero drift.
-- The two reviewed architecture gates (`test_nagar_studio_isolation`,
-  `test_slideshow_adapter_boundary`) gain an explicit, minimal durable-state
-  allowlist: the new state modules may use SQLite/POSIX locks/paths and the one
-  canonicalization authority, and still may not touch pixels, audio or network.
+- **Wave 5 — hot backup, signed bundles, staged restore, admission control.**
+  `creative/studio/production_dr.py` removes three ways a Studio deployment loses
+  work. (1) *The backup that is not a backup*: `create_hot_backup` snapshots a live
+  database with `sqlite3.Connection.backup` (the only online-safe API — a
+  `shutil.copy` would tear the page cache and drop live `-wal` frames), then
+  records the copy's SHA-256 and byte size, every table's row count, and an
+  HMAC-SHA256 over the manifest. (2) *The restore that trusts what it is handed*:
+  `restore_from_backup` re-verifies the bundle, takes an `fcntl.flock` on the
+  target, quarantines the current database, stages the copy **beside** the target,
+  runs `PRAGMA integrity_check` on the staged file, deletes the stale `-wal`/`-shm`
+  that would otherwise be replayed onto the new pages, and only then `os.replace`s
+  it into place — a failure at any step leaves the target untouched.
+  `verify_backup_bundle` reports every problem it finds (bit flip, truncation,
+  unsigned manifest, foreign key, rewritten row counts, corrupt header) rather than
+  short-circuiting. (3) *The cancellation that over-admitted the machine*:
+  `StudioResourceGovernor.run_with_lease` **detaches** its `AdmissionLease` on
+  `asyncio.CancelledError` and releases the slot from a done-callback when the
+  worker thread actually finishes, so a cancelled coroutine cannot admit more
+  concurrent work than the box can take. `BackupKeyMaterial` keeps its secret out
+  of `repr`, `str` and any redacted dump.
+- The three reviewed architecture gates (`test_nagar_studio_isolation`,
+  `test_slideshow_adapter_boundary`, `test_command_capability_boundary`) gain an
+  explicit, minimal durable-state allowlist: the new state modules may use
+  SQLite/POSIX locks/paths/thread pools and the one canonicalization authority, and
+  still may not touch pixels, audio, network or shells.
 
 ### Fix — integrated-tree CI closure (session `arena/750b78f5-nexus-ai-agent`)
 

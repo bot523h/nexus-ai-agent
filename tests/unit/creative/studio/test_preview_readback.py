@@ -684,7 +684,7 @@ class TestBuilder:
 
     def test_default_labels_are_generated_in_both_languages(self) -> None:
         builder = _builder()
-        builder.add_operation(operation="timeline.mark", target_clip_id="clip-9", span=(0, 1))
+        builder.add_operation(operation="preview.sample_cut", target_clip_id="clip-9", span=(0, 1))
         labels = builder.build_readback().operations[0].labels
         assert set(labels) == {"fa", "en"}
         assert "clip-9" in labels["en"]
@@ -839,10 +839,10 @@ class TestCompareRevisions:
                 labels=operation.labels,
             )
         builder.add_operation(
-            operation="timeline.mark", target_clip_id="clip-3", span=(0, 1), labels=LABELS
+            operation="preview.sample_cut", target_clip_id="clip-3", span=(0, 1), labels=LABELS
         )
         report = compare_revisions(base, builder.build_readback())
-        assert report.added_operations == ("timeline.mark@clip-3",)
+        assert report.added_operations == ("preview.sample_cut@clip-3",)
         assert report.removed_operations == ()
         assert report.identical is False
 
