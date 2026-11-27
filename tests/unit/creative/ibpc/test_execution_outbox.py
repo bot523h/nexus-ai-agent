@@ -25,6 +25,7 @@ import pytest
 from nexus_ai_agent.nagar.ibpc.approval import ApprovalIdentity, DurableApprovalLedger
 from nexus_ai_agent.nagar.ibpc.execution_outbox import (
     ApprovalConsumptionError,
+    CompletionVerificationError,
     DurableExecutionOutboxStore,
     ExecutionOutboxConflictError,
     ExecutionOutboxCoordinator,
@@ -34,8 +35,10 @@ from nexus_ai_agent.nagar.ibpc.execution_outbox import (
     ExecutionOutboxTerminalError,
     OutboxRow,
     PollTimeoutError,
+    VerifiedExecutionCompletion,
     approval_identity_for,
     derive_idempotency_key,
+    derive_reserved_job_id,
     utc_now,
 )
 
@@ -106,6 +109,21 @@ def _payload(**overrides: Any) -> dict[str, Any]:
     return payload
 
 
+def _proof(
+    *, artifact_id: str = "artifact-1", passport_id: str = "passport-1", **overrides: Any
+) -> VerifiedExecutionCompletion:
+    """A well-formed verified completion (the only shape that may complete)."""
+    fields: dict[str, Any] = {
+        "artifact_id": artifact_id,
+        "artifact_sha256": "a" * 64,
+        "passport_id": passport_id,
+        "lineage_digest": "sha256:" + "b" * 64,
+        "verified_at_utc": "2026-11-27T00:00:00+00:00",
+    }
+    fields.update(overrides)
+    return VerifiedExecutionCompletion(**fields)
+
+
 def _store(tmp_path: Path, *, clock: _Clock | None = None) -> DurableExecutionOutboxStore:
     return DurableExecutionOutboxStore(tmp_path / "outbox.sqlite3", now=clock or _Clock())
 
@@ -126,19 +144,50 @@ class _Harness:
 
     # -- callbacks --------------------------------------------------------- #
 
-    def consume(self, approval_id: str, identity: ApprovalIdentity) -> None:
+    def consume(
+        self,
+        approval_id: str,
+        identity: ApprovalIdentity,
+        *,
+        job_id: str | None = None,
+        attempt: int = 1,
+    ) -> None:
+        """The default consume callback: a fake, and it stays one.
+
+        ``job_id``/``attempt`` are accepted (and deliberately ignored) because
+        the coordinator always presents the row's durable reservation.  Tests
+        that need the *real* single-use ledger build
+        :meth:`real_ledger_consume` instead — that is where the crash-window
+        recovery is proved.
+        """
+        del job_id, attempt
         if approval_id in self.consumed:
             raise RuntimeError("already_consumed")
         if identity.principal_id != PRINCIPAL:
             raise RuntimeError("identity_mismatch")
         self.consumed.append(approval_id)
 
-    def enqueue(self, *, idempotency_key: str, payload: dict[str, Any]) -> str:
+    def real_ledger_consume(
+        self,
+        approval_id: str,
+        identity: ApprovalIdentity,
+        *,
+        job_id: str | None = None,
+        attempt: int = 1,
+    ) -> None:
+        """Consume through the genuine :class:`DurableApprovalLedger`."""
+        self.ledger.consume(approval_id, identity=identity, job_id=job_id, attempt=attempt)
+        self.consumed.append(approval_id)
+
+    def enqueue(
+        self, *, idempotency_key: str, payload: dict[str, Any], job_id: str | None = None
+    ) -> str:
         for existing in self.enqueued:
             if existing["idempotency_key"] == idempotency_key:
                 return str(existing["job_id"])
-        job_id = f"job-{len(self.enqueued) + 1}"
-        self.enqueued.append({"idempotency_key": idempotency_key, "job_id": job_id})
+        resolved = job_id or f"job-{len(self.enqueued) + 1}"
+        self.enqueued.append({"idempotency_key": idempotency_key, "job_id": resolved})
+        job_id = resolved
         self.jobs[job_id] = {
             "status": "COMPLETED",
             "artifact_id": "artifact-1",
@@ -152,20 +201,25 @@ class _Harness:
     def await_slow(self, job_id: str) -> dict[str, Any]:
         return {"status": "PENDING", "artifact_id": "", "passport_id": ""}
 
-    def verify(self, row: OutboxRow, completion: Any) -> tuple[str, str]:
+    def verify(self, row: OutboxRow, completion: Any) -> VerifiedExecutionCompletion:
         self.verify_calls.append(row.outbox_id)
-        return str(completion.artifact_id), str(completion.passport_id)
+        return _proof(
+            artifact_id=str(completion.artifact_id),
+            passport_id=str(completion.passport_id),
+        )
 
     def build_coordinator(
         self,
         *,
         poll_timeout: float = 1.0,
-        verify: Callable[[OutboxRow, Any], tuple[str, str]] | None = None,
-        consume: Callable[[str, ApprovalIdentity], None] | None = None,
+        verify: Callable[[OutboxRow, Any], Any] | None = None,
+        consume: Callable[..., None] | None = None,
         enqueue: Callable[..., str] | None = None,
         slow: bool = False,
+        max_enqueue_attempts: int = 0,
+        confirm: bool = True,
     ) -> ExecutionOutboxCoordinator:
-        return ExecutionOutboxCoordinator(
+        coordinator = ExecutionOutboxCoordinator(
             store=self.store,
             consume_approval_fn=consume or self.consume,
             enqueue_job_fn=enqueue or self.enqueue,
@@ -173,9 +227,25 @@ class _Harness:
             verify_completion_fn=verify or self.verify,
             poll_timeout_seconds=poll_timeout,
             poll_interval_seconds=0.5,
+            max_enqueue_attempts=max_enqueue_attempts,
             clock=self.clock,
             sleep=lambda _seconds: None,
         )
+        if confirm:
+            coordinator = ExecutionOutboxCoordinator(
+                store=self.store,
+                consume_approval_fn=consume or self.consume,
+                enqueue_job_fn=enqueue or self.enqueue,
+                await_completion_fn=(self.await_slow if slow else self.await_completion),
+                verify_completion_fn=verify or self.verify,
+                confirm_consumption_fn=coordinator.confirm_consumption_from_ledger(self.ledger),
+                poll_timeout_seconds=poll_timeout,
+                poll_interval_seconds=0.5,
+                max_enqueue_attempts=max_enqueue_attempts,
+                clock=self.clock,
+                sleep=lambda _seconds: None,
+            )
+        return coordinator
 
     def finish(self, job_id: str) -> None:
         self.jobs[job_id] = {
@@ -310,7 +380,10 @@ class TestHappyPath:
     def test_execute_runs_all_four_states_and_completes(self, harness: _Harness) -> None:
         outcome = harness.execute()
         assert outcome.status == "COMPLETED"
-        assert outcome.job_id == "job-1"
+        # The job id is the row's durable *reservation*, derived from the
+        # idempotency key before the approval was consumed -- never a random id.
+        assert outcome.job_id == derive_reserved_job_id(outcome.idempotency_key)
+        assert outcome.job_id == harness.enqueued[0]["job_id"]
         assert outcome.artifact_id == "artifact-1"
         assert outcome.passport_id == "passport-1"
         assert outcome.terminal is True
@@ -339,13 +412,24 @@ class TestHappyPath:
     def test_worker_completion_without_verification_identity_fails_closed(
         self, harness: _Harness
     ) -> None:
-        def verify(_row: OutboxRow, _completion: Any) -> tuple[str, str]:
-            return "", ""
+        def verify(_row: OutboxRow, _completion: Any) -> Any:
+            return _proof(artifact_id="", passport_id="")
 
         coordinator = harness.build_coordinator(verify=verify)
         outcome = harness.execute(coordinator)
-        assert outcome.status == "FAILED_TERMINAL"
-        assert "artifact_or_passport" in outcome.detail
+        # A blank proof cannot even be constructed, so the coordinator holds the
+        # row rather than promoting the worker's claim to a completed turn.
+        assert outcome.status == "AWAITING_WORKER"
+        assert outcome.can_resume is True
+        assert "completion_unverified" in outcome.detail
+
+    def test_verifier_returning_a_non_proof_holds_the_record(self, harness: _Harness) -> None:
+        coordinator = harness.build_coordinator(
+            verify=lambda _row, _completion: ("artifact-1", "passport-1")
+        )
+        outcome = harness.execute(coordinator)
+        assert outcome.status == "AWAITING_WORKER"
+        assert "invalid_completion_proof" in outcome.detail
 
     def test_verification_refusal_is_terminal(self, harness: _Harness) -> None:
         def verify(_row: OutboxRow, _completion: Any) -> tuple[str, str]:
@@ -377,15 +461,13 @@ class TestHappyPath:
             artifact_id = "artifact-9"
             passport_id = "passport-9"
 
-        coordinator = ExecutionOutboxCoordinator(
-            store=harness.store,
-            consume_approval_fn=harness.consume,
-            enqueue_job_fn=harness.enqueue,
-            await_completion_fn=lambda _job: _Completion(),
-            poll_timeout_seconds=1.0,
-            clock=harness.clock,
-            sleep=lambda _s: None,
+        coordinator = harness.build_coordinator(
+            verify=lambda _row, completion: _proof(
+                artifact_id=str(completion.artifact_id),
+                passport_id=str(completion.passport_id),
+            )
         )
+        object.__setattr__(coordinator, "_await", lambda _job: _Completion())
         outcome = harness.execute(coordinator)
         assert outcome.status == "COMPLETED"
         assert outcome.artifact_id == "artifact-9"
@@ -436,7 +518,11 @@ class TestCrashRecovery:
         assert recovered.status == "COMPLETED"
         assert recovered.resumed_from == "INTENT_STAGED"
         assert harness.consumed.count("appr-crash-staged") == 1
-        assert len(harness.enqueued) == 1
+        # Exactly one job per intent: the first coordinator parked its row in
+        # APPROVAL_CONSUMED (a transient enqueue failure no longer burns the
+        # approval), so the reconciler picks *that* row up, not a second job.
+        intent_jobs = [e for e in harness.enqueued if e["idempotency_key"] == key]
+        assert len(intent_jobs) == 1
 
     def test_crash_after_approval_consumed_never_reconsumes(self, harness: _Harness) -> None:
         """The exact window: consumed, then died before ``enqueue``."""
@@ -517,7 +603,7 @@ class TestCrashRecovery:
         outcome = harness.execute_slow(poll_timeout=1.0)
         assert outcome.status == "AWAITING_WORKER"
         assert outcome.can_resume is True
-        assert outcome.job_id == "job-1"
+        assert outcome.job_id == derive_reserved_job_id(outcome.idempotency_key)
         assert outcome.terminal is False
         row = harness.store.get(outbox_id=outcome.outbox_id)
         assert row is not None
@@ -682,16 +768,18 @@ class TestCrashRecovery:
     def test_a_prebuilt_worker_completion_is_passed_through(self, harness: _Harness) -> None:
         from nexus_ai_agent.nagar.ibpc.execution_outbox import _WorkerCompletion
 
-        coordinator = ExecutionOutboxCoordinator(
-            store=harness.store,
-            consume_approval_fn=harness.consume,
-            enqueue_job_fn=harness.enqueue,
-            await_completion_fn=lambda _job: _WorkerCompletion(
+        coordinator = harness.build_coordinator(
+            verify=lambda _row, completion: _proof(
+                artifact_id=str(completion.artifact_id),
+                passport_id=str(completion.passport_id),
+            )
+        )
+        object.__setattr__(
+            coordinator,
+            "_await",
+            lambda _job: _WorkerCompletion(
                 status="COMPLETED", artifact_id="artifact-7", passport_id="passport-7"
             ),
-            poll_timeout_seconds=1.0,
-            clock=harness.clock,
-            sleep=lambda _s: None,
         )
         outcome = harness.execute(coordinator)
         assert outcome.artifact_id == "artifact-7"
@@ -812,14 +900,39 @@ class TestFailClosed:
         assert "approval_consumption_failed" in outcome.detail
         assert harness.enqueued == []
 
-    def test_queue_refusal_after_consumption_is_terminal(self, harness: _Harness) -> None:
+    def test_transient_queue_refusal_never_destroys_the_spent_approval(
+        self, harness: _Harness
+    ) -> None:
         def refusing_enqueue(**_kwargs: Any) -> str:
             raise RuntimeError("queue unavailable")
 
         outcome = harness.execute(harness.build_coordinator(enqueue=refusing_enqueue))
-        assert outcome.status == "FAILED_TERMINAL"
-        assert "enqueue_failed" in outcome.detail
+        # The approval is spent; a transient queue error must NOT terminalise the
+        # row, because that would require a fresh human approval for a hiccup.
+        assert outcome.status == "APPROVAL_CONSUMED"
+        assert outcome.can_resume is True
+        assert "enqueue_retryable" in outcome.detail
         assert harness.consumed == [APPROVAL]
+        row = harness.store.get(outbox_id=outcome.outbox_id)
+        assert row is not None
+        assert row.attempt_count == 1
+
+    def test_a_validation_refusal_at_enqueue_is_terminal(self, harness: _Harness) -> None:
+        def rejecting_enqueue(**_kwargs: Any) -> str:
+            raise ValueError("payload can never be accepted")
+
+        outcome = harness.execute(harness.build_coordinator(enqueue=rejecting_enqueue))
+        assert outcome.status == "FAILED_TERMINAL"
+        assert "enqueue_rejected" in outcome.detail
+
+    def test_enqueue_attempts_exhaustion_is_terminal(self, harness: _Harness) -> None:
+        def refusing_enqueue(**_kwargs: Any) -> str:
+            raise RuntimeError("queue unavailable")
+
+        coordinator = harness.build_coordinator(enqueue=refusing_enqueue, max_enqueue_attempts=1)
+        outcome = harness.execute(coordinator)
+        assert outcome.status == "FAILED_TERMINAL"
+        assert "enqueue_attempts_exhausted" in outcome.detail
 
     def test_enqueue_without_a_job_id_is_terminal(self, harness: _Harness) -> None:
         outcome = harness.execute(harness.build_coordinator(enqueue=lambda **_k: ""))
@@ -849,7 +962,7 @@ class TestFailClosed:
             plan_payload=payload,
         )
         assert outcome.status == "FAILED_TERMINAL"
-        assert "approval_consumption_failed" in outcome.detail
+        assert "approval_identity_failed" in outcome.detail
 
     def test_malformed_completion_shape_is_refused(self, harness: _Harness) -> None:
         coordinator = ExecutionOutboxCoordinator(
@@ -1281,3 +1394,608 @@ class TestDurabilityAndConcurrency:
             ).fetchone() == ("INTENT_STAGED",)
         finally:
             raw.close()
+
+
+# --------------------------------------------------------------------------- #
+# Wave 1 — the true crash window, replay classification, and verified completion
+# --------------------------------------------------------------------------- #
+def _binding(approval_id: str = APPROVAL) -> Any:
+    from nexus_ai_agent.nagar.ibpc.models import ApprovalBinding
+
+    return ApprovalBinding(
+        approval_id=approval_id,
+        session_id=SESSION,
+        turn_id=TURN,
+        sequence_number=1,
+        tenant_id=TENANT,
+        project_id=PROJECT,
+        principal_id=PRINCIPAL,
+        source_revision=0,
+        source_asset_digest=ASSET_DIGEST,
+        ast_digest=AST_DIGEST,
+        plan_digest=PLAN_DIGEST,
+        preview_digest=PREVIEW_DIGEST,
+        revision_id=REVISION,
+    )
+
+
+class TestCrashWindowBetweenLedgerAndOutbox:
+    """The exact window: ``approval.py`` committed, ``outbox.py`` did not.
+
+    Every test here uses the genuine :class:`DurableApprovalLedger` with a real
+    job reservation, because that is the object whose reservation table decides
+    whether a second consume is a recovery or a replay.
+    """
+
+    def _approved(
+        self, harness: _Harness, *, approval_id: str = APPROVAL
+    ) -> tuple[Any, ApprovalIdentity, str]:
+        harness.ledger.create(_binding(approval_id))
+        identity = approval_identity_for(
+            OutboxRow(
+                outbox_id="obx-seed",
+                idempotency_key="k",
+                tenant_id=TENANT,
+                project_id=PROJECT,
+                session_id=SESSION,
+                turn_id=TURN,
+                principal_id=PRINCIPAL,
+                approval_id=approval_id,
+                revision_id=REVISION,
+                revision_jcs_sha256=REV_JCS,
+                plan_payload_json=json.dumps(_payload(), sort_keys=True),
+                state="INTENT_STAGED",
+                job_id=None,
+                artifact_id=None,
+                passport_id=None,
+                attempt_count=0,
+                last_error="",
+                created_at_utc="now",
+                updated_at_utc="now",
+            )
+        )
+        harness.ledger.approve(approval_id, identity=identity, turn_is_active=lambda: True)
+        key = derive_idempotency_key(
+            tenant_id=TENANT,
+            project_id=PROJECT,
+            session_id=SESSION,
+            turn_id=TURN,
+            approval_id=approval_id,
+            revision_jcs_sha256=REV_JCS,
+        )
+        return identity, key, derive_reserved_job_id(key)
+
+    def _stage(self, harness: _Harness, *, approval_id: str = APPROVAL) -> tuple[Any, str]:
+        key = derive_idempotency_key(
+            tenant_id=TENANT,
+            project_id=PROJECT,
+            session_id=SESSION,
+            turn_id=TURN,
+            approval_id=approval_id,
+            revision_jcs_sha256=REV_JCS,
+        )
+        row, _ = harness.store.stage_intent(
+            idempotency_key=key,
+            tenant_id=TENANT,
+            project_id=PROJECT,
+            session_id=SESSION,
+            turn_id=TURN,
+            principal_id=PRINCIPAL,
+            approval_id=approval_id,
+            revision_id=REVISION,
+            revision_jcs_sha256=REV_JCS,
+            plan_payload=_payload(),
+        )
+        return row, derive_reserved_job_id(key)
+
+    def _real_coordinator(self, harness: _Harness, **kwargs: Any) -> ExecutionOutboxCoordinator:
+        plain = harness.build_coordinator(consume=harness.real_ledger_consume, **kwargs)
+        return ExecutionOutboxCoordinator(
+            store=harness.store,
+            consume_approval_fn=harness.real_ledger_consume,
+            enqueue_job_fn=kwargs.get("enqueue") or harness.enqueue,
+            await_completion_fn=(
+                harness.await_slow if kwargs.get("slow") else harness.await_completion
+            ),
+            verify_completion_fn=harness.verify,
+            confirm_consumption_fn=plain.confirm_consumption_from_ledger(harness.ledger),
+            poll_timeout_seconds=kwargs.get("poll_timeout", 1.0),
+            poll_interval_seconds=0.5,
+            clock=harness.clock,
+            sleep=lambda _seconds: None,
+        )
+
+    def test_true_crash_between_approval_commit_and_outbox_commit_recovers_without_double_consume(
+        self, harness: _Harness
+    ) -> None:
+        identity, key, reserved = self._approved(harness)
+        row, staged_reserved = self._stage(harness)
+        assert row.state == "INTENT_STAGED"
+        assert staged_reserved == reserved
+
+        # --- the crash: the ledger commits CONSUMED, the outbox never commits.
+        harness.ledger.consume(APPROVAL, identity=identity, job_id=reserved, attempt=1)
+        assert harness.store.get(outbox_id=row.outbox_id).state == "INTENT_STAGED"  # type: ignore[union-attr]
+
+        # --- a restarted process reconciles that orphaned INTENT_STAGED row.
+        outcomes = self._real_coordinator(harness).reconcile_in_flight()
+        recovered = next(o for o in outcomes if o.outbox_id == row.outbox_id)
+
+        assert recovered.status in ("AWAITING_WORKER", "COMPLETED")
+        assert recovered.status != "FAILED_TERMINAL"
+        assert recovered.resumed_from == "INTENT_STAGED"
+        assert recovered.job_id == reserved
+        # The approval was consumed exactly once; the recovery never re-consumed.
+        assert harness.consumed.count(APPROVAL) == 1
+        states = [event["to_state"] for event in harness.store.events_for(row.outbox_id)]
+        assert "FAILED_TERMINAL" not in states
+        assert states[:3] == ["INTENT_STAGED", "APPROVAL_CONSUMED", "JOB_ENQUEUED"]
+        # And a second recovery is inert.
+        again = self._real_coordinator(harness).reconcile_in_flight()
+        assert again == () or all(o.status != "FAILED_TERMINAL" for o in again)
+
+    def test_true_replay_with_different_job_fails_terminal(self, harness: _Harness) -> None:
+        identity, _key, reserved = self._approved(harness)
+        row, _ = self._stage(harness)
+
+        # Somebody else consumed this approval under a *different* job id.
+        harness.ledger.consume(APPROVAL, identity=identity, job_id="job-somebody-else", attempt=1)
+
+        outcome = self._real_coordinator(harness).execute_or_recover(
+            tenant_id=TENANT,
+            project_id=PROJECT,
+            session_id=SESSION,
+            turn_id=TURN,
+            principal_id=PRINCIPAL,
+            approval_id=APPROVAL,
+            revision_id=REVISION,
+            revision_jcs_sha256=REV_JCS,
+            plan_payload=_payload(),
+        )
+        assert outcome.status == "FAILED_TERMINAL"
+        assert "replay" in outcome.detail
+        assert harness.enqueued == []
+        assert harness.store.get(outbox_id=row.outbox_id).state == "FAILED_TERMINAL"  # type: ignore[union-attr]
+
+    def test_true_replay_with_different_plan_fails_terminal(self, harness: _Harness) -> None:
+        identity, key, reserved = self._approved(harness)
+
+        # The ledger consumed this approval for the reserved job, bound to plan
+        # ``c``.  The outbox row that arrives *claims* plan ``f`` -- the same
+        # job id, a different approved plan.  That is a replay, not a recovery.
+        harness.ledger.consume(APPROVAL, identity=identity, job_id=reserved, attempt=1)
+        row, _ = harness.store.stage_intent(
+            idempotency_key=key,
+            tenant_id=TENANT,
+            project_id=PROJECT,
+            session_id=SESSION,
+            turn_id=TURN,
+            principal_id=PRINCIPAL,
+            approval_id=APPROVAL,
+            revision_id=REVISION,
+            revision_jcs_sha256=REV_JCS,
+            plan_payload=_payload(
+                approval_identity=_identity_payload(plan_digest="sha256:" + "f" * 64)
+            ),
+        )
+        assert row.reserved_job_id == reserved
+
+        outcome = self._real_coordinator(harness).execute_or_recover(
+            tenant_id=TENANT,
+            project_id=PROJECT,
+            session_id=SESSION,
+            turn_id=TURN,
+            principal_id=PRINCIPAL,
+            approval_id=APPROVAL,
+            revision_id=REVISION,
+            revision_jcs_sha256=REV_JCS,
+            plan_payload=_payload(
+                approval_identity=_identity_payload(plan_digest="sha256:" + "f" * 64)
+            ),
+        )
+        assert outcome.status == "FAILED_TERMINAL"
+        assert "replay" in outcome.detail
+        assert harness.enqueued == []
+        stored = harness.store.get(outbox_id=row.outbox_id)
+        assert stored is not None and stored.state == "FAILED_TERMINAL"
+
+    def test_a_finalized_reservation_is_not_recovered_as_a_crash(self, harness: _Harness) -> None:
+        identity, _key, reserved = self._approved(harness)
+        _row, _ = self._stage(harness)
+        harness.ledger.consume(APPROVAL, identity=identity, job_id=reserved, attempt=1)
+        # The intent was already finalized (its job published), so a row still
+        # sitting in INTENT_STAGED for it is stale bookkeeping, not a recovery.
+        harness.ledger.finalize_consumption(APPROVAL, job_id=reserved, attempt=1)
+
+        outcome = self._real_coordinator(harness).execute_or_recover(
+            tenant_id=TENANT,
+            project_id=PROJECT,
+            session_id=SESSION,
+            turn_id=TURN,
+            principal_id=PRINCIPAL,
+            approval_id=APPROVAL,
+            revision_id=REVISION,
+            revision_jcs_sha256=REV_JCS,
+            plan_payload=_payload(),
+        )
+        assert outcome.status == "FAILED_TERMINAL"
+        assert harness.enqueued == []
+
+    def test_a_revoked_approval_is_never_recovered(self, harness: _Harness) -> None:
+        identity, _key, _reserved = self._approved(harness)
+        row, _ = self._stage(harness)
+        harness.ledger.revoke(APPROVAL)
+        confirmed = self._real_coordinator(harness).confirm_consumption_from_ledger(harness.ledger)
+        assert confirmed(row, identity) is False
+
+    def test_the_confirmation_refuses_an_unknown_approval(self, harness: _Harness) -> None:
+        identity, _key, _reserved = self._approved(harness)
+        row, _ = self._stage(harness)
+        confirmed = self._real_coordinator(harness).confirm_consumption_from_ledger(harness.ledger)
+        assert confirmed(row, identity) is False
+
+    def test_the_confirmation_returns_false_when_the_ledger_raises(self, harness: _Harness) -> None:
+        identity, _key, _reserved = self._approved(harness)
+        row, _ = self._stage(harness)
+
+        class _Exploding:
+            def get(self, _approval_id: str) -> Any:
+                raise RuntimeError("ledger unavailable")
+
+            def _read_reservation(self, _approval_id: str) -> Any:  # pragma: no cover
+                raise AssertionError("must not be reached")
+
+        confirmed = self._real_coordinator(harness).confirm_consumption_from_ledger(_Exploding())
+        assert confirmed(row, identity) is False
+
+    def test_a_confirm_callback_that_raises_is_treated_as_not_recovered(
+        self, harness: _Harness
+    ) -> None:
+        self._approved(harness)
+        row, _ = self._stage(harness)
+
+        def exploding(_row: OutboxRow, _identity: Any) -> bool:
+            raise RuntimeError("confirmation probe failed")
+
+        coordinator = ExecutionOutboxCoordinator(
+            store=harness.store,
+            consume_approval_fn=harness.real_ledger_consume,
+            enqueue_job_fn=harness.enqueue,
+            await_completion_fn=harness.await_completion,
+            verify_completion_fn=harness.verify,
+            confirm_consumption_fn=exploding,
+            poll_timeout_seconds=1.0,
+            sleep=lambda _seconds: None,
+        )
+        outcome = harness.execute(coordinator)
+        # Nothing was consumed, so the real ledger accepts the first consume:
+        # the raising *confirm* is never consulted on the happy path.
+        assert outcome.status in ("COMPLETED", "AWAITING_WORKER")
+        assert harness.store.get(outbox_id=row.outbox_id) is not None
+
+    def test_the_reserved_job_id_is_deterministic_and_key_derived(self) -> None:
+        first = derive_reserved_job_id("obx_" + "1" * 64)
+        assert first == derive_reserved_job_id("obx_" + "1" * 64)
+        assert first.startswith("job-") and len(first) == 36
+        assert first != derive_reserved_job_id("obx_" + "2" * 64)
+        with pytest.raises(ExecutionOutboxError):
+            derive_reserved_job_id("   ")
+
+
+class TestVerifiedCompletionIsMandatory:
+    """``Job completed`` is a claim; only a verified proof may become COMPLETED."""
+
+    def test_completion_without_verifier_or_invalid_completion_proof_fails_closed(
+        self, harness: _Harness
+    ) -> None:
+        # 1. No verifier at all.
+        no_verifier = ExecutionOutboxCoordinator(
+            store=harness.store,
+            consume_approval_fn=harness.consume,
+            enqueue_job_fn=harness.enqueue,
+            await_completion_fn=harness.await_completion,
+            poll_timeout_seconds=1.0,
+            clock=harness.clock,
+            sleep=lambda _s: None,
+        )
+        outcome = harness.execute(no_verifier)
+        assert outcome.status == "AWAITING_WORKER"
+        assert "verify_completion_fn_required" in outcome.detail
+        assert outcome.artifact_id is None
+        row = harness.store.get(outbox_id=outcome.outbox_id)
+        assert row is not None and row.state == "AWAITING_WORKER"
+
+        # 2. A verifier that returns something that is not a proof.
+        wrong_shape = harness.build_coordinator(verify=lambda _r, _c: {"artifact_id": "artifact-1"})
+        again = harness.execute(wrong_shape)
+        assert again.status == "AWAITING_WORKER"
+        assert "invalid_completion_proof" in again.detail
+
+        # 3. A proof whose digest is not a 64-hex sha256 is refused at construction.
+        with pytest.raises(CompletionVerificationError):
+            _proof(artifact_sha256="not-a-digest")
+        with pytest.raises(CompletionVerificationError):
+            _proof(passport_id="")
+        with pytest.raises(CompletionVerificationError):
+            _proof(lineage_digest="")
+
+    def test_a_verifier_that_raises_a_verification_error_holds_the_row(
+        self, harness: _Harness
+    ) -> None:
+        def verify(_row: OutboxRow, _completion: Any) -> Any:
+            raise CompletionVerificationError("passport_not_found", "no passport row")
+
+        outcome = harness.execute(harness.build_coordinator(verify=verify))
+        assert outcome.status == "AWAITING_WORKER"
+        assert "passport_not_found" in outcome.detail
+
+    def test_a_validated_completion_records_the_proof_in_the_event_log(
+        self, harness: _Harness
+    ) -> None:
+        outcome = harness.execute(harness.build_coordinator())
+        assert outcome.status == "COMPLETED"
+        events = harness.store.events_for(outcome.outbox_id)
+        completed = [e for e in events if e["to_state"] == "COMPLETED"]
+        assert len(completed) == 1
+        assert "artifact_sha256=" + "a" * 64 in completed[0]["detail"]
+        assert "lineage=sha256:" + "b" * 64 in completed[0]["detail"]
+
+    def test_verified_completion_round_trips_to_a_dict(self) -> None:
+        proof = _proof()
+        assert proof.to_dict() == {
+            "artifact_id": "artifact-1",
+            "artifact_sha256": "a" * 64,
+            "passport_id": "passport-1",
+            "lineage_digest": "sha256:" + "b" * 64,
+            "verified_at_utc": "2026-11-27T00:00:00+00:00",
+        }
+
+
+class TestInterProcessOutboxLock:
+    """``execute_or_recover`` takes the store's flock, not just the reconciler."""
+
+    def test_outbox_lock_names_its_own_sidecar(self, tmp_path: Path) -> None:
+        with DurableExecutionOutboxStore(tmp_path / "outbox.sqlite3") as store:
+            with store.outbox_lock():
+                assert (tmp_path / "outbox.sqlite3.outbox.lock").exists()
+
+    def test_outbox_lock_is_exclusive_across_processes(self, tmp_path: Path) -> None:
+        import fcntl
+        import os
+
+        with DurableExecutionOutboxStore(tmp_path / "outbox.sqlite3") as store:
+            with store.outbox_lock():
+                handle = os.open(str(tmp_path / "outbox.sqlite3.outbox.lock"), os.O_RDWR)
+                try:
+                    with pytest.raises(BlockingIOError):
+                        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                finally:
+                    os.close(handle)
+
+    def test_two_concurrent_executions_of_one_key_yield_one_job(self, harness: _Harness) -> None:
+        results: list[Any] = []
+        errors: list[BaseException] = []
+
+        def run() -> None:
+            try:
+                results.append(harness.execute(harness.build_coordinator()))
+            except BaseException as exc:  # pragma: no cover - failure path
+                errors.append(exc)
+
+        threads = [threading.Thread(target=run) for _ in range(2)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        assert errors == []
+        assert len(harness.enqueued) == 1
+        assert harness.consumed == [APPROVAL]
+        assert all(r.status in ("COMPLETED", "AWAITING_WORKER") for r in results)
+
+
+class TestStoreSurfacesAddedForTheCrashWindow:
+    """The small store/coordinator surfaces the recovery path relies on."""
+
+    def test_a_pre_reserved_store_is_migrated_in_place(self, tmp_path: Path) -> None:
+        path = tmp_path / "legacy.sqlite3"
+        raw = sqlite3.connect(str(path), isolation_level=None)
+        try:
+            raw.execute(
+                "CREATE TABLE nexus_ibpc_execution_outbox ("
+                " outbox_id TEXT PRIMARY KEY, idempotency_key TEXT NOT NULL UNIQUE,"
+                " tenant_id TEXT NOT NULL, project_id TEXT NOT NULL,"
+                " session_id TEXT NOT NULL, turn_id TEXT NOT NULL,"
+                " principal_id TEXT NOT NULL, approval_id TEXT NOT NULL,"
+                " revision_id TEXT NOT NULL, revision_jcs_sha256 TEXT NOT NULL,"
+                " plan_payload_json TEXT NOT NULL, state TEXT NOT NULL,"
+                " job_id TEXT, artifact_id TEXT, passport_id TEXT,"
+                " attempt_count INTEGER NOT NULL DEFAULT 0,"
+                " last_error TEXT NOT NULL DEFAULT '',"
+                " created_at_utc TEXT NOT NULL, updated_at_utc TEXT NOT NULL)"
+            )
+        finally:
+            raw.close()
+        with DurableExecutionOutboxStore(path) as store:
+            columns = {
+                row[1]
+                for row in store._conn.execute("PRAGMA table_info(nexus_ibpc_execution_outbox)")
+            }
+            assert "reserved_job_id" in columns
+
+    def test_confirm_reserved_consumption_defaults_its_event_detail(
+        self, harness: _Harness
+    ) -> None:
+        key = derive_idempotency_key(
+            tenant_id=TENANT,
+            project_id=PROJECT,
+            session_id=SESSION,
+            turn_id=TURN,
+            approval_id="appr-confirm",
+            revision_jcs_sha256=REV_JCS,
+        )
+        row, _ = harness.store.stage_intent(
+            idempotency_key=key,
+            tenant_id=TENANT,
+            project_id=PROJECT,
+            session_id=SESSION,
+            turn_id=TURN,
+            principal_id=PRINCIPAL,
+            approval_id="appr-confirm",
+            revision_id=REVISION,
+            revision_jcs_sha256=REV_JCS,
+            plan_payload=_payload(),
+        )
+        consumed = harness.store.confirm_reserved_consumption(outbox_id=row.outbox_id)
+        assert consumed.state == "APPROVAL_CONSUMED"
+        events = harness.store.events_for(row.outbox_id)
+        assert events[-1]["detail"] == "recovered_consumed_reservation"
+
+    def test_parking_for_retry_outside_approval_consumed_is_refused(
+        self, harness: _Harness
+    ) -> None:
+        outcome = harness.execute(harness.build_coordinator())
+        with pytest.raises(ExecutionOutboxError) as excinfo:
+            harness.store.record_retryable_enqueue_failure(
+                outbox_id=outcome.outbox_id, error="late"
+            )
+        assert excinfo.value.reason == "illegal_transition"
+
+    def test_a_negative_enqueue_attempt_budget_is_refused(self, harness: _Harness) -> None:
+        for value in (-1, True):
+            with pytest.raises(ExecutionOutboxError):
+                ExecutionOutboxCoordinator(
+                    store=harness.store,
+                    consume_approval_fn=harness.consume,
+                    enqueue_job_fn=harness.enqueue,
+                    await_completion_fn=harness.await_completion,
+                    max_enqueue_attempts=value,
+                )
+
+    def test_confirm_from_ledger_refuses_a_finalized_less_reservation(
+        self, harness: _Harness
+    ) -> None:
+        identity, _key, _reserved = TestCrashWindowBetweenLedgerAndOutbox()._approved(harness)
+        # Consume *without* a job reservation: the ledger has no row to confirm.
+        harness.ledger.consume(APPROVAL, identity=identity)
+        row, _ = TestCrashWindowBetweenLedgerAndOutbox()._stage(harness)
+        confirmed = harness.build_coordinator().confirm_consumption_from_ledger(harness.ledger)
+        assert confirmed(row, identity) is False
+
+    def test_a_refused_consume_without_a_confirm_callback_is_terminal(
+        self, harness: _Harness
+    ) -> None:
+        def refusing(_approval_id: str, _identity: Any, **_kwargs: Any) -> None:
+            raise RuntimeError("replay: approval already consumed")
+
+        coordinator = ExecutionOutboxCoordinator(
+            store=harness.store,
+            consume_approval_fn=refusing,
+            enqueue_job_fn=harness.enqueue,
+            await_completion_fn=harness.await_completion,
+            verify_completion_fn=harness.verify,
+            poll_timeout_seconds=1.0,
+            sleep=lambda _s: None,
+        )
+        outcome = harness.execute(coordinator)
+        assert outcome.status == "FAILED_TERMINAL"
+        assert "approval_consumption_failed" in outcome.detail
+
+    def test_a_completion_claim_on_an_unenqueueable_row_is_terminal(
+        self, harness: _Harness
+    ) -> None:
+        # Stage and consume but never enqueue; then hand the coordinator a row
+        # that claims success.  It cannot even park, so it must refuse.
+        key = derive_idempotency_key(
+            tenant_id=TENANT,
+            project_id=PROJECT,
+            session_id=SESSION,
+            turn_id=TURN,
+            approval_id="appr-unenqueued",
+            revision_jcs_sha256=REV_JCS,
+        )
+        row, _ = harness.store.stage_intent(
+            idempotency_key=key,
+            tenant_id=TENANT,
+            project_id=PROJECT,
+            session_id=SESSION,
+            turn_id=TURN,
+            principal_id=PRINCIPAL,
+            approval_id="appr-unenqueued",
+            revision_id=REVISION,
+            revision_jcs_sha256=REV_JCS,
+            plan_payload=_payload(),
+        )
+        coordinator = ExecutionOutboxCoordinator(
+            store=harness.store,
+            consume_approval_fn=harness.consume,
+            enqueue_job_fn=harness.enqueue,
+            await_completion_fn=harness.await_completion,
+            poll_timeout_seconds=1.0,
+            sleep=lambda _s: None,
+        )
+        from nexus_ai_agent.nagar.ibpc.execution_outbox import _WorkerCompletion
+
+        held = coordinator._complete(
+            row, _WorkerCompletion(status="COMPLETED", artifact_id="a", passport_id="p")
+        )
+        assert held.state == "FAILED_TERMINAL"
+        assert "completion_unverified" in held.last_error
+
+    def test_a_raising_confirm_callback_on_a_refused_consume_is_terminal(
+        self, harness: _Harness
+    ) -> None:
+        def refusing(_approval_id: str, _identity: Any, **_kwargs: Any) -> None:
+            raise RuntimeError("replay: approval already consumed")
+
+        def exploding(_row: OutboxRow, _identity: Any) -> bool:
+            raise RuntimeError("confirmation probe failed")
+
+        coordinator = ExecutionOutboxCoordinator(
+            store=harness.store,
+            consume_approval_fn=refusing,
+            enqueue_job_fn=harness.enqueue,
+            await_completion_fn=harness.await_completion,
+            verify_completion_fn=harness.verify,
+            confirm_consumption_fn=exploding,
+            poll_timeout_seconds=1.0,
+            sleep=lambda _s: None,
+        )
+        outcome = harness.execute(coordinator)
+        # A confirmation probe that itself fails is never read as "recovered".
+        assert outcome.status == "FAILED_TERMINAL"
+        assert "approval_consumption_failed" in outcome.detail
+
+    def test_a_confirm_true_after_a_refusing_consume_repairs_the_row(
+        self, harness: _Harness
+    ) -> None:
+        """For a consume callback that does *not* replay, ``confirm`` is the repair.
+
+        ``DurableApprovalLedger.consume`` is idempotent for the same open
+        reservation, so the ordinary recovery never needs this branch.  A ledger
+        (or an adapter) that raises on *any* second consume does, and that is
+        what this proves: the outbox advances instead of declaring a replay.
+        """
+
+        def refusing(_approval_id: str, _identity: Any, **_kwargs: Any) -> None:
+            raise RuntimeError("replay: approval already consumed")
+
+        coordinator = ExecutionOutboxCoordinator(
+            store=harness.store,
+            consume_approval_fn=refusing,
+            enqueue_job_fn=harness.enqueue,
+            await_completion_fn=harness.await_completion,
+            verify_completion_fn=harness.verify,
+            confirm_consumption_fn=lambda _row, _identity: True,
+            poll_timeout_seconds=1.0,
+            sleep=lambda _s: None,
+        )
+        row, _ = TestCrashWindowBetweenLedgerAndOutbox()._stage(harness)
+        repaired = coordinator._consume_approval(row)
+        assert repaired.state == "APPROVAL_CONSUMED"
+        assert repaired.last_error == ""
+        events = harness.store.events_for(row.outbox_id)
+        assert events[-1]["detail"].startswith("recovered_reservation:job-")
+        # And the drive continues to enqueue from the repaired state.
+        driven = coordinator._enqueue_job(repaired)
+        assert driven.state == "JOB_ENQUEUED"
+        assert driven.job_id == repaired.reserved_job_id

@@ -65,6 +65,7 @@ from nexus_ai_agent.nagar.ibpc.authority import StudioAction, StudioRole
 from nexus_ai_agent.nagar.ibpc.execution_outbox import (
     DurableExecutionOutboxStore,
     ExecutionOutboxCoordinator,
+    VerifiedExecutionCompletion,
     derive_idempotency_key,
 )
 from nexus_ai_agent.nagar.ibpc.models import ApprovalBinding, PrivacyMode
@@ -486,12 +487,14 @@ class _Worker:
         self.verified: list[str] = []
         self.artifacts: dict[str, bytes] = {}
 
-    def enqueue(self, *, idempotency_key: str, payload: dict[str, Any]) -> str:
+    def enqueue(
+        self, *, idempotency_key: str, payload: dict[str, Any], job_id: str | None = None
+    ) -> str:
         # Idempotent on the key, exactly like InProcessJobQueue's own contract.
-        for job_id in self.enqueued:
-            if self.jobs[job_id]["idempotency_key"] == idempotency_key:
-                return job_id
-        job_id = f"job-{len(self.enqueued) + 1}"
+        for existing in self.enqueued:
+            if self.jobs[existing]["idempotency_key"] == idempotency_key:
+                return existing
+        job_id = job_id or f"job-{len(self.enqueued) + 1}"
         self.enqueued.append(job_id)
         self.jobs[job_id] = {
             "idempotency_key": idempotency_key,
@@ -551,26 +554,48 @@ def _coordinator(
     drain: Any = None,
     enqueue: Any = None,
 ) -> ExecutionOutboxCoordinator:
-    def consume(approval_id: str, identity: ApprovalIdentity) -> None:
-        world.approvals.consume(approval_id, identity=identity)
+    def consume(
+        approval_id: str,
+        identity: ApprovalIdentity,
+        *,
+        job_id: str | None = None,
+        attempt: int = 1,
+    ) -> None:
+        world.approvals.consume(approval_id, identity=identity, job_id=job_id, attempt=attempt)
 
-    def verify(row: Any, completion: Any) -> tuple[str, str]:
+    def verify(row: Any, completion: Any) -> VerifiedExecutionCompletion:
         # The outbox's verification hook is where provenance is drained: an
         # artifact that has no passport row is not a completion.
         if drain is not None:
             report = drain()
             assert report.failed == 0, report.errors
-        return (
-            str(completion.artifact_id),
-            str(getattr(completion, "passport_id", "") or "passport-1"),
+        artifact_id = str(completion.artifact_id)
+        artifact = worker.artifacts.get(artifact_id, b"")
+        return VerifiedExecutionCompletion(
+            artifact_id=artifact_id,
+            artifact_sha256=hashlib.sha256(artifact).hexdigest(),
+            passport_id=str(getattr(completion, "passport_id", "") or "passport-1"),
+            lineage_digest="sha256:" + "e" * 64,
+            verified_at_utc="2026-11-27T00:00:00+00:00",
         )
 
+    coordinator = ExecutionOutboxCoordinator(
+        store=world.outbox,
+        consume_approval_fn=consume,
+        enqueue_job_fn=enqueue or worker.enqueue,
+        await_completion_fn=worker.await_completion,
+        verify_completion_fn=verify,
+        poll_timeout_seconds=poll_timeout,
+        poll_interval_seconds=0.0,
+        sleep=lambda _seconds: None,
+    )
     return ExecutionOutboxCoordinator(
         store=world.outbox,
         consume_approval_fn=consume,
         enqueue_job_fn=enqueue or worker.enqueue,
         await_completion_fn=worker.await_completion,
         verify_completion_fn=verify,
+        confirm_consumption_fn=coordinator.confirm_consumption_from_ledger(world.approvals),
         poll_timeout_seconds=poll_timeout,
         poll_interval_seconds=0.0,
         sleep=lambda _seconds: None,
@@ -664,24 +689,28 @@ class TestCrashAndReconcile:
             revision_jcs_sha256="sha256:" + "d" * 64,
             plan_payload=payload,
         )
-        # The approval is spent and the intent is terminal for *this* process.
-        assert crashed.status == "FAILED_TERMINAL"
-        assert "enqueue_failed" in crashed.detail
+        # The approval is spent, and the *transient* enqueue failure does NOT
+        # burn it: the intent is parked in APPROVAL_CONSUMED so it stays
+        # resumable rather than needing a human to approve the turn again.
+        assert crashed.status == "APPROVAL_CONSUMED"
+        assert crashed.can_resume is True
+        assert "enqueue_retryable" in crashed.detail
 
         # --- process 2: a fresh coordinator sees the durable rows.
         fresh_worker = _Worker(world)
         restarted = _coordinator(world, fresh_worker)
-        # A row that reached FAILED_TERMINAL is terminal by design: re-driving it
-        # would re-execute a turn whose approval is already spent.  Reconciliation
-        # therefore has nothing in flight to do, and nothing is re-enqueued.
-        assert restarted.reconcile_in_flight() == ()
-        assert fresh_worker.enqueued == []
+        outcomes = restarted.reconcile_in_flight()
+        assert len(outcomes) == 1
+        assert outcomes[0].resumed_from == "APPROVAL_CONSUMED"
+        assert len(fresh_worker.enqueued) == 1
         # The single-use approval was consumed exactly once (a replay would raise).
         assert world.approvals.get("appr-1").state.value == "CONSUMED"
         row = world.outbox.get(idempotency_key=crashed.idempotency_key)
         assert row is not None
-        assert row.state == "FAILED_TERMINAL"
-        assert "enqueue_failed" in row.last_error
+        # The queue row is durable and the turn is parked on the worker, not on
+        # the approval: the restarted process owns a live, resumable intent.
+        assert row.state == "AWAITING_WORKER"
+        assert row.job_id == fresh_worker.enqueued[0]
 
     def test_a_poll_timeout_parks_the_turn_and_reconcile_finishes_it(self, world: _Slice) -> None:
         session, turn, readback, payload = self._approved_world(world)

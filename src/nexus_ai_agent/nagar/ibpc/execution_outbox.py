@@ -54,6 +54,7 @@ from nexus_ai_agent.nagar.ibpc.canonical import canonical_json
 
 __all__ = [
     "ApprovalConsumptionError",
+    "CompletionVerificationError",
     "DurableExecutionOutboxStore",
     "ExecutionOutboxConflictError",
     "ExecutionOutboxCoordinator",
@@ -63,8 +64,10 @@ __all__ = [
     "ExecutionOutboxTerminalError",
     "OutboxRow",
     "PollTimeoutError",
+    "VerifiedExecutionCompletion",
     "approval_identity_for",
     "derive_idempotency_key",
+    "derive_reserved_job_id",
     "utc_now",
 ]
 
@@ -108,6 +111,15 @@ class PollTimeoutError(ExecutionOutboxError):
 
 class ExecutionOutboxTerminalError(ExecutionOutboxError):
     """The job or its verification failed terminally."""
+
+
+class CompletionVerificationError(ExecutionOutboxError):
+    """A worker's self-reported completion could not be independently verified.
+
+    Raised (and honoured by the coordinator) when a job reports success but the
+    completion proof is missing, unverifiable, or malformed.  "The job said it
+    finished" is a claim; only a verified artifact + passport is evidence.
+    """
 
 
 class ExecutionOutboxState(str, Enum):
@@ -158,6 +170,26 @@ def derive_idempotency_key(
         (tenant_id, project_id, session_id, turn_id, approval_id, revision_jcs_sha256)
     ).encode("utf-8")
     return "obx_" + hashlib.sha256(material).hexdigest()
+
+
+def derive_reserved_job_id(idempotency_key: str) -> str:
+    """Deterministic job id reserved for one intent, derived from its key.
+
+    The reservation must exist **before** the single-use approval is consumed:
+    that is what makes a crash between ``approval.py``'s commit and the outbox's
+    own ``APPROVAL_CONSUMED`` commit recoverable.  The ledger can then be asked
+    "was this approval consumed *for this exact job*?" and answer yes, instead of
+    the recovery being misread as a replay attack.
+
+    Deterministic (never ``uuid4``) so a restarted process recomputes the same
+    reservation from the durable ``idempotency_key`` alone — no extra column and
+    no extra coordination is needed to remember it across a crash.
+    """
+    if not isinstance(idempotency_key, str) or not idempotency_key.strip():
+        raise ExecutionOutboxError(
+            "invalid_idempotency_key", "idempotency_key must be a non-empty string"
+        )
+    return "job-" + hashlib.sha256(idempotency_key.encode("utf-8")).hexdigest()[:32]
 
 
 def approval_identity_for(row: OutboxRow) -> Any:
@@ -262,6 +294,10 @@ class OutboxRow:
     last_error: str
     created_at_utc: str
     updated_at_utc: str
+    #: The deterministic job id reserved for this intent *before* the approval
+    #: was consumed, so a crash in that window is recoverable rather than a
+    #: false "replay" refusal.
+    reserved_job_id: str = ""
 
     @property
     def plan_payload(self) -> dict[str, Any]:
@@ -313,6 +349,54 @@ class ExecutionOutboxOutcome:
 
 
 @dataclass(frozen=True)
+class VerifiedExecutionCompletion:
+    """Independently verified proof that a job's artifact really exists.
+
+    Produced by a ``verify_completion_fn`` and *required* before an intent may
+    transition to ``COMPLETED``.  The coordinator validates every field, so a
+    callback that returns an empty or malformed proof fails closed instead of
+    promoting a worker's self-report into a durable success.
+    """
+
+    artifact_id: str
+    artifact_sha256: str
+    passport_id: str
+    lineage_digest: str
+    verified_at_utc: str
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.artifact_id, str) or not self.artifact_id.strip():
+            raise CompletionVerificationError(
+                "invalid_completion_proof", "artifact_id must be a non-empty string"
+            )
+        digest = self.artifact_sha256
+        if (
+            not isinstance(digest, str)
+            or len(digest) != 64
+            or any(char not in "0123456789abcdef" for char in digest)
+        ):
+            raise CompletionVerificationError(
+                "invalid_completion_proof",
+                "artifact_sha256 must be 64 lowercase hex characters",
+            )
+        for field_name in ("passport_id", "lineage_digest", "verified_at_utc"):
+            value = getattr(self, field_name)
+            if not isinstance(value, str) or not value.strip():
+                raise CompletionVerificationError(
+                    "invalid_completion_proof", f"{field_name} must be a non-empty string"
+                )
+
+    def to_dict(self) -> dict[str, str]:
+        return {
+            "artifact_id": self.artifact_id,
+            "artifact_sha256": self.artifact_sha256,
+            "passport_id": self.passport_id,
+            "lineage_digest": self.lineage_digest,
+            "verified_at_utc": self.verified_at_utc,
+        }
+
+
+@dataclass(frozen=True)
 class _WorkerCompletion:
     """What the caller's worker driver reports back about one job."""
 
@@ -357,7 +441,8 @@ _SCHEMA = (
         attempt_count INTEGER NOT NULL DEFAULT 0,
         last_error TEXT NOT NULL DEFAULT '',
         created_at_utc TEXT NOT NULL,
-        updated_at_utc TEXT NOT NULL
+        updated_at_utc TEXT NOT NULL,
+        reserved_job_id TEXT NOT NULL DEFAULT ''
     )
     """,
     """
@@ -400,6 +485,17 @@ class DurableExecutionOutboxStore:
         with self._transaction():
             for statement in _SCHEMA:
                 self._conn.execute(statement)
+            # Forward-compatible migration for a store written by the previous
+            # revision: the reservation column is additive and defaults to ''.
+            columns = {
+                row[1]
+                for row in self._conn.execute("PRAGMA table_info(nexus_ibpc_execution_outbox)")
+            }
+            if "reserved_job_id" not in columns:
+                self._conn.execute(
+                    "ALTER TABLE nexus_ibpc_execution_outbox "
+                    "ADD COLUMN reserved_job_id TEXT NOT NULL DEFAULT ''"
+                )
         try:
             os.chmod(self._path, 0o600)
         except OSError:  # pragma: no cover - filesystems without POSIX modes
@@ -550,6 +646,11 @@ class DurableExecutionOutboxStore:
                 return existing, False
             outbox_id = f"obx_{uuid.uuid4().hex}"
             now = self._now()
+            # The reservation is written in the *same* transaction as the
+            # INTENT_STAGED row, so no observer can ever see one without the
+            # other.  ``reserved_job_id`` is NULL-free ('' means "not yet
+            # derived") so an older store's rows still read back cleanly.
+            reserved_job_id = derive_reserved_job_id(idempotency_key)
             self._conn.execute(
                 """
                 INSERT INTO nexus_ibpc_execution_outbox (
@@ -557,9 +658,9 @@ class DurableExecutionOutboxStore:
                     turn_id, principal_id, approval_id, revision_id,
                     revision_jcs_sha256, plan_payload_json, state, job_id,
                     artifact_id, passport_id, attempt_count, last_error,
-                    created_at_utc, updated_at_utc
+                    created_at_utc, updated_at_utc, reserved_job_id
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'INTENT_STAGED', NULL,
-                          NULL, NULL, 0, '', ?, ?)
+                          NULL, NULL, 0, '', ?, ?, ?)
                 """,
                 (
                     outbox_id,
@@ -575,6 +676,7 @@ class DurableExecutionOutboxStore:
                     payload_json,
                     now,
                     now,
+                    reserved_job_id,
                 ),
             )
             self._record_event_locked(
@@ -728,6 +830,53 @@ class DurableExecutionOutboxStore:
             )
             return self._require_locked(outbox_id)
 
+    def confirm_reserved_consumption(self, *, outbox_id: str, detail: str = "") -> OutboxRow:
+        """``INTENT_STAGED`` → ``APPROVAL_CONSUMED`` for a recovered reservation.
+
+        Used *only* when the ledger proves the approval was consumed for this
+        row's reserved job: the effect already happened, the outbox row simply
+        never got its commit.  The event detail names the recovery so the log
+        distinguishes a crash repair from a fresh consumption.
+        """
+        return self._transition(
+            outbox_id=outbox_id,
+            expected=("INTENT_STAGED",),
+            target="APPROVAL_CONSUMED",
+            detail=detail or "recovered_consumed_reservation",
+        )
+
+    def record_retryable_enqueue_failure(self, *, outbox_id: str, error: str) -> OutboxRow:
+        """Hold an ``APPROVAL_CONSUMED`` row for retry, recording why.
+
+        A transient enqueue failure must never destroy a spent approval: the row
+        stays in ``APPROVAL_CONSUMED`` (still ``can_resume``) with the error and
+        an incremented attempt count, so a later ``reconcile_in_flight`` retries
+        ``enqueue_fn`` with the *same* idempotency key.
+        """
+        with self._transaction():
+            row = self._require_locked(outbox_id)
+            if row.state != ExecutionOutboxState.APPROVAL_CONSUMED.value:
+                raise ExecutionOutboxError(
+                    "illegal_transition",
+                    f"cannot park for retry from state {row.state!r}",
+                )
+            self._apply_locked(
+                outbox_id=outbox_id,
+                target="APPROVAL_CONSUMED",
+                job_id=row.job_id,
+                artifact_id=row.artifact_id,
+                passport_id=row.passport_id,
+                last_error=error[:1000],
+                attempt_increment=1,
+            )
+            self._record_event_locked(
+                outbox_id=outbox_id,
+                from_state=row.state,
+                to_state="APPROVAL_CONSUMED",
+                detail=f"retry_pending: {error}",
+            )
+            return self._require_locked(outbox_id)
+
     def record_attempt_failure(self, *, outbox_id: str, error: str) -> OutboxRow:
         """Log a recoverable error (attempt count +1) without leaving the state."""
         with self._transaction():
@@ -746,13 +895,14 @@ class DurableExecutionOutboxStore:
     # -- locking ----------------------------------------------------------- #
 
     @contextmanager
-    def reconcile_lock(self) -> Iterator[None]:
-        """Cross-process exclusive lock for one reconciliation pass.
+    def _file_lock(self, suffix: str) -> Iterator[None]:
+        """Cross-process exclusive lock on ``<db><suffix>``.
 
-        ``fcntl.flock`` on a sidecar file: advisory, but held for the whole pass
-        so two processes cannot drive the same row into two different jobs.  On a
-        platform without ``fcntl`` the pass degrades to this process's own lock
-        (SQLite's write lock still serialises the transitions themselves).
+        ``fcntl.flock`` is advisory, but it is held for the whole critical
+        section, which is what stops two processes driving the same row into two
+        different jobs.  On a platform without ``fcntl`` the scope degrades to
+        this process's own lock (SQLite's write lock still serialises the
+        transitions themselves).
         """
         try:
             import fcntl  # POSIX only; the deployment target is Linux
@@ -760,7 +910,7 @@ class DurableExecutionOutboxStore:
             with self._lock:
                 yield
             return
-        lock_path = self._path.with_suffix(self._path.suffix + ".reconcile.lock")
+        lock_path = self._path.with_suffix(self._path.suffix + suffix)
         handle = os.open(str(lock_path), os.O_RDWR | os.O_CREAT, 0o600)
         try:
             fcntl.flock(handle, fcntl.LOCK_EX)
@@ -768,6 +918,29 @@ class DurableExecutionOutboxStore:
         finally:
             fcntl.flock(handle, fcntl.LOCK_UN)
             os.close(handle)
+
+    @contextmanager
+    def reconcile_lock(self) -> Iterator[None]:
+        """Cross-process exclusive lock for one reconciliation pass.
+
+        Retained under its historical name; it is the same lock
+        :meth:`outbox_lock` takes, so a reconciler and a direct
+        ``execute_or_recover`` call can never interleave on one row.
+        """
+        with self._file_lock(".reconcile.lock"):
+            yield
+
+    @contextmanager
+    def outbox_lock(self) -> Iterator[None]:
+        """Cross-process lock covering a whole ``execute_or_recover`` critical path.
+
+        Distinct sidecar name (``<db>.outbox.lock``) from the reconciler's, but
+        *the same* exclusion contract: any two writers that can drive one row —
+        a reconciler pass and a direct execution, or two direct executions —
+        serialize on it before reading the row's state.
+        """
+        with self._file_lock(".outbox.lock"):
+            yield
 
     # -- internals --------------------------------------------------------- #
 
@@ -878,6 +1051,7 @@ class DurableExecutionOutboxStore:
             last_error=str(row[16]),
             created_at_utc=str(row[17]),
             updated_at_utc=str(row[18]),
+            reserved_job_id=str(row[19]) if len(row) > 19 and row[19] is not None else "",
         )
 
 
@@ -889,19 +1063,33 @@ class ExecutionOutboxCoordinator:
     store:
         The durable outbox.
     consume_approval_fn:
-        ``(approval_id, identity) -> None``; must raise on refusal.  Called
-        *only* when the row is still ``INTENT_STAGED``.
+        ``(approval_id, identity, job_id=..., attempt=...) -> None``; must raise
+        on refusal.  Always presented the row's durable ``reserved_job_id`` so
+        the ledger can recognise a recovery of the *same* intent.
+    confirm_consumption_fn:
+        Optional ``(row, identity) -> bool``; asked only after ``consume``
+        refused.  Returns True when the ledger proves the approval was already
+        consumed **for this row's reserved job** — i.e. the previous process
+        crashed after ``approval.py`` committed and before the outbox committed
+        ``APPROVAL_CONSUMED``.  Defaults to the equivalent check against
+        ``DurableApprovalLedger`` reservation rows.
     enqueue_job_fn:
-        ``(idempotency_key=..., payload=...) -> job_id``; must be idempotent on
-        the key (the queue's own contract).  Called *only* when the row is
-        ``APPROVAL_CONSUMED``.
+        ``(idempotency_key=..., payload=..., job_id=...) -> job_id``; must be
+        idempotent on the key (the queue's own contract).  Called *only* when
+        the row is ``APPROVAL_CONSUMED``.  ``job_id`` is optional for the
+        callee (a callable that accepts only ``idempotency_key``/``payload``
+        still works and simply receives the queue's own id).
     await_completion_fn:
         ``(job_id) -> worker-completion`` (mapping or an object with ``status``);
         polled until the job finishes or the budget expires.
     verify_completion_fn:
-        Optional ``(row, completion) -> (artifact_id, passport_id)``; raising
-        turns the intent ``FAILED_TERMINAL`` (a completed job that cannot be
-        verified must never be reported as success).
+        **Required when a worker reports success.**  ``(row, completion) ->
+        VerifiedExecutionCompletion``; a missing verifier, a raised error, or a
+        malformed proof all fail closed — a completed job that cannot be
+        independently verified is never reported as success.
+    max_enqueue_attempts:
+        How many transient enqueue failures ``reconcile_in_flight`` will retry
+        before the intent is declared terminal.  ``0`` means "never give up".
     poll_timeout_seconds / poll_interval_seconds / clock:
         The poll budget and its (injected) clock; a timeout is
         ``AWAITING_WORKER``, never a failure.
@@ -911,12 +1099,14 @@ class ExecutionOutboxCoordinator:
         self,
         *,
         store: DurableExecutionOutboxStore,
-        consume_approval_fn: Callable[[str, Any], None],
+        consume_approval_fn: Callable[..., None],
         enqueue_job_fn: Callable[..., str],
         await_completion_fn: Callable[[str], Any],
-        verify_completion_fn: Callable[[OutboxRow, Any], tuple[str, str]] | None = None,
+        verify_completion_fn: Callable[[OutboxRow, Any], Any] | None = None,
+        confirm_consumption_fn: Callable[[OutboxRow, Any], bool] | None = None,
         poll_timeout_seconds: float = 0.0,
         poll_interval_seconds: float = 0.01,
+        max_enqueue_attempts: int = 0,
         clock: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], None] = time.sleep,
     ) -> None:
@@ -926,19 +1116,64 @@ class ExecutionOutboxCoordinator:
             raise ExecutionOutboxError(
                 "invalid_poll_interval", "poll_interval_seconds must be >= 0"
             )
+        if isinstance(max_enqueue_attempts, bool) or max_enqueue_attempts < 0:
+            raise ExecutionOutboxError(
+                "invalid_max_enqueue_attempts", "max_enqueue_attempts must be >= 0"
+            )
         self._store = store
         self._consume = consume_approval_fn
+        # ``None`` means "no crash-window repair is possible": a refused
+        # consumption is then always terminal, which is the pre-Wave-1 behaviour
+        # and is what a caller with a hand-rolled consume callback wants unless
+        # it opts in.
+        self._confirm = confirm_consumption_fn
         self._enqueue = enqueue_job_fn
         self._await = await_completion_fn
         self._verify = verify_completion_fn
         self._poll_timeout = poll_timeout_seconds
         self._poll_interval = poll_interval_seconds
+        self._max_enqueue_attempts = max_enqueue_attempts
         self._clock = clock
         self._sleep = sleep
 
     @property
     def store(self) -> DurableExecutionOutboxStore:
         return self._store
+
+    def confirm_consumption_from_ledger(self, ledger: Any) -> Callable[[OutboxRow, Any], bool]:
+        """Build a ``confirm_consumption_fn`` that interrogates a real ledger.
+
+        The returned callable answers one question: *was this approval consumed
+        for this very intent?*  It is True only when all four hold, so any other
+        shape (another job, another plan, a finalized attempt, a revoked or
+        expired binding) is reported as a genuine replay instead of silently
+        repairing it:
+
+        1. the binding's state is ``CONSUMED``;
+        2. the stored reservation's job id equals this row's ``reserved_job_id``;
+        3. the reservation is not finalized (no other attempt closed it);
+        4. the reservation's identity fingerprint is this row's identity.
+        """
+
+        def _confirm(row: OutboxRow, identity: Any) -> bool:
+            reserved = self._reserved_job_id(row)
+            try:
+                binding = ledger.get(row.approval_id)
+            except Exception:
+                return False
+            if getattr(binding.state, "value", binding.state) != "CONSUMED":
+                return False
+            reservation = ledger._read_reservation(row.approval_id)
+            if reservation is None:
+                return False
+            job_id, fingerprint, finalized_at, _attempt = reservation
+            if finalized_at is not None:
+                return False
+            if not isinstance(job_id, str) or not hmac.compare_digest(job_id, reserved):
+                return False
+            return hmac.compare_digest(fingerprint, identity.identity_digest())
+
+        return _confirm
 
     # -- public API -------------------------------------------------------- #
 
@@ -960,6 +1195,12 @@ class ExecutionOutboxCoordinator:
         Idempotent end to end: a second call with the same inputs returns the
         cached ``COMPLETED`` outcome, resumes a crashed intent from its recorded
         state, and never re-consumes or double-enqueues.
+
+        The whole stage-then-drive sequence runs under the store's inter-process
+        ``flock``.  Without it two workers calling this with one
+        ``idempotency_key`` could both read ``INTENT_STAGED`` and both drive the
+        row: one would consume the approval, the other would observe the consumed
+        ledger and misclassify it as a replay.
         """
         key = derive_idempotency_key(
             tenant_id=tenant_id,
@@ -969,23 +1210,24 @@ class ExecutionOutboxCoordinator:
             approval_id=approval_id,
             revision_jcs_sha256=revision_jcs_sha256,
         )
-        row, _created = self._store.stage_intent(
-            idempotency_key=key,
-            tenant_id=tenant_id,
-            project_id=project_id,
-            session_id=session_id,
-            turn_id=turn_id,
-            principal_id=principal_id,
-            approval_id=approval_id,
-            revision_id=revision_id,
-            revision_jcs_sha256=revision_jcs_sha256,
-            plan_payload=plan_payload,
-        )
-        return self._drive(row)
+        with self._store.outbox_lock():
+            row, _created = self._store.stage_intent(
+                idempotency_key=key,
+                tenant_id=tenant_id,
+                project_id=project_id,
+                session_id=session_id,
+                turn_id=turn_id,
+                principal_id=principal_id,
+                approval_id=approval_id,
+                revision_id=revision_id,
+                revision_jcs_sha256=revision_jcs_sha256,
+                plan_payload=plan_payload,
+            )
+            return self._drive(row)
 
     def reconcile_in_flight(self, *, limit: int = 100) -> tuple[ExecutionOutboxOutcome, ...]:
         """Drive every in-flight row forward under one cross-process lock."""
-        with self._store.reconcile_lock():
+        with self._store.reconcile_lock(), self._store.outbox_lock():
             rows = self._store.list_in_flight(limit=limit)
             return tuple(self._drive(row) for row in rows)
 
@@ -1042,11 +1284,47 @@ class ExecutionOutboxCoordinator:
             detail=row.last_error,
         )
 
+    def _reserved_job_id(self, row: OutboxRow) -> str:
+        """The row's durable reservation, or the derived one for a legacy row."""
+        return row.reserved_job_id or derive_reserved_job_id(row.idempotency_key)
+
     def _consume_approval(self, row: OutboxRow) -> OutboxRow:
+        """Drive ``INTENT_STAGED`` → ``APPROVAL_CONSUMED`` exactly once.
+
+        Three outcomes, and the difference between the first two is the whole
+        point of this method:
+
+        * the ledger consumes the approval → mark the row consumed;
+        * the ledger *refuses* but confirms the approval was consumed for this
+          row's reserved job → the previous process crashed in the window
+          between the ledger's commit and ours; advance the row, do not fail;
+        * the ledger refuses and does not confirm → a genuine replay (different
+          job, different plan, revoked, expired).  Terminal, with the typed
+          reason preserved.
+        """
         try:
             identity = approval_identity_for(row)
-            self._consume(row.approval_id, identity)
         except Exception as exc:
+            return self._store.mark_failed_terminal(
+                outbox_id=row.outbox_id,
+                error=f"approval_identity_failed: {type(exc).__name__}: {exc}",
+            )
+        reserved = self._reserved_job_id(row)
+        try:
+            self._consume(row.approval_id, identity, job_id=reserved, attempt=1)
+        except Exception as exc:
+            # Before declaring the intent dead, ask the ledger whether the crash
+            # window is what we are looking at.
+            if self._confirm is not None:
+                try:
+                    recovered = bool(self._confirm(row, identity))
+                except Exception:
+                    recovered = False
+                if recovered:
+                    return self._store.confirm_reserved_consumption(
+                        outbox_id=row.outbox_id,
+                        detail=f"recovered_reservation:{reserved}",
+                    )
             # The single-use approval is the one thing the outbox cannot repair:
             # a refusal here means the intent can never execute as approved.
             return self._store.mark_failed_terminal(
@@ -1056,17 +1334,38 @@ class ExecutionOutboxCoordinator:
         return self._store.mark_approval_consumed(outbox_id=row.outbox_id, detail=row.approval_id)
 
     def _enqueue_job(self, row: OutboxRow) -> OutboxRow:
+        """Enqueue the job, never destroying a spent approval for a transient error.
+
+        Once the row is ``APPROVAL_CONSUMED`` the approval is gone: marking the
+        row ``FAILED_TERMINAL`` would burn it and require a fresh human approval
+        for what may be a one-second queue hiccup.  A *validation* refusal
+        (``ValueError``) is different — the payload can never be accepted — so
+        that, and an exhausted ``max_enqueue_attempts``, are the only terminal
+        enqueue outcomes.
+        """
         try:
             job_id = self._enqueue(
                 idempotency_key=row.idempotency_key,
                 payload=row.plan_payload,
+                job_id=self._reserved_job_id(row),
             )
-        except Exception as exc:
-            # The queue refused: the intent is durable and the approval is spent,
-            # so this is terminal for this turn (a human must re-approve).
+        except ValueError as exc:
             return self._store.mark_failed_terminal(
                 outbox_id=row.outbox_id,
-                error=f"enqueue_failed: {type(exc).__name__}: {exc}",
+                error=f"enqueue_rejected: {type(exc).__name__}: {exc}",
+            )
+        except Exception as exc:
+            attempts = row.attempt_count + 1
+            if self._max_enqueue_attempts and attempts >= self._max_enqueue_attempts:
+                return self._store.mark_failed_terminal(
+                    outbox_id=row.outbox_id,
+                    error=f"enqueue_attempts_exhausted({attempts}): {type(exc).__name__}: {exc}",
+                )
+            # Durable fact, resumable state: the next reconcile retries with the
+            # same idempotency key, so the queue's own dedupe makes it safe.
+            return self._store.record_retryable_enqueue_failure(
+                outbox_id=row.outbox_id,
+                error=f"enqueue_retryable: {type(exc).__name__}: {exc}",
             )
         if not isinstance(job_id, str) or not job_id.strip():
             return self._store.mark_failed_terminal(
@@ -1109,27 +1408,59 @@ class ExecutionOutboxCoordinator:
         return row
 
     def _complete(self, row: OutboxRow, completion: _WorkerCompletion) -> OutboxRow:
-        artifact_id = completion.artifact_id
-        passport_id = completion.passport_id
-        if self._verify is not None:
-            try:
-                artifact_id, passport_id = self._verify(row, completion)
-            except Exception as exc:
-                return self._store.mark_failed_terminal(
-                    outbox_id=row.outbox_id,
-                    error=f"verification_failed: {type(exc).__name__}: {exc}",
-                )
-        if not artifact_id or not passport_id:
+        """``AWAITING_WORKER``/``JOB_ENQUEUED`` → ``COMPLETED``, or hold.
+
+        "The job finished" is a claim by the worker; ``COMPLETED`` is a durable
+        assertion that a passport exists for a real artifact.  Only an
+        independently verified :class:`VerifiedExecutionCompletion` may cross
+        that line, so a missing verifier or an unusable proof leaves the row in
+        ``AWAITING_WORKER`` (``can_resume``) rather than promoting it — the turn
+        stays open and reconcilable instead of being recorded as done.
+        """
+        if self._verify is None:
+            return self._hold_for_verification(
+                row, CompletionVerificationError("verify_completion_fn_required")
+            )
+        try:
+            proof = self._verify(row, completion)
+        except CompletionVerificationError as exc:
+            return self._hold_for_verification(row, exc)
+        except Exception as exc:
             return self._store.mark_failed_terminal(
                 outbox_id=row.outbox_id,
-                error="completion_missing_artifact_or_passport_identity",
+                error=f"verification_failed: {type(exc).__name__}: {exc}",
+            )
+        if not isinstance(proof, VerifiedExecutionCompletion):
+            return self._hold_for_verification(
+                row,
+                CompletionVerificationError(
+                    "invalid_completion_proof",
+                    f"verify_completion_fn returned {type(proof).__name__}, "
+                    "expected VerifiedExecutionCompletion",
+                ),
             )
         return self._store.mark_completed(
             outbox_id=row.outbox_id,
-            artifact_id=artifact_id,
-            passport_id=passport_id,
-            detail=f"job={row.job_id}",
+            artifact_id=proof.artifact_id,
+            passport_id=proof.passport_id,
+            detail=f"job={row.job_id} artifact_sha256={proof.artifact_sha256} "
+            f"lineage={proof.lineage_digest}",
         )
+
+    def _hold_for_verification(self, row: OutboxRow, error: Exception) -> OutboxRow:
+        """Park a completion claim that cannot be verified, without losing it."""
+        try:
+            return self._store.mark_awaiting_worker(
+                outbox_id=row.outbox_id,
+                detail=f"completion_unverified: {error}",
+            )
+        except ExecutionOutboxError:
+            # The row is not in a state that can await a worker (e.g. it was
+            # never enqueued).  Nothing can verify it, so the claim is refused.
+            return self._store.mark_failed_terminal(
+                outbox_id=row.outbox_id,
+                error=f"completion_unverified: {error}",
+            )
 
     def _completion(self, job_id: str) -> _WorkerCompletion:
         raw = self._await(job_id)
