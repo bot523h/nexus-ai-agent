@@ -16,14 +16,17 @@ slice, and one adversarial mutation campaign.
 
 ## 1. The repository's eight gates
 
-`docs/architecture/TESTING.md` §1 defines the gate contract. These are the
-measured results at `3f80f9a`.
+`docs/architecture/TESTING.md` §1 defines the gate contract. The targeted and
+coverage numbers in §2, the campaign in §3 and the benchmark table below are
+measured at the commit named in each subsection. The whole-suite run in §2.2 was
+measured once, earlier, at `3f80f9a`, and is kept as recorded rather than
+re-stated.
 
 | # | Gate | Command | Result at `3f80f9a` |
 |---|---|---|---|
 | 1 | Lint | `ruff check .` | **PASS** — all checks passed, 1639 files |
 | 2 | Format | `ruff format --check .` | **PASS** — 1639 files already formatted |
-| 3 | Types | `mypy src` | **PASS for this branch** — 660 modules; the only 3 errors are pre-existing `imageio_ffmpeg` stub residuals in `atlas_ffmpeg.py`, `slideshow/ffmpeg.py`, `real_media_continuity.py`, none touched by this branch. `mypy --strict` on all five Studio modules and all three new test/harness files: **clean** |
+| 3 | Types | `mypy src` | **PASS for this branch** — 670 modules; 4 residual errors, all pre-existing `origin/main` artifacts of *optional* dependencies this sandbox has not installed (`imageio_ffmpeg` in `atlas_ffmpeg.py`, `slideshow/ffmpeg.py`, `real_media_continuity.py`; `Settings.llm` in `llamaindex_retrieval.py`). All four files are byte-identical to `origin/main`. `mypy --strict` on the five Studio modules, `nagar/ibpc/composition.py`, `api/studio_ibpc.py`, both new test files and both scripts: **clean** |
 | 4 | Tests | `pytest -q -m "not slow"` | **see §2.2** — 17 675 cases collect; the measured run is 17 264 passed / 46 failed / 72 errors with every failure traced to a sandbox binary or a pre-existing storyboard-worker timeout, none to this branch |
 | 5 | Migrations on PostgreSQL | `nexus migrate` ×2 + contract suites | **PARTIAL — PostgreSQL unavailable in this sandbox.** The SQLite-backed migration contract suites pass (`test_migrate_cli` 3, `test_migrate_adoption` + `test_migrate_race_condition` + `test_checkpoint_adapter_contract` 19 passed / 15 skipped). The real-PostgreSQL legs are §4 |
 | 6 | Optional-extras matrix | `test_optional_extras.py` | **PASS** — 7 passed, 10 skipped (the skips are the extras that are not installed here, by design) |
@@ -38,8 +41,28 @@ Additional gates the repository wires into CI, measured here:
 | Version lock-step | **PASS** — `VERSION == pyproject == CHANGELOG == 3.13.0` |
 | Truth gate (`python -m nexus_ai_agent.nagar --check`) | **PASS** — `TRUTH GATE: GREEN — projection and generated docs match the sources` |
 | Docs integrity (`tests/unit/test_docs_integrity.py`) | **PASS** — 119 tests |
-| Architecture guards (`tests/architecture/`) | **PASS** — 449 tests (excluding the two that need a full CI checkout: `test_subprocess_timeout_boundary`, `test_merge_base_guard`) |
+| Architecture guards (`tests/architecture/`) | **PASS** — 456 tests, 0 failures (excluding the two that need a full CI checkout: `test_subprocess_timeout_boundary`, `test_merge_base_guard`). Three separate campaigns live here and all three ran: the CP4 fence-protocol mutants (31 killed), the W6 science campaign, and the pack-activation completeness check |
 | Truth + board + docs suites | **PASS** — 334 tests |
+
+### 1.0 Why three architecture gates needed a dependency install
+
+`tests/architecture/test_cp4_fence_protocol_mutations.py`,
+`test_w6_science_mutations.py` and
+`test_pack_activation_completeness.py::test_cli_registry_is_the_composition_registry`
+were red on a bare checkout of this sandbox — **and equally red on `main` with
+this branch stashed** (24 failures stashed, 21 with it applied, all three in the
+same files, none of them touched here). The cause was the sandbox, not the code:
+
+| Missing distribution | Made red | After installing |
+|---|---|---|
+| `cryptography` | 19 CP4 mutants (the whole vault package failed to *import*, so every baseline was exit 2) | 31/31 killed |
+| `cryptography` | the W6 science campaign | passes |
+| `typer` | the CLI-vs-composition registry check | passes |
+
+Installed with `pip install cryptography typer uvicorn fastapi python-multipart
+psutil python-telegram-bot`. This is a *measurement* note, not a code change: no
+source file was modified to make these pass, and the dependency set is the one
+`pyproject.toml` already declares.
 
 ### 1.1 The truth gate's zero-collision rule
 
@@ -104,6 +127,12 @@ The only sub-100 % lines in the targeted run are inside a test module's own
 opt-in branch (the `NEXUS_RUN_MUTATION_CAMPAIGN` gate), not product code.
 
 ### 2.2 The whole-suite run, and what its failures were
+
+> **Recorded, not re-run.** This is the one measurement in this document that
+> predates the current tree. It is kept because tracing all 118 non-passing
+> outcomes is evidence in its own right, and re-running a 64-minute suite would
+> not change any conclusion in this branch. Every other number here was taken
+> on the current HEAD.
 
 Measured once, end to end, at `3f80f9a`:
 
@@ -218,6 +247,67 @@ changed the acceptance semantics of the two shipped security campaigns. This
 campaign uses the mutation-testing rule (named target node + a real failure
 effect), and reports collateral failures through `--redundancy` instead of letting
 them invalidate the kill.
+
+---
+
+## 3.3 Wave 4: the modules are reachable, and gated in the right order
+
+Coverage proves the modules are exercised by tests. It does not prove a
+*deployment* can reach them. `tests/unit/creative/studio/test_wave4_studio_http_wiring.py`
+(57 tests) drives the real ASGI app against a real `StudioPrincipalAuthStore` and
+a real workspace on disk and asserts:
+
+* the four new endpoints answer with real payloads (a readback that re-verifies
+  against its own digest, a pinned chain read back with its asset pins, a genuine
+  hot backup verified by name);
+* the refusal order **401 → 400 → 403**, asserted as an order: a malformed
+  project id is a 401 without a principal token and a 400 with one, so an
+  anonymous caller cannot probe identifier shape and a typo is never reported as
+  a denial. VIEWER is shown to be refused the audit surface with a 403.
+* the boundary translations the router owns: a JSON span arrives as a two-element
+  *list* and is converted to the tuple the builder requires — the builder is
+  deliberately left strict, because its strictness is what makes a float
+  unrepresentable;
+* the two states that are not the caller's fault: an absent backup key is a 503
+  (`disaster_recovery_unavailable`), and a manager that refuses the artifact is a
+  409 — with the specific `DisasterRecoveryError` handler declared *before* the
+  generic `ValueError` one, because the former subclasses the latter.
+
+`tests/integration/test_studio_multiprocess_crash_recovery.py` (4 tests) is the
+process-boundary proof the in-process slice cannot give. Four separate OS
+processes walk the loop against the same durable files:
+
+| Process | Does | Is killed? |
+|---|---|---|
+| prepare | seeds the approval, writes the asset | no |
+| A | consumes the approval, then ``os._exit``-style SIGKILL before enqueue | **SIGKILL, no exit handler** |
+| B | reconciles: must not re-consume, must not double-enqueue | no |
+| C | worker writes bytes, marks the row completed, drains a real `CreativeGraph` | no |
+| D | builds and verifies the `ArtifactPassport` from the journal | no |
+
+The parent asserts against the children's durable files (one queue row, one
+outbox row, `APPROVAL_CONSUMED` on disk), and asserts no child wrote bytecode.
+
+### 3.4 Latency — N=3, bound to the measured commit
+
+`scripts/benchmark_wave4_studio_e2e.py --trials 3 --iterations 5`, three trials
+per path, each in a **fresh temporary directory** so no trial inherits warmth:
+
+| # | Path | Median | p95 | Stddev |
+|---|---|---:|---:|---:|
+| a | authority-bridge proof + integrity | 0.662 ms | 1.317 ms | 0.437 ms |
+| b | revision pinning + worker verification | 4.793 ms | 5.478 ms | 0.449 ms |
+| c | rational preview readback + WYSIWYS | 1.904 ms | 2.121 ms | 0.144 ms |
+| d | execution-outbox full cycle | 19.382 ms | 20.855 ms | 0.976 ms |
+| e | DR hot backup → verify → restore | 30.697 ms | 33.933 ms | 2.178 ms |
+
+p95 is **nearest-rank**, not interpolated: at N=3 an interpolated p95 is a number
+no observation supports, and the honest answer is the maximum observation. The
+wide relative spread on (a) is expected — a sub-millisecond operation is dominated
+by scheduling noise — while (d) and (e), the two paths that fsync a real SQLite
+write, are correspondingly stable. The report is bound to the exact HEAD SHA
+(`-dirty` suffixed when the worktree is not clean), so no number can be quoted
+against a tree it was not measured on.
 
 ---
 

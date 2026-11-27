@@ -134,7 +134,7 @@ placeholder text.
 
 | Document | What it is |
 |---|---|
-| [audits/STUDIO_WAVES_GATE_EVIDENCE_2026-11-27.md](audits/STUDIO_WAVES_GATE_EVIDENCE_2026-11-27.md) | Studio waves 1-6: the repository's eight gates measured at `3f80f9a`, the 40/40 mutation campaign, and the two gates this sandbox could not measure. |
+| [audits/STUDIO_WAVES_GATE_EVIDENCE_2026-11-27.md](audits/STUDIO_WAVES_GATE_EVIDENCE_2026-11-27.md) | Studio waves 1-6: durable revision pinning, the crash-safe execution outbox, exact rational preview readback and production DR — each module at 100 % line *and* branch coverage, the 50/50 mutation campaign, the N=3 benchmark bound to `e54bc7b4`, and the gates this sandbox could not measure. |
 | [audits/AUDIT_REPORT_2026-09-21.md](audits/AUDIT_REPORT_2026-09-21.md) | Full architecture audit (P0 findings + command honesty matrix). |
 | [audits/HANDOFF_ANALYSIS_2026-09-21.md](audits/HANDOFF_ANALYSIS_2026-09-21.md) | Board GC + engineered handoff analysis (agent D session). |
 | [audits/REPO_HYGIENE_REPORT_2026-09-21.md](audits/REPO_HYGIENE_REPORT_2026-09-21.md) | Repository hygiene pass: docs reorganisation, release alignment, branch janitorial work. |
