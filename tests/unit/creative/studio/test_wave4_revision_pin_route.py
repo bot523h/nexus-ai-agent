@@ -140,9 +140,7 @@ class TestAuthorization:
         response = _pin(deployment["client"], _pin_body(), token=VIEWER_TOKEN)
         assert response.status_code == 403, response.text[:400]
 
-    def test_an_anonymous_caller_is_refused_before_anything_else(
-        self, deployment: Any
-    ) -> None:
+    def test_an_anonymous_caller_is_refused_before_anything_else(self, deployment: Any) -> None:
         response = _pin(deployment["client"], _pin_body(), token=None)  # type: ignore[arg-type]
         assert response.status_code == 401, response.text[:400]
 
@@ -199,9 +197,7 @@ class TestPointerLockstep:
     def test_the_revisions_endpoint_reflects_the_pin(self, deployment: Any) -> None:
         client = deployment["client"]
         assert _pin(client, _pin_body()).status_code == 201
-        listed = client.get(
-            f"/api/studio/projects/{PROJECT}/ibpc/revisions", headers=_headers()
-        )
+        listed = client.get(f"/api/studio/projects/{PROJECT}/ibpc/revisions", headers=_headers())
         assert listed.status_code == 200, listed.text[:400]
         payload = listed.json()
         assert payload["wired"] is True
