@@ -1895,4 +1895,3 @@ class TestCancelledWaiterLeaseLeak:
             assert governor.stats()["waiting"] == 0
         finally:
             governor.shutdown()
-

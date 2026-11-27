@@ -57,16 +57,34 @@ to regenerate the shared artifact.
 
 ## 2. Test evidence for this branch
 
-| Suite | Tests | Time | Result |
-|---|---:|---:|---|
-| `tests/unit/creative/studio/test_studio_directory_bridge.py` | 41 | — | PASS |
-| `tests/unit/creative/studio/test_revision_pinning.py` | 89 | — | PASS |
-| `tests/unit/creative/ibpc/test_execution_outbox.py` | 106 | — | PASS |
-| `tests/unit/creative/studio/test_preview_readback.py` | 113 | — | PASS |
-| `tests/unit/creative/studio/test_production_dr.py` | 85 | — | PASS |
-| `tests/integration/test_nagar_studio_e2e_vertical_slice.py` | 24 | 1.4 s | PASS |
-| `tests/unit/creative/studio/test_wave6b_studio_mutation_campaign.py` | 23 (1 opt-in) | 0.9 s | PASS |
-| **combined targeted run** | **439 passed, 1 skipped** | 10.6 s | **PASS** |
+| Suite | Tests | Result |
+|---|---:|---|
+| `tests/unit/creative/studio/test_studio_directory_bridge.py` | 47 | PASS |
+| `tests/unit/creative/studio/test_revision_pinning.py` | 101 | PASS |
+| `tests/unit/creative/ibpc/test_execution_outbox.py` | 88 | PASS |
+| `tests/unit/creative/studio/test_preview_readback.py` | 128 | PASS |
+| `tests/unit/creative/studio/test_production_dr.py` | 121 | PASS |
+| `tests/unit/creative/studio/test_wave4_studio_http_wiring.py` | 57 | PASS |
+| `tests/unit/creative/studio/test_wave6b_studio_mutation_campaign.py` | 24 (1 opt-in) | PASS |
+| `tests/integration/test_nagar_studio_e2e_vertical_slice.py` | 24 | PASS |
+| `tests/integration/test_studio_multiprocess_crash_recovery.py` | 4 | PASS |
+| **combined targeted run** | **663 passed, 1 skipped** | **PASS** |
+
+The command that produced those numbers, verbatim:
+
+```
+PYTHONPATH=src COVERAGE_FILE=/tmp/.coverage.w4b TMPDIR=/tmp/pytest_studio_waves \
+    .venv/bin/python -m pytest -q --cov-branch --cov=nexus_ai_agent \
+    --cov-report=term-missing \
+    tests/unit/creative/studio/ \
+    tests/unit/creative/ibpc/test_execution_outbox.py \
+    tests/integration/test_nagar_studio_e2e_vertical_slice.py \
+    tests/integration/test_studio_multiprocess_crash_recovery.py \
+    tests/unit/test_wave3_ibpc_durability.py \
+    tests/integration/test_api_gate_inventory.py \
+    -p no:cacheprovider
+663 passed, 1 skipped, 1 warning in 57.60s
+```
 
 All five production modules carry **100 % line and branch coverage**, measured
 with `coverage run --branch` over exactly these suites:
@@ -74,10 +92,12 @@ with `coverage run --branch` over exactly these suites:
 ```
 source file                              stmts  miss  branch  br-miss  cover
 adapters/studio_directory_bridge.py        151     0      34        0   100%
-creative/studio/preview_readback.py        411     0     136        0   100%
-creative/studio/production_dr.py           492     0     100        0   100%
-creative/studio/revision_pinning.py        327     0     108        0   100%
-nagar/ibpc/execution_outbox.py             404     0     102        0   100%
+api/studio_ibpc.py                         539     0      62        0   100%
+creative/studio/preview_readback.py        429     0     142        0   100%
+creative/studio/production_dr.py           552     0     126        0   100%
+creative/studio/revision_pinning.py        351     0     116        0   100%
+nagar/ibpc/composition.py                  123     0      34        0   100%
+nagar/ibpc/execution_outbox.py             499     0     132        0   100%
 ```
 
 The only sub-100 % lines in the targeted run are inside a test module's own
@@ -139,14 +159,16 @@ without leaving a target behind.
 
 ---
 
-## 3. Mutation campaign — 40/40, and what it found
+## 3. Mutation campaign — 50/50, and what it found
 
 `scripts/run_wave4_studio_e2e_mutations.py` rewrites one shipped guard at a time
-across the five modules: **40 mutants, eight per module**, every anchor occurring
-exactly once, every mutant parsed, every file restored byte-for-byte and
-re-verified by SHA-256.
+across the five modules: **50 mutants**, every anchor occurring exactly once,
+every mutant parsed, every file restored byte-for-byte and re-verified by
+SHA-256.  M01–M40 are eight per module; M41–M50 attack the specific defects
+Waves 1–3 fixed, which distributes as 8 / 9 / 11 / 11 / 11 rather than a tidier
+ten each — the measured split is recorded, not rounded.
 
-**Result: 40/40 `VALID_KILL`.**
+**Result: 50/50 `VALID_KILL`.**
 
 The campaign found three things about this codebase that reading the tests would
 not have:
@@ -173,13 +195,13 @@ not have:
 slice:
 
 ```
-unit suites catch 40/40
-the slice catches 16/40 on its own
+unit suites catch 50/50
+the slice catches 16/50 on its own
 missed by both: 0
 ```
 
 A six-mutant sample went from **1/6 to 6/6** after the negative-path class was
-added. The remaining 24 are guarded at layers the slice does not drive (key
+added. The remaining 34 are guarded at layers the slice does not drive (key
 material, pruning, `flock` helpers, governor accounting) and are explicitly *not*
 claimed as slice evidence.
 

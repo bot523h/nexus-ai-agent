@@ -187,6 +187,15 @@ class IBPCServiceDeps:
     authorized_asset_root: Path | None = None
     project_revision_resolver: Any | None = None  # Callable[[str], str] | None
     owned_closables: tuple[Any, ...] = ()
+    #: Optional Wave-4 execution seam. When supplied, ``execute`` routes its
+    #: approval-consumption and enqueue through this coordinator so a crash
+    #: between the two is recoverable instead of stranding the turn. When absent
+    #: the legacy in-line path runs unchanged -- this is a backward-compatible
+    #: hook, never a requirement.
+    execution_coordinator: Any | None = None
+    #: Optional Wave-4 pinning store. When supplied, a successful turn honours
+    #: the project's durable head instead of the injected revision provider.
+    revision_pinning_store: Any | None = None
 
 
 @dataclass(frozen=True)
@@ -443,6 +452,29 @@ class IBPCService:
     @property
     def privacy(self) -> PrivacyPolicy:
         return self._privacy
+
+    @property
+    def execution_coordinator(self) -> Any | None:
+        """The optional crash-safe execution seam (``None`` on the legacy path)."""
+        return self._deps.execution_coordinator
+
+    @property
+    def revision_pinning_store(self) -> Any | None:
+        """The optional durable revision-pinning store (``None`` when unwired)."""
+        return self._deps.revision_pinning_store
+
+    def durable_head_revision(self, project_id: str) -> str | None:
+        """The project's pinned head, or ``None`` when nothing is pinned yet.
+
+        This is a *read-only* projection: it never creates a head and never
+        raises for an unknown project, so the service can ask the question on
+        every turn without changing behaviour when the store is unwired.
+        """
+        store = self._deps.revision_pinning_store
+        if store is None:
+            return None
+        head = store.head_of(project_id)
+        return None if head is None else str(head)
 
     def _authorize_studio_action(
         self,

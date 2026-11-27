@@ -20,6 +20,7 @@ from nexus_ai_agent.adapters.studio_principal_auth import (
 )
 from nexus_ai_agent.api.studio_session import require_studio_caller
 from nexus_ai_agent.creative.packs.runtime import build_runtime_registry
+from nexus_ai_agent.creative.studio.production_dr import DisasterRecoveryError
 from nexus_ai_agent.nagar.ibpc.approval import ApprovalError
 from nexus_ai_agent.nagar.ibpc.approval_mac import KeyProviderError, StaticKeyRing
 from nexus_ai_agent.nagar.ibpc.authority import (
@@ -28,9 +29,18 @@ from nexus_ai_agent.nagar.ibpc.authority import (
     StudioAuthorizationError,
     StudioRole,
 )
+from nexus_ai_agent.nagar.ibpc.composition import (
+    UnifiedStudioRuntime,
+    build_unified_studio_runtime,
+)
 from nexus_ai_agent.nagar.ibpc.models import DataCategory, PrivacyMode, ProcessingScope
 from nexus_ai_agent.nagar.ibpc.privacy import PrivacyViolation
-from nexus_ai_agent.nagar.ibpc.service import IBPCService, PipelineResult
+from nexus_ai_agent.nagar.ibpc.service import (
+    IBPCService,
+    IBPCServiceDeps,
+    PipelineResult,
+    utc_now,
+)
 from nexus_ai_agent.nagar.ibpc.session import (
     DuplicateTurnError,
     IdempotencyConflictError,
@@ -128,6 +138,95 @@ def _build_service(
         auth_store=auth_store,
         channel_binding_ref=binding_ref,
         authorized_asset_root=_studio_authorized_asset_root(),
+    )
+
+
+def _runtime_store_names() -> dict[str, str]:
+    """Resolve the durable store filenames, allowing an operator override.
+
+    Kept as a function (not a constant) so a test can point every store at a
+    temporary directory through the same environment the deployment uses.
+    """
+    from nexus_ai_agent.nagar.ibpc.composition import RUNTIME_STORE_FILENAMES
+
+    names = dict(RUNTIME_STORE_FILENAMES)
+    override = os.getenv("NEXUS_STUDIO_AUTHORITY_DB", "").strip()
+    if override:
+        # The authority store lives in the auth database the rest of this router
+        # already uses; keeping one path for it avoids a second copy of the same
+        # principals drifting apart.
+        names["authority"] = Path(override).name
+    return names
+
+
+def _normalise_operations(operations: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Turn a JSON operation list into what the builder actually consumes.
+
+    JSON has no tuple, so a ``(start, end)`` span arrives as a two-element
+    *list* and the builder -- which is deliberately strict about its input --
+    refuses it.  Translating at the boundary is the router's job: the builder's
+    strictness is the property that makes a float unrepresentable, and loosening
+    it so that HTTP could pass a list through would weaken every in-process
+    caller too.
+
+    ``deltas`` is normalised the same way for the same reason.  Anything else is
+    passed through untouched so the builder, not this function, decides what is
+    valid.
+    """
+    normalised: list[dict[str, Any]] = []
+    for operation in operations:
+        copy = dict(operation)
+        span = copy.get("span")
+        if isinstance(span, list) and len(span) == 2:
+            copy["span"] = (span[0], span[1])
+        deltas = copy.get("deltas")
+        if isinstance(deltas, list):
+            copy["deltas"] = tuple(deltas)
+        normalised.append(copy)
+    return normalised
+
+
+def _build_runtime(
+    auth_store: StudioPrincipalAuthStore, *, binding_ref: str | None
+) -> UnifiedStudioRuntime:
+    """Assemble the Wave-4 runtime for one request.
+
+    The runtime is built per request, exactly like the service it wraps: the
+    durable stores are the shared state, and constructing them is cheap because
+    SQLite pages are already warm.  Building a long-lived global would leak file
+    handles across tests and across a worker reload, which is the failure mode
+    the per-request service already avoids.
+    """
+    from nexus_ai_agent.api.app import get_creative_registry
+
+    queue = get_creative_registry().queue
+    revision = int(os.getenv("NEXUS_STUDIO_ACTIVE_REVISION", "0") or "0")
+    try:
+        key_provider = StaticKeyRing.from_environment(os.environ)
+    except KeyProviderError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="approval_key_unavailable: approval key ring is not configured",
+        ) from exc
+    workspace_root = _studio_workspace_root()
+    deps = IBPCServiceDeps(
+        queue=queue,
+        registry=build_runtime_registry(),
+        workspace_root=workspace_root,
+        revision_provider=lambda: revision,
+        now=utc_now,
+        authority=auth_store,
+        authorizer=ProjectMembershipAuthorizer(auth_store),
+        channel_binding_ref=binding_ref,
+        durable=True,
+        authorized_asset_root=_studio_authorized_asset_root(),
+    )
+    return build_unified_studio_runtime(
+        deps,
+        key_provider=key_provider,
+        store_filenames=_runtime_store_names(),
+        enable_execution_outbox=True,
+        enable_disaster_recovery=True,
     )
 
 
@@ -918,6 +1017,232 @@ async def revoke_project_principal_binding(
             "binding_ref": binding_ref,
             "status": "REVOKED",
         }
+    finally:
+        auth_store.close()
+
+
+# --------------------------------------------------------------------------- #
+# Wave 4 — preview readback, revision pinning, and disaster recovery over HTTP
+# --------------------------------------------------------------------------- #
+class PreviewReadbackRequest(BaseModel):
+    """One preview the caller wants rendered as a WYSIWYS-verifiable readback.
+
+    ``revision_number``, ``timebase`` and every operation are required: a
+    readback built from defaults would be a readback of nothing in particular,
+    and the digest it produces is what an approval later binds to.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    revision_id: str = Field(min_length=1, max_length=128)
+    revision_number: int = Field(ge=1)
+    timebase_numerator: int = Field(ge=1)
+    timebase_denominator: int = Field(ge=1)
+    operations: list[dict[str, Any]] = Field(min_length=1, max_length=256)
+    expected_digest: str = Field(default="", max_length=128)
+
+
+class VerifyBackupRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    bundle: str = Field(min_length=1, max_length=256)
+
+
+def _require_authenticated(
+    auth_store: StudioPrincipalAuthStore,
+    principal_token: str | None,
+) -> tuple[str, str]:
+    """401 first, always: an anonymous caller learns nothing about the request."""
+    return _authenticate_principal(auth_store, principal_token)
+
+
+def _require_valid_project_id(project_id: str) -> None:
+    """400 second: a malformed identifier is a caller error, not a denial.
+
+    Deliberately *after* authentication and *before* authorization.  Reporting
+    400 to an anonymous caller would let it probe which project identifiers are
+    well-formed, and reporting 403 before 400 would make a typo look like a
+    permissions problem.
+    """
+    if not _ID_RE.fullmatch(project_id):
+        raise HTTPException(status_code=400, detail="invalid project_id")
+
+
+@router.post("/projects/{project_id}/ibpc/preview-readback")
+async def preview_readback(
+    project_id: str,
+    body: PreviewReadbackRequest,
+    x_nexus_principal_token: str | None = Header(default=None, alias="X-Nexus-Principal-Token"),
+) -> dict[str, Any]:
+    """Render a structured preview readback and prove it is what it claims.
+
+    The response carries the readback's own digest and a ``wysiwys_verified``
+    flag produced by re-verifying the object that was just built.  A readback
+    that fails its own integrity check is a 500, not a 200 with ``false``: the
+    caller cannot act on a preview the server itself does not trust.
+    """
+    auth_store = get_studio_auth_store()
+    try:
+        principal_id, auth_tenant_id = _require_authenticated(auth_store, x_nexus_principal_token)
+        _require_valid_project_id(project_id)
+        binding_ref = auth_store.default_binding_for(principal_id) or ""
+        _authorize(
+            auth_store,
+            principal_id=principal_id,
+            project_id=project_id,
+            action=StudioAction.READ_SESSION,
+            binding_ref=binding_ref,
+        )
+        # ``Field(ge=1)`` on both timebase components already rejects a
+        # non-positive rate with a 422, so no runtime re-check is needed here.
+        runtime = _build_runtime(auth_store, binding_ref=binding_ref)
+        try:
+            try:
+                readback = runtime.preview_readback_for(
+                    tenant_id=auth_tenant_id,
+                    project_id=project_id,
+                    revision_id=body.revision_id,
+                    revision_number=body.revision_number,
+                    principal_id=principal_id,
+                    timebase=(body.timebase_numerator, body.timebase_denominator),
+                    operations=_normalise_operations(body.operations),
+                )
+            except (TypeError, ValueError) as exc:
+                # A malformed operation is the caller's payload, not ours.
+                raise HTTPException(status_code=400, detail=f"invalid_operation: {exc}") from exc
+            verified = runtime.verify_readback(readback, expected_digest=body.expected_digest)
+            if not verified:
+                raise HTTPException(
+                    status_code=409,
+                    detail="readback_integrity_failure: the rendered readback does not "
+                    "verify against its own digest",
+                )
+            # ``to_dict`` is the readback's own canonical projection -- the same
+            # one its digest is computed over -- so the response cannot drift
+            # from what was verified.
+            payload = readback.to_dict()
+            payload["preview_digest"] = readback.preview_digest
+            payload["wysiwys_verified"] = True
+            return payload
+        finally:
+            runtime.close()
+    finally:
+        auth_store.close()
+
+
+@router.get("/projects/{project_id}/ibpc/revisions")
+async def read_pinned_revisions(
+    project_id: str,
+    x_nexus_principal_token: str | None = Header(default=None, alias="X-Nexus-Principal-Token"),
+) -> dict[str, Any]:
+    """The project's durable revision head and the immutable chain behind it."""
+    auth_store = get_studio_auth_store()
+    try:
+        principal_id, _auth_tenant_id = _require_authenticated(auth_store, x_nexus_principal_token)
+        _require_valid_project_id(project_id)
+        binding_ref = auth_store.default_binding_for(principal_id) or ""
+        _authorize(
+            auth_store,
+            principal_id=principal_id,
+            project_id=project_id,
+            action=StudioAction.READ_JOB,
+            binding_ref=binding_ref,
+        )
+        runtime = _build_runtime(auth_store, binding_ref=binding_ref)
+        try:
+            return runtime.revision_status(project_id)
+        finally:
+            runtime.close()
+    finally:
+        auth_store.close()
+
+
+@router.get("/projects/{project_id}/ibpc/disaster-recovery")
+async def read_disaster_recovery_status(
+    project_id: str,
+    x_nexus_principal_token: str | None = Header(default=None, alias="X-Nexus-Principal-Token"),
+) -> dict[str, Any]:
+    """Whether DR is wired, where bundles live, and which bundles exist.
+
+    Reading this is an audit action: knowing which backups exist is exactly the
+    information an attacker would want before deleting them.
+    """
+    auth_store = get_studio_auth_store()
+    try:
+        principal_id, _auth_tenant_id = _require_authenticated(auth_store, x_nexus_principal_token)
+        _require_valid_project_id(project_id)
+        binding_ref = auth_store.default_binding_for(principal_id) or ""
+        _authorize(
+            auth_store,
+            principal_id=principal_id,
+            project_id=project_id,
+            action=StudioAction.READ_AUDIT,
+            binding_ref=binding_ref,
+        )
+        runtime = _build_runtime(auth_store, binding_ref=binding_ref)
+        try:
+            status = runtime.dr_status()
+            status["tenant_id"] = _auth_tenant_id
+            return status
+        finally:
+            runtime.close()
+    finally:
+        auth_store.close()
+
+
+@router.post("/projects/{project_id}/ibpc/disaster-recovery/verify")
+async def verify_disaster_recovery_bundle(
+    project_id: str,
+    body: VerifyBackupRequest,
+    x_nexus_principal_token: str | None = Header(default=None, alias="X-Nexus-Principal-Token"),
+) -> dict[str, Any]:
+    """Re-verify one bundle's HMAC, digest, size, integrity and row counts.
+
+    Verification is read-only by design, so this endpoint is safe to call on a
+    production backup: it cannot restore, delete or repair anything.
+    """
+    auth_store = get_studio_auth_store()
+    try:
+        principal_id, _auth_tenant_id = _require_authenticated(auth_store, x_nexus_principal_token)
+        _require_valid_project_id(project_id)
+        binding_ref = auth_store.default_binding_for(principal_id) or ""
+        _authorize(
+            auth_store,
+            principal_id=principal_id,
+            project_id=project_id,
+            action=StudioAction.READ_AUDIT,
+            binding_ref=binding_ref,
+        )
+        runtime = _build_runtime(auth_store, binding_ref=binding_ref)
+        try:
+            try:
+                report = runtime.verify_backup(body.bundle)
+            # Order matters: ``DisasterRecoveryError`` is a ``ValueError``, so the
+            # specific handler has to come first or every DR refusal would be
+            # flattened into the generic "bad request" answer.
+            except DisasterRecoveryError as exc:
+                # The manager refused the artifact itself: a malformed manifest, a
+                # key mismatch, a bundle signed by another deployment.
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+            except RuntimeError as exc:
+                # The runtime reports "no DR manager" as RuntimeError, which is a
+                # deployment gap (503), never the caller's fault (400).
+                raise HTTPException(
+                    status_code=503,
+                    detail="disaster_recovery_unavailable: no backup key is configured",
+                ) from exc
+            except ValueError as exc:
+                # A bundle *name* that cannot be a name (a traversal, a blank)
+                # is the caller's error and is caught before any I/O.
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            payload = report.to_dict()
+            payload["project_id"] = project_id
+            payload["bundle"] = body.bundle
+            # ``verified`` is the whole answer; the per-field report is what lets
+            # an operator see *which* check failed without opening the bundle.
+            return payload
+        finally:
+            runtime.close()
     finally:
         auth_store.close()
 

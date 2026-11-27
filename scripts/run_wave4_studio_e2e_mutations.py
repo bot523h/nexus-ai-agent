@@ -328,10 +328,8 @@ MUTATIONS: tuple[Mutation, ...] = (
     Mutation(
         "M18_outbox_reconcile_ignores_consumed_rows",
         OUTBOX,
-        '            target="APPROVAL_CONSUMED",\n'
-        '            detail=detail,\n',
-        '            target="INTENT_STAGED",\n'
-        '            detail=detail,\n',
+        '            target="APPROVAL_CONSUMED",\n            detail=detail,\n',
+        '            target="INTENT_STAGED",\n            detail=detail,\n',
         "consuming the approval must advance the row; writing it back to "
         "INTENT_STAGED re-arms a spent single-use approval",
         _nodes(
@@ -376,14 +374,14 @@ MUTATIONS: tuple[Mutation, ...] = (
     Mutation(
         "M22_outbox_verification_skipped",
         OUTBOX,
-        '            return self._hold_for_verification(\n'
+        "            return self._hold_for_verification(\n"
         '                row, CompletionVerificationError("verify_completion_fn_required")\n'
-        '            )',
-        '            return self._store.mark_completed(\n'
-        '                outbox_id=row.outbox_id,\n'
-        '                artifact_id=completion.artifact_id,\n'
-        '                passport_id=completion.passport_id,\n'
-        '            )',
+        "            )",
+        "            return self._store.mark_completed(\n"
+        "                outbox_id=row.outbox_id,\n"
+        "                artifact_id=completion.artifact_id,\n"
+        "                passport_id=completion.passport_id,\n"
+        "            )",
         "a completion with no verifier must fail closed, never be trusted",
         _nodes(
             OUTBOX_TESTS,
@@ -616,8 +614,7 @@ MUTATIONS: tuple[Mutation, ...] = (
         OUTBOX,
         "        if not isinstance(proof, VerifiedExecutionCompletion):",
         "        if False and not isinstance(proof, VerifiedExecutionCompletion):",
-        "an unverified or wrongly-typed completion proof must never be promoted "
-        "to COMPLETED",
+        "an unverified or wrongly-typed completion proof must never be promoted to COMPLETED",
         _nodes(
             OUTBOX_TESTS,
             "TestVerifiedCompletionIsMandatory::"
@@ -681,8 +678,7 @@ MUTATIONS: tuple[Mutation, ...] = (
     Mutation(
         "M46_dr_cancelled_waiter_keeps_no_guard",
         DR,
-        "            self._release_orphaned_lease(lease_future)\n"
-        "            raise",
+        "            self._release_orphaned_lease(lease_future)\n            raise",
         "            raise",
         "a cancelled waiter's worker thread still wins a lease; without the "
         "done-callback release that slot is lost for the governor's lifetime",
@@ -719,8 +715,8 @@ MUTATIONS: tuple[Mutation, ...] = (
     Mutation(
         "M49_readback_comparison_drops_the_occurrence",
         READBACK,
-        '        indexed[(pair[0], pair[1], occurrence)] = operation',
-        '        indexed[(pair[0], pair[1], 0)] = operation',
+        "        indexed[(pair[0], pair[1], occurrence)] = operation",
+        "        indexed[(pair[0], pair[1], 0)] = operation",
         "keying operations by the pair alone overwrites a repeated operation, so "
         "adding a second trim on the same clip compares as identical",
         _nodes(
@@ -893,9 +889,7 @@ def redundancy_report() -> int:
             # count a syntax/import/collection error (exit 2/3/4) as "caught",
             # which is exactly the false evidence Constitutional Invariant 5
             # exists to forbid.
-            unit_failed = _caught(
-                _run_pytest([_suite_for(mutation)]), mutation.expected_node_ids
-            )
+            unit_failed = _caught(_run_pytest([_suite_for(mutation)]), mutation.expected_node_ids)
             slice_failed = _caught(_run_pytest([SLICE]))
         finally:
             path.write_bytes(original_bytes)
