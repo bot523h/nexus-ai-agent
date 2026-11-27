@@ -8955,7 +8955,7 @@
       "title": "W11X phase 3: fail-closed perception gate, runtime scene-cut/silence GUM, 30/30 mutants",
       "zone": "pr-repair-campaign",
       "priority": "P0",
-      "status": "active",
+      "status": "completed_merged",
       "scope": "Close the post-merge audit of PR #363 on main 8421c05a: enforce Law R31 admitted-is-True across the perception handlers, wire scene-cut and silence GUM at runtime, reconcile the pr-repair-247 board record, refresh the forensic triage baseline and expand the AST mutation campaign to 30/30.",
       "prerequisites": [],
       "acceptance_criteria": [
@@ -8987,13 +8987,16 @@
         "docs/DECISION_LOG.md",
         ".agents/board.json"
       ],
-      "agent_branch": "openhands/w11x-phase3-runtime-gum-failclosed-closure",
-      "claimed_at": "2026-11-27T06:31:50Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 24,
       "gates_owner": false,
       "generation": 1,
       "owner_hint": "",
-      "note": ""
+      "note": "Reconciled during the Wave 3-R7 port (PR #367): the delivered PR had already merged, so the stale active lease was cleared instead of blocking every other board writer.",
+      "delivered_pr": 368,
+      "merge_commit_sha": "54073d1f4fde8c1d5b8f2b1837c3d1f8a442f1cf",
+      "evidence": "PR #368 state=MERGED at 54073d1f4fde8c1d5b8f2b1837c3d1f8a442f1cf (2026-11-27T09:39:16Z) from branch openhands/w11x-phase3-runtime-gum-failclosed-closure; no live lease. Recorded as active with a live TTL after the merge, which is why the board `check` still treated its exclusive paths (including .agents/board.json) as claimed."
     }
   ],
   "deferred_log": [
