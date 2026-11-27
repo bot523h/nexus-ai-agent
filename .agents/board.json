@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-11-27T06:31:50Z",
+  "updated_at": "2026-11-27T11:51:02Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -1310,6 +1310,163 @@
         "src/nexus_ai_agent/api/studio_ibpc.py",
         "tests/unit/test_wave3_ibpc_durability.py",
         "tests/unit/creative/test_wave3_ibpc_mutations.py"
+      ]
+    },
+    {
+      "id": "pr-backlog-security",
+      "description": "PR backlog convergence 2026-11-27: security, authorization and command wiring (resume anchor; paths mirror the member PRs)",
+      "paths": [
+        "./",
+        ".Jules/",
+        ".agents/",
+        ".github/",
+        ".github/workflows/",
+        "docs/",
+        "docs/architecture/",
+        "docs/architecture/adr/",
+        "docs/audits/",
+        "docs/audits/receipts/",
+        "scripts/",
+        "src/nexus_ai_agent/",
+        "src/nexus_ai_agent/adapters/",
+        "src/nexus_ai_agent/agent/",
+        "src/nexus_ai_agent/agents/store/",
+        "src/nexus_ai_agent/api/",
+        "src/nexus_ai_agent/bot/",
+        "src/nexus_ai_agent/bot/surface/",
+        "src/nexus_ai_agent/cockpit/",
+        "src/nexus_ai_agent/cockpit/static/",
+        "src/nexus_ai_agent/config/",
+        "src/nexus_ai_agent/continuum/",
+        "src/nexus_ai_agent/core/",
+        "src/nexus_ai_agent/creative/"
+      ]
+    },
+    {
+      "id": "pr-backlog-runtime",
+      "description": "PR backlog convergence 2026-11-27: runtime, queue, storage and memory (resume anchor; paths mirror the member PRs)",
+      "paths": [
+        "./",
+        ".agents/",
+        ".github/",
+        ".github/workflows/",
+        "docs/",
+        "docs/architecture/",
+        "docs/architecture/adr/",
+        "docs/audits/",
+        "docs/ops/",
+        "migrations/versions/",
+        "scripts/",
+        "scripts/probes/",
+        "src/nexus_ai_agent/",
+        "src/nexus_ai_agent/adapters/",
+        "src/nexus_ai_agent/adapters/instrumentation/",
+        "src/nexus_ai_agent/agents/",
+        "src/nexus_ai_agent/agents/store/",
+        "src/nexus_ai_agent/application/",
+        "src/nexus_ai_agent/bot/",
+        "src/nexus_ai_agent/config/",
+        "src/nexus_ai_agent/creative/",
+        "src/nexus_ai_agent/domain/",
+        "src/nexus_ai_agent/features/",
+        "src/nexus_ai_agent/infrastructure/observability/"
+      ]
+    },
+    {
+      "id": "pr-backlog-creative",
+      "description": "PR backlog convergence 2026-11-27: creative runtime, operations and assets (resume anchor; paths mirror the member PRs)",
+      "paths": [
+        "./",
+        ".agents/",
+        ".github/workflows/",
+        ".openhands/memory/",
+        "docs/",
+        "docs/architecture/",
+        "docs/architecture/adr/",
+        "docs/audits/",
+        "docs/engineering/",
+        "docs/ops/",
+        "evidence/",
+        "evidence/media/",
+        "scripts/",
+        "src/nexus_ai_agent/",
+        "src/nexus_ai_agent/adapters/",
+        "src/nexus_ai_agent/api/",
+        "src/nexus_ai_agent/bot/",
+        "src/nexus_ai_agent/continuum/",
+        "src/nexus_ai_agent/creative/",
+        "src/nexus_ai_agent/creative/assets/",
+        "src/nexus_ai_agent/creative/composition/",
+        "src/nexus_ai_agent/creative/interop/",
+        "src/nexus_ai_agent/creative/luts/",
+        "src/nexus_ai_agent/creative/otio/"
+      ]
+    },
+    {
+      "id": "pr-backlog-studio",
+      "description": "PR backlog convergence 2026-11-27: Studio transactions and agent intelligence (resume anchor; paths mirror the member PRs)",
+      "paths": [
+        ".agents/",
+        "docs/",
+        "docs/wave3d-closure-v4/",
+        "docs/wave3d-closure-v4/docs/",
+        "docs/wave3d-closure-v4/evidence/",
+        "docs/wave3d-closure-v4/patches/",
+        "docs/wave3d-closure-v4/tests/dispatch_tests/tests/unit/",
+        "docs/wave3d-closure-v4/tests/patch_a_tests/tests/unit/",
+        "docs/wave3d-closure-v4/tests/patch_b_tests/tests/unit/",
+        "docs/wave3d-closure-v4/tests/tiso01_tests/unit/",
+        "scripts/",
+        "src/nexus_ai_agent/",
+        "src/nexus_ai_agent/bot/",
+        "src/nexus_ai_agent/creative/",
+        "src/nexus_ai_agent/creative/intelligence/",
+        "src/nexus_ai_agent/creative/spine/",
+        "src/nexus_ai_agent/creative/studio/",
+        "src/nexus_ai_agent/i18n/locales/",
+        "src/nexus_ai_agent/jobs/",
+        "src/nexus_ai_agent/orchestration/",
+        "tests/architecture/",
+        "tests/integration/",
+        "tests/unit/"
+      ]
+    },
+    {
+      "id": "pr-backlog-causal-memory",
+      "description": "PR backlog convergence 2026-11-27: causal memory (resume anchor; paths mirror the member PRs)",
+      "paths": [
+        "./",
+        ".agents/",
+        "docs/",
+        "docs/architecture/",
+        "docs/engineering/",
+        "src/nexus_ai_agent/continuum/",
+        "src/nexus_ai_agent/nagar/causal_memory/",
+        "src/nexus_ai_agent/nagar/director/",
+        "src/nexus_ai_agent/nagar/p0/",
+        "tests/architecture/",
+        "tests/integration/",
+        "tests/unit/"
+      ]
+    },
+    {
+      "id": "pr-backlog-governance",
+      "description": "PR backlog convergence 2026-11-27: governance, documentation and automation (resume anchor; paths mirror the member PRs)",
+      "paths": [
+        "./",
+        ".agents/",
+        ".github/",
+        ".github/workflows/",
+        "docs/",
+        "docs/architecture/",
+        "docs/architecture/adr/",
+        "scripts/",
+        "src/nexus_ai_agent/agents/",
+        "src/nexus_ai_agent/features/",
+        "src/nexus_ai_agent/orchestration/",
+        "src/nexus_ai_agent/storage/",
+        "tests/architecture/",
+        "tests/unit/"
       ]
     }
   ],
@@ -8923,7 +9080,7 @@
       "zone": "nagar-ibpc-wave3-durability",
       "priority": "P0",
       "status": "active_in_review",
-      "scope": "Post-PR #365 Wave 3.5 defense-in-depth closure on PR #366: align durable vs in-memory provider_id consent matching, fail-closed empty/mismatched tenant_id at both DurablePrivacyConsentStore and PrivacyPolicy layers with persisted SQLite DENIED audit rows, enforce auth-first (401 before 400) and shared _resolve_scoped_project_id() conflict rejection in Studio IBPC API, reconcile .agents/board.json provenance (PR #355-#365), close superseded PR #364, and expand AST campaign M37-M40 (40-mutant AST campaign).",
+      "scope": "Post-PR #365 Wave 3.5 defense-in-depth closure on PR #366: align durable vs in-memory provider_id consent matching, fail-closed empty/mismatched tenant_id at both DurablePrivacyConsentStore and PrivacyPolicy layers with persisted SQLite DENIED audit rows, enforce auth-first (401 before 400) and shared _resolve_scoped_project_id() conflict rejection in Studio IBPC API, reconcile .agents/board.json provenance (PR #355-#365), close superseded PR #364, and expand AST campaign M37-M40 (40-mutant AST campaign). Reconciled 2026-11-27 by the PR backlog convergence: PR #366 is merged into main at b8dee44c5f430e65acb28e80356fd502f17cfefa (completion_records evidence), and the live successor is PR #367 (head a8a06eee) which closes the two authorization gaps left by #365.",
       "prerequisites": [
         "task-w3-ibpc-durability"
       ],
@@ -8953,7 +9110,7 @@
       "title": "W11X phase 3: fail-closed perception gate, runtime scene-cut/silence GUM, 30/30 mutants",
       "zone": "pr-repair-campaign",
       "priority": "P0",
-      "status": "active",
+      "status": "done",
       "scope": "Close the post-merge audit of PR #363 on main 8421c05a: enforce Law R31 admitted-is-True across the perception handlers, wire scene-cut and silence GUM at runtime, reconcile the pr-repair-247 board record, refresh the forensic triage baseline and expand the AST mutation campaign to 30/30.",
       "prerequisites": [],
       "acceptance_criteria": [
@@ -8985,13 +9142,139 @@
         "docs/DECISION_LOG.md",
         ".agents/board.json"
       ],
-      "agent_branch": "openhands/w11x-phase3-runtime-gum-failclosed-closure",
-      "claimed_at": "2026-11-27T06:31:50Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 24,
       "gates_owner": false,
-      "generation": 1,
+      "generation": 2,
       "owner_hint": "",
       "note": ""
+    },
+    {
+      "task": "pr-backlog-security-2026-11-27",
+      "title": "PR backlog convergence 2026-11-27: security, authorization and command wiring",
+      "zone": "pr-backlog-security",
+      "priority": "P0",
+      "status": "queued",
+      "scope": "Resume anchor for the 2026-11-27 PR backlog convergence. The following PRs were closed as DEFERRED_TO_BOARD_AND_CLOSED; their branches are preserved and remain reopenable:\n- PR #33 (branch `arena/01a0c3aa-nexus-ai-agent`)\n- PR #58 (branch `arena/01a0cf4c-nexus-ai-agent`)\n- PR #89 (branch `arena/01a0da85-nexus-ai-agent`)\n- PR #99 (branch `arena/01a0df78-nexus-ai-agent`)\n- PR #114 (branch `arena/01a0e48b-nexus-ai-agent`)\n- PR #115 (branch `arena/01a0e4f5-nexus-ai-agent`)\n- PR #149 (branch `jules-17280586122182824375-a980d7f3`)\n- PR #257 (branch `palette-ux-language-agent-callbacks-3810091352756636228`)\nThese PRs predate the merged Wave-1/Wave-3 authorization spine (#365/#366/#367) and each carries 12-20 merge-tree conflicts; none may be replayed as a whole without re-deriving it against the canonical CommandBus/policy path. Resume only after rebasing the selected PR onto current main and re-deriving its delta against the canonical implementation; reopen the PR or open a successor branch from main.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "The selected PR is rebased onto current main (or replaced by a successor branch) with its published history preserved.",
+        "The delta is re-derived against the canonical implementation; no second parallel runtime/queue/storage/authority/transaction path is introduced.",
+        "make lint, make types and make test pass on the exact new HEAD; adversarial regression coverage is added for the repaired defect.",
+        "The ownership referee (agent_board.py check) exits 0 on the actual changed files before every push, and the PR is handed off for independent review."
+      ],
+      "evidence_required": [
+        "Exact head/base/main SHAs, the rebase or successor branch, and the changed-file inventory.",
+        "Gate output (lint/types/test) with commands, results and the SHA they ran against.",
+        "The latest required CI conclusions and unresolved review threads on the exact HEAD."
+      ],
+      "exclusive_paths": []
+    },
+    {
+      "task": "pr-backlog-runtime-2026-11-27",
+      "title": "PR backlog convergence 2026-11-27: runtime, queue, storage and memory",
+      "zone": "pr-backlog-runtime",
+      "priority": "P1",
+      "status": "queued",
+      "scope": "Resume anchor for the 2026-11-27 PR backlog convergence. The following PRs were closed as DEFERRED_TO_BOARD_AND_CLOSED; their branches are preserved and remain reopenable:\n- PR #57 (branch `arena/01a0cf30-nexus-ai-agent`)\n- PR #60 (branch `arena/01a0cf50-nexus-ai-agent`)\n- PR #63 (branch `arena/01a0cf98-nexus-ai-agent`)\n- PR #92 (branch `arena/01a0da13-nexus-ai-agent`)\n- PR #113 (branch `arena/01a0e442-nexus-ai-agent`)\n- PR #117 (branch `arena/01a0e742-nexus-ai-agent`)\n- PR #118 (branch `arena/01a0e846-nexus-ai-agent`)\n- PR #121 (branch `arena/01a0e9a1-nexus-ai-agent`)\n- PR #122 (branch `arena/01a0eade-nexus-ai-agent`)\n- PR #193 (branch `arena/linux-python-foundation-20261008`)\n- PR #204 (branch `jules-9365954277398354280-a037ccfb`)\nThese PRs target runtime/queue/storage/memory surfaces that main has since reworked (resource-pack sync, engine-owned schema, async DB, sqlite-vec). #193 additionally requires an owner decision on the Python 3.14 baseline. Resume only after rebasing the selected PR onto current main and re-deriving its delta against the canonical implementation; reopen the PR or open a successor branch from main.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "The selected PR is rebased onto current main (or replaced by a successor branch) with its published history preserved.",
+        "The delta is re-derived against the canonical implementation; no second parallel runtime/queue/storage/authority/transaction path is introduced.",
+        "make lint, make types and make test pass on the exact new HEAD; adversarial regression coverage is added for the repaired defect.",
+        "The ownership referee (agent_board.py check) exits 0 on the actual changed files before every push, and the PR is handed off for independent review."
+      ],
+      "evidence_required": [
+        "Exact head/base/main SHAs, the rebase or successor branch, and the changed-file inventory.",
+        "Gate output (lint/types/test) with commands, results and the SHA they ran against.",
+        "The latest required CI conclusions and unresolved review threads on the exact HEAD."
+      ],
+      "exclusive_paths": []
+    },
+    {
+      "task": "pr-backlog-creative-2026-11-27",
+      "title": "PR backlog convergence 2026-11-27: creative runtime, operations and assets",
+      "zone": "pr-backlog-creative",
+      "priority": "P1",
+      "status": "queued",
+      "scope": "Resume anchor for the 2026-11-27 PR backlog convergence. The following PRs were closed as DEFERRED_TO_BOARD_AND_CLOSED; their branches are preserved and remain reopenable:\n- PR #64 (branch `arena/01a0d2a2-nexus-ai-agent`)\n- PR #66 (branch `arena/01a0d2d6-nexus-ai-agent`)\n- PR #69 (branch `arena/01a0d3af-nexus-ai-agent`)\n- PR #73 (branch `arena/01a0d467-nexus-ai-agent`)\n- PR #97 (branch `arena/01a0df86-nexus-ai-agent`)\n- PR #327 (branch `arena/da6837a6-nexus-ai-agent`)\n- PR #328 (branch `nagar-studio-app-20261110`)\nThe creative spine (#126/#183/#128) and the canonical asset library (creative/assets/*) already landed; these PRs carry older, conflicting variants and the Studio PWA (#328) is a product decision on top of the read API. Resume only after rebasing the selected PR onto current main and re-deriving its delta against the canonical implementation; reopen the PR or open a successor branch from main.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "The selected PR is rebased onto current main (or replaced by a successor branch) with its published history preserved.",
+        "The delta is re-derived against the canonical implementation; no second parallel runtime/queue/storage/authority/transaction path is introduced.",
+        "make lint, make types and make test pass on the exact new HEAD; adversarial regression coverage is added for the repaired defect.",
+        "The ownership referee (agent_board.py check) exits 0 on the actual changed files before every push, and the PR is handed off for independent review."
+      ],
+      "evidence_required": [
+        "Exact head/base/main SHAs, the rebase or successor branch, and the changed-file inventory.",
+        "Gate output (lint/types/test) with commands, results and the SHA they ran against.",
+        "The latest required CI conclusions and unresolved review threads on the exact HEAD."
+      ],
+      "exclusive_paths": []
+    },
+    {
+      "task": "pr-backlog-studio-2026-11-27",
+      "title": "PR backlog convergence 2026-11-27: Studio transactions and agent intelligence",
+      "zone": "pr-backlog-studio",
+      "priority": "P1",
+      "status": "queued",
+      "scope": "Resume anchor for the 2026-11-27 PR backlog convergence. The following PRs were closed as DEFERRED_TO_BOARD_AND_CLOSED; their branches are preserved and remain reopenable:\n- PR #129 (branch `jules-16705230035848180943-c7860de1`)\n- PR #150 (branch `arena/01a10528-nexus-ai-agent`)\n- PR #230 (branch `arena/aa451c49-nexus-ai-agent`)\nPlanTransaction/CommandBus landed on main via the Studio substrate; these PRs predate it and conflict with creative/studio/{bus,plan_execution,runtime}.py. Resume only after rebasing the selected PR onto current main and re-deriving its delta against the canonical implementation; reopen the PR or open a successor branch from main.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "The selected PR is rebased onto current main (or replaced by a successor branch) with its published history preserved.",
+        "The delta is re-derived against the canonical implementation; no second parallel runtime/queue/storage/authority/transaction path is introduced.",
+        "make lint, make types and make test pass on the exact new HEAD; adversarial regression coverage is added for the repaired defect.",
+        "The ownership referee (agent_board.py check) exits 0 on the actual changed files before every push, and the PR is handed off for independent review."
+      ],
+      "evidence_required": [
+        "Exact head/base/main SHAs, the rebase or successor branch, and the changed-file inventory.",
+        "Gate output (lint/types/test) with commands, results and the SHA they ran against.",
+        "The latest required CI conclusions and unresolved review threads on the exact HEAD."
+      ],
+      "exclusive_paths": []
+    },
+    {
+      "task": "pr-backlog-causal-memory-2026-11-27",
+      "title": "PR backlog convergence 2026-11-27: causal memory",
+      "zone": "pr-backlog-causal-memory",
+      "priority": "P2",
+      "status": "queued",
+      "scope": "Resume anchor for the 2026-11-27 PR backlog convergence. The following PRs were closed as DEFERRED_TO_BOARD_AND_CLOSED; their branches are preserved and remain reopenable:\n- PR #273 (branch `feat/nagar-p0-nel-semantic-time-causal-memory`)\n- PR #284 (branch `arena/nagar-causal-memory-director-impl-20261029-2208`)\nDraft causal-memory contracts (NEL semantic time, read-only Causal Memory) have no counterpart on main and need an architecture decision before a rebase. Resume only after rebasing the selected PR onto current main and re-deriving its delta against the canonical implementation; reopen the PR or open a successor branch from main.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "The selected PR is rebased onto current main (or replaced by a successor branch) with its published history preserved.",
+        "The delta is re-derived against the canonical implementation; no second parallel runtime/queue/storage/authority/transaction path is introduced.",
+        "make lint, make types and make test pass on the exact new HEAD; adversarial regression coverage is added for the repaired defect.",
+        "The ownership referee (agent_board.py check) exits 0 on the actual changed files before every push, and the PR is handed off for independent review."
+      ],
+      "evidence_required": [
+        "Exact head/base/main SHAs, the rebase or successor branch, and the changed-file inventory.",
+        "Gate output (lint/types/test) with commands, results and the SHA they ran against.",
+        "The latest required CI conclusions and unresolved review threads on the exact HEAD."
+      ],
+      "exclusive_paths": []
+    },
+    {
+      "task": "pr-backlog-governance-2026-11-27",
+      "title": "PR backlog convergence 2026-11-27: governance, documentation and automation",
+      "zone": "pr-backlog-governance",
+      "priority": "P1",
+      "status": "queued",
+      "scope": "Resume anchor for the 2026-11-27 PR backlog convergence. The following PRs were closed as DEFERRED_TO_BOARD_AND_CLOSED; their branches are preserved and remain reopenable:\n- PR #84 (branch `arena/01a0da15-nexus-ai-agent`)\n- PR #137 (branch `arena/01a0181931-collision-governance`)\n- PR #157 (branch `arena/01a10ba1-nexus-ai-agent`)\nENGINEERING_CONSTITUTION.md, the collision/governance tests and the agent constitution are absent from main; they touch ci.yml, Makefile, AGENTS.md and agent_board.py and need a governance decision rather than a blind replay. Resume only after rebasing the selected PR onto current main and re-deriving its delta against the canonical implementation; reopen the PR or open a successor branch from main.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "The selected PR is rebased onto current main (or replaced by a successor branch) with its published history preserved.",
+        "The delta is re-derived against the canonical implementation; no second parallel runtime/queue/storage/authority/transaction path is introduced.",
+        "make lint, make types and make test pass on the exact new HEAD; adversarial regression coverage is added for the repaired defect.",
+        "The ownership referee (agent_board.py check) exits 0 on the actual changed files before every push, and the PR is handed off for independent review."
+      ],
+      "evidence_required": [
+        "Exact head/base/main SHAs, the rebase or successor branch, and the changed-file inventory.",
+        "Gate output (lint/types/test) with commands, results and the SHA they ran against.",
+        "The latest required CI conclusions and unresolved review threads on the exact HEAD."
+      ],
+      "exclusive_paths": []
     }
   ],
   "deferred_log": [
@@ -9768,6 +10051,11 @@
         "rev": 4,
         "date": "2026-11-26",
         "note": "W11X phase-2 truth sync (PR #363): the GUM arithmetic corrections (JS bin coverage, two-block propagation, level-aware loudness variance, spectral condition number, construction-time PSD) and the perception admission gate binding at creative/production_runtime.py are recorded as MODULE_MAP R31 + DECISION_LOG D-0042/D-0043; the W11X mutation campaign is 22/22 killed and OPERATION_TRUTH.json was regenerated at this HEAD."
+      },
+      {
+        "rev": 5,
+        "date": "2026-11-27",
+        "note": "PR backlog convergence 2026-11-27: live inventory of 44 open PRs at main 54073d1f; #368 and #366 merge evidence recorded; pr-repair-247-phase3 completed; 6 family resume anchors registered for the PRs closed as deferred; evidence in .agents/evidence/pr-convergence-2026-11-27/."
       }
     ]
   },
@@ -10111,18 +10399,6 @@
     {
       "kind": "pull_request",
       "repository": "bot523h/nexus-ai-agent",
-      "number": 366,
-      "state": "merged_into_main",
-      "evidence": {
-        "source": "github_api",
-        "merge_commit_sha": "b8dee44c5f430e65acb28e80356fd502f17cfefa",
-        "recorded_by": "openhands/w11x-phase3-runtime-gum-failclosed-closure",
-        "recorded_at": "2026-11-27T06:31:50Z"
-      }
-    },
-    {
-      "kind": "pull_request",
-      "repository": "bot523h/nexus-ai-agent",
       "number": 363,
       "state": "merged_into_main",
       "evidence": {
@@ -10130,6 +10406,30 @@
         "merge_commit_sha": "8421c05a55bc08f013217c81db444790ac74862e",
         "recorded_by": "openhands/w11x-phase3-runtime-gum-failclosed-closure",
         "recorded_at": "2026-11-27T06:31:50Z"
+      }
+    },
+    {
+      "kind": "pull_request",
+      "repository": "bot523h/nexus-ai-agent",
+      "number": 368,
+      "state": "merged_into_main",
+      "evidence": {
+        "source": "github_api",
+        "merge_commit_sha": "54073d1f4fde8c1d5b8f2b1837c3d1f8a442f1cf",
+        "recorded_by": "openhands/pr-backlog-convergence-2026-11-27",
+        "recorded_at": "2026-11-27T11:43:49Z"
+      }
+    },
+    {
+      "kind": "pull_request",
+      "repository": "bot523h/nexus-ai-agent",
+      "number": 366,
+      "state": "merged_into_main",
+      "evidence": {
+        "source": "github_api",
+        "merge_commit_sha": "b8dee44c5f430e65acb28e80356fd502f17cfefa",
+        "recorded_by": "openhands/pr-backlog-convergence-2026-11-27",
+        "recorded_at": "2026-11-27T11:43:54Z"
       }
     }
   ]
