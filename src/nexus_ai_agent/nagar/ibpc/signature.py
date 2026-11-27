@@ -173,7 +173,10 @@ def _f_lab(t: float) -> float:
     """CIE-Lab f() function."""
     delta = 6.0 / 29.0
     if t > delta**3:
-        return t ** (1.0 / 3.0)
+        # ``t ** (1 / 3)`` is typed ``Any`` because a fractional power of a
+        # negative float is complex; the branch guarantees ``t > delta**3 > 0``,
+        # so the real cube root is the whole domain.
+        return math.pow(t, 1.0 / 3.0)
     return t / (3.0 * delta * delta) + 4.0 / 29.0
 
 
