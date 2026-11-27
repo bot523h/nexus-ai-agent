@@ -1793,6 +1793,44 @@ class TestInterProcessOutboxLock:
         assert all(r.status in ("COMPLETED", "AWAITING_WORKER") for r in results)
 
 
+class TestCrashWindowRepairPath:
+    """The crash-window repair branch, named for what it proves.
+
+    ``DurableApprovalLedger.consume`` is idempotent for the same open
+    reservation, so production recovery normally succeeds on the replay itself.
+    This class drives the *other* half of the repair -- a ledger or adapter that
+    raises on any second consume -- so the branch that advances an
+    ``INTENT_STAGED`` row to ``APPROVAL_CONSUMED`` is directly evidenced.
+    """
+
+    def test_a_confirm_true_after_a_refusing_consume_repairs_the_row(
+        self, harness: _Harness
+    ) -> None:
+        def refusing(_approval_id: str, _identity: Any, **_kwargs: Any) -> None:
+            raise RuntimeError("replay: approval already consumed")
+
+        coordinator = ExecutionOutboxCoordinator(
+            store=harness.store,
+            consume_approval_fn=refusing,
+            enqueue_job_fn=harness.enqueue,
+            await_completion_fn=harness.await_completion,
+            verify_completion_fn=harness.verify,
+            confirm_consumption_fn=lambda _row, _identity: True,
+            poll_timeout_seconds=1.0,
+            sleep=lambda _s: None,
+        )
+        row, _ = TestCrashWindowBetweenLedgerAndOutbox()._stage(harness)
+        repaired = coordinator._consume_approval(row)
+        assert repaired.state == "APPROVAL_CONSUMED"
+        assert repaired.last_error == ""
+        events = harness.store.events_for(row.outbox_id)
+        assert events[-1]["detail"].startswith("recovered_reservation:job-")
+        # And the drive continues to enqueue from the repaired state.
+        driven = coordinator._enqueue_job(repaired)
+        assert driven.state == "JOB_ENQUEUED"
+        assert driven.job_id == repaired.reserved_job_id
+
+
 class TestStoreSurfacesAddedForTheCrashWindow:
     """The small store/coordinator surfaces the recovery path relies on."""
 

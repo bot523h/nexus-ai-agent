@@ -1390,6 +1390,127 @@ class TestManifestPathTraversalDefence:
         assert report.verified is True
         assert report.problems == ()
 
+    # -- the gate ordering, attacked from the instrumentation side ---------- #
+    def _forge_signed_manifest_into(
+        self, bundle: Path, *, backup_filename: str = HOT_BACKUP_FILENAME
+    ) -> None:
+        """Rewrite the manifest and sign it with a key the manager does not hold.
+
+        Note that a traversing ``backup_filename`` cannot be *constructed*, so the
+        only way an attacker can get one onto disk is to write the JSON directly —
+        which is exactly what an attacker with file-write access but no key does.
+        """
+        stored = json.loads((bundle / MANIFEST_FILENAME).read_text("utf-8"))
+        stored["backup_filename"] = backup_filename
+        stored["manifest_hmac_sha256"] = "0" * 64
+        (bundle / MANIFEST_FILENAME).write_text(json.dumps(stored), encoding="utf-8")
+
+    @staticmethod
+    def _recording_probe() -> tuple[Any, list[str]]:
+        """Patch the I/O seams so any verification read is recorded."""
+        touched: list[str] = []
+        originals = {
+            "sha": production_dr._sha256_file,
+            "integrity": production_dr._integrity_check,
+            "counts": production_dr._table_row_counts,
+        }
+
+        def recording_sha(path: Path) -> tuple[str, int]:
+            touched.append("sha:" + path.name)
+            return originals["sha"](path)
+
+        def recording_integrity(path: Path, **kwargs: Any) -> str:
+            touched.append("integrity:" + path.name)
+            return originals["integrity"](path, **kwargs)
+
+        def recording_counts(path: Path, **kwargs: Any) -> dict[str, int]:
+            touched.append("counts:" + path.name)
+            return originals["counts"](path, **kwargs)
+
+        production_dr._sha256_file = recording_sha  # type: ignore[assignment]
+        production_dr._integrity_check = recording_integrity  # type: ignore[assignment]
+        production_dr._table_row_counts = recording_counts  # type: ignore[assignment]
+        return originals, touched
+
+    @staticmethod
+    def _restore_probe(originals: Any) -> None:
+        production_dr._sha256_file = originals["sha"]  # type: ignore[assignment]
+        production_dr._integrity_check = originals["integrity"]  # type: ignore[assignment]
+        production_dr._table_row_counts = originals["counts"]  # type: ignore[assignment]
+
+    def test_a_forged_signature_is_not_even_tried_against_the_digest(
+        self, tmp_path: Path, live_db: Any
+    ) -> None:
+        """Ordering, measured: a bad HMAC must short-circuit before any read.
+
+        This is the property M44 attacks.  If the gate is removed, verification
+        falls through and *does* hash the file, so ``touched`` stops being empty
+        even when the final verdict is still "unverified".
+        """
+        path, _connection = live_db
+        manager = _manager(tmp_path, key=BackupKeyMaterial("bk-1", KEY_HEX))
+        manifest = manager.create_hot_backup(database_path=path)
+        bundle = manager.backup_root / manifest.bundle_id
+        self._forge_signed_manifest_into(bundle)
+
+        originals, touched = self._recording_probe()
+        try:
+            report = manager.verify_backup_bundle(bundle)
+        finally:
+            self._restore_probe(originals)
+
+        assert report.verified is False
+        assert report.problems == ("signature_invalid",)
+        assert touched == [], f"verification performed I/O before authenticating: {touched}"
+        assert report.actual_sha256 == ""
+        assert report.actual_size_bytes == 0
+
+    def test_a_traversing_filename_is_refused_before_it_is_ever_joined(
+        self, tmp_path: Path, live_db: Any
+    ) -> None:
+        """Ordering, measured, for the *other* gate (M45).
+
+        A signed manifest naming ``../sibling.sqlite3`` must be refused at
+        construction -- before ``bundle_dir / name`` is evaluated -- so no probe
+        sees a read and the sibling is untouched.
+        """
+        path, _connection = live_db
+        manager = _manager(tmp_path, key=BackupKeyMaterial("bk-1", KEY_HEX))
+        manifest = manager.create_hot_backup(database_path=path)
+        bundle = manager.backup_root / manifest.bundle_id
+        sibling = bundle.parent / "sibling.sqlite3"
+        sibling.write_bytes(b"NOT-A-BACKUP")
+        self._forge_signed_manifest_into(bundle, backup_filename="../sibling.sqlite3")
+
+        originals, touched = self._recording_probe()
+        try:
+            report = manager.verify_backup_bundle(bundle)
+        finally:
+            self._restore_probe(originals)
+
+        assert report.verified is False
+        assert report.manifest is None  # the manifest never became a value
+        assert any("invalid_backup_filename" in problem for problem in report.problems)
+        assert touched == []
+        assert sibling.read_bytes() == b"NOT-A-BACKUP"
+
+    def test_the_signature_gate_precedes_the_filename_gate(self) -> None:
+        """Ordering on one manifest: which problem is reported first?"""
+        # A traversing name never survives construction, so the *signature* is the
+        # only gate a malformed manifest can even reach.  Proven by construction:
+        with pytest.raises(DisasterRecoveryError) as excinfo:
+            BackupManifest(
+                manifest_id="man-1",
+                bundle_id="bun-1",
+                created_at_utc="2026-11-27T00:00:00+00:00",
+                source_name="studio.sqlite3",
+                backup_filename="../x.sqlite3",
+                backup_sha256="a" * 64,
+                backup_size_bytes=1,
+                key_id="bk-1",
+            )
+        assert excinfo.value.reason == "invalid_backup_filename"
+
 
 # --------------------------------------------------------------------------- #
 # Wave 2B — a cancelled waiter must never leak governor capacity
@@ -1774,3 +1895,4 @@ class TestCancelledWaiterLeaseLeak:
             assert governor.stats()["waiting"] == 0
         finally:
             governor.shutdown()
+

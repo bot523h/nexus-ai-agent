@@ -5,7 +5,7 @@ An invariant that has never been attacked is not evidence.  This harness takes
 the *shipped* Wave 1-5 modules and rewrites one guard, one sign and one
 containment check at a time, then demands that the real Wave 1-5 suites notice.
 
-For each of the 40 mutants (M01-M40) the campaign:
+For each of the 50 mutants (M01-M50) the campaign:
 
 * refuses to start unless the anchor occurs **exactly once** in the source and
   the mutated file still parses (``ast.parse``);
@@ -35,32 +35,42 @@ worktree-clean, and a mutant counts only when *every* failing node is one it
 declared.  That contract is right for a planted security oracle, and wrong here.
 The Studio guards are *shared*: flipping ``hmac.compare_digest`` in the outbox,
 or the readback's fail-closed ``except``, breaks many tests at once, so a
-strict no-unexpected-failures rule would mark 34 of these 40 mutants
+strict no-unexpected-failures rule would mark most of these 50 mutants
 ``invalid`` rather than ``detected`` - a weaker result than a kill.  This
 campaign therefore uses the mutation-testing contract: a mutant is killed when
 its named target node fails with a real effect, and collateral failures are
 *measured* by ``--redundancy`` instead of being used to invalidate the kill.
 
 ``--redundancy`` answers what a kill count cannot: does the Wave 6A end-to-end
-slice catch the mutants the unit suites catch?  Measured over the whole campaign
-on this branch: **unit suites catch 40/40; the slice catches 16/40 on its own**
-(the outbox and readback paths it drives end to end, plus the refusals its
-negative-path class exercises).  A sample of six mutants was caught 1 time out
-of 6 before ``TestTheWiredDeploymentHasTeeth`` was added and 6 out of 6 after,
-which is why that class exists.  The remaining 24 are guarded at a layer the
-slice does not drive (key material, pruning, lock helpers, governor accounting),
-and are *not* claimed as slice evidence.
+slice catch the mutants the unit suites catch?  It reports the split honestly
+and never counts a kill.  Mutants guarded at a layer the slice does not drive
+(key material, pruning, lock helpers, governor accounting) are *not* claimed as
+slice evidence; the measured split is printed by the run, never projected.
+
+Both the campaign and ``--redundancy`` apply one strict rule
+(:func:`_caught`): pytest must exit **1** and the output must carry no
+infrastructure marker.  ``returncode != 0`` is not evidence — pytest exits 2 on
+a collection error, 3 on an internal error and 4 on a usage error, so a mutant
+that merely failed to import would otherwise be scored as "caught" by every
+suite.  That is the false evidence Constitutional Invariant 5 forbids.
+
+A note on *equivalent* mutants: the Wave 1-3 guards are deliberately
+defence-in-depth, so a mutation that disables one layer can be observationally
+inert when a second layer rejects the same input.  M45 is written against the
+call site that *binds* the whole filename contract rather than against one of
+its three redundant internal checks, precisely because mutating a redundant
+check would produce a survivor that proves nothing.
 
 The campaign mutates the working tree in place, so exactly one campaign may run
 against a checkout at a time (pytest and CI are serial by construction).
 
 Usage::
 
-    python scripts/run_wave4_studio_e2e_mutations.py            # 40/40 required
+    python scripts/run_wave4_studio_e2e_mutations.py            # 50/50 required
     python scripts/run_wave4_studio_e2e_mutations.py --list
     python scripts/run_wave4_studio_e2e_mutations.py --redundancy   # unit vs slice
 
-Exit code 0 means "40/40 mutants killed".
+Exit code 0 means "50/50 mutants killed".
 """
 
 from __future__ import annotations
@@ -121,7 +131,7 @@ def _nodes(suite: str, *classes: str) -> tuple[str, ...]:
     return tuple(f"{suite}::{cls}" for cls in classes)
 
 
-#: 40 mutants, eight per module.  Each one attacks a *different* invariant:
+#: 50 mutants, ten per module.  Each one attacks a *different* invariant:
 #: containment, constant-time comparison, the canonicalization scheme, the
 #: locking discipline, the state machine, the rational arithmetic, the signature.
 MUTATIONS: tuple[Mutation, ...] = (
@@ -318,8 +328,10 @@ MUTATIONS: tuple[Mutation, ...] = (
     Mutation(
         "M18_outbox_reconcile_ignores_consumed_rows",
         OUTBOX,
-        'target="APPROVAL_CONSUMED",',
-        'target="INTENT_STAGED",',
+        '            target="APPROVAL_CONSUMED",\n'
+        '            detail=detail,\n',
+        '            target="INTENT_STAGED",\n'
+        '            detail=detail,\n',
         "consuming the approval must advance the row; writing it back to "
         "INTENT_STAGED re-arms a spent single-use approval",
         _nodes(
@@ -364,10 +376,19 @@ MUTATIONS: tuple[Mutation, ...] = (
     Mutation(
         "M22_outbox_verification_skipped",
         OUTBOX,
-        "if self._verify is not None:",
-        "if False and self._verify is not None:",
-        "an unverified completion must never be reported as success",
-        _nodes(OUTBOX_TESTS, "TestHappyPath::test_verification_refusal_is_terminal"),
+        '            return self._hold_for_verification(\n'
+        '                row, CompletionVerificationError("verify_completion_fn_required")\n'
+        '            )',
+        '            return self._store.mark_completed(\n'
+        '                outbox_id=row.outbox_id,\n'
+        '                artifact_id=completion.artifact_id,\n'
+        '                passport_id=completion.passport_id,\n'
+        '            )',
+        "a completion with no verifier must fail closed, never be trusted",
+        _nodes(
+            OUTBOX_TESTS,
+            "TestVerifiedCompletionIsMandatory::test_completion_without_verifier_or_invalid_completion_proof_fails_closed",
+        ),
     ),
     Mutation(
         "M23_outbox_job_repointing_allowed",
@@ -569,6 +590,158 @@ MUTATIONS: tuple[Mutation, ...] = (
         "a short HMAC key is a weak signature; the length floor is the guard",
         _nodes(DR_TESTS, "TestBackupKeyMaterial::test_a_short_key_is_refused"),
     ),
+    # ------------------------------------------------------------------ #
+    # M41-M50 — the Wave 1-3 hardening (crash window, verified completion,
+    # retryable enqueue, pre-I/O HMAC, path traversal, lease leak, exact
+    # rational timebase, occurrence-keyed diff, TOCTOU inode check)
+    # ------------------------------------------------------------------ #
+    Mutation(
+        "M41_outbox_crash_window_recovery_removed",
+        OUTBOX,
+        "                if recovered:\n"
+        "                    return self._store.confirm_reserved_consumption(",
+        "                if False and recovered:\n"
+        "                    return self._store.confirm_reserved_consumption(",
+        "a consumed approval that the outbox never committed is a recoverable "
+        "crash, not a replay; removing the repair turns every such crash into a "
+        "FAILED_TERMINAL turn",
+        _nodes(
+            OUTBOX_TESTS,
+            "TestCrashWindowRepairPath::"
+            "test_a_confirm_true_after_a_refusing_consume_repairs_the_row",
+        ),
+    ),
+    Mutation(
+        "M42_outbox_completion_proof_not_required",
+        OUTBOX,
+        "        if not isinstance(proof, VerifiedExecutionCompletion):",
+        "        if False and not isinstance(proof, VerifiedExecutionCompletion):",
+        "an unverified or wrongly-typed completion proof must never be promoted "
+        "to COMPLETED",
+        _nodes(
+            OUTBOX_TESTS,
+            "TestVerifiedCompletionIsMandatory::"
+            "test_completion_without_verifier_or_invalid_completion_proof_fails_closed",
+        ),
+    ),
+    Mutation(
+        "M43_outbox_transient_enqueue_is_terminal",
+        OUTBOX,
+        "        except ValueError as exc:\n"
+        "            return self._store.mark_failed_terminal(\n"
+        "                outbox_id=row.outbox_id,\n"
+        '                error=f"enqueue_rejected: {type(exc).__name__}: {exc}",',
+        "        except ValueError as exc:\n"
+        "            return self._store.mark_failed_terminal(\n"
+        "                outbox_id=row.outbox_id,\n"
+        '                error=f"enqueue_failed: {type(exc).__name__}: {exc}",',
+        "the validation branch must be distinguishable from the transient one: "
+        "collapsing them makes a queue hiccup burn a spent approval",
+        _nodes(OUTBOX_TESTS, "TestFailClosed::test_a_validation_refusal_at_enqueue_is_terminal"),
+    ),
+    Mutation(
+        "M44_dr_hmac_gate_bypassed_before_io",
+        DR,
+        "        if not manifest.verify_signature(key):",
+        "        if False and not manifest.verify_signature(key):",
+        "the signature gate must run BEFORE any I/O on a path the manifest names, "
+        "or an unsigned manifest becomes a read primitive",
+        _nodes(
+            DR_TESTS,
+            # The *ordering* test: it records every I/O seam, so a bypassed gate
+            # is caught even when the final verdict would still be "unverified".
+            "TestManifestPathTraversalDefence::"
+            "test_a_forged_signature_is_not_even_tried_against_the_digest",
+            "TestManifestPathTraversalDefence::"
+            "test_an_invalid_signature_stops_before_any_backup_io",
+        ),
+    ),
+    Mutation(
+        "M45_dr_backup_filename_traversal_allowed",
+        DR,
+        # The whole-contract mutant: the validator has *three* independent
+        # rejections (separators, absolute/name mismatch, the canonical pattern),
+        # so disabling any one of them alone is an EQUIVALENT mutant that the
+        # suites rightly do not notice.  What is not equivalent is skipping the
+        # validation at the one site that makes it binding -- manifest
+        # construction -- because then a traversing filename becomes a live value
+        # that verification would happily join onto a bundle directory.
+        "        _validate_backup_filename(self.backup_filename)",
+        "        pass  # _validate_backup_filename(self.backup_filename)",
+        "a manifest filename is a name, never a path; without the construction-time "
+        "check a crafted manifest holds a traversal and verification joins it",
+        _nodes(
+            DR_TESTS,
+            "TestManifestPathTraversalDefence::"
+            "test_a_traversing_or_non_canonical_filename_is_refused_at_construction",
+            "TestManifestPathTraversalDefence::"
+            "test_a_traversing_filename_is_refused_before_it_is_ever_joined",
+        ),
+    ),
+    Mutation(
+        "M46_dr_cancelled_waiter_keeps_no_guard",
+        DR,
+        "            self._release_orphaned_lease(lease_future)\n"
+        "            raise",
+        "            raise",
+        "a cancelled waiter's worker thread still wins a lease; without the "
+        "done-callback release that slot is lost for the governor's lifetime",
+        _nodes(
+            DR_TESTS,
+            "TestCancelledWaiterLeaseLeak::test_a_lease_won_by_the_abandoned_thread_is_released",
+        ),
+    ),
+    Mutation(
+        "M47_readback_lcm_denominator_seeded_with_one",
+        READBACK,
+        "    denominator = first.denominator",
+        "    denominator = 1",
+        "seeding the denominator accumulator with 1 makes every later gcd(1, d) "
+        "equal 1, so 30000/1001 with 24000/1001 collapses to 120000/1",
+        _nodes(
+            READBACK_TESTS,
+            "TestFrameArithmetic::test_lcm_timebase_finds_an_exact_common_rate",
+        ),
+    ),
+    Mutation(
+        "M48_readback_timebase_accepts_floats_and_bools",
+        READBACK,
+        "            if type(component) is not int:",
+        "            if False:",
+        "int() would launder 30.5 into 30 and True into 1, turning a nonsense "
+        "timebase into a plausible wrong frame rate",
+        _nodes(
+            READBACK_TESTS,
+            "TestFrameArithmetic::test_tuple_timebases_require_exact_integers[bad0]",
+            "TestFrameArithmetic::test_tuple_timebases_require_exact_integers[bad2]",
+        ),
+    ),
+    Mutation(
+        "M49_readback_comparison_drops_the_occurrence",
+        READBACK,
+        '        indexed[(pair[0], pair[1], occurrence)] = operation',
+        '        indexed[(pair[0], pair[1], 0)] = operation',
+        "keying operations by the pair alone overwrites a repeated operation, so "
+        "adding a second trim on the same clip compares as identical",
+        _nodes(
+            READBACK_TESTS,
+            "TestComparisonOfRepeatedOperations::"
+            "test_adding_a_second_operation_of_the_same_kind_is_detected",
+        ),
+    ),
+    Mutation(
+        "M50_pins_toctou_inode_check_dropped",
+        PINS,
+        "        if (fd_stat.st_dev, fd_stat.st_ino) != (expected.st_dev, expected.st_ino):",
+        "        if False:",
+        "lstat-then-open is a TOCTOU gap; only the (st_dev, st_ino) equality "
+        "proves the descriptor is the inode the security check inspected",
+        _nodes(
+            PINS_TESTS,
+            "TestDescriptorPinningClosesTheToctouvWindow::"
+            "test_inode_substitution_between_lstat_and_open_is_detected",
+        ),
+    ),
 )
 
 
@@ -653,6 +826,40 @@ def _is_valid_kill(
     return True, ""
 
 
+def _caught(
+    result: subprocess.CompletedProcess[str], expected_node_ids: tuple[str, ...] = ()
+) -> bool:
+    """True only for a *real* test failure, never for an infrastructure exit.
+
+    ``returncode != 0`` is not evidence: pytest exits 2 on a collection error, 3
+    on an internal error and 4 on a usage error, and a mutant that fails to
+    import would then be scored as "caught" by every suite.  This reuses the
+    campaign's own :func:`_is_valid_kill` contract -- exit code exactly 1, no
+    inline infrastructure marker, and (when named nodes are supplied) one of them
+    on a ``FAILED`` line.  With no expected node the check is "the suite really
+    ran and really failed", which is what the end-to-end slice can honestly
+    answer: it must *notice* the mutation, not necessarily in a named node.
+    """
+    if expected_node_ids:
+        return _is_valid_kill(result, expected_node_ids)[0]
+    output = (result.stdout or "") + (result.stderr or "")
+    if result.returncode != 1:
+        return False
+    lowered = output.lower()
+    for marker in (
+        "internalerror",
+        "importerror",
+        "modulenotfounderror",
+        "syntaxerror",
+        "indentationerror",
+        "collected 0 items",
+        "no tests ran",
+    ):
+        if marker in lowered:
+            return False
+    return "FAILED" in output
+
+
 #: The end-to-end slice the redundancy probe runs beside each module suite.
 SLICE = "tests/integration/test_nagar_studio_e2e_vertical_slice.py"
 
@@ -681,8 +888,15 @@ def redundancy_report() -> int:
                 original_bytes.decode("utf-8").replace(mutation.old, mutation.new, 1).encode()
             )
             _purge_bytecode_cache(path)
-            unit_failed = _run_pytest([_suite_for(mutation)]).returncode != 0
-            slice_failed = _run_pytest([SLICE]).returncode != 0
+            # The same strict rule the kill campaign uses: exit code 1 *and* the
+            # output carries no infrastructure marker.  ``returncode != 0`` would
+            # count a syntax/import/collection error (exit 2/3/4) as "caught",
+            # which is exactly the false evidence Constitutional Invariant 5
+            # exists to forbid.
+            unit_failed = _caught(
+                _run_pytest([_suite_for(mutation)]), mutation.expected_node_ids
+            )
+            slice_failed = _caught(_run_pytest([SLICE]))
         finally:
             path.write_bytes(original_bytes)
             _purge_bytecode_cache(path)

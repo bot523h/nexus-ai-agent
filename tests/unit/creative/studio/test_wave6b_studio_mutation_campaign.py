@@ -4,7 +4,7 @@ An invariant that has never been attacked is not evidence.  ``scripts/
 run_wave4_studio_e2e_mutations.py`` rewrites one shipped guard at a time across
 the five Studio execution modules (the authority bridge, revision pinning, the
 execution outbox, the preview readback and disaster recovery) and demands that
-the real Wave 1-5 suites notice — 40 mutants, each anchored on exactly one
+the real Wave 1-5 suites notice — 50 mutants, each anchored on exactly one
 source occurrence, each restored byte-for-byte.
 
 A campaign is expensive (every mutant runs real pytest), so this module does not
@@ -13,7 +13,7 @@ the campaign trustworthy, and the campaign itself is exercised end to end by
 ``--campaign`` (opt in with ``NEXUS_RUN_MUTATION_CAMPAIGN=1``).  Without that
 flag the module still proves, offline and in milliseconds:
 
-* there are exactly 40 mutants, numbered M01-M40, with unique names;
+* there are exactly 50 mutants, numbered M01-M50, with unique names;
 * every mutant changes a file that exists, and its anchor occurs **exactly once**
   in that file (a multi-occurrence anchor would mutate an unintended line);
 * every mutant's replacement parses as Python (the harness also checks this, but
@@ -25,7 +25,7 @@ flag the module still proves, offline and in milliseconds:
   after mutations, runs pytest with ``PYTHONDONTWRITEBYTECODE=1``, and restores
   every target by SHA-256 in a ``finally`` block.
 
-The ``NEXUS_RUN_MUTATION_CAMPAIGN`` path asserts the full 40/40 result.
+The ``NEXUS_RUN_MUTATION_CAMPAIGN`` path asserts the full 50/50 result.
 """
 
 from __future__ import annotations
@@ -43,8 +43,16 @@ import pytest
 ROOT = Path(__file__).resolve().parents[4]  # tests/unit/creative/studio/
 HARNESS = ROOT / "scripts" / "run_wave4_studio_e2e_mutations.py"
 
-#: 40 mutants, eight per module.
-EXPECTED_TOTAL = 40
+#: 50 mutants.  Eight per module for M01-M40, then ten more (M41-M50) aimed at
+#: the Wave 1-3 hardening, so the split is measured rather than assumed.
+EXPECTED_TOTAL = 50
+EXPECTED_PER_MODULE = {
+    "studio_directory_bridge.py": 8,
+    "revision_pinning.py": 9,
+    "execution_outbox.py": 11,
+    "preview_readback.py": 11,
+    "production_dr.py": 11,
+}
 EXPECTED_MODULES = 5
 
 
@@ -73,18 +81,37 @@ class TestCampaignShape:
     def test_the_campaign_has_exactly_forty_mutants(self, harness: ModuleType) -> None:
         assert len(harness.MUTATIONS) == EXPECTED_TOTAL
 
-    def test_the_mutant_names_are_m01_to_m40_and_unique(self, harness: ModuleType) -> None:
+    def test_the_mutant_names_are_m01_to_m50_and_unique(self, harness: ModuleType) -> None:
         names = [mutation.name for mutation in harness.MUTATIONS]
         assert len(set(names)) == EXPECTED_TOTAL
         assert [name.split("_", 1)[0] for name in names] == [
             f"M{index:02d}" for index in range(1, EXPECTED_TOTAL + 1)
         ]
 
-    def test_the_campaign_covers_five_modules_eight_mutants_each(self, harness: ModuleType) -> None:
+    def test_the_campaign_covers_all_five_modules(self, harness: ModuleType) -> None:
+        """Every module is attacked, in proportion to how much it had to fix.
+
+        The split is deliberately *not* an even ten each.  M01-M40 were eight per
+        module; M41-M50 then attacked the specific Wave 1-3 defects, which
+        landed three on the outbox, three on disaster recovery, three on the
+        readback and one on revision pinning.  Asserting the measured split keeps
+        the count honest instead of rounding it to a tidier number.
+        """
         targets = [mutation.path for mutation in harness.MUTATIONS]
         assert len(set(targets)) == EXPECTED_MODULES
-        for target in set(targets):
-            assert targets.count(target) == 8, f"{target.name} does not have 8 mutants"
+        measured = {path.name: targets.count(path) for path in set(targets)}
+        assert measured == EXPECTED_PER_MODULE, measured
+        assert sum(measured.values()) == EXPECTED_TOTAL
+
+    def test_the_wave_one_to_three_hardening_is_attacked(self, harness: ModuleType) -> None:
+        """M41-M50 must exist and must target the Wave 1-3 fixes, not filler."""
+        hardened = [m.name for m in harness.MUTATIONS if m.name[:3] >= "M41"]
+        assert len(hardened) == 10, hardened
+        # Each of the three hardening waves must be represented.
+        assert any("outbox" in name for name in hardened)
+        assert any("readback" in name for name in hardened)
+        assert any("pins" in name for name in hardened)
+        assert any("dr_" in name for name in hardened)
 
     def test_no_two_mutants_apply_the_same_edit(self, harness: ModuleType) -> None:
         edits = [(mutation.path, mutation.old, mutation.new) for mutation in harness.MUTATIONS]
@@ -145,7 +172,10 @@ class TestKillTargetsAreReal:
                 assert len(parts) >= 3, node_id
                 if parts[0] not in cache:
                     cache[parts[0]] = self._nodes(parts[0])
-                assert f"{parts[1]}::{parts[2]}" in cache[parts[0]], (
+                # A parametrised id carries a ``[case]`` suffix on the function
+                # name; the class/function pair is what must exist.
+                function = parts[2].split("[", 1)[0]
+                assert f"{parts[1]}::{function}" in cache[parts[0]], (
                     f"{mutation.name}: {node_id} names no such test"
                 )
 
@@ -326,10 +356,10 @@ class TestHarnessMechanics:
 class TestFullCampaign:
     @pytest.mark.skipif(
         os.environ.get("NEXUS_RUN_MUTATION_CAMPAIGN") != "1",
-        reason="set NEXUS_RUN_MUTATION_CAMPAIGN=1 to run all 40 mutants (~90s)",
+        reason="set NEXUS_RUN_MUTATION_CAMPAIGN=1 to run all 50 mutants (~90s)",
     )
     def test_the_campaign_kills_every_mutant(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """The end-to-end proof: 40/40 VALID_KILL, and the tree is left pristine."""
+        """The end-to-end proof: 50/50 VALID_KILL, and the tree is left pristine."""
         module = _load_harness()
         targets = {mutation.path for mutation in module.MUTATIONS}
         before = {str(path): hashlib.sha256(path.read_bytes()).hexdigest() for path in targets}
