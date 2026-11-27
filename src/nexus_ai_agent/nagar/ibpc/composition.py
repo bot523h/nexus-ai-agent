@@ -240,8 +240,12 @@ class UnifiedStudioRuntime:
 
     def close(self) -> None:
         """Close every owned store once, in dependency order (outbox last)."""
-        # ``service.close()`` already closes the stores it owns; closing the same
-        # SQLite handle twice raises, so each resource is closed at most once.
+        # ``service.close()`` may already have closed some of these, and the
+        # same object can legitimately appear twice in ``owned_closables``.
+        # Deduplicating by ``id()`` keeps the call count to one per object, which
+        # is tidiness rather than correctness: the stores' own ``close()`` is
+        # idempotent behind a ``_closed`` flag, so a second call would be a no-op
+        # rather than the raise an earlier version of this comment claimed.
         seen: set[int] = set()
         for resource in self.owned_closables:
             if id(resource) in seen:

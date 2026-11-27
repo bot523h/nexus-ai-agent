@@ -28,10 +28,10 @@ import asyncio
 import hashlib
 import hmac
 import json
+import logging
 import os
 import shutil
 import stat
-import threading
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -118,6 +118,8 @@ from nexus_ai_agent.provenance.canonicalization import (
 )
 
 #: Closed surface constants. Pinned against the canonical worker's own map by
+logger = logging.getLogger(__name__)
+
 #: tests/architecture/test_ibpc_boundary.py (which may import render_jobs; this
 #: module may not): SURFACE_TO_CANONICAL[("edit", "trim")] == "timeline.trim".
 JOB_TYPE = "creative_render"
@@ -140,38 +142,37 @@ def utc_now() -> str:
 
 
 def _run_coroutine_blocking(coro: Any) -> Any:
-    """Run a coroutine from a *synchronous* caller, whoever owns the loop.
+    """Drive a coroutine to completion from a *synchronous* caller.
 
-    Two cases, and conflating them is how a nested-event-loop bug gets shipped:
+    This bridge exists for exactly one contract: the outbox coordinator is
+    synchronous (it holds SQLite locks and fsyncs) while the queue port is
+    async, so the awaitable has to be driven on a thread that owns no loop.
+    The async entry points -- ``execute()`` and
+    ``reconcile_execution_outbox_async`` -- ``await`` the port directly and must
+    never come through here.
 
-    * no loop is running on this thread (the normal outbox path -- it runs on a
-      worker thread precisely so it can block) -- drive it to completion;
-    * a loop is already running on this thread -- ``asyncio.run`` would raise
-      ``RuntimeError: asyncio.run() cannot be called from a running event
-      loop``, so the coroutine is executed on a dedicated thread instead.  The
-      coroutine object is created by the caller, so it must not be awaited here;
-      it is handed over untouched.
+    A running loop on the calling thread is therefore a *programming error*, not
+    a case to work around.  The previous implementation spawned a thread and
+    joined it on the loop thread, which blocks the loop for the whole duration
+    of the bridged I/O -- the very thing the bridge was added to avoid -- and
+    silently serialises every other request behind one outbox write.  Failing
+    loudly turns a latency bug into an immediate, diagnosable error.
+
+    ``asyncio.run`` is refused for the same reason ``asyncio.run(coro)`` cannot
+    be used here at all: it would raise on a live loop even if we wanted to.
     """
     try:
         asyncio.get_running_loop()
     except RuntimeError:
+        # No loop on this thread: the documented, correct case.
         return asyncio.run(coro)
-
-    result: list[Any] = []
-    failure: list[BaseException] = []
-
-    def _runner() -> None:
-        try:
-            result.append(asyncio.run(coro))
-        except BaseException as exc:  # noqa: BLE001 - re-raised on the caller's thread
-            failure.append(exc)
-
-    thread = threading.Thread(target=_runner, name="ibpc-outbox-bridge", daemon=True)
-    thread.start()
-    thread.join()
-    if failure:
-        raise failure[0]
-    return result[0] if result else None
+    coro.close()  # never leave an un-awaited coroutine to be GC'd with a warning
+    raise RuntimeError(
+        "ibpc.outbox.bridge_on_event_loop: _run_coroutine_blocking was called from a "
+        "thread that is running an event loop; it would block the loop for the whole "
+        "duration of the bridged I/O.  Callers inside a loop must await the async "
+        "entry point (execute() / reconcile_execution_outbox_async) instead."
+    )
 
 
 def _outbox_plan_payload(payload: dict[str, Any]) -> dict[str, Any]:
@@ -196,12 +197,54 @@ def _outbox_plan_payload(payload: dict[str, Any]) -> dict[str, Any]:
     return {key: payload[key] for key in keys if key in payload}
 
 
-class _OutboxSeamUnavailable(RuntimeError):
-    """The outbox seam could not derive a key for this turn.
+def _format_seconds(microseconds: int) -> str:
+    """Seconds as the worker's ``args`` expect them: fixed point, no padding."""
+    return f"{microseconds / 1_000_000:.6f}".rstrip("0").rstrip(".") or "0"
 
-    Internal: callers treat it as "drive the legacy path", never as a refusal,
-    because an unwired outbox must not change what ``execute()`` decides.
+
+def _outbox_reservation_payload(ctx: _TurnContext, approval_id: str) -> dict[str, Any]:
+    """Everything the outbox needs to identify the work, before any bytes move.
+
+    Deliberately free of per-attempt values (workspace, staged path, rendered
+    output): those belong to the job payload, not to the durable intent.  The
+    content identity is the *admitted* digest, which ``execute()`` re-proves
+    against the staged bytes before the queue is touched.
     """
+    return {
+        "command": COMMAND,
+        "operation": SURFACE_OPERATION,
+        "args": [
+            _format_seconds(int(ctx.ast.params["in_point_us"])),
+            _format_seconds(int(ctx.ast.params["out_point_us"])),
+        ],
+        "input_sha256": str(ctx.source_asset_digest),
+        "media_duration_us": int(ctx.duration_us),
+        "idempotency_key": f"ibpc:{approval_id}",
+        "schema_version": 2,
+        "principal_id": str(ctx.verified_identity.principal_id),
+        "project_id": str(ctx.verified_identity.project_id),
+        "channel_binding_id": str(ctx.verified_identity.channel_binding_id),
+    }
+
+
+class IBPCExecutionOutboxError(RuntimeError):
+    """A configured outbox could not record the intent, so execution stops.
+
+    Fail-closed by construction.  Once an outbox is wired it is the durable
+    record of "this approval was spent for this job"; executing without it would
+    spend a single-use cryptographic approval whose only recovery evidence was
+    never written.  A deployment that does not want that guarantee simply does
+    not wire an outbox -- absence is a configuration, failure is not.
+    """
+
+    def __init__(self, reason: str, detail: str = "") -> None:
+        super().__init__(f"{reason}: {detail}" if detail else reason)
+        self.reason = reason
+        self.detail = detail
+
+
+class _OutboxSeamUnavailable(IBPCExecutionOutboxError):
+    """The outbox seam could not derive a key for this turn."""
 
 
 def _outcome_dict(outcome: Any) -> dict[str, Any]:
@@ -500,8 +543,9 @@ class IBPCService:
         # The outbox seam: a *coordinator* once rebuilt, until then whatever the
         # composition root passed (possibly a bare store, possibly nothing).
         self._outbox_coordinator: Any | None = None
-        # Why the seam last failed, if it did.  Never fatal, but never silent.
-        self._outbox_seam_error: str = ""
+        # Why the seam last failed, if it did.  Every failure also raises, so
+        # this is diagnostic context for the caller/log, never a silent shelf.
+        self._last_outbox_error: str | None = None
         self._hydrate_active_contexts()
 
     # -- execution outbox seam ---------------------------------------------- #
@@ -546,6 +590,16 @@ class IBPCService:
         """The coordinator driving the durable outbox, or ``None`` when unwired."""
         return self._outbox_coordinator
 
+    @property
+    def last_outbox_error(self) -> str | None:
+        """The most recent outbox seam failure, or ``None`` if the seam is clean.
+
+        Every failure that sets this also raises (or, for the enqueue-failure
+        recorder, propagates the original error), so this is never the *only*
+        signal -- it is the readable one.
+        """
+        return self._last_outbox_error
+
     def reconcile_execution_outbox(self, *, limit: int = 100) -> tuple[dict[str, Any], ...]:
         """Resume every in-flight intent after a crash or a restart.
 
@@ -580,10 +634,33 @@ class IBPCService:
         Derived from the same six inputs the outbox uses, so the id reserved on
         the ledger and the id the outbox row carries are the same string in
         every process -- no coordination, no extra column.
+
+        FAIL-CLOSED when a store is wired: an outbox that cannot derive its key
+        cannot stage its row, and consuming the approval anyway would spend it
+        with no recovery evidence.  ``None`` therefore means only "no outbox",
+        never "the outbox broke".
         """
         store = self._outbox_store()
         if store is None:
             return None
+        return self._derive_reserved_job_id_or_raise(
+            ctx=ctx,
+            approval_id=approval_id,
+            session_id=session_id,
+            turn_id=turn_id,
+            session=session,
+        )
+
+    def _derive_reserved_job_id_or_raise(
+        self,
+        *,
+        ctx: _TurnContext,
+        approval_id: str,
+        session_id: str,
+        turn_id: str,
+        session: Any,
+    ) -> str:
+        """The deterministic reservation, or a typed fail-closed error."""
         from nexus_ai_agent.nagar.ibpc.execution_outbox import derive_reserved_job_id
 
         try:
@@ -594,9 +671,14 @@ class IBPCService:
                 turn_id=turn_id,
                 session=session,
             )
-        except Exception:  # noqa: BLE001 - a seam failure must not change the legacy refusal
-            return None
-        return derive_reserved_job_id(key)
+            return derive_reserved_job_id(key)
+        except IBPCExecutionOutboxError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - converted, never swallowed
+            self._note_outbox_error("reserved_job_id_unavailable", exc)
+            raise IBPCExecutionOutboxError(
+                "reserved_job_id_unavailable", f"{type(exc).__name__}: {exc}"
+            ) from exc
 
     def _outbox_idempotency_key(
         self,
@@ -624,11 +706,30 @@ class IBPCService:
         for candidate in (ctx.plan.plan_digest, ctx.intent_digest):
             if isinstance(candidate, str) and candidate.strip():
                 return candidate
-        raise _OutboxSeamUnavailable("no plan digest on the turn context")
+        raise _OutboxSeamUnavailable(
+            "no_plan_digest", "the turn context carries no plan digest to key the intent by"
+        )
 
     def _outbox_store(self) -> Any | None:
         coordinator = self._outbox_coordinator
         return None if coordinator is None else getattr(coordinator, "store", None)
+
+    def _note_outbox_error(
+        self, reason: str, exc: BaseException, *, row: Any | None = None
+    ) -> None:
+        """Record AND log a seam failure.  Never called without one of the two."""
+        detail = f"{reason}: {type(exc).__name__}: {exc}"
+        if row is not None:
+            detail = f"{detail} (outbox_id={getattr(row, 'outbox_id', '')})"
+        self._last_outbox_error = detail
+        logger.error(
+            "ibpc.outbox.seam_failure",
+            extra={
+                "outbox_reason": reason,
+                "outbox_row": getattr(row, "outbox_id", None),
+                "session_id": getattr(self, "_last_session_id", None),
+            },
+        )
 
     async def _stage_outbox_intent(
         self,
@@ -640,17 +741,21 @@ class IBPCService:
         session: Any,
         payload: dict[str, Any],
     ) -> Any | None:
-        """``INTENT_STAGED`` -> ``APPROVAL_CONSUMED`` before the queue is touched.
+        """Stage ``INTENT_STAGED`` for this intent, before anything is spent.
 
-        The order is the whole point.  Staging happens *before* the approval is
-        consumed (it is idempotent and reversible); the transition to
-        ``APPROVAL_CONSUMED`` happens *after* the ledger committed.  A crash in
-        between leaves an ``INTENT_STAGED`` row whose reserved job id the ledger
-        already knows, which is precisely what reconciliation confirms rather
-        than rejects.
+        Returns ``None`` only when no outbox is wired.  With an outbox wired this
+        either returns a durable row or raises
+        :class:`IBPCExecutionOutboxError` -- the caller must be able to rely on
+        "no exception means the intent is recorded".
 
-        Returns ``None`` when no outbox is wired -- the caller then behaves
-        exactly as before, so this seam cannot change an unwired deployment.
+        The sequence, and why each step is where it is:
+
+        * staging first, because it is idempotent and reversible and records the
+          ``reserved_job_id`` the ledger will later be asked about;
+        * the ``APPROVAL_CONSUMED`` transition happens in ``execute()`` *after*
+          the ledger commits, so a crash between the two leaves a row whose
+          reservation the ledger already knows -- which is what makes recovery a
+          confirmation instead of a replay rejection.
         """
         store = self._outbox_store()
         if store is None:
@@ -663,8 +768,18 @@ class IBPCService:
                 turn_id=turn_id,
                 session=session,
             )
-            # Another process may already hold the outbox lock; this is I/O, so
-            # it must not run on the event loop.
+            revision_digest = self._outbox_revision_digest(ctx)
+        except IBPCExecutionOutboxError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - converted, never swallowed
+            self._note_outbox_error("intent_key_unavailable", exc)
+            raise IBPCExecutionOutboxError(
+                "intent_key_unavailable", f"{type(exc).__name__}: {exc}"
+            ) from exc
+
+        try:
+            # Another process may hold the outbox lock; this is I/O, so keep it
+            # off the event loop.
             row, _created = await asyncio.to_thread(
                 store.stage_intent,
                 idempotency_key=key,
@@ -675,36 +790,79 @@ class IBPCService:
                 principal_id=str(ctx.verified_identity.principal_id),
                 approval_id=str(approval_id),
                 revision_id=str(ctx.plan.plan_digest),
-                revision_jcs_sha256=self._outbox_revision_digest(ctx),
+                revision_jcs_sha256=revision_digest,
                 plan_payload=_outbox_plan_payload(payload),
             )
-            if row.state == "INTENT_STAGED":
-                row = await asyncio.to_thread(
-                    store.mark_approval_consumed,
-                    outbox_id=row.outbox_id,
-                    detail=str(approval_id),
-                )
-            return row
-        except Exception as exc:  # noqa: BLE001 - the seam must never break execution
-            # A seam that fails closed on its own bookkeeping would refuse turns
-            # the pre-Wave-2 code accepted.  The durable queue is still the
-            # execution authority; a missing outbox row costs recoverability,
-            # which the caller is told about through the return value below.
-            self._outbox_seam_error = f"{type(exc).__name__}: {exc}"
-            return None
+        except Exception as exc:  # noqa: BLE001 - converted, never swallowed
+            self._note_outbox_error("stage_intent_failed", exc)
+            raise IBPCExecutionOutboxError(
+                "stage_intent_failed", f"{type(exc).__name__}: {exc}"
+            ) from exc
+        if row is None or not getattr(row, "outbox_id", ""):
+            error = IBPCExecutionOutboxError(
+                "stage_intent_returned_no_row", "stage_intent produced no durable row"
+            )
+            self._note_outbox_error("stage_intent_returned_no_row", error)
+            raise error
+        return row
 
-    def _record_outbox_enqueued(self, row: Any | None, job_id: str) -> None:
-        """``APPROVAL_CONSUMED`` -> ``JOB_ENQUEUED`` recording the durable job id."""
+    @staticmethod
+    def _reserved_job_id_for_row(row: Any) -> str:
+        reserved = getattr(row, "reserved_job_id", "")
+        if isinstance(reserved, str) and reserved:
+            return reserved
+        raise IBPCExecutionOutboxError(
+            "reservation_missing", f"outbox row {getattr(row, 'outbox_id', '')} has no reservation"
+        )
+
+    def _fail_outbox_row(self, row: Any, reason: str) -> None:
+        """Terminalise a staged intent that can never execute as approved.
+
+        Staging happens *before* the approval is consumed, so every refusal
+        between the two leaves a live ``INTENT_STAGED``/``APPROVAL_CONSUMED``
+        row.  Leaving it in flight would make the next reconcile retry an intent
+        the live path just refused -- a job the approval does not cover -- so a
+        refusal must be recorded as terminal, with its reason.
+
+        Best-effort by design: this runs on an already-decided refusal, and a
+        bookkeeping failure must not turn "refused for reason X" into "crashed".
+        The exception is logged and recorded on ``last_outbox_error`` instead.
+        """
+        store = self._outbox_store()
+        if store is None or row is None:
+            return
+        try:
+            store.mark_failed_terminal(
+                outbox_id=row.outbox_id, error=f"execution_refused: {reason}"
+            )
+        except Exception as exc:  # noqa: BLE001 - see the docstring
+            self._note_outbox_error("mark_failed_terminal_failed", exc, row=row)
+
+    def _record_outbox_enqueued(self, row: Any, job_id: str) -> None:
+        """``APPROVAL_CONSUMED`` -> ``JOB_ENQUEUED`` recording the durable job id.
+
+        Fail-closed: if the row cannot record the enqueue, the caller must know,
+        because the job is now running with no durable pointer to it.
+        """
         store = self._outbox_store()
         if store is None or row is None:
             return
         try:
             store.mark_job_enqueued(outbox_id=row.outbox_id, job_id=job_id)
-        except Exception as exc:  # noqa: BLE001 - see _stage_outbox_intent
-            self._outbox_seam_error = f"{type(exc).__name__}: {exc}"
+        except Exception as exc:  # noqa: BLE001 - converted, never swallowed
+            self._note_outbox_error("mark_job_enqueued_failed", exc, row=row)
+            raise IBPCExecutionOutboxError(
+                "mark_job_enqueued_failed", f"{type(exc).__name__}: {exc}"
+            ) from exc
 
-    def _record_outbox_enqueue_failure(self, row: Any | None, error: BaseException) -> None:
-        """Hold the intent for retry, never terminalise a spent approval."""
+    def _record_outbox_enqueue_failure(self, row: Any, error: BaseException) -> None:
+        """Park the intent for retry; never terminalise a spent approval.
+
+        This one deliberately does NOT raise: it runs inside an ``except`` for an
+        enqueue that already failed, and replacing that error with a bookkeeping
+        error would hide which of the two actually went wrong.  It records and
+        logs instead, and the original failure propagates.
+        """
         store = self._outbox_store()
         if store is None or row is None:
             return
@@ -712,16 +870,18 @@ class IBPCService:
             store.record_retryable_enqueue_failure(
                 outbox_id=row.outbox_id, error=f"enqueue_retryable: {type(error).__name__}: {error}"
             )
-        except Exception as exc:  # noqa: BLE001 - see _stage_outbox_intent
-            self._outbox_seam_error = f"{type(exc).__name__}: {exc}"
+        except Exception as exc:  # noqa: BLE001 - see the docstring
+            self._note_outbox_error("record_enqueue_failure_failed", exc, row=row)
 
-    def _record_outbox_completed(
-        self, row: Any | None, *, artifact_digest: str, capsule: Any
-    ) -> None:
+    def _record_outbox_completed(self, row: Any, *, artifact_digest: str, capsule: Any) -> None:
         """``JOB_ENQUEUED``/``AWAITING_WORKER`` -> ``COMPLETED_VERIFIED``.
 
         Only reached after the independent verifier and the proof gate passed,
         so the durable row never claims a completion the evidence cannot back.
+
+        Fail-closed: this is the record that says the turn actually finished.  A
+        missing transition would leave a verified, published artifact behind a
+        row that still claims to be in flight.
         """
         store = self._outbox_store()
         if store is None or row is None:
@@ -736,8 +896,11 @@ class IBPCService:
                 ),
                 detail="verified",
             )
-        except Exception as exc:  # noqa: BLE001 - see _stage_outbox_intent
-            self._outbox_seam_error = f"{type(exc).__name__}: {exc}"
+        except Exception as exc:  # noqa: BLE001 - converted, never swallowed
+            self._note_outbox_error("mark_completed_failed", exc, row=row)
+            raise IBPCExecutionOutboxError(
+                "mark_completed_failed", f"{type(exc).__name__}: {exc}"
+            ) from exc
 
     def _outbox_consume_approval(
         self, approval_id: str, identity: Any, *, job_id: str = "", attempt: int = 1
@@ -2249,7 +2412,7 @@ class IBPCService:
 
     @staticmethod
     def _seconds_str(microseconds: int) -> str:
-        return f"{microseconds / 1_000_000:.6f}".rstrip("0").rstrip(".") or "0"
+        return _format_seconds(microseconds)
 
     def _canonical_intent(self, ctx: _TurnContext) -> CanonicalCreativeIntent:
         """Build the schema-2 canonical intent with the SAME builder the worker
@@ -2353,23 +2516,76 @@ class IBPCService:
                 return ExecutionOutcome(
                     status="refused", detail="approval_mac_invalid: envelope verification failed"
                 )
+            # Fail-closed seam check, BEFORE anything is spent: with an outbox
+            # wired, an underivable reservation must refuse here rather than
+            # consume an approval it could never record.
             try:
-                # With the outbox wired, the consumption reserves the SAME
-                # deterministic job id the outbox row was staged under.  Without
-                # that reservation the ledger cannot answer "was this approval
-                # consumed for this very intent?" after a crash, and recovery
-                # would be misread as a replay -- the exact window Wave 2 closes.
+                reserved_job_id = self._reserved_job_id_for(
+                    ctx, approval_id, session_id, turn_id, session
+                )
+            except IBPCExecutionOutboxError as exc:
+                return ExecutionOutcome(
+                    status="refused", detail=f"outbox_unavailable: {exc.reason}: {exc.detail}"
+                )
+            # STAGE, THEN CONSUME -- fail-closed, and in that order.
+            #
+            # The durable intent is written BEFORE the single-use approval is
+            # touched, so an outbox that cannot record the intent refuses
+            # without spending anything.  The reverse order would spend a
+            # cryptographic approval whose only recovery evidence was never
+            # created -- unrecoverable by construction, and the finding this
+            # wave closes.
+            #
+            # The row is staged with the SAME canonical projection that the job
+            # payload below will carry (the projection deliberately excludes
+            # paths and workspaces, so it is fully known here) -- which is what
+            # lets ``stage_intent`` stay idempotent: a retry re-derives an
+            # identical projection instead of looking like a conflicting
+            # re-stage, and a resumed row carries the real plan, not a stub.
+            try:
+                outbox_row = await self._stage_outbox_intent(
+                    ctx=ctx,
+                    approval_id=approval_id,
+                    session_id=session_id,
+                    turn_id=turn_id,
+                    session=session,
+                    payload=_outbox_reservation_payload(ctx, approval_id),
+                )
+            except IBPCExecutionOutboxError as exc:
+                return ExecutionOutcome(
+                    status="refused", detail=f"outbox_unavailable: {exc.reason}: {exc.detail}"
+                )
+            try:
                 self._approvals.consume(
                     approval_id,
                     identity=identity,
-                    job_id=self._reserved_job_id_for(
-                        ctx, approval_id, session_id, turn_id, session
-                    ),
+                    # The reservation ties the ledger's record of the spend to
+                    # the outbox row, so recovery can ask "consumed for THIS
+                    # job?" instead of guessing.  A spent approval reserved for
+                    # this very job and unfinalised IS the crash window, and the
+                    # ledger resumes it rather than refusing a replay.
+                    job_id=reserved_job_id,
                     key_provider=provider,
                 )
             except ApprovalError as exc:
+                self._fail_outbox_row(outbox_row, f"consume_{exc.reason}")
                 return ExecutionOutcome(status="refused", detail=f"{exc.reason}: {exc.detail}")
+            store = self._outbox_store()
+            if (
+                outbox_row is not None
+                and store is not None
+                and getattr(outbox_row, "state", "") == "INTENT_STAGED"
+            ):
+                outbox_row = await asyncio.to_thread(
+                    store.mark_approval_consumed,
+                    outbox_id=outbox_row.outbox_id,
+                    detail=str(approval_id),
+                )
             if turn.turn_state not in (TurnState.APPROVED, TurnState.EXECUTING):
+                # The approval was consumed by THIS call moments ago if the
+                # state flipped, so the spend is real: terminalise the intent
+                # rather than leaving a row for reconcile to retry.
+                self._fail_outbox_row(outbox_row, f"turn_state_{turn.turn_state.value}")
                 return ExecutionOutcome(
                     status="refused",
                     detail=f"turn state {turn.turn_state.value} cannot execute "
@@ -2380,7 +2596,14 @@ class IBPCService:
             # the state read-back below.  Without that, a cancel racing the
             # (lock-free) staging/enqueue window could terminalise the turn and a
             # later mark_failed would raise an uncaught TransitionError.
-            self._sessions.mark_executing(session_id, turn_id)
+            #
+            # A turn already EXECUTING is the crash-resume path, not a conflict:
+            # the previous attempt consumed this approval, died before the queue
+            # committed, and the retry is picking the same turn back up.  The
+            # state machine refuses a self-transition, but the *claim* is already
+            # held, and the execute lock above guarantees only one caller is here.
+            if turn.turn_state is not TurnState.EXECUTING:
+                self._sessions.mark_executing(session_id, turn_id)
             # Pure read-back under the lock: the authoritative state at reservation.
             reserved = self._sessions.get_session(session_id).turns.get(turn_id)
             if reserved is None or reserved.turn_state is not TurnState.EXECUTING:
@@ -2464,14 +2687,6 @@ class IBPCService:
             "channel_binding_id": ctx.verified_identity.channel_binding_id,
             "intent": self._canonical_intent(ctx).model_dump(mode="json"),
         }
-        outbox_row = await self._stage_outbox_intent(
-            ctx=ctx,
-            approval_id=approval_id,
-            session_id=session_id,
-            turn_id=turn_id,
-            session=session,
-            payload=payload,
-        )
         try:
             job_id = await self._deps.queue.enqueue(
                 job_type=JOB_TYPE, idempotency_key=idempotency_key, payload=payload
@@ -2479,9 +2694,20 @@ class IBPCService:
         except Exception as exc:  # noqa: BLE001 — enqueue failure is a refusal, not a render claim
             # The outbox row stays APPROVAL_CONSUMED, never FAILED_TERMINAL: the
             # approval is already spent, so burning the intent for a queue hiccup
-            # would demand a fresh human approval.  Reconciliation retries it.
+            # would demand a fresh human approval.  Reconciliation -- or a retry
+            # through this very method -- resumes it under the same reserved job
+            # id, which is why the turn deliberately is NOT marked failed here:
+            # a FAILED turn would refuse the retry that recovers the approval.
             self._record_outbox_enqueue_failure(outbox_row, exc)
-            self._sessions.mark_failed(session_id, turn_id)
+            logger.warning(
+                "ibpc.outbox.enqueue_parked",
+                extra={
+                    "outbox_id": getattr(outbox_row, "outbox_id", None),
+                    "reserved_job_id": getattr(outbox_row, "reserved_job_id", None),
+                    "session_id": session_id,
+                    "turn_id": turn_id,
+                },
+            )
             return ExecutionOutcome(status="refused", detail=f"enqueue_failed: {exc}")
         self._record_outbox_enqueued(outbox_row, job_id)
 
