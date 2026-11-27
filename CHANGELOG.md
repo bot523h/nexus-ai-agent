@@ -78,6 +78,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   worker thread actually finishes, so a cancelled coroutine cannot admit more
   concurrent work than the box can take. `BackupKeyMaterial` keeps its secret out
   of `repr`, `str` and any redacted dump.
+- **Wave 6A — the end-to-end vertical slice.** `tests/integration/test_nagar_studio_e2e_vertical_slice.py`
+  runs the whole Studio loop against real objects on a real temp disk, with zero
+  mocks: seed tenant/project/OWNER/EDITOR/VIEWER in the real
+  `StudioPrincipalAuthStore`; verify the four-way authority triple and prove VIEWER
+  is refused; open a live session and begin turn 1; pin revision 1 with an asset
+  whose SHA-256 is measured from the bytes on disk; build and verify the WYSIWYS
+  readback and bind an approval to *that* digest; consume the approval and crash
+  before enqueue, then prove a fresh process does not re-consume or re-enqueue;
+  hold the poll budget so the row parks at `AWAITING_WORKER`; let the worker verify
+  the pins, render bytes, and drain the provenance outbox into a real
+  `CreativeGraph` (COMMAND → EXECUTION → ARTIFACT, `integrity_check` clean); then run
+  turn 2 as revision 2 and diff the two readbacks in exact rational arithmetic.
+  It finishes with a hot backup of the live auth database, a full verify, and a
+  restore into a new location that is then used to resolve a principal — proof the
+  restored file is usable, not merely byte-identical. A governor test runs the
+  slice under real threads, and two invariants assert no float ever reaches a
+  persisted readback payload and nothing is written outside the temp root.
 - The three reviewed architecture gates (`test_nagar_studio_isolation`,
   `test_slideshow_adapter_boundary`, `test_command_capability_boundary`) gain an
   explicit, minimal durable-state allowlist: the new state modules may use
