@@ -6,9 +6,9 @@ campaign `NEXUS-PR-BACKLOG-CONVERGENCE-2026-11-27` · main `54073d1f4fde` · inv
 
 | disposition | count |
 |---|---|
+| `BLOCKED_ACTIVE_OWNER` | 1 |
 | `DEFERRED_TO_BOARD_AND_CLOSED` | 34 |
 | `EXTRACTED_AND_CLOSED` | 4 |
-| `MERGE_CANDIDATE` | 1 |
 | `SUPERSEDED_AND_CLOSED` | 5 |
 
 ## Per-PR matrix
@@ -58,11 +58,15 @@ campaign `NEXUS-PR-BACKLOG-CONVERGENCE-2026-11-27` · main `54073d1f4fde` · inv
 | #327 | `d5d5ead3` | `DEFERRED_TO_BOARD_AND_CLOSED` | creative | 25/484 | 28 | 0 |
 | #328 | `4f6ca1d1` | `DEFERRED_TO_BOARD_AND_CLOSED` | creative | 5/479 | 11 | 0 |
 | #329 | `56f34094` | `EXTRACTED_AND_CLOSED` | — | 2/479 | 1 | 0 |
-| #367 | `439a6ee2` | `MERGE_CANDIDATE` | — | 2/1 | 0 | 0 |
+| #367 | `439a6ee2` | `BLOCKED_ACTIVE_OWNER` | — | 2/1 | 0 | 0 |
+
+## Blocked / active owner
+
+#367 is the only PR left open. Its snapshot head was `439a6ee2aa42e122f9d061b5f4520e4177b28e4f`; the live head at report time is `31895925a757e24984d9056aec588d8d123fa483` (10 commits, 10 files, base `54073d1f`), pushed by the `task-w35-ibpc-security-closure` owner while this campaign ran. Merging an in-flight branch would violate the ownership contract, so the convergence records it as `BLOCKED_ACTIVE_OWNER` and does not close or merge it.
 
 ## Merge evidence
 
-_(pending)_
+_(none performed by this campaign: the single merge candidate #367 remains with its active owner)_
 
 ## Closures
 

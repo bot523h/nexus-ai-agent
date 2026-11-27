@@ -396,7 +396,7 @@
       "title": "fix(ibpc): close the two authorization gaps left by #365 (Wave 3-R7 port)",
       "head_sha": "439a6ee2aa42e122f9d061b5f4520e4177b28e4f",
       "head_ref": "wave3-r7/authorization-closure",
-      "disposition": "MERGE_CANDIDATE",
+      "disposition": "BLOCKED_ACTIVE_OWNER",
       "board_task": null,
       "closed": false
     }

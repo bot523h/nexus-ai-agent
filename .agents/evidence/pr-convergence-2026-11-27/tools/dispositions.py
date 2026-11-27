@@ -15,6 +15,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 MAIN_SHA = "54073d1f4fde8c1d5b8f2b1837c3d1f8a442f1cf"
+LIVE_367_HEAD = "31895925a757e24984d9056aec588d8d123fa483"
 CAMPAIGN = "NEXUS-PR-BACKLOG-CONVERGENCE-2026-11-27"
 
 SUPERSEDED = {
@@ -179,11 +180,15 @@ def main() -> int:
         number = pr["number"]
         stats = per[number]
         if number == 367:
-            disposition = "MERGED" if merge_result.get("number") == 367 else "MERGE_CANDIDATE"
+            disposition = "MERGED" if merge_result.get("number") == 367 else "BLOCKED_ACTIVE_OWNER"
             family = None
             why = (
-                "Closes the two authorization gaps left by #365; 7 files, 0 merge-tree conflicts, "
-                "0 unresolved threads, branch updated onto main and CI re-run on the exact head."
+                "The only genuine merge candidate: closes the two authorization gaps left by #365, "
+                "0 merge-tree conflicts, 0 unresolved threads, base updated onto main 54073d1f. "
+                "Left OPEN because its owner (task-w35-ibpc-security-closure) is actively pushing "
+                "(head a8a06eee -> 31895925, 10 commits / 10 files during this campaign); merging an "
+                "in-flight branch would violate the ownership contract. Resume: owner finishes CI on "
+                "the exact head and merges, or the convergence owner merges after a stable green head."
             )
             evidence = [
                 "docs/engineering/NAGAR_IBPC.md",
@@ -247,6 +252,8 @@ def main() -> int:
                 "evidence": evidence,
                 "resume_condition": resume,
                 "closure": closed.get(number),
+                "live_head_sha": LIVE_367_HEAD if number == 367 else None,
+                "live_changed_files": 10 if number == 367 else None,
             }
         )
 
@@ -341,9 +348,18 @@ def main() -> int:
         )
     report += [
         "",
+        "## Blocked / active owner",
+        "",
+        f"#367 is the only PR left open. Its snapshot head was `{next(r['head_sha'] for r in matrix if r['number'] == 367)}`; "
+        f"the live head at report time is `{LIVE_367_HEAD}` (10 commits, 10 files, base `54073d1f`), pushed by the "
+        "`task-w35-ibpc-security-closure` owner while this campaign ran. Merging an in-flight branch would violate "
+        "the ownership contract, so the convergence records it as `BLOCKED_ACTIVE_OWNER` and does not close or merge it.",
+        "",
         "## Merge evidence",
         "",
-        f"```json\n{json.dumps(merge_result, indent=2)}\n```" if merge_result else "_(pending)_",
+        f"```json\n{json.dumps(merge_result, indent=2)}\n```"
+        if merge_result
+        else "_(none performed by this campaign: the single merge candidate #367 remains with its active owner)_",
         "",
         "## Closures",
         "",

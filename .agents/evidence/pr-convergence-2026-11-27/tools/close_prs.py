@@ -113,7 +113,7 @@ def main() -> int:
 
     for row in matrix:
         number = row["number"]
-        if row["disposition"] in ("MERGED", "MERGE_CANDIDATE"):
+        if row["disposition"] in ("MERGED", "MERGE_CANDIDATE", "BLOCKED_ACTIVE_OWNER"):
             continue
         if args.only and number not in args.only:
             continue

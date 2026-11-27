@@ -42,7 +42,9 @@
         "disposition": "DEFERRED_TO_BOARD_AND_CLOSED",
         "comment_url": "https://github.com/bot523h/nexus-ai-agent/pull/33#issuecomment-7217491549",
         "closed_at": "2026-11-27T11:48:10Z"
-      }
+      },
+      "live_head_sha": null,
+      "live_changed_files": null
     },
     {
       "number": 57,
@@ -84,7 +86,9 @@
         "disposition": "DEFERRED_TO_BOARD_AND_CLOSED",
         "comment_url": "https://github.com/bot523h/nexus-ai-agent/pull/57#issuecomment-7217492214",
         "closed_at": "2026-11-27T11:48:13Z"
-      }
+      },
+      "live_head_sha": null,
+      "live_changed_files": null
     },
     {
       "number": 58,
@@ -126,7 +130,9 @@
         "disposition": "DEFERRED_TO_BOARD_AND_CLOSED",
         "comment_url": "https://github.com/bot523h/nexus-ai-agent/pull/58#issuecomment-7217492897",
         "closed_at": "2026-11-27T11:48:15Z"
-      }
+      },
+      "live_head_sha": null,
+      "live_changed_files": null
     },
     {
       "number": 60,
@@ -168,7 +174,9 @@
         "disposition": "DEFERRED_TO_BOARD_AND_CLOSED",
         "comment_url": "https://github.com/bot523h/nexus-ai-agent/pull/60#issuecomment-7217493599",
         "closed_at": "2026-11-27T11:48:17Z"
-      }
+      },
+      "live_head_sha": null,
+      "live_changed_files": null
     },
     {
       "number": 63,
@@ -210,7 +218,9 @@
         "disposition": "DEFERRED_TO_BOARD_AND_CLOSED",
         "comment_url": "https://github.com/bot523h/nexus-ai-agent/pull/63#issuecomment-7217494255",
         "closed_at": "2026-11-27T11:48:19Z"
-      }
+      },
+      "live_head_sha": null,
+      "live_changed_files": null
     },
     {
       "number": 64,
@@ -252,7 +262,9 @@
         "disposition": "DEFERRED_TO_BOARD_AND_CLOSED",
         "comment_url": "https://github.com/bot523h/nexus-ai-agent/pull/64#issuecomment-7217494995",
         "closed_at": "2026-11-27T11:48:21Z"
-      }
+      },
+      "live_head_sha": null,
+      "live_changed_files": null
     },
     {
       "number": 66,
@@ -294,7 +306,9 @@
         "disposition": "DEFERRED_TO_BOARD_AND_CLOSED",
         "comment_url": "https://github.com/bot523h/nexus-ai-agent/pull/66#issuecomment-7217495673",
         "closed_at": "2026-11-27T11:48:24Z"
-      }
+      },
+      "live_head_sha": null,
+      "live_changed_files": null
     },
     {
       "number": 69,
@@ -336,7 +350,9 @@
         "disposition": "DEFERRED_TO_BOARD_AND_CLOSED",
         "comment_url": "https://github.com/bot523h/nexus-ai-agent/pull/69#issuecomment-7217496368",
         "closed_at": "2026-11-27T11:48:26Z"
-      }
+      },
+      "live_head_sha": null,
+      "live_changed_files": null
     },
     {
       "number": 73,
@@ -378,7 +394,9 @@
         "disposition": "DEFERRED_TO_BOARD_AND_CLOSED",
         "comment_url": "https://github.com/bot523h/nexus-ai-agent/pull/73#issuecomment-7217497216",
         "closed_at": "2026-11-27T11:48:28Z"
-      }
+      },
+      "live_head_sha": null,
+      "live_changed_files": null
     },
     {
       "number": 84,
@@ -420,7 +438,9 @@
         "disposition": "DEFERRED_TO_BOARD_AND_CLOSED",
         "comment_url": "https://github.com/bot523h/nexus-ai-agent/pull/84#issuecomment-7217497967",
         "closed_at": "2026-11-27T11:48:31Z"
-      }
+      },
+      "live_head_sha": null,
+      "live_changed_files": null
     },
     {
       "number": 89,
@@ -461,7 +481,9 @@
         "disposition": "DEFERRED_TO_BOARD_AND_CLOSED",
         "comment_url": "https://github.com/bot523h/nexus-ai-agent/pull/89#issuecomment-7217498596",
         "closed_at": "2026-11-27T11:48:33Z"
-      }
+      },
+      "live_head_sha": null,
+      "live_changed_files": null
     },
     {
       "number": 92,
@@ -499,7 +521,9 @@
         "disposition": "DEFERRED_TO_BOARD_AND_CLOSED",
         "comment_url": "https://github.com/bot523h/nexus-ai-agent/pull/92#issuecomment-7217499259",
         "closed_at": "2026-11-27T11:48:35Z"
-      }
+      },
+      "live_head_sha": null,
+      "live_changed_files": null
     },
     {
       "number": 97,
@@ -541,7 +565,9 @@
         "disposition": "DEFERRED_TO_BOARD_AND_CLOSED",
         "comment_url": "https://github.com/bot523h/nexus-ai-agent/pull/97#issuecomment-7217499941",
         "closed_at": "2026-11-27T11:48:37Z"
-      }
+      },
+      "live_head_sha": null,
+      "live_changed_files": null
     },
     {
       "number": 99,
@@ -583,7 +609,9 @@
         "disposition": "DEFERRED_TO_BOARD_AND_CLOSED",
         "comment_url": "https://github.com/bot523h/nexus-ai-agent/pull/99#issuecomment-7217500559",
         "closed_at": "2026-11-27T11:48:39Z"
-      }
+      },
+      "live_head_sha": null,
+      "live_changed_files": null
     },
     {
       "number": 113,
@@ -625,7 +653,9 @@
         "disposition": "DEFERRED_TO_BOARD_AND_CLOSED",
         "comment_url": "https://github.com/bot523h/nexus-ai-agent/pull/113#issuecomment-7217501195",
         "closed_at": "2026-11-27T11:48:41Z"
-      }
+      },
+      "live_head_sha": null,
+      "live_changed_files": null
     },
     {
       "number": 114,
@@ -667,7 +697,9 @@
         "disposition": "DEFERRED_TO_BOARD_AND_CLOSED",
         "comment_url": "https://github.com/bot523h/nexus-ai-agent/pull/114#issuecomment-7217501964",
         "closed_at": "2026-11-27T11:48:44Z"
-      }
+      },
+      "live_head_sha": null,
+      "live_changed_files": null
     },
     {
       "number": 115,
@@ -709,7 +741,9 @@
         "disposition": "DEFERRED_TO_BOARD_AND_CLOSED",
         "comment_url": "https://github.com/bot523h/nexus-ai-agent/pull/115#issuecomment-7217502916",
         "closed_at": "2026-11-27T11:48:46Z"
-      }
+      },
+      "live_head_sha": null,
+      "live_changed_files": null
     },
     {
       "number": 117,
@@ -751,7 +785,9 @@
         "disposition": "DEFERRED_TO_BOARD_AND_CLOSED",
         "comment_url": "https://github.com/bot523h/nexus-ai-agent/pull/117#issuecomment-7217503701",
         "closed_at": "2026-11-27T11:48:49Z"
-      }
+      },
+      "live_head_sha": null,
+      "live_changed_files": null
     },
     {
       "number": 118,
@@ -793,7 +829,9 @@
         "disposition": "DEFERRED_TO_BOARD_AND_CLOSED",
         "comment_url": "https://github.com/bot523h/nexus-ai-agent/pull/118#issuecomment-7217504406",
         "closed_at": "2026-11-27T11:48:51Z"
-      }
+      },
+      "live_head_sha": null,
+      "live_changed_files": null
     },
     {
       "number": 121,
@@ -835,7 +873,9 @@
         "disposition": "DEFERRED_TO_BOARD_AND_CLOSED",
         "comment_url": "https://github.com/bot523h/nexus-ai-agent/pull/121#issuecomment-7217505344",
         "closed_at": "2026-11-27T11:48:55Z"
-      }
+      },
+      "live_head_sha": null,
+      "live_changed_files": null
     },
     {
       "number": 122,
@@ -877,7 +917,9 @@
         "disposition": "DEFERRED_TO_BOARD_AND_CLOSED",
         "comment_url": "https://github.com/bot523h/nexus-ai-agent/pull/122#issuecomment-7217506358",
         "closed_at": "2026-11-27T11:48:58Z"
-      }
+      },
+      "live_head_sha": null,
+      "live_changed_files": null
     },
     {
       "number": 129,
@@ -917,7 +959,9 @@
         "disposition": "DEFERRED_TO_BOARD_AND_CLOSED",
         "comment_url": "https://github.com/bot523h/nexus-ai-agent/pull/129#issuecomment-7217507311",
         "closed_at": "2026-11-27T11:49:00Z"
-      }
+      },
+      "live_head_sha": null,
+      "live_changed_files": null
     },
     {
       "number": 135,
@@ -954,7 +998,9 @@
         "disposition": "SUPERSEDED_AND_CLOSED",
         "comment_url": "https://github.com/bot523h/nexus-ai-agent/pull/135#issuecomment-7217507970",
         "closed_at": "2026-11-27T11:49:02Z"
-      }
+      },
+      "live_head_sha": null,
+      "live_changed_files": null
     },
     {
       "number": 137,
@@ -996,7 +1042,9 @@
         "disposition": "DEFERRED_TO_BOARD_AND_CLOSED",
         "comment_url": "https://github.com/bot523h/nexus-ai-agent/pull/137#issuecomment-7217508575",
         "closed_at": "2026-11-27T11:49:04Z"
-      }
+      },
+      "live_head_sha": null,
+      "live_changed_files": null
     },
     {
       "number": 140,
@@ -1032,7 +1080,9 @@
         "disposition": "SUPERSEDED_AND_CLOSED",
         "comment_url": "https://github.com/bot523h/nexus-ai-agent/pull/140#issuecomment-7217509295",
         "closed_at": "2026-11-27T11:49:07Z"
-      }
+      },
+      "live_head_sha": null,
+      "live_changed_files": null
     },
     {
       "number": 149,
@@ -1074,7 +1124,9 @@
         "disposition": "DEFERRED_TO_BOARD_AND_CLOSED",
         "comment_url": "https://github.com/bot523h/nexus-ai-agent/pull/149#issuecomment-7217510040",
         "closed_at": "2026-11-27T11:49:09Z"
-      }
+      },
+      "live_head_sha": null,
+      "live_changed_files": null
     },
     {
       "number": 150,
@@ -1116,7 +1168,9 @@
         "disposition": "DEFERRED_TO_BOARD_AND_CLOSED",
         "comment_url": "https://github.com/bot523h/nexus-ai-agent/pull/150#issuecomment-7217510883",
         "closed_at": "2026-11-27T11:49:12Z"
-      }
+      },
+      "live_head_sha": null,
+      "live_changed_files": null
     },
     {
       "number": 157,
@@ -1158,7 +1212,9 @@
         "disposition": "DEFERRED_TO_BOARD_AND_CLOSED",
         "comment_url": "https://github.com/bot523h/nexus-ai-agent/pull/157#issuecomment-7217511772",
         "closed_at": "2026-11-27T11:49:14Z"
-      }
+      },
+      "live_head_sha": null,
+      "live_changed_files": null
     },
     {
       "number": 193,
@@ -1200,7 +1256,9 @@
         "disposition": "DEFERRED_TO_BOARD_AND_CLOSED",
         "comment_url": "https://github.com/bot523h/nexus-ai-agent/pull/193#issuecomment-7217512452",
         "closed_at": "2026-11-27T11:49:16Z"
-      }
+      },
+      "live_head_sha": null,
+      "live_changed_files": null
     },
     {
       "number": 204,
@@ -1238,7 +1296,9 @@
         "disposition": "DEFERRED_TO_BOARD_AND_CLOSED",
         "comment_url": "https://github.com/bot523h/nexus-ai-agent/pull/204#issuecomment-7217513084",
         "closed_at": "2026-11-27T11:49:18Z"
-      }
+      },
+      "live_head_sha": null,
+      "live_changed_files": null
     },
     {
       "number": 205,
@@ -1276,7 +1336,9 @@
         "disposition": "SUPERSEDED_AND_CLOSED",
         "comment_url": "https://github.com/bot523h/nexus-ai-agent/pull/205#issuecomment-7217513860",
         "closed_at": "2026-11-27T11:49:20Z"
-      }
+      },
+      "live_head_sha": null,
+      "live_changed_files": null
     },
     {
       "number": 230,
@@ -1318,7 +1380,9 @@
         "disposition": "DEFERRED_TO_BOARD_AND_CLOSED",
         "comment_url": "https://github.com/bot523h/nexus-ai-agent/pull/230#issuecomment-7217514434",
         "closed_at": "2026-11-27T11:49:22Z"
-      }
+      },
+      "live_head_sha": null,
+      "live_changed_files": null
     },
     {
       "number": 257,
@@ -1356,7 +1420,9 @@
         "disposition": "DEFERRED_TO_BOARD_AND_CLOSED",
         "comment_url": "https://github.com/bot523h/nexus-ai-agent/pull/257#issuecomment-7217515060",
         "closed_at": "2026-11-27T11:49:24Z"
-      }
+      },
+      "live_head_sha": null,
+      "live_changed_files": null
     },
     {
       "number": 273,
@@ -1398,7 +1464,9 @@
         "disposition": "DEFERRED_TO_BOARD_AND_CLOSED",
         "comment_url": "https://github.com/bot523h/nexus-ai-agent/pull/273#issuecomment-7217515748",
         "closed_at": "2026-11-27T11:49:26Z"
-      }
+      },
+      "live_head_sha": null,
+      "live_changed_files": null
     },
     {
       "number": 284,
@@ -1440,7 +1508,9 @@
         "disposition": "DEFERRED_TO_BOARD_AND_CLOSED",
         "comment_url": "https://github.com/bot523h/nexus-ai-agent/pull/284#issuecomment-7217516354",
         "closed_at": "2026-11-27T11:49:28Z"
-      }
+      },
+      "live_head_sha": null,
+      "live_changed_files": null
     },
     {
       "number": 285,
@@ -1475,7 +1545,9 @@
         "disposition": "EXTRACTED_AND_CLOSED",
         "comment_url": "https://github.com/bot523h/nexus-ai-agent/pull/285#issuecomment-7217517074",
         "closed_at": "2026-11-27T11:49:30Z"
-      }
+      },
+      "live_head_sha": null,
+      "live_changed_files": null
     },
     {
       "number": 295,
@@ -1512,7 +1584,9 @@
         "disposition": "SUPERSEDED_AND_CLOSED",
         "comment_url": "https://github.com/bot523h/nexus-ai-agent/pull/295#issuecomment-7217517774",
         "closed_at": "2026-11-27T11:49:33Z"
-      }
+      },
+      "live_head_sha": null,
+      "live_changed_files": null
     },
     {
       "number": 297,
@@ -1550,7 +1624,9 @@
         "disposition": "EXTRACTED_AND_CLOSED",
         "comment_url": "https://github.com/bot523h/nexus-ai-agent/pull/297#issuecomment-7217518532",
         "closed_at": "2026-11-27T11:49:35Z"
-      }
+      },
+      "live_head_sha": null,
+      "live_changed_files": null
     },
     {
       "number": 301,
@@ -1586,7 +1662,9 @@
         "disposition": "SUPERSEDED_AND_CLOSED",
         "comment_url": "https://github.com/bot523h/nexus-ai-agent/pull/301#issuecomment-7217519239",
         "closed_at": "2026-11-27T11:49:37Z"
-      }
+      },
+      "live_head_sha": null,
+      "live_changed_files": null
     },
     {
       "number": 313,
@@ -1621,7 +1699,9 @@
         "disposition": "EXTRACTED_AND_CLOSED",
         "comment_url": "https://github.com/bot523h/nexus-ai-agent/pull/313#issuecomment-7217519883",
         "closed_at": "2026-11-27T11:49:39Z"
-      }
+      },
+      "live_head_sha": null,
+      "live_changed_files": null
     },
     {
       "number": 327,
@@ -1663,7 +1743,9 @@
         "disposition": "DEFERRED_TO_BOARD_AND_CLOSED",
         "comment_url": "https://github.com/bot523h/nexus-ai-agent/pull/327#issuecomment-7217520541",
         "closed_at": "2026-11-27T11:49:41Z"
-      }
+      },
+      "live_head_sha": null,
+      "live_changed_files": null
     },
     {
       "number": 328,
@@ -1705,7 +1787,9 @@
         "disposition": "DEFERRED_TO_BOARD_AND_CLOSED",
         "comment_url": "https://github.com/bot523h/nexus-ai-agent/pull/328#issuecomment-7217521157",
         "closed_at": "2026-11-27T11:49:43Z"
-      }
+      },
+      "live_head_sha": null,
+      "live_changed_files": null
     },
     {
       "number": 329,
@@ -1740,7 +1824,9 @@
         "disposition": "EXTRACTED_AND_CLOSED",
         "comment_url": "https://github.com/bot523h/nexus-ai-agent/pull/329#issuecomment-7217521677",
         "closed_at": "2026-11-27T11:49:45Z"
-      }
+      },
+      "live_head_sha": null,
+      "live_changed_files": null
     },
     {
       "number": 367,
@@ -1762,16 +1848,18 @@
       "symbols_on_main": 12,
       "added_symbols": 41,
       "files_identical_on_main": 0,
-      "disposition": "MERGE_CANDIDATE",
+      "disposition": "BLOCKED_ACTIVE_OWNER",
       "family": null,
       "board_task": null,
-      "rationale": "Closes the two authorization gaps left by #365; 7 files, 0 merge-tree conflicts, 0 unresolved threads, branch updated onto main and CI re-run on the exact head.",
+      "rationale": "The only genuine merge candidate: closes the two authorization gaps left by #365, 0 merge-tree conflicts, 0 unresolved threads, base updated onto main 54073d1f. Left OPEN because its owner (task-w35-ibpc-security-closure) is actively pushing (head a8a06eee -> 31895925, 10 commits / 10 files during this campaign); merging an in-flight branch would violate the ownership contract. Resume: owner finishes CI on the exact head and merges, or the convergence owner merges after a stable green head.",
       "evidence": [
         "docs/engineering/NAGAR_IBPC.md",
         "src/nexus_ai_agent/nagar/ibpc/service.py"
       ],
       "resume_condition": "",
-      "closure": null
+      "closure": null,
+      "live_head_sha": "31895925a757e24984d9056aec588d8d123fa483",
+      "live_changed_files": 10
     }
   ]
 }
