@@ -792,12 +792,57 @@ class IBPCService:
         return str(_run_coroutine_blocking(coro))
 
     def _outbox_await_completion(self, job_id: str) -> Any:
+        """Report the queue's status in the shape the coordinator parses.
+
+        The coordinator accepts a mapping or an object with a ``status``; the
+        queue port returns a bare ``JobStatus`` enum, which has neither, so the
+        projection happens here rather than in the coordinator (which must stay
+        independent of this module's ports).
+        """
         coro = self._deps.queue.get_status(job_id)
-        return _run_coroutine_blocking(coro)
+        raw = _run_coroutine_blocking(coro)
+        status = getattr(raw, "value", raw)
+        return {"status": str(status), "job_id": job_id}
 
     def _outbox_verify_completion(self, row: Any, completion: Any) -> Any:
-        """Independent proof that the job's artifact exists, or nothing."""
-        return None
+        """Independent proof that the job's artifact really exists on disk.
+
+        Deliberately strict: an unverifiable completion is *parked*, never
+        promoted.  Returning a proof here is what allows
+        ``COMPLETED_VERIFIED``, so anything the verifier cannot check must
+        refuse rather than optimistically succeed.
+        """
+        from nexus_ai_agent.nagar.ibpc.execution_outbox import (
+            CompletionVerificationError,
+            VerifiedExecutionCompletion,
+        )
+
+        job_id = str(getattr(completion, "job_id", "") or row.job_id or "")
+        if not job_id:
+            raise CompletionVerificationError("missing_job_id", "completion names no job")
+        try:
+            result = _run_coroutine_blocking(self._deps.queue.get_result(job_id))
+        except Exception as exc:  # noqa: BLE001 - an unreadable result is unverifiable
+            raise CompletionVerificationError(
+                "result_unavailable", f"queue result unavailable: {exc}"
+            ) from exc
+        if not result or result.get("success") is not True:
+            raise CompletionVerificationError(
+                "worker_not_successful", "the queue result does not report success"
+            )
+        artifact_path = Path(str(result.get("artifact_path") or ""))
+        if not artifact_path.is_file():
+            raise CompletionVerificationError("artifact_missing", f"no artifact at {artifact_path}")
+        digest = sha256_file(artifact_path)
+        if digest.startswith("sha256:"):
+            digest = digest.split(":", 1)[1]
+        return VerifiedExecutionCompletion(
+            artifact_id=str(result.get("artifact_id") or artifact_path.name),
+            artifact_sha256=digest,
+            passport_id=str(result.get("passport_id") or ""),
+            lineage_digest=str(result.get("lineage_digest") or ""),
+            verified_at_utc=str(self._deps.now()),
+        )
 
     _outbox_coordinator: Any | None
 
