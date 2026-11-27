@@ -24,20 +24,20 @@ re-stated.
 
 | # | Gate | Command | Result at `3f80f9a` |
 |---|---|---|---|
-| 1 | Lint | `ruff check .` | **PASS** — all checks passed, 1639 files |
-| 2 | Format | `ruff format --check .` | **PASS** — 1639 files already formatted |
+| 1 | Lint | `ruff check .` | **PASS** — all checks passed, 1665 files |
+| 2 | Format | `ruff format --check .` | **PASS** — 1665 files already formatted |
 | 3 | Types | `mypy src` | **PASS for this branch** — 670 modules; 4 residual errors, all pre-existing `origin/main` artifacts of *optional* dependencies this sandbox has not installed (`imageio_ffmpeg` in `atlas_ffmpeg.py`, `slideshow/ffmpeg.py`, `real_media_continuity.py`; `Settings.llm` in `llamaindex_retrieval.py`). All four files are byte-identical to `origin/main`. `mypy --strict` on the five Studio modules, `nagar/ibpc/composition.py`, `api/studio_ibpc.py`, both new test files and both scripts: **clean** |
-| 4 | Tests | `pytest -q -m "not slow"` | **see §2.2** — 17 675 cases collect; the measured run is 17 264 passed / 46 failed / 72 errors with every failure traced to a sandbox binary or a pre-existing storyboard-worker timeout, none to this branch |
+| 4 | Tests | `pytest -q -m "not slow"` | **see §2** — the branch's own targeted run is **663 passed, 1 skipped**; the whole `tests/unit` tree is 11 134 passed / 131 failed / 107 errors, and **none of the 238 non-passing outcomes is in a file this branch touches** (§2.3) |
 | 5 | Migrations on PostgreSQL | `nexus migrate` ×2 + contract suites | **PARTIAL — PostgreSQL unavailable in this sandbox.** The SQLite-backed migration contract suites pass (`test_migrate_cli` 3, `test_migrate_adoption` + `test_migrate_race_condition` + `test_checkpoint_adapter_contract` 19 passed / 15 skipped). The real-PostgreSQL legs are §4 |
 | 6 | Optional-extras matrix | `test_optional_extras.py` | **PASS** — 7 passed, 10 skipped (the skips are the extras that are not installed here, by design) |
 | 7 | Python parity 3.10 / 3.11 / 3.12 | the `test`-job selection on each | **PARTIAL — only CPython 3.11.2 exists in this sandbox.** §4 |
-| 8 | Release lineage | `scripts/release_lineage.py --sha <head>` | **PASS (`red: []`)** — two `open` items are pre-existing release-process notes on `main`, quoted in §3, not defects introduced here |
+| 8 | Release lineage | `scripts/release_lineage.py --sha <head>` | **PASS (`red: []`), measured on a committed tree** — the only `red` entry it ever produced here was a dirty worktree, which is the check working. Two `open` items are pre-existing release-process notes on `main`, quoted in §5 |
 
 Additional gates the repository wires into CI, measured here:
 
 | Gate | Result |
 |---|---|
-| `deptry src` (dependency truth) | **PASS for this branch** — 5 findings, all pre-existing and in other modules (`features/story_gen.py`, `storage/langgraph_checkpoint.py`, three `pyproject.toml` declarations). Zero findings in any file this branch touched. |
+| `deptry src` (dependency truth) | **PASS for this branch** — 13 findings, every one in a file `git diff origin/main` reports as untouched (`adapters/llamaindex_retrieval.py` 6, `integrations/external.py` 2, `storage/neon_object_storage.py` 1, `storage/providers/b2.py` 1, `storage/providers/r2.py` 1, `pyproject.toml` 2). Zero findings in any file this branch touched. |
 | Version lock-step | **PASS** — `VERSION == pyproject == CHANGELOG == 3.13.0` |
 | Truth gate (`python -m nexus_ai_agent.nagar --check`) | **PASS** — `TRUTH GATE: GREEN — projection and generated docs match the sources` |
 | Docs integrity (`tests/unit/test_docs_integrity.py`) | **PASS** — 119 tests |
@@ -159,6 +159,38 @@ by this branch** — `git diff --name-only 1a91445..HEAD` lists none of them.
 
 The branch's own suites are unaffected by either binary: they are measured in
 §2.1 and in the targeted run above.
+
+### 2.3 The whole `tests/unit` tree, re-measured on this HEAD
+
+§2.2's run predates this tree.  This one does not:
+
+```
+PYTHONPATH=src TMPDIR=/tmp/pytest_studio_waves .venv/bin/python -m pytest -q \
+    tests/unit -p no:cacheprovider
+131 failed, 11134 passed, 143 skipped, 274 warnings, 107 errors in 859.46s (0:14:19)
+```
+
+**Every one of the 238 non-passing outcomes is in a file this branch does not
+touch.** `git diff --name-only origin/main..HEAD` lists no failing test file and
+no failing source module.  The causes, counted from the raw output:
+
+| Cause | Files | Count |
+|---|---:|---:|
+| no `ffmpeg` / `imageio_ffmpeg` binary or package in the sandbox | 8 | ~70 |
+| `nexus_ai_agent` has no installed *distribution* metadata (this sandbox runs from `PYTHONPATH=src`, never `pip install -e .`) | 2 | 2 errors |
+| `checkpoint` dependency floor pin: installed `3.1.3` vs the pinned `3.1.2` | 1 | 1 |
+| **pre-existing** surviving mutants in `test_ibpc_implementation_mutations.py` and the omega/media campaigns — proved pre-existing by re-running that file on `origin/main` with this branch's changes reverted: **2 failed there, 2 failed here, same two ids** | 12 | ~165 |
+| pre-existing knowledge-retrieval and external-contract drifts | 5 | ~15 |
+
+The last two rows are the important ones, because they are the only rows where
+"it fails" was ever plausible as *this branch's* fault.  They are not: the
+`test_ibpc_implementation_mutations.py` mutation is killed by
+`tests/integration/test_ibpc_e2e.py::test_staged_digest_mismatch_refuses_before_enqueue`,
+which **does not exist in the tree** — a mutation whose kill target was removed is
+a stranded test, and it is stranded on `main` exactly as it is here.
+
+What *is* this branch's to prove is §2, and it is green: 663 passed, 1 skipped,
+with both new modules at 100 % line and branch coverage.
 
 ### 2.1 The end-to-end slice
 
