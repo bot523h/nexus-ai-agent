@@ -281,7 +281,14 @@ jobs:
   continuum-evidence:
     name: continuum-evidence (${{ matrix.python-version }})
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    # 90, not 60, and the reason is measured rather than defensive: the job runs
+    # the pack coverage, the snapshot verifier and the mutation campaign TWICE
+    # each (byte-identical `cmp` is the contract) and on cpython-3.10 it hit the
+    # 60-minute cap at 1h0m18s -- after its own notices had already reported
+    # accepted=True, passed=True and 80/80 killed.  A cap that kills a run whose
+    # evidence is complete converts a slow interpreter into a red gate.  Nothing
+    # is weakened: both runs and every cmp stay.
+    timeout-minutes: 90
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     strategy:
