@@ -1120,7 +1120,11 @@ async def preview_readback(
             # ``to_dict`` is the readback's own canonical projection -- the same
             # one its digest is computed over -- so the response cannot drift
             # from what was verified.
-            payload = readback.to_dict()
+            # ``dict(...)`` makes the projection's type explicit: the readback
+            # declares ``dict[str, Any]`` but mypy sees an untyped ``to_dict``
+            # through the runtime seam, and an implicit Any must not leak into
+            # this router's return type.
+            payload: dict[str, Any] = dict(readback.to_dict())
             payload["preview_digest"] = readback.preview_digest
             payload["wysiwys_verified"] = True
             return payload
@@ -1235,7 +1239,7 @@ async def verify_disaster_recovery_bundle(
                 # A bundle *name* that cannot be a name (a traversal, a blank)
                 # is the caller's error and is caught before any I/O.
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
-            payload = report.to_dict()
+            payload: dict[str, Any] = dict(report.to_dict())
             payload["project_id"] = project_id
             payload["bundle"] = body.bundle
             # ``verified`` is the whole answer; the per-field report is what lets
