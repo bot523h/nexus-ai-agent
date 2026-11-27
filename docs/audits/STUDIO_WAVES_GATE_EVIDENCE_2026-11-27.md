@@ -68,8 +68,20 @@ to regenerate the shared artifact.
 | `tests/unit/creative/studio/test_wave6b_studio_mutation_campaign.py` | 23 (1 opt-in) | 0.9 s | PASS |
 | **combined targeted run** | **439 passed, 1 skipped** | 10.6 s | **PASS** |
 
-All five production modules carry **100 % line and branch coverage** from their
-own suites (Wave 5 measured this explicitly; Waves 2–4 were built to it).
+All five production modules carry **100 % line and branch coverage**, measured
+with `coverage run --branch` over exactly these suites:
+
+```
+source file                              stmts  miss  branch  br-miss  cover
+adapters/studio_directory_bridge.py        151     0      34        0   100%
+creative/studio/preview_readback.py        411     0     136        0   100%
+creative/studio/production_dr.py           492     0     100        0   100%
+creative/studio/revision_pinning.py        327     0     108        0   100%
+nagar/ibpc/execution_outbox.py             404     0     102        0   100%
+```
+
+The only sub-100 % lines in the targeted run are inside a test module's own
+opt-in branch (the `NEXUS_RUN_MUTATION_CAMPAIGN` gate), not product code.
 
 ### 2.2 The whole-suite run, and what its failures were
 
