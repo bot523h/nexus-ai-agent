@@ -378,6 +378,9 @@ def build_unified_studio_runtime(
         revision_pinning_store=revision_pins,
         execution_coordinator=None,
         owned_closables=owned_by_service,
+        # Execution-time re-verification of the four-way authority snapshot.  A
+        # membership revoked between approve and execute refuses here.
+        authority_bridge=authority_bridge,
     )
     service = build_ibpc_service(wired, key_provider=key_provider, environ=environ)
     if execution_outbox is not None:

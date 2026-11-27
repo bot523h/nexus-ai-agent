@@ -277,6 +277,11 @@ class IBPCServiceDeps:
     #: Optional Wave-4 pinning store. When supplied, a successful turn honours
     #: the project's durable head instead of the injected revision provider.
     revision_pinning_store: Any | None = None
+    #: The durable unified authority bridge.  When supplied, ``execute()``
+    #: re-verifies the four-way snapshot (principal, tenant, project, membership)
+    #: at execution time -- a membership revoked between approve and execute must
+    #: refuse the turn, not merely have been valid when the approval was granted.
+    authority_bridge: Any | None = None
 
 
 @dataclass(frozen=True)
@@ -928,6 +933,45 @@ class IBPCService:
                 action=action,
                 binding_ref=resolved_ref,
             )
+
+    def _verify_execution_authority(
+        self,
+        *,
+        principal_id: str,
+        project_id: str,
+        tenant_id: str,
+        ctx: Any,
+    ) -> str | None:
+        """Ask the durable bridge whether this actor may execute *now*.
+
+        Returns ``None`` when the turn may proceed, or a refusal string.  An
+        unwired bridge returns ``None``: a deployment without one keeps the
+        pre-Wave-4 behaviour rather than being refused for a seam it never had.
+
+        A bridge that *raises* is a refusal, never a pass.  Any other choice
+        would turn a durable-store outage into an authorization bypass.
+        """
+        bridge = self._deps.authority_bridge
+        if bridge is None:
+            return None
+        binding_ref = str(
+            getattr(ctx.verified_identity, "channel_binding_id", "")
+            or self._deps.channel_binding_ref
+            or ""
+        )
+        try:
+            bridge.verify_worker_execution_authority(
+                principal_id=principal_id,
+                project_id=project_id,
+                tenant_id=tenant_id,
+                binding_ref=binding_ref,
+                required_action=StudioAction.EXECUTE_APPROVED_PLAN,
+            )
+        except Exception as exc:  # noqa: BLE001 - every failure is a refusal
+            reason = getattr(exc, "reason", type(exc).__name__)
+            detail = getattr(exc, "detail", "") or str(exc)
+            return f"authority_refused: {reason}: {detail}"
+        return None
 
     def _validate_session_binding(
         self,
@@ -2275,6 +2319,23 @@ class IBPCService:
                 project_id=session.project_id,
                 action=StudioAction.EXECUTE_PLAN,
             )
+            # The worker-boundary authority gate.  `_authorize_studio_action`
+            # above answers "may this role act?" against the membership row as it
+            # is NOW; this asks the durable bridge for the full four-way snapshot
+            # and records a proof.  They are deliberately both present: the
+            # first is the cheap role check every route shares, the second is the
+            # execution-time evidence that the principal, tenant, project and
+            # binding all still agree -- a revocation between approve and execute
+            # refuses here, which is the whole point of a worker boundary.
+            bridge_refusal = await asyncio.to_thread(
+                self._verify_execution_authority,
+                principal_id=principal_id,
+                project_id=session.project_id,
+                tenant_id=session.tenant_id,
+                ctx=ctx,
+            )
+            if bridge_refusal is not None:
+                return ExecutionOutcome(status="refused", detail=bridge_refusal)
             if ctx.scope_signature is None or not hmac.compare_digest(
                 ctx.scope_signature, self._scope_signature(ctx, identity)
             ):
