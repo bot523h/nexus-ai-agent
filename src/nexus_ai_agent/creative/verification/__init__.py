@@ -28,7 +28,6 @@ from .perception_gate import (
     admit_perception,
     gate_scene_cut,
     gate_silence,
-    scene_cut_histograms,
 )
 from .uncertainty_gum import (
     CombinedUncertainty,
@@ -71,7 +70,6 @@ __all__ = [
     "evaluate_threshold",
     "loudness_uncertainty",
     "scene_cut_uncertainty",
-    "scene_cut_histograms",
     "silence_uncertainty",
     "slo_burn_uncertainty",
     "welch_satterthwaite",

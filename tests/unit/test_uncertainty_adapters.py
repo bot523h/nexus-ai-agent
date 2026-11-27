@@ -20,6 +20,7 @@ from nexus_ai_agent.creative.verification.adapters import (
     scene_cut_uncertainty,
     silence_uncertainty,
     slo_burn_uncertainty,
+    synthetic_scene_cut_histograms,
 )
 from nexus_ai_agent.creative.verification.uncertainty_gum import (
     GUMInputError,
@@ -604,3 +605,10 @@ def test_silence_expanded_property_matches_the_decision() -> None:
 def test_silence_refuses_a_level_that_underflows_to_zero() -> None:
     with pytest.raises(GUMInputError):
         silence_uncertainty(-4000.0, -30.0, 48_000)
+
+
+@pytest.mark.parametrize("strength", [0.0, 1.0, -0.1, 1.1])
+def test_synthetic_scene_cut_histograms_refuse_out_of_range_strengths(strength: float) -> None:
+    """The test-only generator still validates its input."""
+    with pytest.raises(GUMInputError, match="threshold must be in"):
+        synthetic_scene_cut_histograms(strength)

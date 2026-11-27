@@ -31,6 +31,9 @@ from nexus_ai_agent.creative.studio.models import (
     TypedCommand,
     new_project,
 )
+from nexus_ai_agent.creative.verification.adapters import (
+    synthetic_scene_cut_histograms,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SEC = 1_000_000
@@ -66,7 +69,19 @@ def _project() -> Project:
     )
 
 
-def _silence_evidence(spans: list[tuple[float, float]], *, noise_floor_db: float = -40.0) -> Any:
+_SCENE_BEFORE, _SCENE_AFTER = synthetic_scene_cut_histograms(0.3)
+
+
+def _silence_evidence(
+    spans: list[tuple[float, float]],
+    *,
+    noise_floor_db: float = -40.0,
+    measured_rms_db: float | None = -48.0,
+    sample_count: int | None = 48_000,
+    sample_rate_hz: int | None = None,
+    span_measured_rms_db: float | None = None,
+    span_sample_count: int | None = None,
+) -> Any:
     from nexus_ai_agent.creative.packs.perception.models import (
         SilenceEvidence,
         SilenceSpan,
@@ -78,13 +93,28 @@ def _silence_evidence(spans: list[tuple[float, float]], *, noise_floor_db: float
         duration_us=20 * SEC,
         noise_floor_db=noise_floor_db,
         min_silence_us=500_000,
+        measured_rms_db=measured_rms_db,
+        sample_count=sample_count,
+        sample_rate_hz=sample_rate_hz,
         spans=tuple(
-            SilenceSpan(start_us=int(start * SEC), end_us=int(end * SEC)) for start, end in spans
+            SilenceSpan(
+                start_us=int(start * SEC),
+                end_us=int(end * SEC),
+                measured_rms_db=span_measured_rms_db,
+                sample_count=span_sample_count,
+            )
+            for start, end in spans
         ),
     )
 
 
-def _scene_evidence(cuts: list[float]) -> Any:
+def _scene_evidence(
+    cuts: list[float],
+    *,
+    hist_before: tuple[float, ...] | None = _SCENE_BEFORE,
+    hist_after: tuple[float, ...] | None = _SCENE_AFTER,
+    sample_count_before: int | None = 4096,
+) -> Any:
     from nexus_ai_agent.creative.packs.perception.models import SceneCutEvidence
 
     return SceneCutEvidence.seal(
@@ -93,6 +123,9 @@ def _scene_evidence(cuts: list[float]) -> Any:
         duration_us=20 * SEC,
         threshold=0.3,
         cuts_us=tuple(int(cut * SEC) for cut in cuts),
+        hist_before=hist_before,
+        hist_after=hist_after,
+        sample_count_before=sample_count_before,
     )
 
 
@@ -414,10 +447,10 @@ def test_a_clear_scene_cut_publishes_markers_with_gum_telemetry() -> None:
 
 def test_a_borderline_scene_cut_abstains_and_publishes_no_markers() -> None:
     from nexus_ai_agent.creative.verification.adapters import scene_cut_uncertainty
-    from nexus_ai_agent.creative.verification.perception_gate import scene_cut_histograms
 
-    before, after = scene_cut_histograms(0.3)
-    limit = scene_cut_uncertainty(before, after, samples_per_histogram=4096).js_divergence
+    limit = scene_cut_uncertainty(
+        _SCENE_BEFORE, _SCENE_AFTER, samples_per_histogram=4096
+    ).js_divergence
     outcome = _dispatch(
         "analysis.mark_scene_cuts",
         {
@@ -458,7 +491,7 @@ def test_a_clear_silence_publishes_markers_with_gum_telemetry() -> None:
 
 def test_a_borderline_silence_abstains_and_publishes_no_markers() -> None:
     payload = _silence_payload(
-        evidence=_silence_evidence([(2.0, 3.5)], noise_floor_db=-30.0).model_dump(mode="json")
+        evidence=_silence_evidence([(2.0, 3.5)], measured_rms_db=-40.0).model_dump(mode="json")
     )
     outcome = _dispatch("analysis.mark_silences", payload)
     assert outcome.output["markers_added"] == 0
@@ -468,7 +501,7 @@ def test_a_borderline_silence_abstains_and_publishes_no_markers() -> None:
 
 def test_a_loud_segment_fails_the_silence_gate() -> None:
     payload = _silence_payload(
-        evidence=_silence_evidence([(2.0, 3.5)], noise_floor_db=-20.0).model_dump(mode="json")
+        evidence=_silence_evidence([(2.0, 3.5)], measured_rms_db=-32.0).model_dump(mode="json")
     )
     outcome = _dispatch("analysis.mark_silences", payload)
     assert outcome.output["markers_added"] == 0
@@ -480,3 +513,142 @@ def _registry_with_gate(gate: Any) -> Any:
     from nexus_ai_agent.creative.packs.runtime import build_runtime_registry
 
     return build_runtime_registry(perception_gate=gate)
+
+
+def test_silence_falsifiability_detector_threshold_is_not_measured_rms() -> None:
+    """``noise_floor_db`` is the detector threshold, never the measured level."""
+    unmeasured = _silence_evidence(
+        [(2.0, 3.5)], noise_floor_db=-40.0, measured_rms_db=None, sample_count=None
+    )
+    outcome = _dispatch(
+        "analysis.mark_silences",
+        _silence_payload(evidence=unmeasured.model_dump(mode="json")),
+    )
+    assert outcome.output["markers_added"] == 0
+    assert outcome.output["refused"] is True
+    record = outcome.output["uncertainty"]
+    assert record["admitted"] is False
+    assert record["outcome"] == "abstain_insufficient_evidence"
+    assert "missing_measured_rms_db" in record["refusal"]
+
+    permissive = _silence_evidence(
+        [(2.0, 3.5)], noise_floor_db=-40.0, measured_rms_db=-48.0, sample_count=48_000
+    )
+    strict = _silence_evidence(
+        [(2.0, 3.5)], noise_floor_db=-55.0, measured_rms_db=-48.0, sample_count=48_000
+    )
+    passed = _dispatch(
+        "analysis.mark_silences", _silence_payload(evidence=permissive.model_dump(mode="json"))
+    )
+    failed = _dispatch(
+        "analysis.mark_silences", _silence_payload(evidence=strict.model_dump(mode="json"))
+    )
+    # The estimate is the measured level under both thresholds; only the verdict moves.
+    assert passed.output["uncertainty"]["rms_db"] == pytest.approx(-48.0)
+    assert failed.output["uncertainty"]["rms_db"] == pytest.approx(-48.0)
+    assert passed.output["uncertainty"]["threshold_db"] == pytest.approx(-40.0)
+    assert failed.output["uncertainty"]["threshold_db"] == pytest.approx(-55.0)
+    assert passed.output["uncertainty"]["outcome"] == "pass"
+    assert failed.output["uncertainty"]["outcome"] == "fail"
+    assert passed.output["markers_added"] == 1
+    assert failed.output["markers_added"] == 0
+
+
+def test_scene_cut_falsifiability_requires_empirical_frame_histograms() -> None:
+    """A detector threshold is not a histogram: the gate must abstain without frames."""
+    unmeasured = _scene_evidence([5.0], hist_before=None, hist_after=None)
+    outcome = _dispatch(
+        "analysis.mark_scene_cuts",
+        {
+            "track_id": "a1",
+            "clip_id": "clip_a",
+            "evidence": unmeasured.model_dump(mode="json"),
+        },
+    )
+    assert outcome.output["markers_added"] == 0
+    assert outcome.output["refused"] is True
+    record = outcome.output["uncertainty"]
+    assert record["admitted"] is False
+    assert record["outcome"] == "abstain_insufficient_evidence"
+    assert "missing_frame_histograms" in record["refusal"]
+
+    disjoint = _scene_evidence([5.0], hist_before=(1.0, 0.0), hist_after=(0.0, 1.0))
+    identical = _scene_evidence([5.0], hist_before=(0.5, 0.5), hist_after=(0.5, 0.5))
+    passed = _dispatch(
+        "analysis.mark_scene_cuts",
+        {"track_id": "a1", "clip_id": "clip_a", "evidence": disjoint.model_dump(mode="json")},
+    )
+    failed = _dispatch(
+        "analysis.mark_scene_cuts",
+        {"track_id": "a1", "clip_id": "clip_a", "evidence": identical.model_dump(mode="json")},
+    )
+    # Same detector threshold, different empirical frames -> different measurements.
+    assert passed.output["uncertainty"]["js_divergence"] == pytest.approx(1.0)
+    assert failed.output["uncertainty"]["js_divergence"] == pytest.approx(0.0)
+    assert passed.output["uncertainty"]["outcome"] == "pass"
+    assert failed.output["uncertainty"]["outcome"] == "fail"
+    assert passed.output["markers_added"] == 1
+    assert failed.output["markers_added"] == 0
+
+
+def test_silence_measurement_can_come_from_the_worst_measured_span() -> None:
+    evidence = _silence_evidence(
+        [(2.0, 3.5)],
+        measured_rms_db=None,
+        sample_count=None,
+        span_measured_rms_db=-48.0,
+        span_sample_count=24_000,
+    )
+    outcome = _dispatch(
+        "analysis.mark_silences", _silence_payload(evidence=evidence.model_dump(mode="json"))
+    )
+    assert outcome.output["uncertainty"]["rms_db"] == pytest.approx(-48.0)
+    assert outcome.output["uncertainty"]["admitted"] is True
+    assert outcome.output["markers_added"] == 1
+
+
+def test_silence_sample_count_can_be_derived_from_a_real_sample_rate() -> None:
+    evidence = _silence_evidence(
+        [(2.0, 3.5)], measured_rms_db=-48.0, sample_count=None, sample_rate_hz=48_000
+    )
+    outcome = _dispatch(
+        "analysis.mark_silences", _silence_payload(evidence=evidence.model_dump(mode="json"))
+    )
+    assert outcome.output["uncertainty"]["admitted"] is True
+    assert outcome.output["markers_added"] == 1
+
+
+def test_silence_explicit_sample_count_wins_over_the_sample_rate() -> None:
+    evidence = _silence_evidence(
+        [(2.0, 3.5)], measured_rms_db=-48.0, sample_count=48_000, sample_rate_hz=48_000
+    )
+    outcome = _dispatch(
+        "analysis.mark_silences", _silence_payload(evidence=evidence.model_dump(mode="json"))
+    )
+    assert outcome.output["uncertainty"]["admitted"] is True
+    assert outcome.output["markers_added"] == 1
+
+
+def test_silence_evidence_level_sample_count_wins_over_the_span() -> None:
+    evidence = _silence_evidence(
+        [(2.0, 3.5)],
+        measured_rms_db=None,
+        sample_count=24_000,
+        span_measured_rms_db=-48.0,
+    )
+    outcome = _dispatch(
+        "analysis.mark_silences", _silence_payload(evidence=evidence.model_dump(mode="json"))
+    )
+    assert outcome.output["uncertainty"]["rms_db"] == pytest.approx(-48.0)
+    assert outcome.output["uncertainty"]["admitted"] is True
+
+
+def test_the_gate_and_operations_never_synthesise_histograms() -> None:
+    """The synthetic JSD fixture is test-only; the production path must abstain."""
+    for relative in (
+        "src/nexus_ai_agent/creative/verification/perception_gate.py",
+        "src/nexus_ai_agent/creative/packs/perception/operations.py",
+    ):
+        path = REPO_ROOT / relative
+        assert not _calls(path, "synthetic_scene_cut_histograms"), relative
+        assert not _calls(path, "scene_cut_histograms"), relative

@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
 from typing import Any, Literal
 
@@ -120,17 +121,29 @@ class _Evidence(BaseModel):
         validator would then reject.
         """
         draft = cls.model_construct(**{**fields, "evidence_hash": "sha256:" + "0" * 64})
-        payload = draft.model_dump(mode="json")
+        # ``model_construct`` skips coercion, so a list passed for a tuple field would
+        # trip the serializer; ``model_validate`` below performs the real coercion.
+        payload = draft.model_dump(mode="json", warnings=False)
         return cls.model_validate({**payload, "evidence_hash": canonical_evidence_hash(payload)})
 
 
 class SilenceSpan(BaseModel):
-    """A silent interval in *asset* time, half-open ``[start_us, end_us)``."""
+    """A silent interval in *asset* time, half-open ``[start_us, end_us)``.
+
+    ``measured_rms_db`` / ``sample_count`` are the **empirical** measurement of
+    the signal inside this span. They are optional because legacy evidence (and
+    the FFmpeg ``silencedetect`` adapter, which reports only *where* a silence
+    starts and ends) may not carry them. They are never derived from
+    ``noise_floor_db``: that field is the detector's *threshold*, not a
+    measurement, and the gate refuses a silence claim without a real level.
+    """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     start_us: int = Field(ge=0, le=MAX_MEDIA_US)
     end_us: int = Field(ge=0, le=MAX_MEDIA_US)
+    measured_rms_db: float | None = Field(default=None, le=0.0, allow_inf_nan=False)
+    sample_count: int | None = Field(default=None, ge=1)
 
     @model_validator(mode="after")
     def _ordered(self) -> SilenceSpan:
@@ -140,12 +153,22 @@ class SilenceSpan(BaseModel):
 
 
 class SilenceEvidence(_Evidence):
-    """Silences measured by the engine (``silencedetect``) on the asset's audio."""
+    """Silences measured by the engine (``silencedetect``) on the asset's audio.
+
+    ``noise_floor_db`` is the ``silencedetect=noise=`` **detector threshold**; it
+    is a configuration value, not a signal measurement. ``measured_rms_db`` and
+    ``sample_count`` (optionally per span, or a real ``sample_rate_hz`` from which
+    the count can be derived) are the measurement the GUM gate is allowed to
+    reason about. Without them the gate abstains.
+    """
 
     kind: Literal["silence"] = "silence"
     noise_floor_db: float = Field(gt=-100.0, le=-10.0, allow_inf_nan=False)
     min_silence_us: int = Field(ge=10_000, le=600_000_000)
     spans: tuple[SilenceSpan, ...] = Field(default=(), max_length=MAX_SPANS)
+    measured_rms_db: float | None = Field(default=None, le=0.0, allow_inf_nan=False)
+    sample_count: int | None = Field(default=None, ge=1)
+    sample_rate_hz: int | None = Field(default=None, ge=1)
 
     @model_validator(mode="after")
     def _spans_ordered_and_inside(self) -> SilenceEvidence:
@@ -160,11 +183,32 @@ class SilenceEvidence(_Evidence):
 
 
 class SceneCutEvidence(_Evidence):
-    """Scene-change instants (``select='gt(scene,T)'``) in *asset* time."""
+    """Scene-change instants (``select='gt(scene,T)'``) in *asset* time.
+
+    ``threshold`` is the ``select`` **detector threshold**, not a measurement.
+    ``hist_before`` / ``hist_after`` are the empirical per-frame colour
+    histograms of the frames on either side of the cut, already normalised to
+    bin probabilities. They are optional for backward compatibility, but the GUM
+    gate refuses a scene-cut claim that does not carry them: a divergence derived
+    from the detector threshold would be a restatement of the claim, not evidence.
+    """
 
     kind: Literal["scenes"] = "scenes"
     threshold: float = Field(gt=0.0, lt=1.0, allow_inf_nan=False)
     cuts_us: tuple[int, ...] = Field(default=(), max_length=MAX_SPANS)
+    hist_before: tuple[float, ...] | None = None
+    hist_after: tuple[float, ...] | None = None
+    sample_count_before: int | None = Field(default=None, ge=1)
+    sample_count_after: int | None = Field(default=None, ge=1)
+
+    @field_validator("hist_before", "hist_after", mode="before")
+    @classmethod
+    def _coerce_histogram(cls, value: object) -> object:
+        if value is None:
+            return None
+        if isinstance(value, (str, bytes)) or not isinstance(value, (list, tuple)):
+            raise ValueError("a scene histogram must be a sequence of bin probabilities")
+        return tuple(float(entry) for entry in value)
 
     @model_validator(mode="after")
     def _cuts_ascending_and_inside(self) -> SceneCutEvidence:
@@ -175,6 +219,18 @@ class SceneCutEvidence(_Evidence):
             if cut < 0 or cut > self.duration_us:
                 raise ValueError("scene cut lies outside the media duration")
             previous = cut
+        before, after = self.hist_before, self.hist_after
+        if (before is None) != (after is None):
+            raise ValueError("hist_before and hist_after must be supplied together")
+        if before is not None and after is not None:
+            if not before or len(before) != len(after):
+                raise ValueError("scene histograms must be non-empty and share a bin count")
+            for label, histogram in (("hist_before", before), ("hist_after", after)):
+                if any(not math.isfinite(entry) or entry < 0.0 for entry in histogram):
+                    raise ValueError(f"{label} entries must be finite and non-negative")
+                total = math.fsum(histogram)
+                if not math.isclose(total, 1.0, rel_tol=0.0, abs_tol=1e-9):
+                    raise ValueError(f"{label} must be normalised (sums to 1.0), got {total!r}")
         return self
 
 

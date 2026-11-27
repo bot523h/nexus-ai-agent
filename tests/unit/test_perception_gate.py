@@ -9,7 +9,10 @@ import pytest
 
 from nexus_ai_agent.creative.composition.license_lattice import LicenseRegime
 from nexus_ai_agent.creative.packs.perception.models import LICENSE_REGIME_NAMES
-from nexus_ai_agent.creative.verification.adapters import scene_cut_uncertainty
+from nexus_ai_agent.creative.verification.adapters import (
+    scene_cut_uncertainty,
+    synthetic_scene_cut_histograms,
+)
 from nexus_ai_agent.creative.verification.perception_gate import (
     PerceptionAdmission,
     PerceptionAdmissionRequest,
@@ -20,7 +23,6 @@ from nexus_ai_agent.creative.verification.perception_gate import (
     gate_scene_cut,
     gate_silence,
     parse_regimes,
-    scene_cut_histograms,
 )
 from nexus_ai_agent.creative.verification.uncertainty_gum import (
     GUMInputError,
@@ -278,33 +280,76 @@ def test_the_typed_record_refuses_wrong_port_types_and_a_foreign_request() -> No
 # ---------------------------------------------------------------------------
 
 
+_SCENE_BEFORE, _SCENE_AFTER = synthetic_scene_cut_histograms(0.3)
+
+
+def _scene_context(**overrides: Any) -> dict[str, Any]:
+    context: dict[str, Any] = {
+        "hist_before": list(_SCENE_BEFORE),
+        "hist_after": list(_SCENE_AFTER),
+        "cut_threshold_bits": 0.02,
+        "samples_per_histogram": 4096,
+    }
+    context.update(overrides)
+    return context
+
+
+def _silence_context(**overrides: Any) -> dict[str, Any]:
+    context: dict[str, Any] = {
+        "measured_rms_db": -48.0,
+        "threshold_db": -40.0,
+        "sample_count": 72_000,
+        "window_duration_s": 1.5,
+        "min_silence_duration_s": 0.5,
+    }
+    context.update(overrides)
+    return context
+
+
 def test_scene_cut_gate_admits_a_cut_above_the_threshold() -> None:
-    record = gate_scene_cut(
-        {"threshold": 0.3, "cut_threshold_bits": 0.02, "samples_per_histogram": 4096}
-    )
+    record = gate_scene_cut(_scene_context())
     assert record["admitted"] is True
     assert record["outcome"] == "pass"
     assert record["combined_u"] > 0.0
     assert record["expanded_U"] == pytest.approx(2.0 * record["combined_u"])
 
 
+def test_scene_cut_gate_abstains_without_empirical_histograms() -> None:
+    record = gate_scene_cut({"cut_threshold_bits": 0.02})
+    assert record["admitted"] is False
+    assert record["outcome"] == "abstain_insufficient_evidence"
+    assert record["refusal"] == "insufficient_evidence: missing_frame_histograms"
+
+
+def test_scene_cut_gate_never_uses_the_detector_threshold_as_a_histogram() -> None:
+    """A detector ``threshold`` is a claim, not a measurement: the gate abstains."""
+    record = gate_scene_cut({"threshold": 0.3, "cut_threshold_bits": 0.02})
+    assert record["admitted"] is False
+    assert record["outcome"] == "abstain_insufficient_evidence"
+    assert "missing_frame_histograms" in record["refusal"]
+
+
 def test_a_borderline_scene_cut_abstains_instead_of_admitting() -> None:
-    before, after = scene_cut_histograms(0.3)
-    limit = scene_cut_uncertainty(before, after, samples_per_histogram=4096).js_divergence
-    record = gate_scene_cut(
-        {"threshold": 0.3, "cut_threshold_bits": limit, "samples_per_histogram": 4096}
-    )
+    limit = scene_cut_uncertainty(
+        _SCENE_BEFORE, _SCENE_AFTER, samples_per_histogram=4096
+    ).js_divergence
+    record = gate_scene_cut(_scene_context(cut_threshold_bits=limit))
     assert record["admitted"] is False
     assert record["outcome"] == "abstain_insufficient_evidence"
     assert record["refusal"]
 
 
 def test_scene_cut_gate_fails_a_weak_cut() -> None:
-    record = gate_scene_cut(
-        {"threshold": 0.3, "cut_threshold_bits": 0.5, "samples_per_histogram": 4096}
-    )
+    record = gate_scene_cut(_scene_context(cut_threshold_bits=0.5))
     assert record["admitted"] is False
     assert record["outcome"] == "fail"
+
+
+def test_scene_cut_gate_refuses_inconsistent_histograms() -> None:
+    record = gate_scene_cut({"hist_before": [1.0, 0.0], "hist_after": [0.5, 0.25, 0.25]})
+    assert record["admitted"] is False
+    assert record["outcome"] == "abstain_insufficient_evidence"
+    assert "inconsistent_frame_histograms" in record["refusal"]
 
 
 def test_scene_cut_gate_uses_explicit_histograms() -> None:
@@ -320,67 +365,81 @@ def test_scene_cut_gate_uses_explicit_histograms() -> None:
     assert record["admitted"] is True
 
 
-def test_silence_gate_admits_a_segment_below_the_ceiling() -> None:
-    record = gate_silence(
-        {
-            "rms_db": -40.0,
-            "threshold_db": -30.0,
-            "sample_count": 72000,
-            "window_duration_s": 1.5,
-            "min_silence_duration_s": 0.5,
-        }
-    )
+def test_silence_gate_admits_a_segment_below_the_threshold() -> None:
+    record = gate_silence(_silence_context())
     assert record["admitted"] is True
     assert record["outcome"] == "pass"
+    assert record["rms_db"] == pytest.approx(-48.0)
+    assert record["threshold_db"] == pytest.approx(-40.0)
+
+
+def test_silence_gate_accepts_the_legacy_rms_db_alias_as_measured() -> None:
+    record = gate_silence({"rms_db": -48.0, "threshold_db": -40.0, "sample_count": 72_000})
+    assert record["admitted"] is True
+
+
+def test_silence_gate_abstains_without_a_measured_level() -> None:
+    record = gate_silence({"threshold_db": -40.0, "sample_count": 72_000})
+    assert record["admitted"] is False
+    assert record["outcome"] == "abstain_insufficient_evidence"
+    assert record["refusal"] == "insufficient_evidence: missing_measured_rms_db"
+
+
+def test_silence_gate_never_uses_the_detector_threshold_as_the_measurement() -> None:
+    record = gate_silence({"noise_floor_db": -40.0, "threshold_db": -40.0, "sample_count": 72_000})
+    assert record["admitted"] is False
+    assert "missing_measured_rms_db" in record["refusal"]
+
+
+def test_silence_gate_abstains_without_a_sample_count() -> None:
+    record = gate_silence({"measured_rms_db": -48.0, "threshold_db": -40.0})
+    assert record["admitted"] is False
+    assert record["refusal"] == "insufficient_evidence: missing_sample_count"
+
+
+def test_silence_gate_abstains_on_a_non_positive_sample_count() -> None:
+    record = gate_silence({"measured_rms_db": -48.0, "threshold_db": -40.0, "sample_count": 0})
+    assert record["admitted"] is False
+    assert "non_positive_sample_count" in record["refusal"]
 
 
 def test_a_borderline_silence_abstains_instead_of_admitting() -> None:
-    record = gate_silence(
-        {
-            "rms_db": -30.0,
-            "threshold_db": -30.0,
-            "sample_count": 72000,
-            "window_duration_s": 1.5,
-            "min_silence_duration_s": 0.5,
-        }
-    )
+    record = gate_silence(_silence_context(measured_rms_db=-40.0))
     assert record["admitted"] is False
     assert record["outcome"] == "abstain_insufficient_evidence"
     assert record["refusal"]
 
 
 def test_silence_gate_fails_a_loud_segment() -> None:
-    record = gate_silence(
-        {
-            "rms_db": -20.0,
-            "threshold_db": -30.0,
-            "sample_count": 72000,
-            "window_duration_s": 1.5,
-            "min_silence_duration_s": 0.5,
-        }
-    )
+    record = gate_silence(_silence_context(measured_rms_db=-32.0))
     assert record["admitted"] is False
     assert record["outcome"] == "fail"
 
 
 def test_gate_perception_dispatches_scene_cut_and_silence() -> None:
-    assert gate_perception({"kind": "scene_cut", "threshold": 0.3})["admitted"] is True
-    assert (
-        gate_perception(
-            {"kind": "silence", "rms_db": -40.0, "threshold_db": -30.0, "sample_count": 48000}
-        )["admitted"]
-        is True
-    )
+    assert gate_perception({"kind": "scene_cut", **_scene_context()})["admitted"] is True
+    assert gate_perception({"kind": "silence", **_silence_context()})["admitted"] is True
 
 
 @pytest.mark.parametrize(
     "payload",
     [
-        {"kind": "scene_cut"},
-        {"kind": "scene_cut", "threshold": 0.0},
-        {"kind": "scene_cut", "threshold": 0.3, "cut_threshold_bits": 0.0},
-        {"kind": "silence", "rms_db": -40.0, "threshold_db": -30.0},
-        {"kind": "silence", "rms_db": -40.0, "threshold_db": -30.0, "sample_count": 1},
+        {"kind": "scene_cut", "cut_threshold_bits": 0.0},
+        {"kind": "scene_cut", "coverage_factor": 0.0},
+        {"kind": "scene_cut", "samples_per_histogram": True},
+        {
+            "kind": "silence",
+            "measured_rms_db": -48.0,
+            "threshold_db": -40.0,
+            "sample_count": True,
+        },
+        {
+            "kind": "silence",
+            "measured_rms_db": -48.0,
+            "threshold_db": -40.0,
+            "sample_count": 48_000,
+            "bit_depth": True,
+        },
     ],
 )
 def test_the_new_gate_kinds_refuse_malformed_context(payload: dict[str, Any]) -> None:
@@ -388,19 +447,45 @@ def test_the_new_gate_kinds_refuse_malformed_context(payload: dict[str, Any]) ->
         gate_perception(payload)
 
 
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"kind": "scene_cut"},
+        {"kind": "scene_cut", "threshold": 0.3},
+        {"kind": "silence"},
+        {"kind": "silence", "measured_rms_db": -48.0, "threshold_db": -40.0},
+    ],
+)
+def test_the_new_gate_kinds_abstain_on_missing_evidence(payload: dict[str, Any]) -> None:
+    record = gate_perception(payload)
+    assert record["admitted"] is False
+    assert record["outcome"] == "abstain_insufficient_evidence"
+    assert record["refusal"].startswith("insufficient_evidence:")
+
+
 def test_scene_cut_gate_refuses_non_positive_limits() -> None:
     with pytest.raises(GUMInputError):
-        gate_scene_cut({"threshold": 0.3, "cut_threshold_bits": 0.0})
+        gate_scene_cut({"cut_threshold_bits": 0.0})
     with pytest.raises(GUMInputError):
-        gate_scene_cut({"threshold": 0.3, "coverage_factor": 0.0})
+        gate_scene_cut({"coverage_factor": 0.0})
     with pytest.raises(GUMInputError):
-        gate_scene_cut({"threshold": 0.3, "samples_per_histogram": True})
+        gate_scene_cut({"samples_per_histogram": True})
 
 
 def test_silence_gate_refuses_non_int_counts() -> None:
     with pytest.raises(GUMInputError):
-        gate_silence({"rms_db": -40.0, "threshold_db": -30.0, "sample_count": True})
+        gate_silence({"measured_rms_db": -48.0, "threshold_db": -40.0, "sample_count": True})
     with pytest.raises(GUMInputError):
         gate_silence(
-            {"rms_db": -40.0, "threshold_db": -30.0, "sample_count": 48_000, "bit_depth": True}
+            {
+                "measured_rms_db": -48.0,
+                "threshold_db": -40.0,
+                "sample_count": 48_000,
+                "bit_depth": True,
+            }
         )
+
+
+def test_scene_cut_gate_refuses_a_non_sequence_histogram() -> None:
+    with pytest.raises(GUMInputError, match="sequences of bin probabilities"):
+        gate_scene_cut({"hist_before": 0.5, "hist_after": [0.0, 1.0]})

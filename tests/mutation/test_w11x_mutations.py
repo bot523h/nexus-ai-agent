@@ -1,6 +1,6 @@
 """W11X phase-2 AST mutation campaign: GUM math, adapters, gate and pack wiring.
 
-Thirty surgical mutations, each attacking one mathematical invariant of the
+Thirty-four surgical mutations, each attacking one mathematical invariant of the
 JCGM 100:2008 propagation, the three-valued guard band, the licence/GUM
 admission composition, or the runtime scene-cut/silence wiring. The kill oracle
 is the strict one used by the creative-graph campaign: ``KILLED`` requires
@@ -254,6 +254,15 @@ def _level_blind_silence_variance(node: ast.AST) -> ast.AST:
 def _admit_abstain(node: ast.AST) -> ast.AST:
     assert isinstance(node, ast.Assign)
     node.value = ast.parse("decision.outcome is not VerificationOutcome.FAIL", mode="eval").body
+    return node
+
+
+def _fallback_to_noise_floor(node: ast.AST) -> ast.AST:
+    """Replace the measured-level fallback with the detector threshold."""
+    assert isinstance(node, ast.If)
+    body = node.body[0]
+    assert isinstance(body, ast.Assign)
+    body.value = ast.parse("payload.get('noise_floor_db')", mode="eval").body
     return node
 
 
@@ -592,6 +601,50 @@ MUTATIONS: tuple[MutationSpec, ...] = (
         predicate=lambda n: _is_assign(n, "admitted"),
         transform=_admit_abstain,
     ),
+    MutationSpec(
+        mutant_id="W31_silence_threshold_used_as_measurement",
+        invariant="a silence claim needs a measured level, never the detector threshold",
+        target_file=GATE_FILE,
+        func_name="gate_silence",
+        test_file=GATE_TESTS,
+        test_selector="test_silence_gate_never_uses_the_detector_threshold_as_the_measurement",
+        expected_error_tokens=("missing_measured_rms_db",),
+        predicate=lambda n: _is_if(n, "measured is None"),
+        transform=_fallback_to_noise_floor,
+    ),
+    MutationSpec(
+        mutant_id="W32_scene_cut_missing_histograms_admitted",
+        invariant="a scene-cut claim needs empirical frame histograms",
+        target_file=GATE_FILE,
+        func_name="gate_scene_cut",
+        test_file=GATE_TESTS,
+        test_selector="test_scene_cut_gate_abstains_without_empirical_histograms",
+        expected_error_tokens=("GUMInputError", "TypeError", "assert"),
+        predicate=lambda n: _is_if(n, "before is None or after is None"),
+        transform=_weaken_to_false,
+    ),
+    MutationSpec(
+        mutant_id="W33_silence_non_positive_sample_count_admitted",
+        invariant="a silence claim needs a positive sample count",
+        target_file=GATE_FILE,
+        func_name="gate_silence",
+        test_file=GATE_TESTS,
+        test_selector="test_silence_gate_abstains_on_a_non_positive_sample_count",
+        expected_error_tokens=("GUMInputError", "assert"),
+        predicate=lambda n: _is_if(n, "samples <= 0"),
+        transform=_weaken_to_false,
+    ),
+    MutationSpec(
+        mutant_id="W34_marker_refusal_ignored",
+        invariant="marker operations publish only when the GUM gate admits",
+        target_file=OPERATIONS_FILE,
+        func_name="_mark_silences",
+        test_file=RUNTIME_TESTS,
+        test_selector="test_silence_falsifiability_detector_threshold_is_not_measured_rms",
+        expected_error_tokens=("assert", "markers_added"),
+        predicate=lambda n: _is_if(n, "gum_admission.get('admitted') is not True"),
+        transform=_weaken_to_false,
+    ),
 )
 
 
@@ -687,7 +740,7 @@ def test_w11x_mutation_campaign_zero_survived() -> None:
 
     # The pin is deliberate: a silently dropped mutant would otherwise look like
     # a clean campaign. Raise it whenever a mutant is added, never lower it.
-    assert len(MUTATIONS) == 30
+    assert len(MUTATIONS) == 34
     assert invalid == [], f"Invalid mutants ({len(invalid)}): {invalid}"
     assert survived == [], f"Survived mutants ({len(survived)}): {survived}"
     assert len(killed) == len(MUTATIONS)

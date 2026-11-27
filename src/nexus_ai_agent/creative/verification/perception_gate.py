@@ -55,7 +55,6 @@ __all__ = [
     "gate_scene_cut",
     "gate_silence",
     "parse_regimes",
-    "scene_cut_histograms",
 ]
 
 
@@ -212,29 +211,27 @@ def gate_loudness(context: object) -> dict[str, Any]:
     return record
 
 
-def scene_cut_histograms(strength: float) -> tuple[tuple[float, float], tuple[float, float]]:
-    """Deterministic two-bin surrogate histograms for one detector strength.
-
-    The harvested evidence records *where* the detector found a cut and the
-    strength threshold it used, but not the per-frame histograms. This builds a
-    symmetric pair whose Jensen-Shannon divergence is monotone in ``strength``
-    (``0`` at ``0``, ``1`` bit at ``1``), so the gate can still refuse a weak
-    claim: it evaluates the claim at the strength the detector reported.
-    """
-    value = _finite(strength, "threshold")
-    if not 0.0 < value < 1.0:
-        raise GUMInputError(f"threshold must be in (0, 1), got {value!r}")
-    half = 0.5 * value
-    return (0.5 + half, 0.5 - half), (0.5 - half, 0.5 + half)
+def _insufficient_evidence(reason: str, **extra: Any) -> dict[str, Any]:
+    """A fail-closed abstention: no measurement means no gated claim."""
+    record: dict[str, Any] = {
+        "outcome": VerificationOutcome.ABSTAIN_INSUFFICIENT_EVIDENCE.value,
+        "admitted": False,
+        "refusal": f"insufficient_evidence: {reason}",
+        "recommended_gain_db": None,
+    }
+    record.update(extra)
+    return record
 
 
 def gate_scene_cut(context: object) -> dict[str, Any]:
-    """GUM guard band over one candidate scene cut's divergence claim.
+    """GUM guard band over one candidate scene cut's *measured* divergence.
 
-    The cut must be **above** ``cut_threshold_bits`` with the whole expanded
-    interval, otherwise the honest answer is to refuse the marker. When explicit
-    ``hist_before``/``hist_after`` are supplied they are used; otherwise the
-    deterministic :func:`scene_cut_histograms` pair is derived from ``threshold``.
+    The gate only accepts **empirical** frame histograms (``hist_before`` /
+    ``hist_after``, normalised bin probabilities) with a positive sample count.
+    The detector ``threshold`` is *not* a measurement and is never used to
+    synthesise a histogram: a divergence built from the threshold would restate
+    the claim. Without real histograms the honest answer is
+    ``ABSTAIN_INSUFFICIENT_EVIDENCE``.
     """
     payload = _mapping(context, "gate context")
     cut_threshold = _finite(payload.get("cut_threshold_bits", 0.02), "cut_threshold_bits")
@@ -249,8 +246,19 @@ def gate_scene_cut(context: object) -> dict[str, Any]:
     before = payload.get("hist_before")
     after = payload.get("hist_after")
     if before is None or after is None:
-        _required(payload, ("threshold",))
-        before, after = scene_cut_histograms(_finite(payload["threshold"], "threshold"))
+        return _insufficient_evidence(
+            "missing_frame_histograms",
+            limit=cut_threshold,
+            coverage_factor=coverage,
+        )
+    if not isinstance(before, Sequence) or not isinstance(after, Sequence):
+        raise GUMInputError("hist_before/hist_after must be sequences of bin probabilities")
+    if len(before) != len(after) or not before:
+        return _insufficient_evidence(
+            "inconsistent_frame_histograms",
+            limit=cut_threshold,
+            coverage_factor=coverage,
+        )
     budget = scene_cut_uncertainty(
         before,
         after,
@@ -289,18 +297,29 @@ def gate_scene_cut(context: object) -> dict[str, Any]:
 
 
 def gate_silence(context: object) -> dict[str, Any]:
-    """GUM guard band over one candidate silence segment's RMS level.
+    """GUM guard band over one candidate silence segment's **measured** RMS level.
 
-    The segment must be **below** ``threshold_db`` with the whole expanded
-    interval, otherwise the marker is refused.
+    ``measured_rms_db`` is the empirical level of the signal; ``threshold_db`` is
+    the decision threshold (normally the detector's ``noise_floor_db``). The two
+    must never be the same value by construction: substituting the threshold for
+    the measurement is a circular claim, so a missing measurement abstains.
     """
     payload = _mapping(context, "gate context")
-    _required(payload, ("rms_db", "threshold_db", "sample_count"))
-    rms = _finite(payload["rms_db"], "rms_db")
-    threshold = _finite(payload["threshold_db"], "threshold_db")
-    samples = payload["sample_count"]
+    measured = payload.get("measured_rms_db")
+    if measured is None:
+        measured = payload.get("rms_db")
+    if measured is None:
+        return _insufficient_evidence("missing_measured_rms_db")
+    samples = payload.get("sample_count")
+    if samples is None:
+        return _insufficient_evidence("missing_sample_count")
     if isinstance(samples, bool) or not isinstance(samples, int):
         raise GUMInputError("sample_count must be an int")
+    if samples <= 0:
+        return _insufficient_evidence("non_positive_sample_count", sample_count=samples)
+    _required(payload, ("threshold_db",))
+    rms = _finite(measured, "measured_rms_db")
+    threshold = _finite(payload["threshold_db"], "threshold_db")
     bit_depth = payload.get("bit_depth", 16)
     if isinstance(bit_depth, bool) or not isinstance(bit_depth, int):
         raise GUMInputError("bit_depth must be an int")

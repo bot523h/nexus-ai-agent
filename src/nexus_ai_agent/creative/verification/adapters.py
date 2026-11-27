@@ -305,6 +305,25 @@ def silence_uncertainty(
     )
 
 
+def synthetic_scene_cut_histograms(
+    strength: float,
+) -> tuple[tuple[float, float], tuple[float, float]]:
+    """TEST-ONLY synthetic two-bin histograms for one detector strength.
+
+    This is a **mathematical fixture generator**, not a measurement. It exists so
+    unit tests can exercise the JSD curve (monotone ``0`` at ``0``, ``1`` bit at
+    ``1``) without a real frame. It must never be called on the production gate
+    path: a divergence derived from the detector threshold would restate the
+    claim instead of measuring it, which is exactly the P0 defect this generator
+    used to hide. The gate requires empirical ``hist_before``/``hist_after``.
+    """
+    value = _finite_number(strength, "threshold")
+    if not 0.0 < value < 1.0:
+        raise GUMInputError(f"threshold must be in (0, 1), got {value!r}")
+    half = 0.5 * value
+    return (0.5 + half, 0.5 - half), (0.5 - half, 0.5 + half)
+
+
 @dataclass(frozen=True, slots=True)
 class SceneCutUncertainty:
     """Multinomial delta-method uncertainty of a Jensen-Shannon divergence."""

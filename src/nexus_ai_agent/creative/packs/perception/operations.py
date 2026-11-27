@@ -54,11 +54,9 @@ from nexus_ai_agent.creative.studio.models import (
 #: Gain (dB) is reported with centi-dB resolution; more digits are false precision.
 _GAIN_DIGITS = 2
 
-#: Policy ceiling for a silence claim: a segment is silence only when its RMS is
-#: below this level. It is deliberately a *policy* value, not derived from the
-#: measurement, so the gate checks the claim instead of restating it.
-_SILENCE_CEILING_DBFS = -30.0
-_SILENCE_SAMPLE_RATE = 48_000
+#: Bit depth and coverage used to expand the silence interval. The *level* and
+#: the *sample count* are never defaulted here: a silence claim without a real
+#: measurement must abstain (Law R31 + invariant 8).
 _SILENCE_BIT_DEPTH = 16
 _SILENCE_COVERAGE = 0.95
 
@@ -198,16 +196,43 @@ def _marker_admission(gate: PerceptionGate | None, payload: Any) -> dict[str, An
     )
 
 
+def _worst_measured_span(evidence: Any) -> tuple[float | None, int | None]:
+    """Loudest measured span: the hardest one to defend as silence."""
+    measured: list[tuple[float, int | None]] = []
+    for span in evidence.spans:
+        if span.measured_rms_db is not None:
+            measured.append((span.measured_rms_db, span.sample_count))
+    if not measured:
+        return None, None
+    level, samples = max(measured, key=lambda item: item[0])
+    return level, samples
+
+
 def _silence_gate_context(evidence: Any) -> dict[str, Any]:
-    """GUM request for the worst (shortest) silence span in the evidence."""
+    """GUM request for the **measured** silence level, never the detector threshold.
+
+    ``noise_floor_db`` is the ``silencedetect`` configuration; it is passed only
+    as the *decision threshold*. The measured level comes from the evidence (or
+    the loudest measured span), and the sample count from the evidence, the span,
+    or a real sample rate over a real window. If none of those exist the context
+    carries ``None`` and :func:`gate_silence` abstains instead of inventing one.
+    """
     durations = [(span.end_us - span.start_us) / 1_000_000 for span in evidence.spans]
     window = min(durations, default=0.0)
     minimum = min(evidence.min_silence_us / 1_000_000, window) if window > 0.0 else 0.0
+    measured = evidence.measured_rms_db
+    samples = evidence.sample_count
+    if measured is None:
+        measured, span_samples = _worst_measured_span(evidence)
+        if samples is None:
+            samples = span_samples
+    if samples is None and measured is not None and evidence.sample_rate_hz:
+        samples = max(2, int(round(window * evidence.sample_rate_hz)))
     return {
         "kind": "silence",
-        "rms_db": evidence.noise_floor_db,
-        "threshold_db": _SILENCE_CEILING_DBFS,
-        "sample_count": max(2, int(window * _SILENCE_SAMPLE_RATE)),
+        "measured_rms_db": measured,
+        "threshold_db": evidence.noise_floor_db,
+        "sample_count": samples,
         "bit_depth": _SILENCE_BIT_DEPTH,
         "window_duration_s": window,
         "min_silence_duration_s": minimum,
@@ -216,12 +241,18 @@ def _silence_gate_context(evidence: Any) -> dict[str, Any]:
 
 
 def _scene_gate_context(evidence: Any, cut_threshold_bits: float) -> dict[str, Any]:
-    """GUM request for the detector strength reported with a scene-cut evidence."""
+    """GUM request built from the **empirical** frame histograms of the cut.
+
+    The detector ``threshold`` is deliberately absent: the gate must measure the
+    divergence between the frames, not restate the threshold that selected them.
+    """
     return {
         "kind": "scene_cut",
-        "threshold": evidence.threshold,
+        "hist_before": None if evidence.hist_before is None else list(evidence.hist_before),
+        "hist_after": None if evidence.hist_after is None else list(evidence.hist_after),
         "cut_threshold_bits": cut_threshold_bits,
-        "samples_per_histogram": _SCENE_CUT_SAMPLES,
+        "samples_per_histogram": evidence.sample_count_before or _SCENE_CUT_SAMPLES,
+        "samples_per_histogram_after": evidence.sample_count_after,
         "coverage_factor": _SCENE_CUT_COVERAGE,
     }
 
