@@ -541,6 +541,59 @@ def _stale_generation(
     )
 
 
+def _zone_paths(board: dict, claim: dict) -> list[str]:
+    """The declared paths of a claim's zone, or an empty list when undeclared."""
+    zone_id = claim.get("zone")
+    for zone in board.get("zones") or []:
+        if isinstance(zone, dict) and zone.get("id") == zone_id:
+            return [p for p in (zone.get("paths") or []) if isinstance(p, str) and p.strip()]
+    return []
+
+
+def _effective_paths(board: dict, claim: dict) -> list[str]:
+    """Paths a live claim actually fences: its own, else its declared zone.
+
+    A claim whose ``exclusive_paths`` is empty still owns its zone. The live
+    ``task-w35-ibpc-security-closure`` claim had exactly that shape while its PR
+    was rewriting files, and the referee reported "no overlap" for work that sat
+    squarely inside another agent's declared area (PR #363/#369 audit finding).
+    """
+    explicit = [
+        path
+        for path in (claim.get("exclusive_paths") or [])
+        if isinstance(path, str) and path.strip()
+    ]
+    return explicit or _zone_paths(board, claim)
+
+
+def _paths_overlap(left: str, right: str) -> bool:
+    """True when two declared paths (directory or file) intersect."""
+    return _path_matches(left, right) or _path_matches(right, left)
+
+
+def validate_zone_disjointness(zones: object) -> list[tuple[str, str, str]]:
+    """Return ``(zone_a, zone_b, path)`` for every pair of zones that overlap.
+
+    Advisory and pure: the board's family zones deliberately overlap (they are
+    resume anchors, not leases), so this is a diagnostic a reviewer runs, not a
+    gate the referee enforces.
+    """
+    entries: list[tuple[str, list[str]]] = []
+    for zone in zones if isinstance(zones, list) else []:
+        if not isinstance(zone, dict):
+            continue
+        paths = [p for p in (zone.get("paths") or []) if isinstance(p, str) and p.strip()]
+        entries.append((str(zone.get("id", "")), paths))
+    overlaps: list[tuple[str, str, str]] = []
+    for index, (left_id, left_paths) in enumerate(entries):
+        for right_id, right_paths in entries[index + 1 :]:
+            for left in left_paths:
+                for right in right_paths:
+                    if _paths_overlap(left, right):
+                        overlaps.append((left_id, right_id, left))
+    return overlaps
+
+
 def _conflicting_paths(board: dict, branch: str, files: list[str]) -> list[tuple[str, str]]:
     """Return overlaps between *files* and other branches' live exclusive paths."""
     hits: list[tuple[str, str]] = []
@@ -549,7 +602,7 @@ def _conflicting_paths(board: dict, branch: str, files: list[str]) -> list[tuple
             continue
         if branch and claim.get("agent_branch") == branch:
             continue
-        for excl in claim.get("exclusive_paths", []):
+        for excl in _effective_paths(board, claim):
             for f in files:
                 fp = f.strip()
                 if not fp:
@@ -722,6 +775,17 @@ def _claim_locked(args: argparse.Namespace) -> int:
     stale_reason = claim.pop("release_reason", None)
     if stale_reason:
         claim["previous_release_reason"] = stale_reason
+    # A lease that would fence a path another live claim already owns is a
+    # collision even when this claim's ``exclusive_paths`` is empty: the zone
+    # fallback is what makes that visible (PR #363/#369 audit finding).
+    claim_paths = _effective_paths(board, claim)
+    clashes = _conflicting_paths(board, args.branch, claim_paths) if claim_paths else []
+    if clashes:
+        print(f"REFUSED: {args.task} would fence path(s) another live claim owns:")
+        for task, path in sorted(set(clashes)):
+            print(f"  {path}  <- claimed by {task}")
+        print(STOP_BANNER)
+        return 2
     claim.update(
         status="active",
         agent_branch=args.branch,
@@ -1658,7 +1722,7 @@ def audit_pr_visibility(board: dict, prs: list[dict]) -> dict:
 
         def covered(fp: str) -> bool:
             return any(
-                any(_path_matches(excl, fp) for excl in claim.get("exclusive_paths", []))
+                any(_path_matches(excl, fp) for excl in _effective_paths(board, claim))
                 for claim in live_claims
             )
 
