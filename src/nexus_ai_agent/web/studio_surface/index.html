@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NAGAR Studio — استودیوی محصول</title>
+<link rel="stylesheet" href="studio.css">
+</head>
+<body>
+<a class="skip" href="#composer">پرش به نوشتن درخواست</a>
+<header class="top">
+  <h1>NAGAR Studio</h1>
+  <p class="status" id="status" role="status" aria-live="polite">در حال اتصال…</p>
+</header>
+
+<main class="grid">
+  <section class="panel" id="sessions" aria-labelledby="sessions-title">
+    <h2 id="sessions-title">نشست‌ها</h2>
+    <ul class="list" id="session-list"></ul>
+    <p class="empty" id="sessions-empty">هنوز نشستی باز نشده است.</p>
+  </section>
+
+  <section class="panel" id="composer" aria-labelledby="composer-title">
+    <h2 id="composer-title">درخواست جدید</h2>
+    <form id="composer-form">
+      <label>پروژه <input name="project_id" required autocomplete="off" placeholder="project-id"></label>
+      <label>دارایی <input name="asset_id" required autocomplete="off" placeholder="asset-id"></label>
+      <label>مسیر منبع <input name="source_path" required autocomplete="off" placeholder="published/…"></label>
+      <label>قصد (intent)
+        <textarea name="text" required maxlength="2048" rows="4" placeholder="چه چیزی می‌خواهید بسازید؟"></textarea>
+      </label>
+      <div class="actions">
+        <button type="submit" id="submit-turn">ارسال</button>
+        <button type="button" id="reload">بارگذاری دوباره</button>
+      </div>
+      <p class="hint" id="composer-hint"></p>
+    </form>
+  </section>
+
+  <section class="panel" id="turns" aria-labelledby="turns-title">
+    <h2 id="turns-title">نوبت‌ها و نتیجه</h2>
+    <ol class="turns" id="turn-list"></ol>
+    <p class="empty" id="turns-empty">نتیجه‌ای برای نمایش نیست.</p>
+  </section>
+</main>
+
+<dialog id="state-dialog" aria-labelledby="state-title">
+  <h2 id="state-title"></h2>
+  <p id="state-body"></p>
+  <form method="dialog"><button>بستن</button></form>
+</dialog>
+
+<script src="studio.js"></script>
+</body>
+</html>

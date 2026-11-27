@@ -155,6 +155,20 @@ class LocalCacheProvider:
         self.path_for_key(remote_key)
         await asyncio.to_thread(self._copy_from_cache, self, remote_key, local_path)
 
+    async def delete_objects(self, *, keys: list[str]) -> None:
+        """Delete the given keys; a missing key is not an error.
+
+        Mirrors the R2/B2 tier so the maintenance lane (backup prune in
+        housekeeping) behaves the same against a local tier. Keys are validated
+        with the same rules as every other operation before any unlink.
+        """
+        paths = [self.path_for_key(key) for key in keys]
+        for path in paths:
+            try:
+                path.unlink()
+            except FileNotFoundError:
+                continue
+
     def _path_for_prefix(self, prefix: str) -> Path:
         components = self._validated_components(
             prefix,
