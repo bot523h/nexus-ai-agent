@@ -1163,6 +1163,125 @@ async def read_pinned_revisions(
         auth_store.close()
 
 
+class PinAssetRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    asset_id: str = Field(min_length=1, max_length=128)
+    relative_path: str = Field(min_length=1, max_length=1024)
+    content_sha256: str = Field(pattern="^[0-9a-f]{64}$")
+    byte_size: int = Field(ge=0)
+    media_type: str = Field(default="application/octet-stream", min_length=1, max_length=128)
+
+
+class PinRevisionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    revision_id: str = Field(min_length=1, max_length=128)
+    revision_number: int = Field(ge=1)
+    parent_revision_id: str | None = Field(default=None, max_length=128)
+    tenant_id: str | None = Field(default=None, min_length=1, max_length=128)
+    session_id: str = Field(min_length=1, max_length=128)
+    turn_id: str = Field(min_length=1, max_length=128)
+    plan_id: str = Field(min_length=1, max_length=256)
+    plan_jcs_sha256: str = Field(pattern="^[0-9a-f]{64}$")
+    parameters_jcs_sha256: str = Field(pattern="^[0-9a-f]{64}$")
+    preview_digest: str = Field(min_length=1, max_length=128)
+    assets: list[PinAssetRequest] = Field(default_factory=list)
+
+
+@router.post("/projects/{project_id}/ibpc/revisions/pin", status_code=201)
+async def pin_studio_revision(
+    project_id: str,
+    body: PinRevisionRequest,
+    x_nexus_principal_token: str | None = Header(default=None, alias="X-Nexus-Principal-Token"),
+) -> dict[str, Any]:
+    """Pin a revision and advance the project head, under one compare-and-swap.
+
+    Authorization is ``OWNER``/``EDITOR`` via ``SUBMIT_INTENT``: pinning defines
+    the bytes later turns render from, so a reader must not be able to do it.
+
+    ``parent_revision_id`` is the CAS operand.  A client that read the head as
+    ``rev-7`` and pins with ``parent_revision_id="rev-7"`` is refused if another
+    turn advanced the head in the meantime -- the store raises
+    ``stale_parent`` and this route turns that into 409, never a silent
+    overwrite of somebody else's revision.
+    """
+    from nexus_ai_agent.creative.studio.revision_pinning import (
+        AssetVersionPin,
+        RevisionConcurrencyConflictError,
+        RevisionIdempotencyConflictError,
+    )
+
+    auth_store = get_studio_auth_store()
+    try:
+        principal_id, auth_tenant_id = _require_authenticated(auth_store, x_nexus_principal_token)
+        _require_valid_project_id(project_id)
+        binding_ref = auth_store.default_binding_for(principal_id) or ""
+        _authorize(
+            auth_store,
+            principal_id=principal_id,
+            project_id=project_id,
+            action=StudioAction.SUBMIT_INTENT,
+            binding_ref=binding_ref,
+        )
+        if body.tenant_id is not None and body.tenant_id != auth_tenant_id:
+            raise HTTPException(status_code=403, detail="tenant_mismatch")
+        runtime = _build_runtime(auth_store, binding_ref=binding_ref)
+        try:
+            if runtime.revision_pins is None:
+                raise HTTPException(status_code=503, detail="revision_pinning_unavailable")
+            pins = [
+                AssetVersionPin(
+                    asset_id=asset.asset_id,
+                    relative_path=asset.relative_path,
+                    content_sha256=asset.content_sha256,
+                    byte_size=asset.byte_size,
+                    media_type=asset.media_type,
+                )
+                for asset in body.assets
+            ]
+            envelope = runtime.revision_pins.pin_revision(
+                revision_id=body.revision_id,
+                project_id=project_id,
+                tenant_id=auth_tenant_id,
+                session_id=body.session_id,
+                turn_id=body.turn_id,
+                revision_number=body.revision_number,
+                parent_revision_id=body.parent_revision_id,
+                plan_id=body.plan_id,
+                plan_jcs_sha256=body.plan_jcs_sha256,
+                parameters_jcs_sha256=body.parameters_jcs_sha256,
+                preview_digest=body.preview_digest,
+                input_asset_pins=tuple(pins),
+            )
+            # Keep the project row's pointer in lockstep with the pinned head.
+            # The two must never disagree; a disagreement is refused at
+            # admission (``revision_split_brain``), so writing it would make the
+            # next turn fail rather than this one.
+            try:
+                auth_store.set_project_revision(project_id, envelope.revision_id)
+            except AuthorizationError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+            return {
+                "revision_id": envelope.revision_id,
+                "revision_number": envelope.revision_number,
+                "parent_revision_id": envelope.parent_revision_id,
+                "revision_jcs_sha256": envelope.revision_jcs_sha256,
+                "created_at_utc": envelope.created_at_utc,
+                "head": runtime.revision_pins.head_of(project_id),
+            }
+        except RevisionConcurrencyConflictError as exc:
+            # A stale parent or a genesis on an existing project: the caller lost
+            # a race and must re-read the head.
+            raise HTTPException(status_code=409, detail=f"{exc.reason}: {exc.detail}") from exc
+        except RevisionIdempotencyConflictError as exc:
+            raise HTTPException(status_code=409, detail=f"{exc.reason}: {exc.detail}") from exc
+        finally:
+            runtime.close()
+    finally:
+        auth_store.close()
+
+
 @router.get("/projects/{project_id}/ibpc/disaster-recovery")
 async def read_disaster_recovery_status(
     project_id: str,

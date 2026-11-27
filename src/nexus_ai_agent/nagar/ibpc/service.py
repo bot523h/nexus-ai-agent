@@ -1010,11 +1010,36 @@ class IBPCService:
         return src
 
     def _authoritative_revision(self, project_id: str) -> tuple[int, str]:
+        """The one revision a turn is admitted against.
+
+        Two sources exist and only one may win.  The durable pinned head is
+        authoritative when it exists: it names the exact bytes and plan a
+        revision *was*, which is what the worker re-verifies.  The project row's
+        ``active_revision_id`` is a pointer that can be advanced without pinning
+        anything, so trusting it preferentially would let a turn execute against
+        a revision that has no pin behind it.
+
+        The two are therefore compared, and a disagreement is a split brain --
+        refused as a stale revision rather than silently resolved in favour of
+        either side.  Resolving it here would mean one caller's turn executes
+        against bytes another caller was told do not exist.
+        """
         revision = int(self._deps.revision_provider())
+        resolver_rev: str | None = None
         if self._deps.project_revision_resolver is not None:
-            rev_id = str(self._deps.project_revision_resolver(project_id))
-            return revision, rev_id
-        return revision, str(revision)
+            resolver_rev = str(self._deps.project_revision_resolver(project_id))
+
+        pinned = self.durable_head_revision(project_id)
+        if pinned is None:
+            # Nothing pinned yet: the project row is the only truth there is.
+            return revision, resolver_rev if resolver_rev is not None else str(revision)
+        if resolver_rev is not None and not hmac.compare_digest(pinned, resolver_rev):
+            raise StaleRevisionError(
+                "revision_split_brain",
+                f"pinned head {pinned!r} != project active revision {resolver_rev!r} "
+                "for the same project; refusing to pick one",
+            )
+        return revision, pinned
 
     def _validate_revision_binding(
         self,
