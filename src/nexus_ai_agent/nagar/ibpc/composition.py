@@ -240,7 +240,13 @@ class UnifiedStudioRuntime:
 
     def close(self) -> None:
         """Close every owned store once, in dependency order (outbox last)."""
+        # ``service.close()`` already closes the stores it owns; closing the same
+        # SQLite handle twice raises, so each resource is closed at most once.
+        seen: set[int] = set()
         for resource in self.owned_closables:
+            if id(resource) in seen:
+                continue
+            seen.add(id(resource))
             close_fn = getattr(resource, "close", None)
             if callable(close_fn):
                 close_fn()
@@ -337,13 +343,47 @@ def build_unified_studio_runtime(
     else:
         _note("disaster_recovery", "disabled by the caller")
 
+    # -- the authority bridge ---------------------------------------------- #
+    # A bridge over the SAME studio auth store the deps already authorize
+    # against: one durable principal/membership truth, read twice by two
+    # different callers, beats two stores that could disagree.
+    authority_bridge = None
+    authority_store = getattr(deps, "authority", None)
+    if authority_store is None:
+        _note("authority_bridge", "deps carry no StudioPrincipalAuthStore")
+    else:
+        from nexus_ai_agent.adapters.studio_directory_bridge import (
+            StudioUnifiedAuthorityBridge,
+        )
+
+        authority_bridge = StudioUnifiedAuthorityBridge(authority_store, now=deps.now)
+
     # -- the service itself ------------------------------------------------ #
+    # ``execution_coordinator`` stays the raw store at this point: the real
+    # ``ExecutionOutboxCoordinator`` is built by the SERVICE in
+    # :meth:`IBPCService.rebuild_execution_coordinator`, because it must close
+    # over the service's own consume/enqueue/verify callables.  Passing a store
+    # here is what lets the service discover the outbox without a second
+    # constructor argument.
+    # The service ADOPTS the runtime's stores as owned closables, so the
+    # existing per-request ``service.close()`` in every API route also releases
+    # the pinning store and the outbox.  Without this the routes that call
+    # ``close()`` on the service alone would leak one SQLite handle per request
+    # -- a slow file-descriptor exhaustion rather than an obvious failure.
+    owned_by_service: tuple[Any, ...] = (*deps.owned_closables, revision_pins)
+    if execution_outbox is not None:
+        owned_by_service = (*owned_by_service, execution_outbox)
     wired = replace(
         deps,
         revision_pinning_store=revision_pins,
-        execution_coordinator=execution_outbox,
+        execution_coordinator=None,
+        owned_closables=owned_by_service,
     )
     service = build_ibpc_service(wired, key_provider=key_provider, environ=environ)
+    if execution_outbox is not None:
+        # The coordinator is built *over* the live service: it needs to call this
+        # service's consume/enqueue/verify steps, which do not exist before it.
+        service.enable_execution_outbox(execution_outbox)
 
     owned: list[Any] = [service, revision_pins]
     if execution_outbox is not None:
@@ -354,7 +394,7 @@ def build_unified_studio_runtime(
         authorized_asset_root=asset_root,
         service=service,
         authority=getattr(deps, "authority", None),
-        authority_bridge=None,
+        authority_bridge=authority_bridge,
         revision_pins=revision_pins,
         execution_outbox=execution_outbox,
         dr=dr,

@@ -15,7 +15,6 @@ from nexus_ai_agent.adapters.studio_principal_auth import (
     PrincipalAuthenticationError,
     ProjectMembershipAuthorizer,
     StudioPrincipalAuthStore,
-    build_studio_ibpc_service,
     durable_studio_auth_path,
 )
 from nexus_ai_agent.api.studio_session import require_studio_caller
@@ -113,11 +112,26 @@ def _authorize(
         raise HTTPException(status_code=403, detail=str(exc)) from exc
 
 
-def _build_service(
-    auth_store: StudioPrincipalAuthStore,
-    *,
-    binding_ref: str | None,
-) -> IBPCService:
+def _build_runtime(
+    auth_store: StudioPrincipalAuthStore, *, binding_ref: str | None
+) -> UnifiedStudioRuntime:
+    """Assemble the ONE Studio runtime for one request.
+
+    Every Studio route resolves its service from here -- the conversational
+    ``submit``/``approve``/``execute`` routes as well as the preview/revision/DR
+    surface.  Before this existed there were two roots: a legacy
+    ``build_studio_ibpc_service`` call for the conversational routes and this
+    runtime for the readback routes.  The split was invisible to tests (each
+    root was individually correct) and wrong in production, because the routes
+    that actually execute a turn were the ones bypassing the outbox, the
+    pinning store and the authority bridge.
+
+    The runtime is built per request, exactly like the service it wraps: the
+    durable stores are the shared state on disk, and constructing them is cheap
+    because SQLite pages are already warm.  A long-lived global would leak file
+    handles across tests and across a worker reload, which is the failure mode
+    the per-request service already avoids.
+    """
     from nexus_ai_agent.api.app import get_creative_registry
 
     queue = get_creative_registry().queue
@@ -129,16 +143,48 @@ def _build_service(
             status_code=503,
             detail="approval_key_unavailable: approval key ring is not configured",
         ) from exc
-    return build_studio_ibpc_service(
+    workspace_root = _studio_workspace_root()
+    deps = IBPCServiceDeps(
         queue=queue,
         registry=build_runtime_registry(),
-        workspace_root=_studio_workspace_root(),
+        workspace_root=workspace_root,
         revision_provider=lambda: revision,
-        key_provider=key_provider,
-        auth_store=auth_store,
+        now=utc_now,
+        authority=auth_store,
+        authorizer=ProjectMembershipAuthorizer(auth_store),
         channel_binding_ref=binding_ref,
+        durable=True,
         authorized_asset_root=_studio_authorized_asset_root(),
+        # The authoritative revision is the project's row in the same auth store
+        # the rest of the router authorizes against -- one durable truth, not a
+        # second copy that can drift.
+        project_revision_resolver=auth_store.get_project_revision,
     )
+    return build_unified_studio_runtime(
+        deps,
+        key_provider=key_provider,
+        store_filenames=_runtime_store_names(),
+        enable_execution_outbox=True,
+        # DR needs a key; when one is not configured the runtime reports dr=None
+        # with a reason instead of inventing a key that would verify nothing.
+        enable_disaster_recovery=True,
+    )
+
+
+def _build_service(
+    auth_store: StudioPrincipalAuthStore,
+    *,
+    binding_ref: str | None,
+) -> IBPCService:
+    """The conversational routes' service, sourced from the unified runtime.
+
+    A thin projection, not a second composition root: this is the same
+    ``IBPCService`` the readback routes use, carrying the execution outbox, the
+    revision-pinning store and the authority bridge.  The runtime's stores are
+    adopted as owned closables by the service, so the route's existing
+    ``service.close()`` still releases everything exactly once.
+    """
+    return _build_runtime(auth_store, binding_ref=binding_ref).service
 
 
 def _runtime_store_names() -> dict[str, str]:
@@ -184,50 +230,6 @@ def _normalise_operations(operations: list[dict[str, Any]]) -> list[dict[str, An
             copy["deltas"] = tuple(deltas)
         normalised.append(copy)
     return normalised
-
-
-def _build_runtime(
-    auth_store: StudioPrincipalAuthStore, *, binding_ref: str | None
-) -> UnifiedStudioRuntime:
-    """Assemble the Wave-4 runtime for one request.
-
-    The runtime is built per request, exactly like the service it wraps: the
-    durable stores are the shared state, and constructing them is cheap because
-    SQLite pages are already warm.  Building a long-lived global would leak file
-    handles across tests and across a worker reload, which is the failure mode
-    the per-request service already avoids.
-    """
-    from nexus_ai_agent.api.app import get_creative_registry
-
-    queue = get_creative_registry().queue
-    revision = int(os.getenv("NEXUS_STUDIO_ACTIVE_REVISION", "0") or "0")
-    try:
-        key_provider = StaticKeyRing.from_environment(os.environ)
-    except KeyProviderError as exc:
-        raise HTTPException(
-            status_code=503,
-            detail="approval_key_unavailable: approval key ring is not configured",
-        ) from exc
-    workspace_root = _studio_workspace_root()
-    deps = IBPCServiceDeps(
-        queue=queue,
-        registry=build_runtime_registry(),
-        workspace_root=workspace_root,
-        revision_provider=lambda: revision,
-        now=utc_now,
-        authority=auth_store,
-        authorizer=ProjectMembershipAuthorizer(auth_store),
-        channel_binding_ref=binding_ref,
-        durable=True,
-        authorized_asset_root=_studio_authorized_asset_root(),
-    )
-    return build_unified_studio_runtime(
-        deps,
-        key_provider=key_provider,
-        store_filenames=_runtime_store_names(),
-        enable_execution_outbox=True,
-        enable_disaster_recovery=True,
-    )
 
 
 class OpenSessionRequest(BaseModel):

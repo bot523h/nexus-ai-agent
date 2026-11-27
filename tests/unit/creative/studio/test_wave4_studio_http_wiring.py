@@ -590,9 +590,15 @@ class TestTheRuntimeFactory:
             # Pinning is unconditional: it is the one capability a turn cannot
             # execute without, so leaving it off would be a silent footgun.
             assert runtime.revision_pins is not None
+            # The authority bridge is wired from ``deps.authority`` whenever a
+            # principal store is supplied, so it is ABSENT here precisely
+            # because ``_deps`` carries no store -- and its note says so rather
+            # than leaving the caller to infer it from ``None``.
+            assert runtime.authority_bridge is None
             assert {note["capability"] for note in notes} == {
                 "execution_outbox",
                 "disaster_recovery",
+                "authority_bridge",
             }
             assert all(note["enabled"] is False for note in notes)
         finally:

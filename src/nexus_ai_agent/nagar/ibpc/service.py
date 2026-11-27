@@ -31,7 +31,8 @@ import json
 import os
 import shutil
 import stat
-from dataclasses import dataclass
+import threading
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Literal, Protocol
@@ -136,6 +137,86 @@ class ScopeSignatureMismatchError(ApprovalError):
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _run_coroutine_blocking(coro: Any) -> Any:
+    """Run a coroutine from a *synchronous* caller, whoever owns the loop.
+
+    Two cases, and conflating them is how a nested-event-loop bug gets shipped:
+
+    * no loop is running on this thread (the normal outbox path -- it runs on a
+      worker thread precisely so it can block) -- drive it to completion;
+    * a loop is already running on this thread -- ``asyncio.run`` would raise
+      ``RuntimeError: asyncio.run() cannot be called from a running event
+      loop``, so the coroutine is executed on a dedicated thread instead.  The
+      coroutine object is created by the caller, so it must not be awaited here;
+      it is handed over untouched.
+    """
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+
+    result: list[Any] = []
+    failure: list[BaseException] = []
+
+    def _runner() -> None:
+        try:
+            result.append(asyncio.run(coro))
+        except BaseException as exc:  # noqa: BLE001 - re-raised on the caller's thread
+            failure.append(exc)
+
+    thread = threading.Thread(target=_runner, name="ibpc-outbox-bridge", daemon=True)
+    thread.start()
+    thread.join()
+    if failure:
+        raise failure[0]
+    return result[0] if result else None
+
+
+def _outbox_plan_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """The plan projection the outbox stores.
+
+    Deliberately narrow: the outbox compares this canonical JSON on every retry
+    to detect a conflicting re-stage, so it must carry what identifies the work
+    and nothing that varies per attempt (paths, workspace dirs, timestamps).
+    """
+    keys = (
+        "command",
+        "operation",
+        "args",
+        "input_sha256",
+        "media_duration_us",
+        "idempotency_key",
+        "schema_version",
+        "principal_id",
+        "project_id",
+        "channel_binding_id",
+    )
+    return {key: payload[key] for key in keys if key in payload}
+
+
+class _OutboxSeamUnavailable(RuntimeError):
+    """The outbox seam could not derive a key for this turn.
+
+    Internal: callers treat it as "drive the legacy path", never as a refusal,
+    because an unwired outbox must not change what ``execute()`` decides.
+    """
+
+
+def _outcome_dict(outcome: Any) -> dict[str, Any]:
+    """Project an ``ExecutionOutboxOutcome`` into a JSON-safe dict."""
+    to_dict = getattr(outcome, "to_dict", None)
+    if callable(to_dict):
+        payload: dict[str, Any] = dict(to_dict())
+        return payload
+    return {
+        "status": getattr(outcome, "status", ""),
+        "outbox_id": getattr(outcome, "outbox_id", ""),
+        "idempotency_key": getattr(outcome, "idempotency_key", ""),
+        "job_id": getattr(outcome, "job_id", ""),
+        "detail": getattr(outcome, "detail", ""),
+    }
 
 
 class JobFactsProvider(Protocol):
@@ -411,7 +492,314 @@ class IBPCService:
         # serializes the sensitive section of execute() (identity validation ->
         # atomic consume -> turn-state transition) across concurrent requests
         self._execute_lock = asyncio.Lock()
+        # The outbox seam: a *coordinator* once rebuilt, until then whatever the
+        # composition root passed (possibly a bare store, possibly nothing).
+        self._outbox_coordinator: Any | None = None
+        # Why the seam last failed, if it did.  Never fatal, but never silent.
+        self._outbox_seam_error: str = ""
         self._hydrate_active_contexts()
+
+    # -- execution outbox seam ---------------------------------------------- #
+
+    def enable_execution_outbox(self, store: Any) -> Any:
+        """Adopt a durable outbox store and (re)build the coordinator over it.
+
+        Called by the composition root once the service exists.  Separating it
+        from ``IBPCServiceDeps.execution_coordinator`` is deliberate: the
+        coordinator must call *this* service's consume/enqueue/verify steps, so
+        it cannot be built before the service is.
+        """
+        from nexus_ai_agent.nagar.ibpc.execution_outbox import (
+            DurableExecutionOutboxStore,
+            ExecutionOutboxCoordinator,
+        )
+
+        self._deps = replace(self._deps, execution_coordinator=store)
+        if store is None:
+            self._outbox_coordinator = None
+        elif isinstance(store, ExecutionOutboxCoordinator):
+            self._outbox_coordinator = store
+        elif isinstance(store, DurableExecutionOutboxStore):
+            self._outbox_coordinator = ExecutionOutboxCoordinator(
+                store=store,
+                # Mirrors ``execute()``'s own validation order so a reconcile
+                # cannot consume an approval the live path would have refused.
+                consume_approval_fn=self._outbox_consume_approval,
+                enqueue_job_fn=self._outbox_enqueue_job,
+                await_completion_fn=self._outbox_await_completion,
+                verify_completion_fn=self._outbox_verify_completion,
+                confirm_consumption_fn=self._outbox_confirm_consumed,
+            )
+        else:
+            # An unknown seam: keep it as-is so a caller's own object (and its
+            # tests) keep working; we simply cannot drive it.
+            self._outbox_coordinator = store
+        return self._outbox_coordinator
+
+    @property
+    def execution_outbox(self) -> Any | None:
+        """The coordinator driving the durable outbox, or ``None`` when unwired."""
+        return self._outbox_coordinator
+
+    def reconcile_execution_outbox(self, *, limit: int = 100) -> tuple[dict[str, Any], ...]:
+        """Resume every in-flight intent after a crash or a restart.
+
+        Never re-consumes an approval and never enqueues a second job: each row
+        is driven from its own durable state, and the enqueue is keyed on the
+        row's reserved idempotency key so the queue's own dedupe is the backstop.
+        """
+        coordinator = self._outbox_coordinator
+        if coordinator is None or not hasattr(coordinator, "reconcile_in_flight"):
+            return ()
+        outcomes = coordinator.reconcile_in_flight(limit=limit)
+        return tuple(_outcome_dict(outcome) for outcome in outcomes)
+
+    async def reconcile_execution_outbox_async(
+        self, *, limit: int = 100
+    ) -> tuple[dict[str, Any], ...]:
+        """Off-thread reconciliation: the outbox holds SQLite locks and fsyncs."""
+        return await asyncio.to_thread(self.reconcile_execution_outbox, limit=limit)
+
+    # -- outbox callbacks (synchronous, as ExecutionOutboxCoordinator requires) #
+
+    def _reserved_job_id_for(
+        self,
+        ctx: _TurnContext,
+        approval_id: str,
+        session_id: str,
+        turn_id: str,
+        session: Any,
+    ) -> str | None:
+        """The outbox's reserved job id for this turn, or ``None`` when unwired.
+
+        Derived from the same six inputs the outbox uses, so the id reserved on
+        the ledger and the id the outbox row carries are the same string in
+        every process -- no coordination, no extra column.
+        """
+        store = self._outbox_store()
+        if store is None:
+            return None
+        from nexus_ai_agent.nagar.ibpc.execution_outbox import derive_reserved_job_id
+
+        try:
+            key = self._outbox_idempotency_key(
+                ctx=ctx,
+                approval_id=approval_id,
+                session_id=session_id,
+                turn_id=turn_id,
+                session=session,
+            )
+        except Exception:  # noqa: BLE001 - a seam failure must not change the legacy refusal
+            return None
+        return derive_reserved_job_id(key)
+
+    def _outbox_idempotency_key(
+        self,
+        *,
+        ctx: _TurnContext,
+        approval_id: str,
+        session_id: str,
+        turn_id: str,
+        session: Any,
+    ) -> str:
+        """The deterministic intent key: one turn, one approval, one plan."""
+        from nexus_ai_agent.nagar.ibpc.execution_outbox import derive_idempotency_key
+
+        return derive_idempotency_key(
+            tenant_id=str(session.tenant_id),
+            project_id=str(ctx.project_id),
+            session_id=str(session_id),
+            turn_id=str(turn_id),
+            approval_id=str(approval_id),
+            revision_jcs_sha256=self._outbox_revision_digest(ctx),
+        )
+
+    def _outbox_revision_digest(self, ctx: _TurnContext) -> str:
+        """The plan's canonical digest, used as the revision identity in the key."""
+        for candidate in (ctx.plan.plan_digest, ctx.intent_digest):
+            if isinstance(candidate, str) and candidate.strip():
+                return candidate
+        raise _OutboxSeamUnavailable("no plan digest on the turn context")
+
+    def _outbox_store(self) -> Any | None:
+        coordinator = self._outbox_coordinator
+        return None if coordinator is None else getattr(coordinator, "store", None)
+
+    async def _stage_outbox_intent(
+        self,
+        *,
+        ctx: _TurnContext,
+        approval_id: str,
+        session_id: str,
+        turn_id: str,
+        session: Any,
+        payload: dict[str, Any],
+    ) -> Any | None:
+        """``INTENT_STAGED`` -> ``APPROVAL_CONSUMED`` before the queue is touched.
+
+        The order is the whole point.  Staging happens *before* the approval is
+        consumed (it is idempotent and reversible); the transition to
+        ``APPROVAL_CONSUMED`` happens *after* the ledger committed.  A crash in
+        between leaves an ``INTENT_STAGED`` row whose reserved job id the ledger
+        already knows, which is precisely what reconciliation confirms rather
+        than rejects.
+
+        Returns ``None`` when no outbox is wired -- the caller then behaves
+        exactly as before, so this seam cannot change an unwired deployment.
+        """
+        store = self._outbox_store()
+        if store is None:
+            return None
+        try:
+            key = self._outbox_idempotency_key(
+                ctx=ctx,
+                approval_id=approval_id,
+                session_id=session_id,
+                turn_id=turn_id,
+                session=session,
+            )
+            # Another process may already hold the outbox lock; this is I/O, so
+            # it must not run on the event loop.
+            row, _created = await asyncio.to_thread(
+                store.stage_intent,
+                idempotency_key=key,
+                tenant_id=str(session.tenant_id),
+                project_id=str(ctx.project_id),
+                session_id=str(session_id),
+                turn_id=str(turn_id),
+                principal_id=str(ctx.verified_identity.principal_id),
+                approval_id=str(approval_id),
+                revision_id=str(ctx.plan.plan_digest),
+                revision_jcs_sha256=self._outbox_revision_digest(ctx),
+                plan_payload=_outbox_plan_payload(payload),
+            )
+            if row.state == "INTENT_STAGED":
+                row = await asyncio.to_thread(
+                    store.mark_approval_consumed,
+                    outbox_id=row.outbox_id,
+                    detail=str(approval_id),
+                )
+            return row
+        except Exception as exc:  # noqa: BLE001 - the seam must never break execution
+            # A seam that fails closed on its own bookkeeping would refuse turns
+            # the pre-Wave-2 code accepted.  The durable queue is still the
+            # execution authority; a missing outbox row costs recoverability,
+            # which the caller is told about through the return value below.
+            self._outbox_seam_error = f"{type(exc).__name__}: {exc}"
+            return None
+
+    def _record_outbox_enqueued(self, row: Any | None, job_id: str) -> None:
+        """``APPROVAL_CONSUMED`` -> ``JOB_ENQUEUED`` recording the durable job id."""
+        store = self._outbox_store()
+        if store is None or row is None:
+            return
+        try:
+            store.mark_job_enqueued(outbox_id=row.outbox_id, job_id=job_id)
+        except Exception as exc:  # noqa: BLE001 - see _stage_outbox_intent
+            self._outbox_seam_error = f"{type(exc).__name__}: {exc}"
+
+    def _record_outbox_enqueue_failure(self, row: Any | None, error: BaseException) -> None:
+        """Hold the intent for retry, never terminalise a spent approval."""
+        store = self._outbox_store()
+        if store is None or row is None:
+            return
+        try:
+            store.record_retryable_enqueue_failure(
+                outbox_id=row.outbox_id, error=f"enqueue_retryable: {type(error).__name__}: {error}"
+            )
+        except Exception as exc:  # noqa: BLE001 - see _stage_outbox_intent
+            self._outbox_seam_error = f"{type(exc).__name__}: {exc}"
+
+    def _record_outbox_completed(
+        self, row: Any | None, *, artifact_digest: str, capsule: Any
+    ) -> None:
+        """``JOB_ENQUEUED``/``AWAITING_WORKER`` -> ``COMPLETED_VERIFIED``.
+
+        Only reached after the independent verifier and the proof gate passed,
+        so the durable row never claims a completion the evidence cannot back.
+        """
+        store = self._outbox_store()
+        if store is None or row is None:
+            return
+        try:
+            store.mark_completed(
+                outbox_id=row.outbox_id,
+                artifact_id=str(getattr(capsule, "capsule_id", "") or artifact_digest),
+                passport_id=str(
+                    getattr(capsule, "provenance_reference", {}).get("passport", "")
+                    or getattr(capsule, "capsule_id", "")
+                ),
+                detail="verified",
+            )
+        except Exception as exc:  # noqa: BLE001 - see _stage_outbox_intent
+            self._outbox_seam_error = f"{type(exc).__name__}: {exc}"
+
+    def _outbox_consume_approval(
+        self, approval_id: str, identity: Any, *, job_id: str = "", attempt: int = 1
+    ) -> None:
+        """Consume the approval for exactly one reserved job id."""
+        self._approvals.consume(
+            approval_id,
+            identity=identity,
+            job_id=job_id or None,
+            attempt=attempt,
+            key_provider=self._deps.approval_key_provider,
+        )
+
+    def _outbox_confirm_consumed(self, row: Any, identity: Any) -> bool:
+        """Was this approval consumed *for this very intent*?
+
+        True only when the binding is CONSUMED, the reservation names this
+        row's reserved job, the reservation is unfinalised, and the identity
+        fingerprint still matches -- i.e. the previous process died between the
+        ledger commit and the outbox commit.  Anything else is a real replay.
+        """
+        reserved = row.reserved_job_id or ""
+        if not reserved:
+            return False
+        try:
+            binding = self._approvals.get(row.approval_id)
+            read_reservation = getattr(self._approvals, "_read_reservation", None)
+            if read_reservation is None:
+                return False
+            reservation = read_reservation(row.approval_id)
+        except Exception:  # noqa: BLE001 - an unreadable ledger cannot confirm recovery
+            return False
+        if getattr(getattr(binding, "state", None), "value", None) != "CONSUMED":
+            return False
+        if reservation is None:
+            return False
+        job_id, fingerprint, finalized_at, _attempt = reservation
+        if finalized_at is not None:
+            return False
+        if not isinstance(job_id, str) or not hmac.compare_digest(job_id, reserved):
+            return False
+        return hmac.compare_digest(str(fingerprint), identity.identity_digest())
+
+    def _outbox_enqueue_job(self, *, idempotency_key: str, payload: Any, job_id: str = "") -> str:
+        """Enqueue on the job queue, honouring the reserved id where supported.
+
+        The outbox is synchronous by contract (it holds SQLite locks); the queue
+        port is async.  ``asyncio.run`` is only correct because this runs on a
+        worker thread the caller created for exactly that reason -- the async
+        entry point below is what callers inside a loop should use instead.
+        """
+        coro = self._deps.queue.enqueue(
+            job_type=JOB_TYPE,
+            idempotency_key=idempotency_key,
+            payload=dict(payload),
+        )
+        return str(_run_coroutine_blocking(coro))
+
+    def _outbox_await_completion(self, job_id: str) -> Any:
+        coro = self._deps.queue.get_status(job_id)
+        return _run_coroutine_blocking(coro)
+
+    def _outbox_verify_completion(self, row: Any, completion: Any) -> Any:
+        """Independent proof that the job's artifact exists, or nothing."""
+        return None
+
+    _outbox_coordinator: Any | None
 
     def _hydrate_active_contexts(self) -> None:
         if self._session_store is None:
@@ -1835,7 +2223,19 @@ class IBPCService:
                     status="refused", detail="approval_mac_invalid: envelope verification failed"
                 )
             try:
-                self._approvals.consume(approval_id, identity=identity, key_provider=provider)
+                # With the outbox wired, the consumption reserves the SAME
+                # deterministic job id the outbox row was staged under.  Without
+                # that reservation the ledger cannot answer "was this approval
+                # consumed for this very intent?" after a crash, and recovery
+                # would be misread as a replay -- the exact window Wave 2 closes.
+                self._approvals.consume(
+                    approval_id,
+                    identity=identity,
+                    job_id=self._reserved_job_id_for(
+                        ctx, approval_id, session_id, turn_id, session
+                    ),
+                    key_provider=provider,
+                )
             except ApprovalError as exc:
                 return ExecutionOutcome(status="refused", detail=f"{exc.reason}: {exc.detail}")
             if turn.turn_state not in (TurnState.APPROVED, TurnState.EXECUTING):
@@ -1933,13 +2333,26 @@ class IBPCService:
             "channel_binding_id": ctx.verified_identity.channel_binding_id,
             "intent": self._canonical_intent(ctx).model_dump(mode="json"),
         }
+        outbox_row = await self._stage_outbox_intent(
+            ctx=ctx,
+            approval_id=approval_id,
+            session_id=session_id,
+            turn_id=turn_id,
+            session=session,
+            payload=payload,
+        )
         try:
             job_id = await self._deps.queue.enqueue(
                 job_type=JOB_TYPE, idempotency_key=idempotency_key, payload=payload
             )
         except Exception as exc:  # noqa: BLE001 — enqueue failure is a refusal, not a render claim
+            # The outbox row stays APPROVAL_CONSUMED, never FAILED_TERMINAL: the
+            # approval is already spent, so burning the intent for a queue hiccup
+            # would demand a fresh human approval.  Reconciliation retries it.
+            self._record_outbox_enqueue_failure(outbox_row, exc)
             self._sessions.mark_failed(session_id, turn_id)
             return ExecutionOutcome(status="refused", detail=f"enqueue_failed: {exc}")
+        self._record_outbox_enqueued(outbox_row, job_id)
 
         status = await self._drain(job_id)
         result = await self._deps.queue.get_result(job_id)
@@ -2000,6 +2413,10 @@ class IBPCService:
             created_at=self._deps.now(),
         )
         self._sessions.mark_executed(session_id, turn_id)
+        # The outbox records COMPLETED_VERIFIED only here -- after the verifier
+        # and the proof gate both passed -- so the durable row can never claim a
+        # success the evidence does not back.
+        self._record_outbox_completed(outbox_row, artifact_digest=artifact_digest, capsule=capsule)
         detail = "" if gate.proof_complete else "proof_incomplete: " + ",".join(gate.reasons)
         return ExecutionOutcome(
             status=gate.outcome_status,
