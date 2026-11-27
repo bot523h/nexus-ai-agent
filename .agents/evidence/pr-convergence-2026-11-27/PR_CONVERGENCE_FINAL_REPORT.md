@@ -66,4 +66,4 @@ _(pending)_
 
 ## Closures
 
-_(pending)_
+`43` closure records in `CLOSURE_RESULT.json`.

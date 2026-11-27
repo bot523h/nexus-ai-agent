@@ -70,7 +70,9 @@ def comment(row: dict) -> str:
     )
     body = [head, f"\n**Why `{disposition}`**\n\n{row['rationale']}\n"]
     if row["evidence"]:
-        body.append("\n**Evidence**\n\n" + "\n".join(f"- `{item}`" for item in row["evidence"]) + "\n")
+        body.append(
+            "\n**Evidence**\n\n" + "\n".join(f"- `{item}`" for item in row["evidence"]) + "\n"
+        )
     if disposition == "SUPERSEDED_AND_CLOSED":
         body.append(
             "\nThe capability this PR introduced already exists on canonical `main`, so replaying the "
@@ -88,6 +90,7 @@ def comment(row: dict) -> str:
             f"\n**Preservation anchor**\n\n"
             f"- Branch `{row['head_ref']}` is kept and this PR is reopenable.\n"
             f"- Durable board task `{row['board_task']}` (queued) is the resume anchor.\n"
+            f"- Convergence PR: #369 (merges the disposition matrix and board anchors).\n"
             f"- Convergence evidence: `.agents/evidence/pr-convergence-2026-11-27/PR_CONVERGENCE_DISPOSITION_MATRIX.json`.\n"
             f"\n**Resume condition**\n\n{row['resume_condition']}\n"
         )
@@ -110,7 +113,7 @@ def main() -> int:
 
     for row in matrix:
         number = row["number"]
-        if row["disposition"] == "MERGED":
+        if row["disposition"] in ("MERGED", "MERGE_CANDIDATE"):
             continue
         if args.only and number not in args.only:
             continue
@@ -131,7 +134,9 @@ def main() -> int:
                 "closed_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             }
         )
-        RESULT.write_text(json.dumps(existing, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        RESULT.write_text(
+            json.dumps(existing, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+        )
         print(f"closed #{number} ({row['disposition']}) -> {posted.get('html_url')}")
     return 0
 

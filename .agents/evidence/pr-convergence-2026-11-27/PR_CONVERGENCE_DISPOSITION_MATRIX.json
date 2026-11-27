@@ -37,7 +37,12 @@
         "docs/README.md"
       ],
       "resume_condition": "Rebase onto main (>= 54073d1f), re-derive the delta against the canonical implementation, run make lint/types/test, reopen the PR or open a successor branch.",
-      "closure": null
+      "closure": {
+        "number": 33,
+        "disposition": "DEFERRED_TO_BOARD_AND_CLOSED",
+        "comment_url": "https://github.com/bot523h/nexus-ai-agent/pull/33#issuecomment-7217491549",
+        "closed_at": "2026-11-27T11:48:10Z"
+      }
     },
     {
       "number": 57,
@@ -74,7 +79,12 @@
         "src/nexus_ai_agent/domain/inbox.py"
       ],
       "resume_condition": "Rebase onto main (>= 54073d1f), re-derive the delta against the canonical implementation, run make lint/types/test, reopen the PR or open a successor branch.",
-      "closure": null
+      "closure": {
+        "number": 57,
+        "disposition": "DEFERRED_TO_BOARD_AND_CLOSED",
+        "comment_url": "https://github.com/bot523h/nexus-ai-agent/pull/57#issuecomment-7217492214",
+        "closed_at": "2026-11-27T11:48:13Z"
+      }
     },
     {
       "number": 58,
@@ -111,7 +121,12 @@
         "src/nexus_ai_agent/features/force_join.py"
       ],
       "resume_condition": "Rebase onto main (>= 54073d1f), re-derive the delta against the canonical implementation, run make lint/types/test, reopen the PR or open a successor branch.",
-      "closure": null
+      "closure": {
+        "number": 58,
+        "disposition": "DEFERRED_TO_BOARD_AND_CLOSED",
+        "comment_url": "https://github.com/bot523h/nexus-ai-agent/pull/58#issuecomment-7217492897",
+        "closed_at": "2026-11-27T11:48:15Z"
+      }
     },
     {
       "number": 60,
@@ -148,7 +163,12 @@
         "src/nexus_ai_agent/bot/app.py"
       ],
       "resume_condition": "Rebase onto main (>= 54073d1f), re-derive the delta against the canonical implementation, run make lint/types/test, reopen the PR or open a successor branch.",
-      "closure": null
+      "closure": {
+        "number": 60,
+        "disposition": "DEFERRED_TO_BOARD_AND_CLOSED",
+        "comment_url": "https://github.com/bot523h/nexus-ai-agent/pull/60#issuecomment-7217493599",
+        "closed_at": "2026-11-27T11:48:17Z"
+      }
     },
     {
       "number": 63,
@@ -185,7 +205,12 @@
         "docs/architecture/adr/README.md"
       ],
       "resume_condition": "Rebase onto main (>= 54073d1f), re-derive the delta against the canonical implementation, run make lint/types/test, reopen the PR or open a successor branch.",
-      "closure": null
+      "closure": {
+        "number": 63,
+        "disposition": "DEFERRED_TO_BOARD_AND_CLOSED",
+        "comment_url": "https://github.com/bot523h/nexus-ai-agent/pull/63#issuecomment-7217494255",
+        "closed_at": "2026-11-27T11:48:19Z"
+      }
     },
     {
       "number": 64,
@@ -222,7 +247,12 @@
         "src/nexus_ai_agent/creative/execution.py"
       ],
       "resume_condition": "Rebase onto main (>= 54073d1f), re-derive the delta against the canonical implementation, run make lint/types/test, reopen the PR or open a successor branch.",
-      "closure": null
+      "closure": {
+        "number": 64,
+        "disposition": "DEFERRED_TO_BOARD_AND_CLOSED",
+        "comment_url": "https://github.com/bot523h/nexus-ai-agent/pull/64#issuecomment-7217494995",
+        "closed_at": "2026-11-27T11:48:21Z"
+      }
     },
     {
       "number": 66,
@@ -259,7 +289,12 @@
         "src/nexus_ai_agent/api/app.py"
       ],
       "resume_condition": "Rebase onto main (>= 54073d1f), re-derive the delta against the canonical implementation, run make lint/types/test, reopen the PR or open a successor branch.",
-      "closure": null
+      "closure": {
+        "number": 66,
+        "disposition": "DEFERRED_TO_BOARD_AND_CLOSED",
+        "comment_url": "https://github.com/bot523h/nexus-ai-agent/pull/66#issuecomment-7217495673",
+        "closed_at": "2026-11-27T11:48:24Z"
+      }
     },
     {
       "number": 69,
@@ -296,7 +331,12 @@
         "docs/architecture/MODULE_MAP.md"
       ],
       "resume_condition": "Rebase onto main (>= 54073d1f), re-derive the delta against the canonical implementation, run make lint/types/test, reopen the PR or open a successor branch.",
-      "closure": null
+      "closure": {
+        "number": 69,
+        "disposition": "DEFERRED_TO_BOARD_AND_CLOSED",
+        "comment_url": "https://github.com/bot523h/nexus-ai-agent/pull/69#issuecomment-7217496368",
+        "closed_at": "2026-11-27T11:48:26Z"
+      }
     },
     {
       "number": 73,
@@ -333,7 +373,12 @@
         "docs/architecture/adr/0005-three-layer-operation-truth.md"
       ],
       "resume_condition": "Rebase onto main (>= 54073d1f), re-derive the delta against the canonical implementation, run make lint/types/test, reopen the PR or open a successor branch.",
-      "closure": null
+      "closure": {
+        "number": 73,
+        "disposition": "DEFERRED_TO_BOARD_AND_CLOSED",
+        "comment_url": "https://github.com/bot523h/nexus-ai-agent/pull/73#issuecomment-7217497216",
+        "closed_at": "2026-11-27T11:48:28Z"
+      }
     },
     {
       "number": 84,
@@ -370,7 +415,12 @@
         "Makefile"
       ],
       "resume_condition": "Rebase onto main (>= 54073d1f), re-derive the delta against the canonical implementation, run make lint/types/test, reopen the PR or open a successor branch.",
-      "closure": null
+      "closure": {
+        "number": 84,
+        "disposition": "DEFERRED_TO_BOARD_AND_CLOSED",
+        "comment_url": "https://github.com/bot523h/nexus-ai-agent/pull/84#issuecomment-7217497967",
+        "closed_at": "2026-11-27T11:48:31Z"
+      }
     },
     {
       "number": 89,
@@ -406,7 +456,12 @@
         "tests/unit/test_moderation_flood_and_thread.py"
       ],
       "resume_condition": "Rebase onto main (>= 54073d1f), re-derive the delta against the canonical implementation, run make lint/types/test, reopen the PR or open a successor branch.",
-      "closure": null
+      "closure": {
+        "number": 89,
+        "disposition": "DEFERRED_TO_BOARD_AND_CLOSED",
+        "comment_url": "https://github.com/bot523h/nexus-ai-agent/pull/89#issuecomment-7217498596",
+        "closed_at": "2026-11-27T11:48:33Z"
+      }
     },
     {
       "number": 92,
@@ -439,7 +494,12 @@
         "tests/unit/test_container_context.py"
       ],
       "resume_condition": "Rebase onto main (>= 54073d1f), re-derive the delta against the canonical implementation, run make lint/types/test, reopen the PR or open a successor branch.",
-      "closure": null
+      "closure": {
+        "number": 92,
+        "disposition": "DEFERRED_TO_BOARD_AND_CLOSED",
+        "comment_url": "https://github.com/bot523h/nexus-ai-agent/pull/92#issuecomment-7217499259",
+        "closed_at": "2026-11-27T11:48:35Z"
+      }
     },
     {
       "number": 97,
@@ -476,7 +536,12 @@
         "src/nexus_ai_agent/creative/packs/scene/models.py"
       ],
       "resume_condition": "Rebase onto main (>= 54073d1f), re-derive the delta against the canonical implementation, run make lint/types/test, reopen the PR or open a successor branch.",
-      "closure": null
+      "closure": {
+        "number": 97,
+        "disposition": "DEFERRED_TO_BOARD_AND_CLOSED",
+        "comment_url": "https://github.com/bot523h/nexus-ai-agent/pull/97#issuecomment-7217499941",
+        "closed_at": "2026-11-27T11:48:37Z"
+      }
     },
     {
       "number": 99,
@@ -513,7 +578,12 @@
         "src/nexus_ai_agent/api/dashboard.py"
       ],
       "resume_condition": "Rebase onto main (>= 54073d1f), re-derive the delta against the canonical implementation, run make lint/types/test, reopen the PR or open a successor branch.",
-      "closure": null
+      "closure": {
+        "number": 99,
+        "disposition": "DEFERRED_TO_BOARD_AND_CLOSED",
+        "comment_url": "https://github.com/bot523h/nexus-ai-agent/pull/99#issuecomment-7217500559",
+        "closed_at": "2026-11-27T11:48:39Z"
+      }
     },
     {
       "number": 113,
@@ -550,7 +620,12 @@
         "src/nexus_ai_agent/llm/gemini_provider.py"
       ],
       "resume_condition": "Rebase onto main (>= 54073d1f), re-derive the delta against the canonical implementation, run make lint/types/test, reopen the PR or open a successor branch.",
-      "closure": null
+      "closure": {
+        "number": 113,
+        "disposition": "DEFERRED_TO_BOARD_AND_CLOSED",
+        "comment_url": "https://github.com/bot523h/nexus-ai-agent/pull/113#issuecomment-7217501195",
+        "closed_at": "2026-11-27T11:48:41Z"
+      }
     },
     {
       "number": 114,
@@ -587,7 +662,12 @@
         "src/nexus_ai_agent/cockpit/static/cockpit.css"
       ],
       "resume_condition": "Rebase onto main (>= 54073d1f), re-derive the delta against the canonical implementation, run make lint/types/test, reopen the PR or open a successor branch.",
-      "closure": null
+      "closure": {
+        "number": 114,
+        "disposition": "DEFERRED_TO_BOARD_AND_CLOSED",
+        "comment_url": "https://github.com/bot523h/nexus-ai-agent/pull/114#issuecomment-7217501964",
+        "closed_at": "2026-11-27T11:48:44Z"
+      }
     },
     {
       "number": 115,
@@ -624,7 +704,12 @@
         "src/nexus_ai_agent/features/anonymous_chat.py"
       ],
       "resume_condition": "Rebase onto main (>= 54073d1f), re-derive the delta against the canonical implementation, run make lint/types/test, reopen the PR or open a successor branch.",
-      "closure": null
+      "closure": {
+        "number": 115,
+        "disposition": "DEFERRED_TO_BOARD_AND_CLOSED",
+        "comment_url": "https://github.com/bot523h/nexus-ai-agent/pull/115#issuecomment-7217502916",
+        "closed_at": "2026-11-27T11:48:46Z"
+      }
     },
     {
       "number": 117,
@@ -661,7 +746,12 @@
         "docs/architecture/DATA_AND_STORAGE.md"
       ],
       "resume_condition": "Rebase onto main (>= 54073d1f), re-derive the delta against the canonical implementation, run make lint/types/test, reopen the PR or open a successor branch.",
-      "closure": null
+      "closure": {
+        "number": 117,
+        "disposition": "DEFERRED_TO_BOARD_AND_CLOSED",
+        "comment_url": "https://github.com/bot523h/nexus-ai-agent/pull/117#issuecomment-7217503701",
+        "closed_at": "2026-11-27T11:48:49Z"
+      }
     },
     {
       "number": 118,
@@ -698,7 +788,12 @@
         "docs/architecture/MODULE_MAP.md"
       ],
       "resume_condition": "Rebase onto main (>= 54073d1f), re-derive the delta against the canonical implementation, run make lint/types/test, reopen the PR or open a successor branch.",
-      "closure": null
+      "closure": {
+        "number": 118,
+        "disposition": "DEFERRED_TO_BOARD_AND_CLOSED",
+        "comment_url": "https://github.com/bot523h/nexus-ai-agent/pull/118#issuecomment-7217504406",
+        "closed_at": "2026-11-27T11:48:51Z"
+      }
     },
     {
       "number": 121,
@@ -735,7 +830,12 @@
         "src/nexus_ai_agent/agents/phi_agent.py"
       ],
       "resume_condition": "Rebase onto main (>= 54073d1f), re-derive the delta against the canonical implementation, run make lint/types/test, reopen the PR or open a successor branch.",
-      "closure": null
+      "closure": {
+        "number": 121,
+        "disposition": "DEFERRED_TO_BOARD_AND_CLOSED",
+        "comment_url": "https://github.com/bot523h/nexus-ai-agent/pull/121#issuecomment-7217505344",
+        "closed_at": "2026-11-27T11:48:55Z"
+      }
     },
     {
       "number": 122,
@@ -772,7 +872,12 @@
         "tests/unit/test_agent_board.py"
       ],
       "resume_condition": "Rebase onto main (>= 54073d1f), re-derive the delta against the canonical implementation, run make lint/types/test, reopen the PR or open a successor branch.",
-      "closure": null
+      "closure": {
+        "number": 122,
+        "disposition": "DEFERRED_TO_BOARD_AND_CLOSED",
+        "comment_url": "https://github.com/bot523h/nexus-ai-agent/pull/122#issuecomment-7217506358",
+        "closed_at": "2026-11-27T11:48:58Z"
+      }
     },
     {
       "number": 129,
@@ -807,7 +912,12 @@
         "tests/unit/test_plan_transaction.py"
       ],
       "resume_condition": "Rebase onto main (>= 54073d1f), re-derive the delta against the canonical implementation, run make lint/types/test, reopen the PR or open a successor branch.",
-      "closure": null
+      "closure": {
+        "number": 129,
+        "disposition": "DEFERRED_TO_BOARD_AND_CLOSED",
+        "comment_url": "https://github.com/bot523h/nexus-ai-agent/pull/129#issuecomment-7217507311",
+        "closed_at": "2026-11-27T11:49:00Z"
+      }
     },
     {
       "number": 135,
@@ -834,10 +944,17 @@
       "board_task": null,
       "rationale": "main defines PlanTransaction in creative/studio/{bus,plan_execution,runtime}.py; symbol coverage 77/82 (94%) and 11 unresolved threads predate the merged substrate.",
       "evidence": [
-        "Studio PlanTransaction substrate"
+        "src/nexus_ai_agent/creative/studio/plan_execution.py",
+        "src/nexus_ai_agent/creative/studio/bus.py",
+        "src/nexus_ai_agent/creative/studio/runtime.py"
       ],
       "resume_condition": "",
-      "closure": null
+      "closure": {
+        "number": 135,
+        "disposition": "SUPERSEDED_AND_CLOSED",
+        "comment_url": "https://github.com/bot523h/nexus-ai-agent/pull/135#issuecomment-7217507970",
+        "closed_at": "2026-11-27T11:49:02Z"
+      }
     },
     {
       "number": 137,
@@ -874,7 +991,12 @@
         "tests/unit/test_agent_board_collision.py"
       ],
       "resume_condition": "Rebase onto main (>= 54073d1f), re-derive the delta against the canonical implementation, run make lint/types/test, reopen the PR or open a successor branch.",
-      "closure": null
+      "closure": {
+        "number": 137,
+        "disposition": "DEFERRED_TO_BOARD_AND_CLOSED",
+        "comment_url": "https://github.com/bot523h/nexus-ai-agent/pull/137#issuecomment-7217508575",
+        "closed_at": "2026-11-27T11:49:04Z"
+      }
     },
     {
       "number": 140,
@@ -901,10 +1023,16 @@
       "board_task": null,
       "rationale": "same canonical substrate on main; symbol coverage 77/82 (94%); 7 unresolved threads.",
       "evidence": [
-        "Studio CommandBus hardening"
+        "src/nexus_ai_agent/creative/studio/bus.py",
+        "src/nexus_ai_agent/creative/studio/plan_execution.py"
       ],
       "resume_condition": "",
-      "closure": null
+      "closure": {
+        "number": 140,
+        "disposition": "SUPERSEDED_AND_CLOSED",
+        "comment_url": "https://github.com/bot523h/nexus-ai-agent/pull/140#issuecomment-7217509295",
+        "closed_at": "2026-11-27T11:49:07Z"
+      }
     },
     {
       "number": 149,
@@ -941,7 +1069,12 @@
         "docs/architecture/SECURITY.md"
       ],
       "resume_condition": "Rebase onto main (>= 54073d1f), re-derive the delta against the canonical implementation, run make lint/types/test, reopen the PR or open a successor branch.",
-      "closure": null
+      "closure": {
+        "number": 149,
+        "disposition": "DEFERRED_TO_BOARD_AND_CLOSED",
+        "comment_url": "https://github.com/bot523h/nexus-ai-agent/pull/149#issuecomment-7217510040",
+        "closed_at": "2026-11-27T11:49:09Z"
+      }
     },
     {
       "number": 150,
@@ -978,7 +1111,12 @@
         "src/nexus_ai_agent/creative/intelligence/identity.py"
       ],
       "resume_condition": "Rebase onto main (>= 54073d1f), re-derive the delta against the canonical implementation, run make lint/types/test, reopen the PR or open a successor branch.",
-      "closure": null
+      "closure": {
+        "number": 150,
+        "disposition": "DEFERRED_TO_BOARD_AND_CLOSED",
+        "comment_url": "https://github.com/bot523h/nexus-ai-agent/pull/150#issuecomment-7217510883",
+        "closed_at": "2026-11-27T11:49:12Z"
+      }
     },
     {
       "number": 157,
@@ -1015,7 +1153,12 @@
         "docs/MULTI_AGENT_PROTOCOL.md"
       ],
       "resume_condition": "Rebase onto main (>= 54073d1f), re-derive the delta against the canonical implementation, run make lint/types/test, reopen the PR or open a successor branch.",
-      "closure": null
+      "closure": {
+        "number": 157,
+        "disposition": "DEFERRED_TO_BOARD_AND_CLOSED",
+        "comment_url": "https://github.com/bot523h/nexus-ai-agent/pull/157#issuecomment-7217511772",
+        "closed_at": "2026-11-27T11:49:14Z"
+      }
     },
     {
       "number": 193,
@@ -1052,7 +1195,12 @@
         "docs/ops/LINUX_PYTHON_FOUNDATION.md"
       ],
       "resume_condition": "Rebase onto main (>= 54073d1f), re-derive the delta against the canonical implementation, run make lint/types/test, reopen the PR or open a successor branch.",
-      "closure": null
+      "closure": {
+        "number": 193,
+        "disposition": "DEFERRED_TO_BOARD_AND_CLOSED",
+        "comment_url": "https://github.com/bot523h/nexus-ai-agent/pull/193#issuecomment-7217512452",
+        "closed_at": "2026-11-27T11:49:16Z"
+      }
     },
     {
       "number": 204,
@@ -1085,7 +1233,12 @@
         "tests/unit/test_spine_mutations.py"
       ],
       "resume_condition": "Rebase onto main (>= 54073d1f), re-derive the delta against the canonical implementation, run make lint/types/test, reopen the PR or open a successor branch.",
-      "closure": null
+      "closure": {
+        "number": 204,
+        "disposition": "DEFERRED_TO_BOARD_AND_CLOSED",
+        "comment_url": "https://github.com/bot523h/nexus-ai-agent/pull/204#issuecomment-7217513084",
+        "closed_at": "2026-11-27T11:49:18Z"
+      }
     },
     {
       "number": 205,
@@ -1112,10 +1265,18 @@
       "board_task": null,
       "rationale": "main ships the canonical library at creative/assets/{service,blob_store,ingestion,admission,mime}.py plus migration e575469d90b9 and six integration suites; 164/214 added symbols already exist.",
       "evidence": [
-        "Asset Library V1"
+        "src/nexus_ai_agent/creative/assets/service.py",
+        "src/nexus_ai_agent/creative/assets/blob_store.py",
+        "src/nexus_ai_agent/creative/assets/ingestion.py",
+        "migrations/versions/e575469d90b9_nagar_asset_library_v1.py"
       ],
       "resume_condition": "",
-      "closure": null
+      "closure": {
+        "number": 205,
+        "disposition": "SUPERSEDED_AND_CLOSED",
+        "comment_url": "https://github.com/bot523h/nexus-ai-agent/pull/205#issuecomment-7217513860",
+        "closed_at": "2026-11-27T11:49:20Z"
+      }
     },
     {
       "number": 230,
@@ -1152,7 +1313,12 @@
         "docs/wave3d-closure-v4/docs/SOURCE_TRUTH_MATRIX.md"
       ],
       "resume_condition": "Rebase onto main (>= 54073d1f), re-derive the delta against the canonical implementation, run make lint/types/test, reopen the PR or open a successor branch.",
-      "closure": null
+      "closure": {
+        "number": 230,
+        "disposition": "DEFERRED_TO_BOARD_AND_CLOSED",
+        "comment_url": "https://github.com/bot523h/nexus-ai-agent/pull/230#issuecomment-7217514434",
+        "closed_at": "2026-11-27T11:49:22Z"
+      }
     },
     {
       "number": 257,
@@ -1185,7 +1351,12 @@
         "tests/unit/test_handlers.py"
       ],
       "resume_condition": "Rebase onto main (>= 54073d1f), re-derive the delta against the canonical implementation, run make lint/types/test, reopen the PR or open a successor branch.",
-      "closure": null
+      "closure": {
+        "number": 257,
+        "disposition": "DEFERRED_TO_BOARD_AND_CLOSED",
+        "comment_url": "https://github.com/bot523h/nexus-ai-agent/pull/257#issuecomment-7217515060",
+        "closed_at": "2026-11-27T11:49:24Z"
+      }
     },
     {
       "number": 273,
@@ -1222,7 +1393,12 @@
         "docs/engineering/NAGAR_P0_RUNTIME.md"
       ],
       "resume_condition": "Rebase onto main (>= 54073d1f), re-derive the delta against the canonical implementation, run make lint/types/test, reopen the PR or open a successor branch.",
-      "closure": null
+      "closure": {
+        "number": 273,
+        "disposition": "DEFERRED_TO_BOARD_AND_CLOSED",
+        "comment_url": "https://github.com/bot523h/nexus-ai-agent/pull/273#issuecomment-7217515748",
+        "closed_at": "2026-11-27T11:49:26Z"
+      }
     },
     {
       "number": 284,
@@ -1259,7 +1435,12 @@
         "tests/architecture/test_nagar_director_boundary.py"
       ],
       "resume_condition": "Rebase onto main (>= 54073d1f), re-derive the delta against the canonical implementation, run make lint/types/test, reopen the PR or open a successor branch.",
-      "closure": null
+      "closure": {
+        "number": 284,
+        "disposition": "DEFERRED_TO_BOARD_AND_CLOSED",
+        "comment_url": "https://github.com/bot523h/nexus-ai-agent/pull/284#issuecomment-7217516354",
+        "closed_at": "2026-11-27T11:49:28Z"
+      }
     },
     {
       "number": 285,
@@ -1286,10 +1467,15 @@
       "board_task": null,
       "rationale": "board snapshot is 751 commits stale; the added record is preserved as extracted/board-285.diff.",
       "evidence": [
-        "board sync for task-278"
+        ".agents/evidence/pr-convergence-2026-11-27/extracted/board-285.diff"
       ],
       "resume_condition": "",
-      "closure": null
+      "closure": {
+        "number": 285,
+        "disposition": "EXTRACTED_AND_CLOSED",
+        "comment_url": "https://github.com/bot523h/nexus-ai-agent/pull/285#issuecomment-7217517074",
+        "closed_at": "2026-11-27T11:49:30Z"
+      }
     },
     {
       "number": 295,
@@ -1316,10 +1502,17 @@
       "board_task": null,
       "rationale": "would add execution/asset_library.py as a *second* storage authority next to the canonical creative/assets/ service (forbidden by the constitution); capability already on main.",
       "evidence": [
-        "content-addressed asset library extraction"
+        "src/nexus_ai_agent/creative/assets/service.py",
+        "src/nexus_ai_agent/creative/assets/blob_store.py",
+        "src/nexus_ai_agent/execution/__init__.py"
       ],
       "resume_condition": "",
-      "closure": null
+      "closure": {
+        "number": 295,
+        "disposition": "SUPERSEDED_AND_CLOSED",
+        "comment_url": "https://github.com/bot523h/nexus-ai-agent/pull/295#issuecomment-7217517774",
+        "closed_at": "2026-11-27T11:49:33Z"
+      }
     },
     {
       "number": 297,
@@ -1346,10 +1539,18 @@
       "board_task": null,
       "rationale": "the four M16 evidence files do not exist on main and were cherry-picked onto the convergence branch.",
       "evidence": [
-        "M16 convergence evidence"
+        ".agents/evidence/M16_CONVERGENCE_PLAN_2026-10-31.md",
+        ".agents/evidence/M16_TRUE_CLOSEOUT_2026-10-31.md",
+        ".agents/evidence/PR_CONVERGENCE_2026-10-31.md",
+        ".agents/evidence/PR_REGISTRY_2026-10-31.json"
       ],
       "resume_condition": "",
-      "closure": null
+      "closure": {
+        "number": 297,
+        "disposition": "EXTRACTED_AND_CLOSED",
+        "comment_url": "https://github.com/bot523h/nexus-ai-agent/pull/297#issuecomment-7217518532",
+        "closed_at": "2026-11-27T11:49:35Z"
+      }
     },
     {
       "number": 301,
@@ -1376,10 +1577,16 @@
       "board_task": null,
       "rationale": "the watchdog automation is on main (.agents/automation/debt_watchdog_prompt.md and the 2026-10-30/31 reports); this PR only adds dated 2026-11-01..12 snapshots.",
       "evidence": [
-        "engineering-debt watchdog reports"
+        ".agents/automation/debt_watchdog_prompt.md",
+        ".agents/evidence/AGENT_DEBT_WATCHDOG_2026-10-31.md"
       ],
       "resume_condition": "",
-      "closure": null
+      "closure": {
+        "number": 301,
+        "disposition": "SUPERSEDED_AND_CLOSED",
+        "comment_url": "https://github.com/bot523h/nexus-ai-agent/pull/301#issuecomment-7217519239",
+        "closed_at": "2026-11-27T11:49:37Z"
+      }
     },
     {
       "number": 313,
@@ -1406,10 +1613,15 @@
       "board_task": null,
       "rationale": "registration absent from main; preserved verbatim as extracted/board-313.diff.",
       "evidence": [
-        "board registration task-nagar-preservation-media-profiles-01"
+        ".agents/evidence/pr-convergence-2026-11-27/extracted/board-313.diff"
       ],
       "resume_condition": "",
-      "closure": null
+      "closure": {
+        "number": 313,
+        "disposition": "EXTRACTED_AND_CLOSED",
+        "comment_url": "https://github.com/bot523h/nexus-ai-agent/pull/313#issuecomment-7217519883",
+        "closed_at": "2026-11-27T11:49:39Z"
+      }
     },
     {
       "number": 327,
@@ -1446,7 +1658,12 @@
         "OPERATION_CONTRACT_MATRIX.md"
       ],
       "resume_condition": "Rebase onto main (>= 54073d1f), re-derive the delta against the canonical implementation, run make lint/types/test, reopen the PR or open a successor branch.",
-      "closure": null
+      "closure": {
+        "number": 327,
+        "disposition": "DEFERRED_TO_BOARD_AND_CLOSED",
+        "comment_url": "https://github.com/bot523h/nexus-ai-agent/pull/327#issuecomment-7217520541",
+        "closed_at": "2026-11-27T11:49:41Z"
+      }
     },
     {
       "number": 328,
@@ -1483,7 +1700,12 @@
         "src/nexus_ai_agent/web/README.md"
       ],
       "resume_condition": "Rebase onto main (>= 54073d1f), re-derive the delta against the canonical implementation, run make lint/types/test, reopen the PR or open a successor branch.",
-      "closure": null
+      "closure": {
+        "number": 328,
+        "disposition": "DEFERRED_TO_BOARD_AND_CLOSED",
+        "comment_url": "https://github.com/bot523h/nexus-ai-agent/pull/328#issuecomment-7217521157",
+        "closed_at": "2026-11-27T11:49:43Z"
+      }
     },
     {
       "number": 329,
@@ -1510,10 +1732,15 @@
       "board_task": null,
       "rationale": "registration absent from main; preserved verbatim as extracted/board-329.diff.",
       "evidence": [
-        "board registration NAGAR-IBPC-TRIAD-CLOSURE-01"
+        ".agents/evidence/pr-convergence-2026-11-27/extracted/board-329.diff"
       ],
       "resume_condition": "",
-      "closure": null
+      "closure": {
+        "number": 329,
+        "disposition": "EXTRACTED_AND_CLOSED",
+        "comment_url": "https://github.com/bot523h/nexus-ai-agent/pull/329#issuecomment-7217521677",
+        "closed_at": "2026-11-27T11:49:45Z"
+      }
     },
     {
       "number": 367,

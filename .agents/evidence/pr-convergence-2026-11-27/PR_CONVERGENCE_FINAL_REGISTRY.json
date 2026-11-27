@@ -11,7 +11,7 @@
       "head_ref": "arena/01a0c3aa-nexus-ai-agent",
       "disposition": "DEFERRED_TO_BOARD_AND_CLOSED",
       "board_task": "pr-backlog-security-2026-11-27",
-      "closed": false
+      "closed": true
     },
     {
       "number": 57,
@@ -20,7 +20,7 @@
       "head_ref": "arena/01a0cf30-nexus-ai-agent",
       "disposition": "DEFERRED_TO_BOARD_AND_CLOSED",
       "board_task": "pr-backlog-runtime-2026-11-27",
-      "closed": false
+      "closed": true
     },
     {
       "number": 58,
@@ -29,7 +29,7 @@
       "head_ref": "arena/01a0cf4c-nexus-ai-agent",
       "disposition": "DEFERRED_TO_BOARD_AND_CLOSED",
       "board_task": "pr-backlog-security-2026-11-27",
-      "closed": false
+      "closed": true
     },
     {
       "number": 60,
@@ -38,7 +38,7 @@
       "head_ref": "arena/01a0cf50-nexus-ai-agent",
       "disposition": "DEFERRED_TO_BOARD_AND_CLOSED",
       "board_task": "pr-backlog-runtime-2026-11-27",
-      "closed": false
+      "closed": true
     },
     {
       "number": 63,
@@ -47,7 +47,7 @@
       "head_ref": "arena/01a0cf98-nexus-ai-agent",
       "disposition": "DEFERRED_TO_BOARD_AND_CLOSED",
       "board_task": "pr-backlog-runtime-2026-11-27",
-      "closed": false
+      "closed": true
     },
     {
       "number": 64,
@@ -56,7 +56,7 @@
       "head_ref": "arena/01a0d2a2-nexus-ai-agent",
       "disposition": "DEFERRED_TO_BOARD_AND_CLOSED",
       "board_task": "pr-backlog-creative-2026-11-27",
-      "closed": false
+      "closed": true
     },
     {
       "number": 66,
@@ -65,7 +65,7 @@
       "head_ref": "arena/01a0d2d6-nexus-ai-agent",
       "disposition": "DEFERRED_TO_BOARD_AND_CLOSED",
       "board_task": "pr-backlog-creative-2026-11-27",
-      "closed": false
+      "closed": true
     },
     {
       "number": 69,
@@ -74,7 +74,7 @@
       "head_ref": "arena/01a0d3af-nexus-ai-agent",
       "disposition": "DEFERRED_TO_BOARD_AND_CLOSED",
       "board_task": "pr-backlog-creative-2026-11-27",
-      "closed": false
+      "closed": true
     },
     {
       "number": 73,
@@ -83,7 +83,7 @@
       "head_ref": "arena/01a0d467-nexus-ai-agent",
       "disposition": "DEFERRED_TO_BOARD_AND_CLOSED",
       "board_task": "pr-backlog-creative-2026-11-27",
-      "closed": false
+      "closed": true
     },
     {
       "number": 84,
@@ -92,7 +92,7 @@
       "head_ref": "arena/01a0da15-nexus-ai-agent",
       "disposition": "DEFERRED_TO_BOARD_AND_CLOSED",
       "board_task": "pr-backlog-governance-2026-11-27",
-      "closed": false
+      "closed": true
     },
     {
       "number": 89,
@@ -101,7 +101,7 @@
       "head_ref": "arena/01a0da85-nexus-ai-agent",
       "disposition": "DEFERRED_TO_BOARD_AND_CLOSED",
       "board_task": "pr-backlog-security-2026-11-27",
-      "closed": false
+      "closed": true
     },
     {
       "number": 92,
@@ -110,7 +110,7 @@
       "head_ref": "arena/01a0da13-nexus-ai-agent",
       "disposition": "DEFERRED_TO_BOARD_AND_CLOSED",
       "board_task": "pr-backlog-runtime-2026-11-27",
-      "closed": false
+      "closed": true
     },
     {
       "number": 97,
@@ -119,7 +119,7 @@
       "head_ref": "arena/01a0df86-nexus-ai-agent",
       "disposition": "DEFERRED_TO_BOARD_AND_CLOSED",
       "board_task": "pr-backlog-creative-2026-11-27",
-      "closed": false
+      "closed": true
     },
     {
       "number": 99,
@@ -128,7 +128,7 @@
       "head_ref": "arena/01a0df78-nexus-ai-agent",
       "disposition": "DEFERRED_TO_BOARD_AND_CLOSED",
       "board_task": "pr-backlog-security-2026-11-27",
-      "closed": false
+      "closed": true
     },
     {
       "number": 113,
@@ -137,7 +137,7 @@
       "head_ref": "arena/01a0e442-nexus-ai-agent",
       "disposition": "DEFERRED_TO_BOARD_AND_CLOSED",
       "board_task": "pr-backlog-runtime-2026-11-27",
-      "closed": false
+      "closed": true
     },
     {
       "number": 114,
@@ -146,7 +146,7 @@
       "head_ref": "arena/01a0e48b-nexus-ai-agent",
       "disposition": "DEFERRED_TO_BOARD_AND_CLOSED",
       "board_task": "pr-backlog-security-2026-11-27",
-      "closed": false
+      "closed": true
     },
     {
       "number": 115,
@@ -155,7 +155,7 @@
       "head_ref": "arena/01a0e4f5-nexus-ai-agent",
       "disposition": "DEFERRED_TO_BOARD_AND_CLOSED",
       "board_task": "pr-backlog-security-2026-11-27",
-      "closed": false
+      "closed": true
     },
     {
       "number": 117,
@@ -164,7 +164,7 @@
       "head_ref": "arena/01a0e742-nexus-ai-agent",
       "disposition": "DEFERRED_TO_BOARD_AND_CLOSED",
       "board_task": "pr-backlog-runtime-2026-11-27",
-      "closed": false
+      "closed": true
     },
     {
       "number": 118,
@@ -173,7 +173,7 @@
       "head_ref": "arena/01a0e846-nexus-ai-agent",
       "disposition": "DEFERRED_TO_BOARD_AND_CLOSED",
       "board_task": "pr-backlog-runtime-2026-11-27",
-      "closed": false
+      "closed": true
     },
     {
       "number": 121,
@@ -182,7 +182,7 @@
       "head_ref": "arena/01a0e9a1-nexus-ai-agent",
       "disposition": "DEFERRED_TO_BOARD_AND_CLOSED",
       "board_task": "pr-backlog-runtime-2026-11-27",
-      "closed": false
+      "closed": true
     },
     {
       "number": 122,
@@ -191,7 +191,7 @@
       "head_ref": "arena/01a0eade-nexus-ai-agent",
       "disposition": "DEFERRED_TO_BOARD_AND_CLOSED",
       "board_task": "pr-backlog-runtime-2026-11-27",
-      "closed": false
+      "closed": true
     },
     {
       "number": 129,
@@ -200,7 +200,7 @@
       "head_ref": "jules-16705230035848180943-c7860de1",
       "disposition": "DEFERRED_TO_BOARD_AND_CLOSED",
       "board_task": "pr-backlog-studio-2026-11-27",
-      "closed": false
+      "closed": true
     },
     {
       "number": 135,
@@ -209,7 +209,7 @@
       "head_ref": "task221-canonical-substrate-5549960537942764936",
       "disposition": "SUPERSEDED_AND_CLOSED",
       "board_task": null,
-      "closed": false
+      "closed": true
     },
     {
       "number": 137,
@@ -218,7 +218,7 @@
       "head_ref": "arena/01a0181931-collision-governance",
       "disposition": "DEFERRED_TO_BOARD_AND_CLOSED",
       "board_task": "pr-backlog-governance-2026-11-27",
-      "closed": false
+      "closed": true
     },
     {
       "number": 140,
@@ -227,7 +227,7 @@
       "head_ref": "jules-9224540932221163016-e2a6525b",
       "disposition": "SUPERSEDED_AND_CLOSED",
       "board_task": null,
-      "closed": false
+      "closed": true
     },
     {
       "number": 149,
@@ -236,7 +236,7 @@
       "head_ref": "jules-17280586122182824375-a980d7f3",
       "disposition": "DEFERRED_TO_BOARD_AND_CLOSED",
       "board_task": "pr-backlog-security-2026-11-27",
-      "closed": false
+      "closed": true
     },
     {
       "number": 150,
@@ -245,7 +245,7 @@
       "head_ref": "arena/01a10528-nexus-ai-agent",
       "disposition": "DEFERRED_TO_BOARD_AND_CLOSED",
       "board_task": "pr-backlog-studio-2026-11-27",
-      "closed": false
+      "closed": true
     },
     {
       "number": 157,
@@ -254,7 +254,7 @@
       "head_ref": "arena/01a10ba1-nexus-ai-agent",
       "disposition": "DEFERRED_TO_BOARD_AND_CLOSED",
       "board_task": "pr-backlog-governance-2026-11-27",
-      "closed": false
+      "closed": true
     },
     {
       "number": 193,
@@ -263,7 +263,7 @@
       "head_ref": "arena/linux-python-foundation-20261008",
       "disposition": "DEFERRED_TO_BOARD_AND_CLOSED",
       "board_task": "pr-backlog-runtime-2026-11-27",
-      "closed": false
+      "closed": true
     },
     {
       "number": 204,
@@ -272,7 +272,7 @@
       "head_ref": "jules-9365954277398354280-a037ccfb",
       "disposition": "DEFERRED_TO_BOARD_AND_CLOSED",
       "board_task": "pr-backlog-runtime-2026-11-27",
-      "closed": false
+      "closed": true
     },
     {
       "number": 205,
@@ -281,7 +281,7 @@
       "head_ref": "arena/nagar-asset-library-v1",
       "disposition": "SUPERSEDED_AND_CLOSED",
       "board_task": null,
-      "closed": false
+      "closed": true
     },
     {
       "number": 230,
@@ -290,7 +290,7 @@
       "head_ref": "arena/aa451c49-nexus-ai-agent",
       "disposition": "DEFERRED_TO_BOARD_AND_CLOSED",
       "board_task": "pr-backlog-studio-2026-11-27",
-      "closed": false
+      "closed": true
     },
     {
       "number": 257,
@@ -299,7 +299,7 @@
       "head_ref": "palette-ux-language-agent-callbacks-3810091352756636228",
       "disposition": "DEFERRED_TO_BOARD_AND_CLOSED",
       "board_task": "pr-backlog-security-2026-11-27",
-      "closed": false
+      "closed": true
     },
     {
       "number": 273,
@@ -308,7 +308,7 @@
       "head_ref": "feat/nagar-p0-nel-semantic-time-causal-memory",
       "disposition": "DEFERRED_TO_BOARD_AND_CLOSED",
       "board_task": "pr-backlog-causal-memory-2026-11-27",
-      "closed": false
+      "closed": true
     },
     {
       "number": 284,
@@ -317,7 +317,7 @@
       "head_ref": "arena/nagar-causal-memory-director-impl-20261029-2208",
       "disposition": "DEFERRED_TO_BOARD_AND_CLOSED",
       "board_task": "pr-backlog-causal-memory-2026-11-27",
-      "closed": false
+      "closed": true
     },
     {
       "number": 285,
@@ -326,7 +326,7 @@
       "head_ref": "arena/nagar-causal-memory-director-board-sync-20261030-0042",
       "disposition": "EXTRACTED_AND_CLOSED",
       "board_task": null,
-      "closed": false
+      "closed": true
     },
     {
       "number": 295,
@@ -335,7 +335,7 @@
       "head_ref": "arena/m16-pr218-extract",
       "disposition": "SUPERSEDED_AND_CLOSED",
       "board_task": null,
-      "closed": false
+      "closed": true
     },
     {
       "number": 297,
@@ -344,7 +344,7 @@
       "head_ref": "arena/m16-closeout-evidence",
       "disposition": "EXTRACTED_AND_CLOSED",
       "board_task": null,
-      "closed": false
+      "closed": true
     },
     {
       "number": 301,
@@ -353,7 +353,7 @@
       "head_ref": "automation/debt-watchdog",
       "disposition": "SUPERSEDED_AND_CLOSED",
       "board_task": null,
-      "closed": false
+      "closed": true
     },
     {
       "number": 313,
@@ -362,7 +362,7 @@
       "head_ref": "arena/20261104-agent-b-register-media-preservation",
       "disposition": "EXTRACTED_AND_CLOSED",
       "board_task": null,
-      "closed": false
+      "closed": true
     },
     {
       "number": 327,
@@ -371,7 +371,7 @@
       "head_ref": "arena/da6837a6-nexus-ai-agent",
       "disposition": "DEFERRED_TO_BOARD_AND_CLOSED",
       "board_task": "pr-backlog-creative-2026-11-27",
-      "closed": false
+      "closed": true
     },
     {
       "number": 328,
@@ -380,7 +380,7 @@
       "head_ref": "nagar-studio-app-20261110",
       "disposition": "DEFERRED_TO_BOARD_AND_CLOSED",
       "board_task": "pr-backlog-creative-2026-11-27",
-      "closed": false
+      "closed": true
     },
     {
       "number": 329,
@@ -389,7 +389,7 @@
       "head_ref": "arena/nagar-triad-closure-governance",
       "disposition": "EXTRACTED_AND_CLOSED",
       "board_task": null,
-      "closed": false
+      "closed": true
     },
     {
       "number": 367,

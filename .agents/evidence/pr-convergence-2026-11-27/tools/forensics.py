@@ -120,9 +120,9 @@ def main() -> int:
         number = int(pr["number"])
         ref = f"refs/remotes/pr/{number}"
         try:
-            gql = graphql(
-                THREADS, {"owner": OWNER, "name": NAME, "number": number}
-            )["repository"]["pullRequest"]
+            gql = graphql(THREADS, {"owner": OWNER, "name": NAME, "number": number})["repository"][
+                "pullRequest"
+            ]
             threads = gql.get("reviewThreads") or {}
             unresolved = sum(
                 1 for thread in (threads.get("nodes") or []) if not thread.get("isResolved")
@@ -162,7 +162,9 @@ def main() -> int:
             )
 
         conflict_proc = git("merge-tree", "--write-tree", MAIN, ref, check=False)
-        conflict_lines = [line for line in (conflict_proc.stdout or "").splitlines() if "CONFLICT" in line]
+        conflict_lines = [
+            line for line in (conflict_proc.stdout or "").splitlines() if "CONFLICT" in line
+        ]
         whitespace = git("diff", "--check", merge_base, ref, check=False)
 
         additions = deletions = 0
@@ -192,7 +194,10 @@ def main() -> int:
                 "merge_state": pr.get("mergeable_state"),
                 "labels": [label["name"] for label in pr.get("labels") or []],
                 "linked_refs": sorted(
-                    {int(x) for x in re.findall(r"#(\d+)", (pr.get("body") or "") + " " + pr["title"])}
+                    {
+                        int(x)
+                        for x in re.findall(r"#(\d+)", (pr.get("body") or "") + " " + pr["title"])
+                    }
                 ),
                 "review_comments": pr.get("review_comments"),
                 "unresolved_threads": unresolved,

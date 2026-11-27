@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import json
 import sys
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
@@ -93,8 +93,32 @@ def main() -> int:
     forensics = json.loads(FORENSICS.read_text(encoding="utf-8"))
     branches = {r["number"]: r["head_ref"] for r in forensics["records"]}
 
+    files_by_pr = {
+        r["number"]: [entry["path"] for entry in r["files"]] for r in forensics["records"]
+    }
+
     with agent_board.board_lock():
         board = agent_board.load_board()
+        zone_ids = {zone["id"] for zone in board["zones"]}
+        for _task, spec in FAMILIES.items():
+            zone = spec["zone"]
+            if zone in zone_ids:
+                continue
+            prefixes = sorted(
+                {
+                    str(PurePosixPath(path).parent) + "/"
+                    for number in spec["prs"]
+                    for path in files_by_pr.get(number, [])
+                }
+            )[:24]
+            board["zones"].append(
+                {
+                    "id": zone,
+                    "description": f"{spec['title']} (resume anchor; paths mirror the member PRs)",
+                    "paths": prefixes,
+                }
+            )
+            zone_ids.add(zone)
         existing = {claim["task"] for claim in board["claims"]}
         added = []
         for task, spec in FAMILIES.items():
@@ -144,18 +168,29 @@ def main() -> int:
                 if note.strip() not in claim.get("scope", ""):
                     claim["scope"] = claim.get("scope", "") + note
 
-        board["history"]["board_revisions"].append(
-            {
-                "rev": max((entry.get("rev", 0) for entry in board["history"]["board_revisions"]), default=0) + 1,
-                "date": "2026-11-27",
-                "note": (
-                    "PR backlog convergence 2026-11-27: live inventory of 44 open PRs at main "
-                    "54073d1f; #368 and #366 merge evidence recorded; pr-repair-247-phase3 completed; "
-                    "6 family resume anchors registered for the PRs closed as deferred; evidence in "
-                    ".agents/evidence/pr-convergence-2026-11-27/."
-                ),
-            }
+        revisions = board["history"]["board_revisions"]
+        already_noted = any(
+            entry.get("date") == "2026-11-27"
+            and "PR backlog convergence 2026-11-27" in entry.get("note", "")
+            for entry in revisions
         )
+        if not already_noted:
+            revisions.append(
+                {
+                    "rev": max(
+                        (entry.get("rev", 0) for entry in board["history"]["board_revisions"]),
+                        default=0,
+                    )
+                    + 1,
+                    "date": "2026-11-27",
+                    "note": (
+                        "PR backlog convergence 2026-11-27: live inventory of 44 open PRs at main "
+                        "54073d1f; #368 and #366 merge evidence recorded; pr-repair-247-phase3 completed; "
+                        "6 family resume anchors registered for the PRs closed as deferred; evidence in "
+                        ".agents/evidence/pr-convergence-2026-11-27/."
+                    ),
+                }
+            )
         agent_board.save_board(board)
 
     print(f"added family claims: {added or 'none (already present)'}")

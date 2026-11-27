@@ -61,7 +61,11 @@ def main_symbols() -> set[str]:
 
 
 def main_subjects() -> list[str]:
-    return [line.split(" ", 1)[1] for line in git("log", "--format=%H %s", MAIN, "-n", "4000").splitlines() if " " in line]
+    return [
+        line.split(" ", 1)[1]
+        for line in git("log", "--format=%H %s", MAIN, "-n", "4000").splitlines()
+        if " " in line
+    ]
 
 
 def main() -> int:

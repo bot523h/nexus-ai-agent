@@ -44,8 +44,48 @@ SUPERSEDED = {
     ),
 }
 
+
+SUPERSEDED_EVIDENCE = {
+    135: [
+        "src/nexus_ai_agent/creative/studio/plan_execution.py",
+        "src/nexus_ai_agent/creative/studio/bus.py",
+        "src/nexus_ai_agent/creative/studio/runtime.py",
+    ],
+    140: [
+        "src/nexus_ai_agent/creative/studio/bus.py",
+        "src/nexus_ai_agent/creative/studio/plan_execution.py",
+    ],
+    205: [
+        "src/nexus_ai_agent/creative/assets/service.py",
+        "src/nexus_ai_agent/creative/assets/blob_store.py",
+        "src/nexus_ai_agent/creative/assets/ingestion.py",
+        "migrations/versions/e575469d90b9_nagar_asset_library_v1.py",
+    ],
+    295: [
+        "src/nexus_ai_agent/creative/assets/service.py",
+        "src/nexus_ai_agent/creative/assets/blob_store.py",
+        "src/nexus_ai_agent/execution/__init__.py",
+    ],
+    301: [
+        ".agents/automation/debt_watchdog_prompt.md",
+        ".agents/evidence/AGENT_DEBT_WATCHDOG_2026-10-31.md",
+    ],
+    285: [".agents/evidence/pr-convergence-2026-11-27/extracted/board-285.diff"],
+    297: [
+        ".agents/evidence/M16_CONVERGENCE_PLAN_2026-10-31.md",
+        ".agents/evidence/M16_TRUE_CLOSEOUT_2026-10-31.md",
+        ".agents/evidence/PR_CONVERGENCE_2026-10-31.md",
+        ".agents/evidence/PR_REGISTRY_2026-10-31.json",
+    ],
+    313: [".agents/evidence/pr-convergence-2026-11-27/extracted/board-313.diff"],
+    329: [".agents/evidence/pr-convergence-2026-11-27/extracted/board-329.diff"],
+}
+
 EXTRACTED = {
-    285: ("board sync for task-278", "board snapshot is 751 commits stale; the added record is preserved as extracted/board-285.diff."),
+    285: (
+        "board sync for task-278",
+        "board snapshot is 751 commits stale; the added record is preserved as extracted/board-285.diff.",
+    ),
     297: (
         "M16 convergence evidence",
         "the four M16 evidence files do not exist on main and were cherry-picked onto the convergence branch.",
@@ -145,19 +185,22 @@ def main() -> int:
                 "Closes the two authorization gaps left by #365; 7 files, 0 merge-tree conflicts, "
                 "0 unresolved threads, branch updated onto main and CI re-run on the exact head."
             )
-            evidence = ["docs/engineering/NAGAR_IBPC.md", "src/nexus_ai_agent/nagar/ibpc/service.py"]
+            evidence = [
+                "docs/engineering/NAGAR_IBPC.md",
+                "src/nexus_ai_agent/nagar/ibpc/service.py",
+            ]
             resume = ""
         elif number in SUPERSEDED:
             capability, why = SUPERSEDED[number]
             disposition = "SUPERSEDED_AND_CLOSED"
             family = None
-            evidence = [capability]
+            evidence = SUPERSEDED_EVIDENCE.get(number, [capability])
             resume = ""
         elif number in EXTRACTED:
             capability, why = EXTRACTED[number]
             disposition = "EXTRACTED_AND_CLOSED"
             family = None
-            evidence = [capability]
+            evidence = SUPERSEDED_EVIDENCE.get(number, [capability])
             resume = ""
         else:
             disposition = "DEFERRED_TO_BOARD_AND_CLOSED"
@@ -209,7 +252,12 @@ def main() -> int:
 
     matrix.sort(key=lambda row: row["number"])
     (ROOT / "PR_CONVERGENCE_DISPOSITION_MATRIX.json").write_text(
-        json.dumps({"campaign": CAMPAIGN, "main_sha": MAIN_SHA, "records": matrix}, indent=2, ensure_ascii=False) + "\n",
+        json.dumps(
+            {"campaign": CAMPAIGN, "main_sha": MAIN_SHA, "records": matrix},
+            indent=2,
+            ensure_ascii=False,
+        )
+        + "\n",
         encoding="utf-8",
     )
 
@@ -260,7 +308,9 @@ def main() -> int:
         "  P193 -->|requires_architecture_decision| ADR2[Python 3.14 baseline]",
         "  P328 -->|requires_architecture_decision| ADR3[Studio PWA]",
     ]
-    (ROOT / "PR_CONVERGENCE_DEPENDENCY_GRAPH.mmd").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    (ROOT / "PR_CONVERGENCE_DEPENDENCY_GRAPH.mmd").write_text(
+        "\n".join(lines) + "\n", encoding="utf-8"
+    )
 
     counts: dict[str, int] = {}
     for row in matrix:
@@ -277,7 +327,13 @@ def main() -> int:
     ]
     for key in sorted(counts):
         report.append(f"| `{key}` | {counts[key]} |")
-    report += ["", "## Per-PR matrix", "", "| PR | head | disposition | family | ahead/behind | conflicts | threads |", "|---|---|---|---|---|---|---|"]
+    report += [
+        "",
+        "## Per-PR matrix",
+        "",
+        "| PR | head | disposition | family | ahead/behind | conflicts | threads |",
+        "|---|---|---|---|---|---|---|",
+    ]
     for row in matrix:
         report.append(
             f"| #{row['number']} | `{row['head_sha'][:8]}` | `{row['disposition']}` | "
@@ -291,7 +347,9 @@ def main() -> int:
         "",
         "## Closures",
         "",
-        f"`{len(closures)}` closure records in `CLOSURE_RESULT.json`." if closures else "_(pending)_",
+        f"`{len(closures)}` closure records in `CLOSURE_RESULT.json`."
+        if closures
+        else "_(pending)_",
     ]
     (ROOT / "PR_CONVERGENCE_FINAL_REPORT.md").write_text("\n".join(report) + "\n", encoding="utf-8")
 
