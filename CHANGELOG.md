@@ -7,6 +7,159 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Feature — Wave 4/6 Studio execution closure (session `arena/948924cb-nexus-ai-agent`)
+
+- **Wave 1 — unified Studio identity + worker authority bridge.**
+  `adapters/studio_directory_bridge.py` adds `StudioUnifiedAuthorityBridge`, a
+  single durable adapter over `StudioPrincipalAuthStore` that satisfies **both**
+  `CanonicalAuthorityPort` and `PrincipalRoleAuthority`, so the HTTP surface and
+  the canonical worker validate execution against the same four-way invariant
+  (ACTIVE principal, principal/project/tenant agreement, ACTIVE membership whose
+  role permits the action, ACTIVE binding owned by the principal — explicit ref or
+  the deterministic `studio:{tenant}:{principal}` default). A verification returns
+  a frozen `UnifiedExecutionAuthorityProof` whose `proof_digest` is the RFC 8785
+  JCS SHA-256 of its canonical tuple. The authority vocabulary (`PrincipalStatus`,
+  `MembershipStatus`, `BindingStatus`, `MembershipRole`, `PrincipalRoleFacts`,
+  `PrincipalRoleAuthority`, `AuthorityResolution`) lives in `nagar.ibpc.authority`,
+  and `StudioAction.EXECUTE_APPROVED_PLAN` is declared as an alias member of
+  `EXECUTE_PLAN` so a worker proof and an RBAC decision cannot disagree.
+- **Wave 2 — cryptographic revision & asset-version pinning.**
+  `creative/studio/revision_pinning.py` adds `PinnedRevisionEnvelope` (frozen,
+  self-verifying under RFC 8785 JCS), `AssetVersionPin` (streamed SHA-256 + byte
+  size, symlink and traversal refusal) and `DurableRevisionPinningStore` (SQLite
+  WAL, `BEGIN IMMEDIATE`, per-project revision head with optimistic concurrency,
+  idempotent re-pin, typed drift/asset-pin violations). `verify_worker_execution_pins`
+  is the worker gate: envelope integrity, expected revision/plan digests, the
+  current-head rule, and every on-disk asset (lstat symlink refusal,
+  `is_relative_to`, exact size, `hmac.compare_digest` SHA-256).
+- **Wave 3 — crash-safe approval-to-enqueue outbox.** `nagar/ibpc/execution_outbox.py`
+  removes the two failure modes that let an approved turn silently diverge from its
+  durable record: the consume-then-die-before-enqueue window (the single-use approval
+  was spent with no job, and no retry was legal) and the destructive poll timeout (a
+  short caller budget marked the turn `FAILED` while the worker was still running).
+  `DurableExecutionOutboxStore` persists the intent under a derived
+  `idempotency_key` before the approval is consumed and walks a closed
+  `INTENT_STAGED → APPROVAL_CONSUMED → JOB_ENQUEUED → AWAITING_WORKER →
+  COMPLETED | FAILED_TERMINAL` machine in `BEGIN IMMEDIATE` writes;
+  `ExecutionOutboxCoordinator.execute_or_recover` resumes from any crash point
+  without re-consuming or double-enqueueing, `reconcile_in_flight` drives stalled
+  rows under a cross-process `fcntl.flock`, and a poll timeout is `AWAITING_WORKER`
+  (`can_resume=True`) with the elapsed time recorded. An unverified completion is
+  never reported as success.
+- **Wave 4 — WYSIWYS structured preview readback.** `creative/studio/preview_readback.py`
+  describes exactly what an approval authorises, in `fractions.Fraction` only (floats
+  are refused at the boundary): `RationalTime`, `RationalTimeSpan`,
+  `ParameterReadbackDelta`, `TimelineOperationPreview` and the sealed
+  `StructuredPreviewReadback`, whose `preview_digest` is the RFC 8785 JCS SHA-256 of
+  every field — including the bilingual `fa`/`en` labels, the timebase and the
+  operation order — so `verify_wysiwys_readback` fails on any tampering.
+  `compare_revisions` splits added/removed/changed operations and reports drift as an
+  exact rational (`duration_drift_seconds`, with `duration_drift_us` as a rounded
+  projection that is never used to decide identity); an NTSC one-frame move is
+  `1001/30000` s exactly, and 10,000 cuts at 24000/1001, 30000/1001, 25/1 or 24/1
+  land on their frame boundaries with zero drift.
+- **Wave 5 — hot backup, signed bundles, staged restore, admission control.**
+  `creative/studio/production_dr.py` removes three ways a Studio deployment loses
+  work. (1) *The backup that is not a backup*: `create_hot_backup` snapshots a live
+  database with `sqlite3.Connection.backup` (the only online-safe API — a
+  `shutil.copy` would tear the page cache and drop live `-wal` frames), then
+  records the copy's SHA-256 and byte size, every table's row count, and an
+  HMAC-SHA256 over the manifest. (2) *The restore that trusts what it is handed*:
+  `restore_from_backup` re-verifies the bundle, takes an `fcntl.flock` on the
+  target, quarantines the current database, stages the copy **beside** the target,
+  runs `PRAGMA integrity_check` on the staged file, deletes the stale `-wal`/`-shm`
+  that would otherwise be replayed onto the new pages, and only then `os.replace`s
+  it into place — a failure at any step leaves the target untouched.
+  `verify_backup_bundle` reports every problem it finds (bit flip, truncation,
+  unsigned manifest, foreign key, rewritten row counts, corrupt header) rather than
+  short-circuiting. (3) *The cancellation that over-admitted the machine*:
+  `StudioResourceGovernor.run_with_lease` **detaches** its `AdmissionLease` on
+  `asyncio.CancelledError` and releases the slot from a done-callback when the
+  worker thread actually finishes, so a cancelled coroutine cannot admit more
+  concurrent work than the box can take. `BackupKeyMaterial` keeps its secret out
+  of `repr`, `str` and any redacted dump.
+- **Wave 6A — the end-to-end vertical slice.** `tests/integration/test_nagar_studio_e2e_vertical_slice.py`
+  runs the whole Studio loop against real objects on a real temp disk, with zero
+  mocks: seed tenant/project/OWNER/EDITOR/VIEWER in the real
+  `StudioPrincipalAuthStore`; verify the four-way authority triple and prove VIEWER
+  is refused; open a live session and begin turn 1; pin revision 1 with an asset
+  whose SHA-256 is measured from the bytes on disk; build and verify the WYSIWYS
+  readback and bind an approval to *that* digest; consume the approval and crash
+  before enqueue, then prove a fresh process does not re-consume or re-enqueue;
+  hold the poll budget so the row parks at `AWAITING_WORKER`; let the worker verify
+  the pins, render bytes, and drain the provenance outbox into a real
+  `CreativeGraph` (COMMAND → EXECUTION → ARTIFACT, `integrity_check` clean); then run
+  turn 2 as revision 2 and diff the two readbacks in exact rational arithmetic.
+  It finishes with a hot backup of the live auth database, a full verify, and a
+  restore into a new location that is then used to resolve a principal — proof the
+  restored file is usable, not merely byte-identical. A governor test runs the
+  slice under real threads, and two invariants assert no float ever reaches a
+  persisted readback payload and nothing is written outside the temp root.
+- **Wave 6B — the adversarial mutation campaign.** `scripts/run_wave4_studio_e2e_mutations.py`
+  takes the five shipped Studio execution modules and rewrites one guard at a
+  time: **40 mutants, eight per module**, every one anchored on a single source
+  occurrence, every one restored byte-for-byte in a `finally` block and verified
+  by SHA-256. A mutant is credited `VALID_KILL` only when pytest exits 1, the
+  output carries no infrastructure marker, a named target node appears on a
+  `FAILED` line, and the failure is a real effect (an assertion, a raised
+  exception, or a `DID NOT RAISE`).
+  Campaign result: **40/40 killed**.
+  The harness also fixes a truth about this codebase worth writing down: it is
+  the campaign, not the test suite, that found the gaps. Six mutants survived the
+  first honest run for three distinct reasons, and each is now recorded in the
+  campaign rather than glossed over —
+  * **redundant defence-in-depth** (asset pins are sorted twice, the envelope and
+    the store; the approval ledger and the outbox both refuse a replay) is
+    *unobservable* at the store layer, so those mutants were re-pointed at the
+    guard that is actually load-bearing;
+  * **`JCS_RFC8785_V2` and `LEGACY_JSON_V1` produce byte-identical digests** for
+    every payload these modules can build (no floats, no `-0.0`, no `NaN`), so
+    swapping the scheme is a *true equivalent mutant* and a poor mutation — those
+    six were replaced by payload-field deletions that the suites do see;
+  * **a mutated guard can be lethal to a different test than the one you guessed**,
+    which is why targets are now read off an actual failure run, not assumed.
+  The bytecode lesson from W6.7 is applied throughout: every target's `__pycache__`
+  is purged before the pre-flight run, after writing a mutant, and after restoring,
+  and each pytest subprocess runs with `PYTHONDONTWRITEBYTECODE=1`.
+  **The slice is independent evidence, measured.** `--redundancy` applies every
+  mutant against both its unit suite and the Wave 6A slice: the unit suites catch
+  40/40, and the slice catches 16/40 on its own. A six-mutant sample went from
+  1/6 to 6/6 after the slice grew `TestTheWiredDeploymentHasTeeth` — negative
+  paths (a tampered readback, an approval bound to another digest, a symlinked and
+  an escaping asset, a payload naming another scope, a same-key-different-payload
+  conflict, a float at the builder, a tampered bundle refused by restore) driven
+  through the same seeded deployment as the happy path. The other 24 are guarded
+  at a layer the slice does not drive and are *not* claimed as slice evidence.
+  One contract note is recorded rather than discovered later: this campaign uses
+  the mutation-testing kill rule (named target node + real failure), not the SINK
+  runner's strict no-collateral-failures rule, because these Studio guards are
+  shared and 34 of 40 would be marked `invalid` under it — a weaker result than a
+  kill. Bumping `security_mutation_support`'s hardcoded `len(expected_ids) == 14`
+  to reuse that runner was deliberately avoided: it would change the acceptance
+  semantics of the two security campaigns that ship with it.
+  `tests/unit/creative/studio/test_wave6b_studio_mutation_campaign.py` pins the
+  campaign's shape offline (40 mutants, M01-M40, eight per module, no duplicate
+  edits, every anchor unique, every mutant parses and differs, every kill target a
+  real `Class::test`, purge/kill-rule mechanics) in under a second, and holds the
+  end-to-end 40/40 proof behind `NEXUS_RUN_MUTATION_CAMPAIGN=1`.
+- **Gate evidence, measured.** `docs/audits/STUDIO_WAVES_GATE_EVIDENCE_2026-11-27.md`
+  records the repository's eight gates at `3f80f9a` with the command and result for
+  each, and names the two this sandbox could not measure instead of ticking them.
+  The whole-suite run is reported with its real numbers — 17 264 passed / 46 failed
+  / 72 errors in 1 h 04 m — and every non-passing outcome is traced to its cause:
+  a missing `ffmpeg` binary (160 outcomes), a missing `ffprobe` (the wheel bundles
+  `ffmpeg` alone), and three pre-existing storyboard-worker timeouts. Installing
+  the bundled binary and re-running took the affected suites from 64 failures to 5;
+  no file those suites exercise is touched by this branch. Lint, format, types,
+  deptry, version lock-step, the truth gate, the 449 architecture guards and the
+  334 truth/board/docs tests are all green, and the 439-test targeted run across the
+  five module suites, the slice and the campaign guards is green in 10.6 s.
+- The three reviewed architecture gates (`test_nagar_studio_isolation`,
+  `test_slideshow_adapter_boundary`, `test_command_capability_boundary`) gain an
+  explicit, minimal durable-state allowlist: the new state modules may use
+  SQLite/POSIX locks/paths/thread pools and the one canonicalization authority, and
+  still may not touch pixels, audio, network or shells.
+
 ### Fix — integrated-tree CI closure (session `arena/750b78f5-nexus-ai-agent`)
 
 - **MORPHEUS's media spine needed its PyAV dependency declared.** The Wave-4/14

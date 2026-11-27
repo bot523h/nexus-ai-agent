@@ -44,7 +44,19 @@ ADAPTER_ONLY_MODULES = {
     "socket",
     "subprocess",
     "wave",
+    "fcntl",
+    "sqlite3",
 }
+
+#: Durable-state modules (Wave 4): they own a SQLite file and a cross-process
+#: lock by design, so ``sqlite3``/``fcntl``/``os`` are their contract, not a
+#: leak.  They still may not touch pixels, audio, or the network.
+DURABLE_STATE_MODULES = frozenset(
+    {"revision_pinning.py", "preview_readback.py", "production_dr.py"}
+)
+
+#: What a durable-state module is still never allowed to import.
+DURABLE_STATE_STILL_FORBIDDEN = frozenset({"PIL", "httpx", "numpy", "subprocess", "wave", "socket"})
 
 FORBIDDEN_TEMPLATE_KEYS = {
     "command",
@@ -100,6 +112,8 @@ def test_pure_layers_do_not_import_media_or_network_primitives() -> None:
             if path.name == "signing.py":
                 allowed = {"os"}
                 offenders = (_imports(path) & ADAPTER_ONLY_MODULES) - allowed
+            elif path.name in DURABLE_STATE_MODULES:
+                offenders = _imports(path) & DURABLE_STATE_STILL_FORBIDDEN
             else:
                 offenders = _imports(path) & ADAPTER_ONLY_MODULES
             assert not offenders, (
