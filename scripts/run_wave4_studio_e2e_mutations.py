@@ -767,8 +767,23 @@ def _purge_bytecode_cache(source_path: Path) -> None:
 
 
 def _run_pytest(args: list[str]) -> subprocess.CompletedProcess[str]:
+    """Run pytest against the tree under mutation -- not against site-packages.
+
+    ``ROOT`` is the tree this harness lives in, and it is not necessarily the
+    tree that ``import nexus_ai_agent`` resolves to: the project is installed
+    editable, so an isolated worktree (which is how CI runs every mutation job)
+    would import the *other* checkout's bytes.  The mutated file would never be
+    loaded, every mutant would "survive", and the campaign would report 0/50
+    while its own source rewriting was perfectly correct.
+
+    Pinning ``PYTHONPATH`` to this tree is what makes the campaign measure the
+    mutation instead of the installation.  ``scripts/execution_core_mutations.py``
+    does the same for the same reason; this harness was missing it, which is
+    only visible when the two trees differ.
+    """
     env = dict(os.environ)
     env["PYTHONDONTWRITEBYTECODE"] = "1"
+    env["PYTHONPATH"] = str(ROOT / "src")
     return subprocess.run(
         [sys.executable, "-B", "-m", "pytest", "-q", "--no-header", *args],
         cwd=str(ROOT),
