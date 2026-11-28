@@ -368,6 +368,35 @@ class _RecordingAuthority:
         )
 
 
+class _PermissiveAuthorizer:
+    """Test double for ``StudioAuthorizerPort``: allows every action.
+
+    Wave 3-R7 made an *unconfigured* role gate refuse approvals and executions,
+    so a full-pipeline test must compose an authorizer; this one approves
+    everything (role enforcement itself is covered by the RBAC suites).
+    """
+
+    def authorize_action(
+        self,
+        *,
+        principal_id: str,
+        project_id: str,
+        action,
+        binding_ref: str = "",
+    ):
+        from nexus_ai_agent.nagar.ibpc.authority import StudioAuthorizationDecision
+
+        return StudioAuthorizationDecision(
+            allowed=True,
+            principal_id=principal_id,
+            project_id=project_id,
+            role="OWNER",
+            action=getattr(action, "value", str(action)),
+            reason="test_double",
+            binding_ref=binding_ref,
+        )
+
+
 @pytest.fixture()
 def service_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     import types
@@ -430,6 +459,7 @@ def service_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
             revision_provider=lambda: revision["current"],
             authority=authority,
             channel_binding_ref=BINDING_REF,
+            authorizer=_PermissiveAuthorizer(),
             approval_key_provider=StaticKeyRing({"unit": b"u" * 32}, active_key_id="unit"),
         )
     )

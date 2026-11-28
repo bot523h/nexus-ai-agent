@@ -27,10 +27,14 @@ def harness() -> ModuleType:
     return module
 
 
-def test_registry_is_exactly_thirty_unique_valid_ast_mutations(harness: ModuleType) -> None:
+def test_registry_is_exactly_the_declared_unique_valid_ast_mutations(harness: ModuleType) -> None:
     registry = harness.REGISTRY
-    assert [item.id for item in registry] == [f"W4-M{index:02}" for index in range(1, 31)]
-    assert len({(item.source, item.scope, item.old, item.new) for item in registry}) == 30
+    expected = [f"W4-M{index:02}" for index in range(1, 31)]
+    expected += [f"W3-R7-M{index:02}" for index in range(1, 9)]  # Wave 3-R7 additions
+    assert [item.id for item in registry] == expected
+    assert len({(item.source, item.scope, item.old, item.new) for item in registry}) == len(
+        expected
+    )
     for mutation in registry:
         original = (ROOT / mutation.source).read_bytes()
         assert harness.mutated_bytes(original, mutation) != original

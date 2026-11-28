@@ -35,7 +35,7 @@ import stat
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Literal, Protocol
+from typing import Any, Final, Literal, Protocol
 
 from nexus_ai_agent.application.creative_intent import CanonicalCreativeIntent
 from nexus_ai_agent.application.ports.caption_engine import CaptionEnginePort
@@ -62,6 +62,7 @@ from nexus_ai_agent.nagar.ibpc.authority import (
     CanonicalAuthorityPort,
     PrincipalFacts,
     StudioAction,
+    StudioAuthorizationDecision,
     StudioAuthorizerPort,
 )
 from nexus_ai_agent.nagar.ibpc.canonical import digest_of
@@ -122,12 +123,47 @@ logger = logging.getLogger(__name__)
 
 #: tests/architecture/test_ibpc_boundary.py (which may import render_jobs; this
 #: module may not): SURFACE_TO_CANONICAL[("edit", "trim")] == "timeline.trim".
+#: The ONE reason an authorization refusal of the canonical form ever carries.
+#: ``reason`` is a caller contract (``reason == "unauthorized_principal"``), so the
+#: diagnostic travels in ``detail`` and in ``str()`` — never concatenated onto it.
+AUTHORIZATION_REFUSAL_REASON: Final[str] = "unauthorized_principal"
+
+#: The ONLY actions a service composed without a Studio authorizer may perform:
+#: read a session and submit an intent for a plan.  This is an allowlist on
+#: purpose — every other action (including ones added to :class:`StudioAction`
+#: later) is refused by default, so an unconfigured role gate is a refusal and
+#: never a silent no-op (Wave 3-R7).
+_PLAN_ONLY_ACTIONS_WITHOUT_AUTHORIZER: Final[frozenset[StudioAction]] = frozenset(
+    {StudioAction.SUBMIT_INTENT, StudioAction.READ_SESSION}
+)
+
+#: Actions that must never be reachable without a configured Studio authorizer.
+#: Listed explicitly (in addition to the allowlist above) so the refusal reasons
+#: and the security contract stay readable and independently testable; approving,
+#: executing, membership, privacy consent, audit reads and session lifecycle
+#: transitions are all role-gated operations, not planning.
+_AUTHORIZER_REQUIRED_ACTIONS: Final[frozenset[StudioAction]] = frozenset(
+    {
+        StudioAction.APPROVE_PLAN,
+        StudioAction.EXECUTE_PLAN,
+        StudioAction.MANAGE_MEMBERSHIP,
+        StudioAction.MANAGE_CONSENT,
+        StudioAction.READ_AUDIT,
+        StudioAction.CLOSE_SESSION,
+    }
+)
+
 JOB_TYPE = "creative_render"
 COMMAND = "edit"
 SURFACE_OPERATION = "trim"
 CANONICAL_OPERATION: Literal["timeline.trim"] = "timeline.trim"
 WORKSPACE_PREFIX = "creative_"
 DRAIN_TIMEOUT_S = 300.0
+
+
+def _action_name(action: Any) -> str:
+    """Stable string form of a :class:`StudioAction` (or of a plain string)."""
+    return str(getattr(action, "value", action))
 
 
 class ScopeSignatureMismatchError(ApprovalError):
@@ -1086,15 +1122,97 @@ class IBPCService:
         binding_ref: str | None = None,
     ) -> None:
         authorizer = self._deps.authorizer
-        if authorizer is not None:
-            resolved_ref = (
-                (self._deps.channel_binding_ref or "") if binding_ref is None else binding_ref
+        action_name = _action_name(action)
+        if authorizer is None:
+            # Wave 3-R7: an unconfigured role gate fails CLOSED.  Only the explicit
+            # plan-only allowlist survives; anything role-gated — or anything the
+            # allowlist does not name, including actions added later — is refused
+            # before a single byte of state changes.
+            if (
+                action in _AUTHORIZER_REQUIRED_ACTIONS
+                or action not in _PLAN_ONLY_ACTIONS_WITHOUT_AUTHORIZER
+            ):
+                raise AuthorizationError(
+                    AUTHORIZATION_REFUSAL_REASON,
+                    f"{action_name} requires a configured Studio authorizer",
+                )
+            return
+        resolved_ref = (
+            (self._deps.channel_binding_ref or "") if binding_ref is None else binding_ref
+        )
+        decision = authorizer.authorize_action(
+            principal_id=principal_id,
+            project_id=project_id,
+            action=action,
+            binding_ref=resolved_ref,
+        )
+        self._verify_studio_decision(
+            decision,
+            principal_id=principal_id,
+            project_id=project_id,
+            action=action,
+            binding_ref=resolved_ref,
+        )
+
+    @staticmethod
+    def _verify_studio_decision(
+        decision: Any,
+        *,
+        principal_id: str,
+        project_id: str,
+        action: StudioAction,
+        binding_ref: str,
+    ) -> None:
+        """Wave 3-R7: a role decision is evidence only when it is fully consistent.
+
+        An authorizer that returns ``allowed=False`` instead of raising, a decision
+        minted for another principal / project / action / binding, or anything that
+        is not a :class:`StudioAuthorizationDecision` at all is a refusal.  This
+        runs before any approval is minted or consumed, any consent is granted or
+        revoked, any audit row is disclosed, any session transitions or any job is
+        enqueued.
+        """
+        expected_action = _action_name(action)
+        if not isinstance(decision, StudioAuthorizationDecision):
+            raise AuthorizationError(
+                AUTHORIZATION_REFUSAL_REASON,
+                f"the Studio authorizer returned {type(decision).__name__}, "
+                "not a StudioAuthorizationDecision",
             )
-            authorizer.authorize_action(
-                principal_id=principal_id,
-                project_id=project_id,
-                action=action,
-                binding_ref=resolved_ref,
+        if type(decision.allowed) is not bool or decision.allowed is not True:
+            raise AuthorizationError(
+                AUTHORIZATION_REFUSAL_REASON,
+                f"the Studio authorizer did not allow {expected_action}",
+            )
+        resolved_principal = (
+            decision.principal_id.strip() if isinstance(decision.principal_id, str) else None
+        )
+        resolved_project = (
+            decision.project_id.strip() if isinstance(decision.project_id, str) else None
+        )
+        if resolved_principal != principal_id:
+            raise AuthorizationError(
+                AUTHORIZATION_REFUSAL_REASON,
+                f"the Studio authorization decision names principal {resolved_principal!r}, "
+                f"not the requesting {principal_id!r}",
+            )
+        if resolved_project != project_id:
+            raise AuthorizationError(
+                AUTHORIZATION_REFUSAL_REASON,
+                f"the Studio authorization decision names project {resolved_project!r}, "
+                f"not the requesting {project_id!r}",
+            )
+        if decision.action != expected_action:
+            raise AuthorizationError(
+                AUTHORIZATION_REFUSAL_REASON,
+                f"the Studio authorization decision names action {decision.action!r}, "
+                f"not {expected_action!r}",
+            )
+        if decision.binding_ref != binding_ref:
+            raise AuthorizationError(
+                AUTHORIZATION_REFUSAL_REASON,
+                "the Studio authorization decision names a different channel binding "
+                "than the one presented",
             )
 
     def _verify_execution_authority(
@@ -1633,7 +1751,7 @@ class IBPCService:
             # No trusted identity → typed refusal before job admission. Never a
             # synthetic binding, never broad service permissions (Phase 1).
             self._sessions.mark_failed(session_id, turn_id)
-            return Refusal("unauthorized_principal", f"{exc.reason}: {exc.detail}")
+            return Refusal(AUTHORIZATION_REFUSAL_REASON, f"{exc.reason}: {exc.detail}")
         if not src.is_file():
             self._sessions.mark_failed(session_id, turn_id)
             return Refusal("missing_source", f"source media not found: {source_path!r}")
@@ -1907,7 +2025,7 @@ class IBPCService:
             verified = self._resolve_authority(session.principal_id, session.project_id)
         except CanonicalAuthorityError as exc:
             self._sessions.mark_failed(session_id, turn_id)
-            return Refusal("unauthorized_principal", f"{exc.reason}: {exc.detail}")
+            return Refusal(AUTHORIZATION_REFUSAL_REASON, f"{exc.reason}: {exc.detail}")
         src = self._validate_source_path(source_path)
         if not src.is_file():
             self._sessions.mark_failed(session_id, turn_id)
@@ -2024,11 +2142,52 @@ class IBPCService:
             raise CanonicalAuthorityError(
                 "missing_binding", "no canonical channel binding was configured for this service"
             )
-        return authority.resolve_principal(
+        facts = authority.resolve_principal(
             principal_id=principal_id,
             project_id=project_id,
             binding_ref=binding_ref,
         )
+        self._verify_canonical_facts(
+            facts, principal_id=principal_id, project_id=project_id, binding_ref=binding_ref
+        )
+        return facts
+
+    @staticmethod
+    def _verify_canonical_facts(
+        facts: Any, *, principal_id: str, project_id: str, binding_ref: str
+    ) -> None:
+        """Wave 3-R7: never trust a field the canonical port returned unchecked.
+
+        ``principal_id``, ``project_id`` and ``channel_binding_id`` must each be a
+        non-empty, non-whitespace ``str`` and must equal the requested tuple; the
+        binding must also equal the composition's ``channel_binding_ref`` (the
+        reference every downstream fence compares against).  A ``None`` / ``""``
+        / ``"   "`` binding used to be accepted and copied into the job payload.
+        """
+
+        def field(name: str, reason: str) -> str:
+            value = getattr(facts, name, None)
+            if not isinstance(value, str) or not value.strip():
+                raise CanonicalAuthorityError(
+                    reason, f"the canonical authority returned a missing or malformed {name}"
+                )
+            return value
+
+        resolved_principal = field("principal_id", "identity_mismatch")
+        resolved_project = field("project_id", "identity_mismatch")
+        resolved_binding = field("channel_binding_id", "binding_inconsistent")
+        if resolved_principal != principal_id or resolved_project != project_id:
+            raise CanonicalAuthorityError(
+                "identity_mismatch",
+                "the canonical authority returned a different principal_id/project_id "
+                "than requested",
+            )
+        if binding_ref and resolved_binding != binding_ref:
+            raise CanonicalAuthorityError(
+                "binding_inconsistent",
+                "the canonical authority returned a channel_binding_id that is not the "
+                "configured binding",
+            )
 
     # -- approval -------------------------------------------------------------
 

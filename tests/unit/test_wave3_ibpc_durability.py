@@ -124,6 +124,31 @@ def _stub_media_tools(monkeypatch: pytest.MonkeyPatch, duration_us: int = 5_000_
     monkeypatch.setattr(service_mod, "verify_shadow_manifest", lambda _m: None)
 
 
+class _PermissiveAuthorizer:
+    """Test double for ``StudioAuthorizerPort``: allows every action.
+
+    Wave 3-R7 makes an unconfigured role gate refuse everything except planning,
+    so a service that drives consent/audit/session-lifecycle branches must compose
+    an authorizer; the role matrix itself is covered by
+    ``tests/unit/test_ibpc_authorization_closure.py``.
+    """
+
+    def authorize_action(
+        self, *, principal_id: str, project_id: str, action, binding_ref: str = ""
+    ):
+        from nexus_ai_agent.nagar.ibpc.authority import StudioAuthorizationDecision
+
+        return StudioAuthorizationDecision(
+            allowed=True,
+            principal_id=principal_id,
+            project_id=project_id,
+            role="OWNER",
+            action=getattr(action, "value", str(action)),
+            reason="test_double",
+            binding_ref=binding_ref,
+        )
+
+
 def _setup_auth_store(
     db_path: Path,
     *,
@@ -2470,6 +2495,7 @@ class TestWave3EdgeCasesAndCoverage:
                 workspace_root=tmp_path / "mem_ws",
                 revision_provider=lambda: 0,
                 durable=False,
+                authorizer=_PermissiveAuthorizer(),
                 now=clock,
             )
         )
@@ -5422,6 +5448,7 @@ class TestWave3SecurityClosureAndCoverage:
                 workspace_root=ws_f,
                 revision_provider=lambda: 0,
                 durable=False,
+                authorizer=_PermissiveAuthorizer(),
                 authorized_asset_root=ws_f,
                 owned_closables=(object(),),
                 now=clock,

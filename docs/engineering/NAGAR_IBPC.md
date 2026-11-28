@@ -135,6 +135,41 @@ killed** (suite RED per mutant, restored GREEN after), exit 0, verified in the f
 the minimal CI env (28 packages) — same interpreter recipe the `trust-mutations` CI job now uses.
 Worktree unchanged after the run (`git diff --exit-code` in CI).
 
+## Wave 3-R7 — authorization closure (2026-11, on top of #365/#368)
+
+Three authorization gaps survived the #365 merge; all are fail-closed now.
+
+| Gap (as it existed) | Root cause | Invariant after this change | Regression test | Mutants |
+|---|---|---|---|---|
+| A composition with **no Studio authorizer** silently skipped *every* role check: `_authorize_studio_action` returned early whenever `deps.authorizer is None` — which is the default. The first fix made that a *partial denylist* (`APPROVE_PLAN`, `EXECUTE_PLAN`, `MANAGE_MEMBERSHIP`), which still let `MANAGE_CONSENT` (`grant_privacy_consent`, `revoke_privacy_consent`), `READ_AUDIT` (`list_privacy_audit`) and `CLOSE_SESSION` (`close/pause/abort/resume_session`) run with no role proof at all. | early `return` on a missing port; then a denylist that named only three actions | The policy is an explicit **plan-only allowlist** — `_PLAN_ONLY_ACTIONS_WITHOUT_AUTHORIZER = {SUBMIT_INTENT, READ_SESSION}` — plus an explicit `_AUTHORIZER_REQUIRED_ACTIONS` set; *anything the allowlist does not name*, including an action added to `StudioAction` later, is refused with `AuthorizationError(AUTHORIZATION_REFUSAL_REASON, …)` before a byte of state changes. Nothing is minted, consumed, granted, revoked, disclosed, transitioned or queued. | `TestTheUnconfiguredRoleGate`, `TestAuthorizerLessConsentAuditAndLifecycle` | `W3-R7-M01`, `M04`, `M08` |
+| The **authorizer's decision was discarded**: a configured Studio authorizer controlled only whether *it* raised. An `allowed=False` decision returned without raising, or a decision minted for another principal / project / action / channel binding, was accepted as a grant. | the return value of `authorize_action` was never inspected | `_verify_studio_decision` refuses anything that is not a `StudioAuthorizationDecision`, a non-`bool` or non-`True` `allowed` flag, and any inconsistent `principal_id` / `project_id` / `action` / `binding_ref`, **before** an approval is minted or consumed, a consent granted or revoked, an audit row disclosed, a session transitioned or a job enqueued. | `TestTheStudioDecisionContract` (14) | `W3-R7-M05`, `M06`, `M07` |
+| The **canonical authority's answer was trusted unchecked**: `_resolve_authority` returned whatever `resolve_principal` produced and callers copied `facts.channel_binding_id` straight into the queue payload; a `None`/`""`/whitespace binding, or a different `principal_id`/`project_id`, was accepted and only surfaced (sometimes) at consume time. | no validation of the returned facts | *3-way consistency*: `principal_id`, `project_id` and `channel_binding_id` must each be a non-empty, non-whitespace `str`, must equal the requested `(principal_id, project_id)`, and the binding must equal the composition's `channel_binding_ref`. Violations raise `CanonicalAuthorityError("identity_mismatch" \| "binding_inconsistent")` at the request boundary — before any context, approval or job exists. | `TestTheCanonicalFactsAreValidated` (21) | `W3-R7-M02`, `M03` |
+
+**One canonical reason literal.** `AUTHORIZATION_REFUSAL_REASON: Final[str] = "unauthorized_principal"`
+is the single reason both the gate and the decision contract raise; an AST fence in
+`tests/unit/test_ibpc_authorization_closure.py` (95 tests) fails on any second literal or on an
+interpolated `Refusal`/`ApprovalError` reason, so the wire reason can never drift into
+`unauthorized_principal: binding_inconsistent`.
+
+**Role matrix, against the real authority.** `TestRealProjectMembershipAuthorizerMatrix` drives the
+real `ProjectMembershipAuthorizer` over a durable `StudioPrincipalAuthStore` for all four roles
+(`OWNER`, `EDITOR`, `VIEWER`, `AUDITOR`) and all nine `StudioAction` values, plus the
+auditor-reads-audit / viewer-cannot-approve cases.
+
+**Composition rule.** Any service that can approve, execute, administer consent, read the audit or
+transition a session must be built with an authorizer: `build_studio_ibpc_service` already wires a
+`ProjectMembershipAuthorizer` over the durable `StudioPrincipalAuthStore`; test harnesses pass an
+explicit double. An authorizer-less service can plan — and nothing else.
+
+### Mutation evidence (Wave 3-R7)
+
+`scripts/w4_mutations.py` (extended from 30 to 38 mutants; `W3-R7-M01…M08` target the gate, the
+decision contract and the canonical-facts fence). Serial run, byte-exact restoration verified per
+mutant by SHA-256: **38/38 killed, 0 survived, 0 invalid, 0 not run**. The `trust-mutations` CI job
+also runs this campaign, so every CI run executes and kills the authorization mutants. The separate
+`scripts/ibpc_security_mutations.py` campaign (audio staging, approval identity) stays green at
+23/23.
+
 ## Lifecycle & durability (Phase E — honest accounting)
 
 | Entity | Current storage | After process restart | Multi-process | Production claim |
