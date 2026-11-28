@@ -137,6 +137,7 @@
     if (!error) return "error";
     const status = Number(error.status);
     if (status === 401 || status === 403) return "unauthorized";
+    if (status === 429) return "throttled";
     if (status === 0 || status === 502 || status === 503 || status === 504) return "unavailable";
     if (error.name === "TypeError") return "unavailable";
     return "error";
@@ -144,6 +145,7 @@
 
   function statusMessage(kind) {
     if (kind === "unauthorized") return "برای دیدن استودیو باید وارد شوید.";
+    if (kind === "throttled") return "تلاش‌های ناموفق زیاد بود؛ یک دقیقه بعد دوباره تلاش کنید.";
     if (kind === "unavailable") return "پشتیبان استودیو در دسترس نیست؛ بعداً تلاش کنید.";
     if (kind === "ok") return "متصل.";
     return "خطای غیرمنتظره رخ داد.";

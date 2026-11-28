@@ -3059,3 +3059,67 @@ contract, not a heuristic:
   threshold moves, and that two cuts with the same threshold but different frames
   get different JSD verdicts.
 
+
+### 2026-11-28 — The CI maintenance self-test is contained, and `/studio/app` is authenticated
+
+**Decision.** The maintenance lane has two callers with opposite needs: the
+nightly production backup (which must reach the configured cloud tier) and the
+CI self-test (which must **never** reach any cloud tier, because a synthetic
+`nexus_jobs.db` in an operator's R2/B2 bucket is worse than no self-test). The
+second caller is now structurally contained rather than conventionally:
+
+* the self-test injects a `LocalCacheProvider` and passes it to
+  `create_backup`/`run_housekeeping` explicitly;
+* `forbid_remote_provider_factory()` arms a *process-wide* guard for the
+  duration of the run — a context variable (correct under threads and asyncio)
+  plus an environment flag inherited by child processes — and
+  `build_blob_provider` (and its legacy `_build_provider` alias) raise
+  `RuntimeError` while it is armed;
+* `local_only_settings()` builds the settings twice over local: the remote-tier
+  environment is suppressed for the block *and* the remote-tier fields are set
+  to `None`;
+* the scratch database is a real WAL SQLite file created from the application
+  schema (`prepare_database` re-applies `PRAGMA journal_mode=WAL` because
+  `create_all_tables` initialises once per path), and every leg fails closed:
+  an unverified artifact, an artifact on another tier, a missing artifact, a
+  non-WAL file, an empty schema, a prune that did not happen, a reported delete
+  the filesystem does not confirm, and a reconciler divergence all raise
+  `SelfTestError` and exit 1 with one line.
+
+`/studio/app` becomes a real authenticated product surface rather than a page
+behind a shared deployment token: the CSRF marker is enforced **before** the
+session is resolved (so a cross-site POST cannot even probe session state), the
+principal token exchange carries a failed-login limiter (per client key, with a
+sliding window, a truthful `Retry-After`, a success that clears the budget and a
+ceiling on tracked keys), and sessions live in a bounded registry with a
+per-principal quota so one principal’s login storm can never evict another
+principal’s live session. Every forwarding route sends the *session’s* principal
+token, never a caller-supplied header.
+
+**Why it is not a test-only change.** Each of these is a behaviour a production
+operator depends on: the guard converts “we remembered to pass a local provider”
+into “a cloud tier cannot be selected”; the marker ordering converts “we check
+the marker” into “an unauthenticated request cannot distinguish a wrong session
+from a missing marker”; the quota converts “sessions are bounded” into “a flood
+is bounded *per principal*”. The owner-facing sweep in
+`tests/integration/test_api_gate_inventory.py` learned one new declared refusal
+(`429` on the rate-limited token exchange) and nothing else — a 404/405/422 is
+still a deviation, because a set of “acceptable codes” would let a gate that
+stopped running pass as a gate.
+
+**Evidence.** 19-mutant campaign (`scripts/w11x_hardening_mutations.py`)
+19/19 killed, 0 survived, 0 invalid, wired into CI as the `hardening-mutations`
+job which also re-runs `git diff --exit-code` after the campaign. Coverage in
+this lane, measured with `--cov-branch` over the suites that own these modules
+(304 tests): **100% statements and 100% branches** for
+`maintenance/{backup,ci_selftest,housekeeping}.py` and `api/studio_surface.py`,
+with four documented `# pragma: no cover` lines: the session registry's
+`not candidates` branch (the caller counts the principal first), the limiter's
+`not self._failures` branch (pruning never empties a live bucket), the surface's
+second-line tenant check (the authorizer refuses `cross_tenant_denied` first —
+proved by a test that edits the tenant row in the database), and the
+`__main__` entry points. The focused suites are
+`test_maintenance_selftest_isolation.py`, `test_maintenance_selftest_residuals.py`,
+`test_studio_surface_security.py`, `test_studio_surface.py`,
+`test_pr_convergence_recovery.py` and `test_w11x_hardening_mutations_harness.py`,
+plus the owner-facing gate inventory in `tests/integration/test_api_gate_inventory.py`.

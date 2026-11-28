@@ -33,12 +33,15 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import io
 import json
 import os
+import shutil
 import sqlite3
+import tempfile
 import time
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from contextlib import redirect_stdout
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -80,6 +83,11 @@ def prepare_database(path: Path) -> dict[str, Any]:
     path.parent.mkdir(parents=True, exist_ok=True)
     asyncio.run(create_all_tables(str(path)))
     with sqlite3.connect(str(path)) as connection:
+        # ``create_all_tables`` initialises once per *path*, so a second run in
+        # the same process (the self-test deletes and recreates its scratch
+        # directory) returns before the WAL switch. Re-applying it here keeps the
+        # promise this leg makes: the file under test is a real WAL database.
+        connection.execute("PRAGMA journal_mode=WAL")
         journal_mode = str(connection.execute("PRAGMA journal_mode").fetchone()[0]).lower()
         tables = [
             row[0]
@@ -104,18 +112,44 @@ def suppressed_remote_env() -> list[str]:
     return sorted(name for name in os.environ if name.startswith(REMOTE_TIER_ENV_PREFIXES))
 
 
+@contextlib.contextmanager
+def suppressed_remote_environment() -> Iterator[list[str]]:
+    """Remove every remote-tier variable from ``os.environ`` for the block.
+
+    ``Settings`` fills its aliases from the environment, so a runner that holds
+    a complete production tier would otherwise carry those values inside the
+    settings object the self-test hands to ``create_backup``. The provider is
+    injected and the factory is forbidden, which makes that harmless — but the
+    settings themselves should be local by construction, not by luck.
+    """
+    names = [
+        name
+        for name in sorted({*suppressed_remote_env(), PRODUCTION_URL_ENV})
+        if name in os.environ
+    ]
+    saved = {name: os.environ.pop(name) for name in names}
+    try:
+        yield names
+    finally:
+        os.environ.update(saved)
+
+
 def local_only_settings(database: Path, tier: Path) -> Settings:
     """Settings whose storage tier is *structurally* local.
 
-    Every remote-tier credential field is cleared, so even a code path that
-    consulted ``build_blob_provider`` would find nothing to select. The provider
-    itself is injected by :func:`run_backup`; this is the second lock.
+    Built with every remote-tier variable removed from the environment and then
+    with every remote-tier field set to ``None``, so the result is local twice
+    over: nothing in the ambient environment can put a credential into it, and
+    even a code path that consulted ``build_blob_provider`` would find nothing
+    to select. The provider itself is injected by :func:`run_backup`.
     """
     from nexus_ai_agent.config.settings import Settings
 
-    # ``model_copy`` (not constructor kwargs) because these fields are declared
-    # with validation aliases, which pydantic treats as env-only inputs.
-    return Settings.model_validate({}).model_copy(
+    with suppressed_remote_environment():
+        # ``model_copy`` (not constructor kwargs) because these fields are
+        # declared with validation aliases, which pydantic treats as env-only.
+        base = Settings.model_validate({})
+    return base.model_copy(
         update={
             "db_path": str(database),
             "maintenance_local_tier": str(tier),
@@ -177,6 +211,49 @@ def run_drill(artifact: Path, workdir: Path) -> dict[str, Any]:
     return {"ok": True, "engine": payload.get("engine"), "chain": payload.get("chain")}
 
 
+def run_housekeeping_leg(*, database: Path, tier: Path) -> dict[str, Any]:
+    """Prune a stale backup from its own local tier through ``run_housekeeping``.
+
+    The prune uses a dedicated tier, not the backup leg's: the drill consumes the
+    artifact this run uploaded, and the evidence document asserts it still
+    exists. Retention 0 expires the seeded backup immediately, which exercises
+    the *delete* path of the local tier against a provider passed explicitly —
+    a housekeeping regression that fell back to the factory would raise inside
+    the self-test guard instead of reaching a cloud bucket.
+    """
+    from nexus_ai_agent.maintenance.backup import BLOB_BACKUP_PREFIX
+    from nexus_ai_agent.maintenance.housekeeping import run_housekeeping
+    from nexus_ai_agent.storage.providers.local_cache import LocalCacheProvider
+
+    prune_tier = tier.parent / "housekeeping-tier"
+    provider = LocalCacheProvider(prune_tier)
+    stale_key = f"{BLOB_BACKUP_PREFIX}/20000101-000000/nexus.sqlite3"
+    stale_path = provider.path_for_key(stale_key)
+    stale_path.parent.mkdir(parents=True, exist_ok=True)
+    stale_path.write_bytes(b"stale-but-structurally-valid-backup")
+
+    temp_dir = tier.parent / "temp"
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    settings = local_only_settings(database, prune_tier).model_copy(
+        update={"creative_temp_dir": str(temp_dir)}
+    )
+    result = run_housekeeping(
+        settings=settings,
+        backup_retention_days=0,
+        provider=provider,
+    )
+    deleted = list(result["backups_deleted"])
+    if stale_key not in deleted:
+        raise SelfTestError(f"housekeeping did not prune the seeded backup: {result}")
+    if stale_path.exists():
+        raise SelfTestError("housekeeping reported a delete that did not happen")
+    return {
+        "provider": provider.name,
+        "backups_deleted": len(deleted),
+        "dry_run": result["dry_run"],
+    }
+
+
 def run_reconcile(database: Path, workspace_root: Path) -> dict[str, Any]:
     """The nightly artifact/binding reconciliation, dry run, fail on violation."""
     from nexus_ai_agent.maintenance import reconciler
@@ -195,7 +272,7 @@ def run_reconcile(database: Path, workspace_root: Path) -> dict[str, Any]:
                 "--fail-on-violation",
             ]
         )
-    payload = json.loads(buffer.getvalue() or "{}")
+    payload: dict[str, Any] = json.loads(buffer.getvalue() or "{}")
     if code != 0:
         raise SelfTestError(f"reconciliation reported a divergence (exit {code}): {payload}")
     return payload
@@ -209,12 +286,20 @@ def run(
     workspace_root: Path,
     artifact: Path | None = None,
 ) -> dict[str, Any]:
-    """Run the requested legs and return one evidence document."""
+    """Run the requested legs and return one evidence document.
+
+    Every leg executes inside :func:`forbid_remote_provider_factory`, so a code
+    path that stopped injecting the local provider would fail closed here with
+    :data:`~nexus_ai_agent.maintenance.backup.SELFTEST_FACTORY_FORBIDDEN`
+    instead of quietly writing a synthetic artifact to a cloud bucket.
+    """
     if (os.environ.get(PRODUCTION_URL_ENV) or "").strip():
         raise SelfTestError(
             f"{PRODUCTION_URL_ENV} is set: the CI self-test never runs against a configured "
             "database. Unset it (or run the production maintenance job instead)."
         )
+    from nexus_ai_agent.maintenance.backup import forbid_remote_provider_factory
+
     evidence: dict[str, Any] = {
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "mode": MODE_LABEL,
@@ -225,19 +310,34 @@ def run(
         "storage_tier": "local_cache",
         "remote_tier_env_suppressed": suppressed_remote_env(),
     }
-    evidence["database"] = prepare_database(database)
-    if only in ("backup", "all"):
-        backup = run_backup(database, tier)
-        evidence["backup"] = backup
-        artifact = Path(backup["artifact_path"])
-    if only in ("drill", "all"):
-        if artifact is None:
-            raise SelfTestError("the drill leg needs an artifact (run the backup leg first)")
-        evidence["drill"] = run_drill(artifact, tier.parent / "restore-drill")
-    if only in ("reconcile", "all"):
-        evidence["reconcile"] = run_reconcile(database, workspace_root)
+    with forbid_remote_provider_factory():
+        evidence["database"] = prepare_database(database)
+        if only in ("backup", "all"):
+            backup = run_backup(database, tier)
+            evidence["backup"] = backup
+            artifact = Path(backup["artifact_path"])
+        if only in ("drill", "all"):
+            if artifact is None:
+                raise SelfTestError("the drill leg needs an artifact (run the backup leg first)")
+            evidence["drill"] = run_drill(artifact, tier.parent / "restore-drill")
+        if only in ("reconcile", "all"):
+            evidence["reconcile"] = run_reconcile(database, workspace_root)
+        if only == "all":
+            evidence["housekeeping"] = run_housekeeping_leg(database=database, tier=tier)
     evidence["ok"] = True
     return evidence
+
+
+def default_workdir() -> Path:
+    """Deterministic scratch *parent* for the argument-less CI invocation.
+
+    ``RUNNER_TEMP`` on GitHub Actions, the system temp directory elsewhere. The
+    parent is fixed so a human always knows where to look; :func:`main` clears
+    it, then creates the database in a per-run subdirectory so two runs in the
+    same process cannot inherit each other's initialised path.
+    """
+    root = os.environ.get("RUNNER_TEMP") or tempfile.gettempdir()
+    return Path(root) / "nexus-maintenance-selftest"
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -246,14 +346,24 @@ def main(argv: Sequence[str] | None = None) -> int:
         description="End-to-end maintenance self-test for a CI checkout without cloud secrets.",
     )
     parser.add_argument("--only", choices=("backup", "drill", "reconcile", "all"), default="all")
-    parser.add_argument("--db", required=True, help="SQLite path to create and exercise")
-    parser.add_argument("--tier", required=True, help="local maintenance tier directory")
+    parser.add_argument("--db", default=None, help="SQLite path to create and exercise")
+    parser.add_argument("--tier", default=None, help="local maintenance tier directory")
     parser.add_argument("--workspace-root", default=".", help="repository root for reconciliation")
     parser.add_argument("--json-out", default=None, help="write the evidence document here")
     args = parser.parse_args(argv)
 
-    database = Path(args.db).expanduser()
-    tier = Path(args.tier).expanduser()
+    using_defaults = args.db is None and args.tier is None
+    workdir = default_workdir()
+    if using_defaults:
+        shutil.rmtree(workdir, ignore_errors=True)
+        workdir.mkdir(parents=True, exist_ok=True)
+        # A unique database file per run. The storage layer initialises a schema
+        # once per *path* in a process, so reusing the path of a file this run
+        # deleted would silently skip initialisation and leave an empty schema.
+        database = Path(tempfile.mkdtemp(prefix="db-", dir=workdir)) / "nexus.sqlite3"
+    else:
+        database = Path(args.db).expanduser() if args.db else workdir / "nexus.sqlite3"
+    tier = Path(args.tier).expanduser() if args.tier else workdir / "tier"
     tier.mkdir(parents=True, exist_ok=True)
     try:
         evidence = run(
@@ -280,5 +390,5 @@ def main(argv: Sequence[str] | None = None) -> int:
     return 0
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover - module entry point
     raise SystemExit(main())

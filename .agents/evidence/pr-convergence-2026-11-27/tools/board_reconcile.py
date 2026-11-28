@@ -21,6 +21,44 @@ import agent_board  # noqa: E402
 
 FORENSICS = Path(__file__).resolve().parents[1] / "PR_FORENSICS.json"
 
+#: Repository roots that are too coarse to describe *what a family may touch*.
+#: A zone claiming ``src/nexus_ai_agent/`` collides with every other zone, so the
+#: exact files that sit directly in such a root are named instead.
+BROAD_ROOT_PREFIXES = frozenset(
+    {"src/nexus_ai_agent", "tests", "docs", "scripts", ".github", "src"}
+)
+
+
+def _parent_dir(path: str) -> str:
+    """The POSIX directory of *path* without a trailing slash (``"."`` at top level)."""
+    parent = str(PurePosixPath(path).parent)
+    return parent.rstrip("/") or "."
+
+
+def zone_prefixes(paths: list[str]) -> list[str]:
+    """Complete, non-blocking path metadata for a family zone.
+
+    Two properties matter and both are asserted by
+    ``tests/unit/test_pr_convergence_tools.py``:
+
+    * **complete** — no silent truncation. The previous ``[:24]`` cut dropped the
+      tail of the list for the larger families, so a resumer could not see every
+      directory its PRs touched. There is no limit now.
+    * **specific** — a broad repository root (``src/nexus_ai_agent``, ``tests``,
+      …) is not emitted as a directory prefix, because it would overlap every
+      other zone. The files that live directly in that root are listed by exact
+      path instead, so nothing is lost.
+    """
+    parents = {_parent_dir(path) for path in paths if path}
+    prefixes: set[str] = set()
+    for parent in parents:
+        if parent in BROAD_ROOT_PREFIXES:
+            prefixes.update(path for path in paths if path and _parent_dir(path) == parent)
+        else:
+            prefixes.add(f"{parent}/")
+    return sorted(prefixes)
+
+
 FAMILIES = {
     "pr-backlog-security-2026-11-27": {
         "title": "PR backlog convergence 2026-11-27: security, authorization and command wiring",
@@ -104,13 +142,9 @@ def main() -> int:
             zone = spec["zone"]
             if zone in zone_ids:
                 continue
-            prefixes = sorted(
-                {
-                    str(PurePosixPath(path).parent) + "/"
-                    for number in spec["prs"]
-                    for path in files_by_pr.get(number, [])
-                }
-            )[:24]
+            prefixes = zone_prefixes(
+                [path for number in spec["prs"] for path in files_by_pr.get(number, [])]
+            )
             board["zones"].append(
                 {
                     "id": zone,

@@ -147,15 +147,30 @@ def _coerce_keys(raw: Iterable[Any]) -> set[SymbolKey]:
     return keys
 
 
+#: What :func:`verify_superseded_contract_parity` actually measures. The name is
+#: deliberately narrower than "parity": it compares the *structural signature*
+#: an AST can see — module path, qualified name and argument names — and says
+#: nothing about runtime behaviour, types, defaults or semantics. A renamed
+#: method, a changed default, or a body that now returns None all pass this
+#: check, so the verdict is "the API surface is present", never "the PR is
+#: behaviourally redundant".
+PARITY_METHOD = "structural_signature_parity"
+PARITY_METHOD_LABEL = "Structural API Signature Parity"
+
+
 def verify_superseded_contract_parity(
     pr_record: Mapping[str, Any], main_index: Iterable[SymbolKey]
 ) -> dict[str, Any]:
-    """Prove a ``SUPERSEDED_AND_CLOSED`` verdict at the contract level.
+    """Measure Structural API Signature Parity of a ``SUPERSEDED_AND_CLOSED``.
 
-    ``parity`` is true only when *every* contract the PR adds already exists on
-    main with the same module path, qualified name **and** argument names. A
-    same-name symbol in another module is reported as ``relocated`` (it does
-    *not* establish parity), and anything else is ``missing``.
+    ``structural_signature_parity`` (mirrored as ``parity`` for older readers) is
+    true only when *every* added contract already exists on main with the same
+    module path, qualified name **and** argument names. A same-name symbol in
+    another module is reported as ``relocated`` (it does *not* establish parity),
+    and anything else is ``missing``.
+
+    This is a structural claim only: see :data:`PARITY_METHOD` for the exact
+    limits of what an AST comparison can prove.
     """
     added = _coerce_keys(
         pr_record.get("added_contracts") or pr_record.get("added_symbol_keys") or []
@@ -165,13 +180,17 @@ def verify_superseded_contract_parity(
     exact = sorted(key for key in added if key in index)
     missing = sorted(key for key in added if key not in index)
     relocated = [key for key in missing if (key[1], key[2]) in by_name_and_args]
+    established = bool(added) and not missing
     return {
         "number": pr_record.get("number"),
+        "method": PARITY_METHOD,
+        "method_label": PARITY_METHOD_LABEL,
         "added_contracts": len(added),
         "exact_matches": len(exact),
         "relocated": [[key[0], key[1], list(key[2])] for key in relocated],
         "missing": [[key[0], key[1], list(key[2])] for key in missing if key not in relocated],
-        "parity": bool(added) and not missing,
+        "structural_signature_parity": established,
+        "parity": established,
         "coverage": (len(exact) / len(added)) if added else None,
     }
 
@@ -367,6 +386,13 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.verify_superseded:
         parity_payload = {
+            "method": PARITY_METHOD,
+            "method_label": PARITY_METHOD_LABEL,
+            "method_limits": (
+                "AST-level comparison of (module, qualified name, argument names). "
+                "Proves the API surface exists on main; proves nothing about "
+                "runtime behaviour, types, defaults or semantics."
+            ),
             "main_sha": data["main_sha"],
             "main_qualified_contracts": len(index),
             "records": sorted(parity, key=lambda row: row["number"]),
@@ -376,9 +402,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         for row in parity_payload["records"]:
             print(
-                f"  parity #{row['number']}: exact={row['exact_matches']}/{row['added_contracts']} "
+                f"  {PARITY_METHOD} #{row['number']}: "
+                f"exact={row['exact_matches']}/{row['added_contracts']} "
                 f"relocated={len(row['relocated'])} missing={len(row['missing'])} "
-                f"parity={row['parity']}"
+                f"established={row['structural_signature_parity']}"
             )
         print(f"wrote {PARITY_OUT}")
     return 0

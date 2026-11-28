@@ -216,7 +216,7 @@ def lane(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     import base64
 
     from nexus_ai_agent.adapters.studio_principal_auth import StudioPrincipalAuthStore
-    from nexus_ai_agent.api.studio_surface import session_registry
+    from nexus_ai_agent.api.studio_surface import login_limiter, session_registry
     from nexus_ai_agent.nagar.ibpc.authority import StudioRole
 
     workspace = tmp_path / "ws"
@@ -253,11 +253,13 @@ def lane(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     store.close()
 
     session_registry.clear()
+    login_limiter.clear()
     # https base_url: the cookie is Secure, and a test client on http would
     # never send it back — the same rule a browser enforces.
     client = TestClient(app, base_url="https://testserver")
     yield client
     session_registry.clear()
+    login_limiter.clear()
 
 
 def _login(client: TestClient) -> None:
@@ -272,7 +274,12 @@ def _login(client: TestClient) -> None:
 def test_lane_requires_a_session(lane: TestClient) -> None:
     assert lane.get(f"{API_PREFIX}/me").status_code == 401
     assert lane.get(f"{API_PREFIX}/sessions", params={"project_id": PROJECT}).status_code == 401
-    assert lane.post(f"{API_PREFIX}/projects/{PROJECT}/ibpc/sessions", json={}).status_code == 401
+    unauthorised = lane.post(
+        f"{API_PREFIX}/projects/{PROJECT}/ibpc/sessions",
+        json={},
+        headers={"x-nagar-studio": "1"},
+    )
+    assert unauthorised.status_code == 401
 
 
 def test_login_requires_the_csrf_marker(lane: TestClient) -> None:
@@ -321,7 +328,9 @@ def test_sessions_panel_lists_a_real_durable_session(lane: TestClient) -> None:
     empty = lane.get(f"{API_PREFIX}/sessions", params={"project_id": PROJECT})
     assert empty.status_code == 200 and empty.json()["sessions"] == []
 
-    opened = lane.post(f"{API_PREFIX}/projects/{PROJECT}/ibpc/sessions", json={})
+    opened = lane.post(
+        f"{API_PREFIX}/projects/{PROJECT}/ibpc/sessions", json={}, headers={"x-nagar-studio": "1"}
+    )
     assert opened.status_code == 201, opened.text
     session_id = opened.json()["session_id"]
 
@@ -343,7 +352,11 @@ def test_sessions_panel_refuses_a_project_the_caller_cannot_read(lane: TestClien
 
 def test_lane_rejects_an_invalid_body_with_422(lane: TestClient) -> None:
     _login(lane)
-    response = lane.post(f"{API_PREFIX}/projects/{PROJECT}/ibpc/sessions", json={"nope": 1})
+    response = lane.post(
+        f"{API_PREFIX}/projects/{PROJECT}/ibpc/sessions",
+        json={"nope": 1},
+        headers={"x-nagar-studio": "1"},
+    )
     assert response.status_code == 422, response.text
 
 
@@ -356,3 +369,38 @@ def test_the_bundle_never_touches_persistent_storage() -> None:
         assert forbidden not in html, forbidden
     assert "principal_token" in script  # posted once, then cleared
     assert "sequence_number: 1," not in script, "a hardcoded sequence number would collide"
+
+
+def test_a_project_whose_tenant_was_edited_underneath_the_store_is_refused(
+    lane: TestClient,
+) -> None:
+    """A tenant edited straight in the database must not grant a cross-tenant read.
+
+    The API cannot produce this state (the store refuses a cross-tenant grant), so
+    the mutation is made where it could really happen — in the row itself. The
+    authorizer refuses with ``cross_tenant_denied`` before the surface's own
+    second-line check would run, which is why that check carries a
+    ``pragma: no cover`` and this test asserts the *observable* contract rather
+    than the layer that enforces it.
+    """
+    import os
+    import sqlite3
+
+    _login(lane)
+    opened = lane.post(
+        f"{API_PREFIX}/projects/{PROJECT}/ibpc/sessions", json={}, headers={"x-nagar-studio": "1"}
+    )
+    assert opened.status_code == 201, opened.text
+
+    auth_db = Path(os.environ["NEXUS_STUDIO_AUTH_DB"])
+    with sqlite3.connect(auth_db) as connection:
+        connection.execute(
+            "UPDATE nexus_studio_projects SET tenant_id = ? WHERE project_id = ?",
+            ("ten-2", PROJECT),
+        )
+        connection.commit()
+
+    response = lane.get(f"{API_PREFIX}/sessions", params={"project_id": PROJECT})
+
+    assert response.status_code == 403, response.text
+    assert response.json()["detail"].startswith("cross_tenant_denied"), response.text

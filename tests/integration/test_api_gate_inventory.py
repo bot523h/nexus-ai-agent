@@ -194,6 +194,14 @@ class Surface:
     #: Studio session lane refuses a request that lacks its CSRF marker
     #: *before* it looks at the credential).
     probe_headers: Mapping[str, str] = field(default_factory=dict)
+    #: Additional statuses that are still *a refusal*, never a bypass. Only a
+    #: rate-limited operation may declare one: the principal token exchange
+    #: answers ``429`` (with ``Retry-After``) once the failed-login budget is
+    #: spent, and the sweep's repeated wrong credentials legitimately spend it.
+    #: This is deliberately not a general "acceptable codes" set — every other
+    #: operation must still answer exactly its one expected status, because a
+    #: set lets a 404/405/422 pass as a gate that ran.
+    also_refusal_statuses: frozenset[int] = frozenset()
 
     def owns(self, operation: tuple[str, str]) -> bool:
         method, path = operation
@@ -208,6 +216,12 @@ class Surface:
         if state == "unconfigured":
             return self.unconfigured_status
         return self.unauthenticated_status
+
+    def is_refusal(self, state: str, status_code: int) -> bool:
+        """Whether *status_code* is a refusal this surface may answer with."""
+        return status_code == self.expected_status(state) or (
+            status_code in self.also_refusal_statuses
+        )
 
 
 #: Every security boundary of the HTTP surface, in the order they are
@@ -293,6 +307,10 @@ SURFACES: tuple[Surface, ...] = (
         configuration="principal token exchange (NEXUS_STUDIO_AUTH_DB)",
         probe_body={"principal_token": "not-the-principal-token"},
         probe_headers={studio_session.CSRF_HEADER: studio_session.CSRF_VALUE},
+        # The token exchange is the one operation with a failed-login limiter:
+        # repeated wrong credentials spend the budget and it answers 429 with
+        # Retry-After. That is a refusal, not a gate that failed to run.
+        also_refusal_statuses=frozenset({429}),
     ),
 )
 
@@ -644,7 +662,7 @@ def _sweep(
             )
             continue
         expected = surface.expected_status(state)
-        if response.status_code != expected:
+        if not surface.is_refusal(state, response.status_code):
             deviations[operation] = (
                 f"{method} {path}: expected {expected} for surface {surface.name!r} "
                 f"in state {state!r}, got {response.status_code}: {response.text[:160]!r}"

@@ -24,6 +24,8 @@ success only when ALL of these hold:
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import contextvars
 import datetime as dt
 import hashlib
 import json
@@ -32,6 +34,7 @@ import shutil
 import sqlite3
 import subprocess
 import tempfile
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -54,6 +57,51 @@ log = get_logger(__name__)
 #: The two interchangeable S3-compatible maintenance tiers. Both implement the
 #: same ``StorageProvider`` surface, so the maintenance lane is provider-neutral.
 BlobProvider = R2Provider | B2Provider | LocalCacheProvider
+
+#: Environment flag that forbids remote provider selection process-wide (the CI
+#: self-test sets it for the duration of a run, including any child process).
+SELFTEST_FLAG_ENV = "NEXUS_MAINTENANCE_SELFTEST_ACTIVE"
+
+#: Message raised when the factory is consulted during the CI self-test. Pinned
+#: verbatim by ``tests/unit/test_ci_selftest.py``: the lane's whole guarantee is
+#: that no cloud tier is ever *selected*, so this must be impossible to satisfy
+#: accidentally.
+SELFTEST_FACTORY_FORBIDDEN = (
+    "Remote blob provider factory is forbidden during CI local SQLite self-test"
+)
+
+_SELFTEST_ACTIVE: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "nexus_maintenance_selftest_active", default=False
+)
+
+
+def selftest_active() -> bool:
+    """True while a CI local self-test owns this process (or a child of it)."""
+    return _SELFTEST_ACTIVE.get() or os.environ.get(SELFTEST_FLAG_ENV) == "1"
+
+
+@contextlib.contextmanager
+def forbid_remote_provider_factory() -> Iterator[None]:
+    """Make :func:`build_blob_provider` fail closed for the duration of a block.
+
+    Two mechanisms on purpose: a context variable (correct under threads and
+    asyncio tasks) and an environment flag (inherited by subprocesses the
+    self-test spawns). The guard is what turns "we pass a local provider" into
+    "a cloud tier cannot be selected even if a future refactor stops passing
+    one" — the difference between a convention and an invariant.
+    """
+    token = _SELFTEST_ACTIVE.set(True)
+    previous = os.environ.get(SELFTEST_FLAG_ENV)
+    os.environ[SELFTEST_FLAG_ENV] = "1"
+    try:
+        yield
+    finally:
+        if previous is None:
+            os.environ.pop(SELFTEST_FLAG_ENV, None)
+        else:
+            os.environ[SELFTEST_FLAG_ENV] = previous
+        _SELFTEST_ACTIVE.reset(token)
+
 
 # Blob-tier prefix — recognized by AIStorageManager.is_blob_key.
 BLOB_BACKUP_PREFIX = "backups/db"
@@ -291,7 +339,13 @@ def build_blob_provider(settings: Settings) -> BlobProvider:
     migration is loud rather than silently writing backups to the wrong bucket.
     When a *complete* R2 tier is present the fallback is explicit and is used —
     this mirrors the workflow preflight, which accepts either complete tier.
+
+    Raises :class:`RuntimeError` while a CI local self-test is active: that lane
+    must never be able to select a cloud tier, so the refusal is unconditional
+    and happens before any settings are inspected.
     """
+    if selftest_active():
+        raise RuntimeError(SELFTEST_FACTORY_FORBIDDEN)
     b2 = B2Provider.from_settings(settings)
     if b2.is_configured():
         return b2
@@ -319,7 +373,11 @@ def build_blob_provider(settings: Settings) -> BlobProvider:
 
 #: Backwards-compatible alias — the maintenance lane has always called this
 #: ``_build_provider``; the rename documents that it now selects between tiers.
-_build_provider = build_blob_provider
+#: It *delegates* instead of being a second binding, so a monkeypatched or
+#: guarded :func:`build_blob_provider` is honoured on every call path.
+def _build_provider(settings: Settings) -> BlobProvider:
+    """Deprecated alias for :func:`build_blob_provider`."""
+    return build_blob_provider(settings)
 
 
 def _upload_actionable(
