@@ -331,10 +331,28 @@ async def test_a_fresh_service_resumes_the_parked_intent_exactly_once(
         second.close()
 
 
-def test_an_unwired_service_keeps_the_legacy_path(tmp_path: Path) -> None:
+def test_an_unwired_service_keeps_the_legacy_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """ "No outbox configured" must mean "no seam", never "a broken seam"."""
     root = tmp_path / "plain"
     root.mkdir()
+    # The application directory resolves its database from settings, so this
+    # test has to own that path too -- otherwise it reads whatever database the
+    # previously-run test happened to leave behind (and fails when that one has
+    # no schema).  This is isolation, not a workaround: the assertion below is
+    # about an unwired service, not about the directory's database.
+    monkeypatch.setenv("NEXUS_DB_PATH", str(tmp_path / "app.sqlite"))
+    monkeypatch.delenv("NEXUS_DATABASE_URL", raising=False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    settings_module.get_settings.cache_clear()
+    from nexus_ai_agent.storage.db import sync_engine
+    from nexus_ai_agent.storage.migrations import ensure_startup_schema
+    from nexus_ai_agent.storage.models import SQLModel
+
+    ensure_startup_schema()
+    SQLModel.metadata.create_all(sync_engine())
+
     directory = SQLApplicationDirectory()
     binding = ChannelBinding("cli", "plain-owner")
     principal = directory.resolve_or_create(binding)
