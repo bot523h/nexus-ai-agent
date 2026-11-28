@@ -688,12 +688,27 @@ def _markdown(report: dict[str, Any]) -> str:
             f"{summary['p95_ms']:.3f} | {summary['stddev_ms']:.3f} | "
             f"{summary['min_ms']:.3f} | {summary['max_ms']:.3f} |"
         )
+    trials = int(report["trials"])
     lines += [
         "",
         "Each trial runs in its own fresh temporary directory, so a later trial is",
         "never warmed by an earlier one.  `p95` is nearest-rank over the pooled",
         "samples (with N=3 that is the maximum observation, which is the honest",
         "answer: an interpolated p95 at N=3 is a number no measurement supports).",
+        "",
+        f"**Read the spread, not the point estimate.**  N={trials}: "
+        f"`max` is the largest of {trials} samples and `p95` is by construction the "
+        "same number, so neither is a tail estimate -- they are a sample bound.  "
+        "The three numbers that carry information at this N are `min` (best case "
+        "the path can reach), `median` and `stddev` (how reproducible it is).  A "
+        "larger N would be needed to make any p95 claim, and this report does not "
+        "make one.",
+        "",
+        "`runtime_build_and_close` (path f) is deliberately separate from (a)-(e): "
+        "those measure the modules *inside* the runtime, while (f) measures what "
+        "every Studio HTTP route pays per request to assemble and tear the runtime "
+        "down.  It is a fixed overhead on top of whichever path a route then uses, "
+        "so it is not additive with the others and must not be summed with them.",
         "",
         "## Per-trial samples (ms)",
         "",
