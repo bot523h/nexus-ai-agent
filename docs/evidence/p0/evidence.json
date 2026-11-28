@@ -118,6 +118,15 @@
       "reason": "create_backup() gained an explicit provider override so the CI self-test lane can never hand a synthetic SQLite artifact to a configured B2/R2 tier",
       "recorded_at": "2026-11-27",
       "recorded_by": "PR #371 maintenance-lane audit"
+    },
+    {
+      "file": "src/nexus_ai_agent/maintenance/backup.py",
+      "previous_sha256": "2ebcfaf446c0692aa2ea57e4c412bf2a7d26378607e84337a26b02773fe10cae",
+      "sha256": "14a5e3f02d057dd573da54a221c3bd79954c8e9c99538b899213d070db5e51f7",
+      "reason": "build_blob_provider() gained the CI self-test factory guard (forbid_remote_provider_factory), so a lane that regressed to the ambient tier fails closed instead of reaching cloud storage",
+      "recorded_at": "2026-11-28",
+      "recorded_by": "PR #371 maintenance-studio hardening (session 3)",
+      "note": "bound in 3737fbda without a trail row; this row records the true previous digest"
     }
   ]
 }
