@@ -792,9 +792,16 @@ async def test_cancel_before_execute_refuses_and_enqueues_nothing(harness, tmp_p
 
 
 @pytest.mark.asyncio
-async def test_enqueue_failure_marks_failed_without_leaking(harness, tmp_path: Path) -> None:
-    """An enqueue failure must surface as a typed refusal, terminalise the turn
-    as FAILED, and never raise an unhandled state-transition exception."""
+async def test_enqueue_failure_parks_the_turn_without_leaking(harness, tmp_path: Path) -> None:
+    """An enqueue failure surfaces as a typed refusal and never raises.
+
+    The turn is deliberately left EXECUTING, not FAILED.  The approval was
+    consumed before the enqueue, so terminalising the turn would refuse the one
+    retry that can still recover a spent approval; the durable outbox row is
+    what carries the resumable state instead (see
+    ``test_studio_outbox_service_seam``).  With no outbox wired there is nothing
+    to resume from, but the refusal is still typed and the queue still empty.
+    """
     service, queue, _, _, principal = harness
     source = tmp_path / "source.mp4"
     _clip(source)
@@ -819,9 +826,9 @@ async def test_enqueue_failure_marks_failed_without_leaking(harness, tmp_path: P
     assert outcome.status == "refused"
     assert "enqueue_failed" in outcome.detail
     assert queue.job_ids() == []
-    # read the raw turn (get_turn refuses terminal turns by design)
+    # The turn is NOT terminalised: a spent approval must stay recoverable.
     turn = service.sessions.get_session(sid).turns["turn-1"]
-    assert turn.turn_state.value == "FAILED"
+    assert turn.turn_state.value == "EXECUTING"
 
 
 @pytest.mark.asyncio

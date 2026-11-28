@@ -27,10 +27,17 @@ from nexus_ai_agent.application.principal import PrincipalId
 
 __all__ = [
     "AuthorizationError",
+    "AuthorityResolution",
     "CanonicalAuthorityError",
     "CanonicalAuthorityPort",
     "DirectoryAuthority",
+    "MembershipRole",
+    "MembershipStatus",
     "PrincipalFacts",
+    "PrincipalRoleAuthority",
+    "PrincipalRoleFacts",
+    "PrincipalStatus",
+    "BindingStatus",
     "StudioAction",
     "StudioAuthorizationDecision",
     "StudioAuthorizationError",
@@ -62,6 +69,10 @@ class StudioAction(str, Enum):
     SUBMIT_INTENT = "SUBMIT_INTENT"
     APPROVE_PLAN = "APPROVE_PLAN"
     EXECUTE_PLAN = "EXECUTE_PLAN"
+    #: Worker-side spelling of "execute the plan this approval was bound to".
+    #: It is an *alias member* of ``EXECUTE_PLAN`` (same value, same ROLE_ACTIONS
+    #: membership) so a worker proof and an RBAC decision can never disagree.
+    EXECUTE_APPROVED_PLAN = "EXECUTE_PLAN"
     MANAGE_CONSENT = "MANAGE_CONSENT"
     MANAGE_MEMBERSHIP = "MANAGE_MEMBERSHIP"
     CLOSE_SESSION = "CLOSE_SESSION"
@@ -188,3 +199,132 @@ class DirectoryAuthority:
             project_id=project_id,
             channel_binding_id=binding_ref,
         )
+
+
+# --------------------------------------------------------------------------- #
+# Worker authority facts (Wave 4)
+# --------------------------------------------------------------------------- #
+#
+# The *worker* path (``IBPCService`` execution, the canonical render lane) does
+# not merely ask "is this principal a member?" — it has to know the durability
+# status of the three rows a membership decision rests on (principal, project
+# membership, channel binding) and the exact role that granted execution.  The
+# three closed vocabularies below are the durable spellings those rows use; they
+# are declared here (the authority seam) so an adapter store and the worker
+# reader can never disagree about a status string by accident.
+#
+# They live in this module — not in ``adapters`` — because ``nagar.ibpc`` must
+# stay free of adapter imports (``tests/architecture/test_ibpc_boundary.py``).
+
+
+class PrincipalStatus(str, Enum):
+    """Durable lifecycle of one principal row."""
+
+    ACTIVE = "ACTIVE"
+    SUSPENDED = "SUSPENDED"
+    REVOKED = "REVOKED"
+
+
+class MembershipStatus(str, Enum):
+    """Durable lifecycle of one project membership row."""
+
+    ACTIVE = "ACTIVE"
+    SUSPENDED = "SUSPENDED"
+    REVOKED = "REVOKED"
+
+
+class BindingStatus(str, Enum):
+    """Durable lifecycle of one channel-binding row."""
+
+    ACTIVE = "ACTIVE"
+    SUSPENDED = "SUSPENDED"
+    REVOKED = "REVOKED"
+
+
+class MembershipRole(str, Enum):
+    """The role a membership grants, in the worker's own vocabulary.
+
+    Deliberately a *distinct* closed set from :class:`StudioRole` even though the
+    four ids coincide today: ``StudioRole`` names the HTTP/RBAC surface and may
+    grow a surface-only role, while ``MembershipRole`` names what a durable
+    membership row on disk is allowed to say.  ``MembershipRole.from_studio``
+    is the one sanctioned bridge between the two.
+    """
+
+    OWNER = "OWNER"
+    EDITOR = "EDITOR"
+    VIEWER = "VIEWER"
+    AUDITOR = "AUDITOR"
+
+    def to_studio(self) -> StudioRole:
+        """The RBAC role this membership role denotes."""
+        return StudioRole(self.value)
+
+    @classmethod
+    def from_studio(cls, role: StudioRole | str) -> MembershipRole:
+        """Parse a stored/RBAC role spelling, failing closed on anything else."""
+        if isinstance(role, StudioRole):
+            return cls(role.value)
+        if isinstance(role, str):
+            try:
+                return cls(role.strip().upper())
+            except ValueError as exc:
+                raise CanonicalAuthorityError(
+                    "unknown_membership_role", f"{role!r} is not a membership role"
+                ) from exc
+        raise CanonicalAuthorityError(
+            "unknown_membership_role", f"{type(role).__name__} is not a membership role"
+        )
+
+
+@dataclass(frozen=True)
+class PrincipalRoleFacts:
+    """Worker-verified role facts for one (principal, project, tenant) triple.
+
+    Every field is a *read* of the durable store inside one snapshot: the
+    statuses are the stored spellings, ``permitted_actions`` is the closed
+    permission set the role grants, and ``verified_at_utc`` is when the read
+    happened.  The facts are evidence, never a grant — the caller still passes
+    them to its own gate.
+    """
+
+    principal_id: str
+    project_id: str
+    tenant_id: str
+    binding_ref: str
+    role: MembershipRole
+    principal_status: PrincipalStatus
+    membership_status: MembershipStatus
+    binding_status: BindingStatus
+    permitted_actions: tuple[StudioAction, ...]
+    verified_at_utc: str
+
+    @property
+    def may_execute(self) -> bool:
+        """True only when all three rows are ACTIVE (the fail-closed triple)."""
+        return (
+            self.principal_status is PrincipalStatus.ACTIVE
+            and self.membership_status is MembershipStatus.ACTIVE
+            and self.binding_status is BindingStatus.ACTIVE
+        )
+
+
+@runtime_checkable
+class PrincipalRoleAuthority(Protocol):
+    """Resolve the durable role facts the worker re-checks before execution."""
+
+    def resolve_principal_role(
+        self,
+        principal_id: str,
+        project_id: str,
+        *,
+        binding_ref: str = "",
+        tenant_id: str = "",
+    ) -> PrincipalRoleFacts: ...
+
+
+#: The worker's full authority resolution *is* the principal/role fact set:
+#: the four-way decision (principal, project tenant, membership role, binding)
+#: carries nothing that ``PrincipalRoleFacts`` omits, so the alias is exact
+#: rather than a second, drifting shape.
+AuthorityResolution = PrincipalRoleFacts

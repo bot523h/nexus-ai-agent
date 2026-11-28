@@ -28,10 +28,11 @@ import asyncio
 import hashlib
 import hmac
 import json
+import logging
 import os
 import shutil
 import stat
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Literal, Protocol
@@ -117,6 +118,8 @@ from nexus_ai_agent.provenance.canonicalization import (
 )
 
 #: Closed surface constants. Pinned against the canonical worker's own map by
+logger = logging.getLogger(__name__)
+
 #: tests/architecture/test_ibpc_boundary.py (which may import render_jobs; this
 #: module may not): SURFACE_TO_CANONICAL[("edit", "trim")] == "timeline.trim".
 JOB_TYPE = "creative_render"
@@ -136,6 +139,127 @@ class ScopeSignatureMismatchError(ApprovalError):
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _run_coroutine_blocking(coro: Any) -> Any:
+    """Drive a coroutine to completion from a *synchronous* caller.
+
+    This bridge exists for exactly one contract: the outbox coordinator is
+    synchronous (it holds SQLite locks and fsyncs) while the queue port is
+    async, so the awaitable has to be driven on a thread that owns no loop.
+    The async entry points -- ``execute()`` and
+    ``reconcile_execution_outbox_async`` -- ``await`` the port directly and must
+    never come through here.
+
+    A running loop on the calling thread is therefore a *programming error*, not
+    a case to work around.  The previous implementation spawned a thread and
+    joined it on the loop thread, which blocks the loop for the whole duration
+    of the bridged I/O -- the very thing the bridge was added to avoid -- and
+    silently serialises every other request behind one outbox write.  Failing
+    loudly turns a latency bug into an immediate, diagnosable error.
+
+    ``asyncio.run`` is refused for the same reason ``asyncio.run(coro)`` cannot
+    be used here at all: it would raise on a live loop even if we wanted to.
+    """
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        # No loop on this thread: the documented, correct case.
+        return asyncio.run(coro)
+    coro.close()  # never leave an un-awaited coroutine to be GC'd with a warning
+    raise RuntimeError(
+        "ibpc.outbox.bridge_on_event_loop: _run_coroutine_blocking was called from a "
+        "thread that is running an event loop; it would block the loop for the whole "
+        "duration of the bridged I/O.  Callers inside a loop must await the async "
+        "entry point (execute() / reconcile_execution_outbox_async) instead."
+    )
+
+
+def _outbox_plan_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """The plan projection the outbox stores.
+
+    Deliberately narrow: the outbox compares this canonical JSON on every retry
+    to detect a conflicting re-stage, so it must carry what identifies the work
+    and nothing that varies per attempt (paths, workspace dirs, timestamps).
+    """
+    keys = (
+        "command",
+        "operation",
+        "args",
+        "input_sha256",
+        "media_duration_us",
+        "idempotency_key",
+        "schema_version",
+        "principal_id",
+        "project_id",
+        "channel_binding_id",
+    )
+    return {key: payload[key] for key in keys if key in payload}
+
+
+def _format_seconds(microseconds: int) -> str:
+    """Seconds as the worker's ``args`` expect them: fixed point, no padding."""
+    return f"{microseconds / 1_000_000:.6f}".rstrip("0").rstrip(".") or "0"
+
+
+def _outbox_reservation_payload(ctx: _TurnContext, approval_id: str) -> dict[str, Any]:
+    """Everything the outbox needs to identify the work, before any bytes move.
+
+    Deliberately free of per-attempt values (workspace, staged path, rendered
+    output): those belong to the job payload, not to the durable intent.  The
+    content identity is the *admitted* digest, which ``execute()`` re-proves
+    against the staged bytes before the queue is touched.
+    """
+    return {
+        "command": COMMAND,
+        "operation": SURFACE_OPERATION,
+        "args": [
+            _format_seconds(int(ctx.ast.params["in_point_us"])),
+            _format_seconds(int(ctx.ast.params["out_point_us"])),
+        ],
+        "input_sha256": str(ctx.source_asset_digest),
+        "media_duration_us": int(ctx.duration_us),
+        "idempotency_key": f"ibpc:{approval_id}",
+        "schema_version": 2,
+        "principal_id": str(ctx.verified_identity.principal_id),
+        "project_id": str(ctx.verified_identity.project_id),
+        "channel_binding_id": str(ctx.verified_identity.channel_binding_id),
+    }
+
+
+class IBPCExecutionOutboxError(RuntimeError):
+    """A configured outbox could not record the intent, so execution stops.
+
+    Fail-closed by construction.  Once an outbox is wired it is the durable
+    record of "this approval was spent for this job"; executing without it would
+    spend a single-use cryptographic approval whose only recovery evidence was
+    never written.  A deployment that does not want that guarantee simply does
+    not wire an outbox -- absence is a configuration, failure is not.
+    """
+
+    def __init__(self, reason: str, detail: str = "") -> None:
+        super().__init__(f"{reason}: {detail}" if detail else reason)
+        self.reason = reason
+        self.detail = detail
+
+
+class _OutboxSeamUnavailable(IBPCExecutionOutboxError):
+    """The outbox seam could not derive a key for this turn."""
+
+
+def _outcome_dict(outcome: Any) -> dict[str, Any]:
+    """Project an ``ExecutionOutboxOutcome`` into a JSON-safe dict."""
+    to_dict = getattr(outcome, "to_dict", None)
+    if callable(to_dict):
+        payload: dict[str, Any] = dict(to_dict())
+        return payload
+    return {
+        "status": getattr(outcome, "status", ""),
+        "outbox_id": getattr(outcome, "outbox_id", ""),
+        "idempotency_key": getattr(outcome, "idempotency_key", ""),
+        "job_id": getattr(outcome, "job_id", ""),
+        "detail": getattr(outcome, "detail", ""),
+    }
 
 
 class JobFactsProvider(Protocol):
@@ -187,6 +311,20 @@ class IBPCServiceDeps:
     authorized_asset_root: Path | None = None
     project_revision_resolver: Any | None = None  # Callable[[str], str] | None
     owned_closables: tuple[Any, ...] = ()
+    #: Optional Wave-4 execution seam. When supplied, ``execute`` routes its
+    #: approval-consumption and enqueue through this coordinator so a crash
+    #: between the two is recoverable instead of stranding the turn. When absent
+    #: the legacy in-line path runs unchanged -- this is a backward-compatible
+    #: hook, never a requirement.
+    execution_coordinator: Any | None = None
+    #: Optional Wave-4 pinning store. When supplied, a successful turn honours
+    #: the project's durable head instead of the injected revision provider.
+    revision_pinning_store: Any | None = None
+    #: The durable unified authority bridge.  When supplied, ``execute()``
+    #: re-verifies the four-way snapshot (principal, tenant, project, membership)
+    #: at execution time -- a membership revoked between approve and execute must
+    #: refuse the turn, not merely have been valid when the approval was granted.
+    authority_bridge: Any | None = None
 
 
 @dataclass(frozen=True)
@@ -402,7 +540,479 @@ class IBPCService:
         # serializes the sensitive section of execute() (identity validation ->
         # atomic consume -> turn-state transition) across concurrent requests
         self._execute_lock = asyncio.Lock()
+        # The outbox seam: a *coordinator* once rebuilt, until then whatever the
+        # composition root passed (possibly a bare store, possibly nothing).
+        self._outbox_coordinator: Any | None = None
+        # Why the seam last failed, if it did.  Every failure also raises, so
+        # this is diagnostic context for the caller/log, never a silent shelf.
+        self._last_outbox_error: str | None = None
         self._hydrate_active_contexts()
+
+    # -- execution outbox seam ---------------------------------------------- #
+
+    def enable_execution_outbox(self, store: Any) -> Any:
+        """Adopt a durable outbox store and (re)build the coordinator over it.
+
+        Called by the composition root once the service exists.  Separating it
+        from ``IBPCServiceDeps.execution_coordinator`` is deliberate: the
+        coordinator must call *this* service's consume/enqueue/verify steps, so
+        it cannot be built before the service is.
+        """
+        from nexus_ai_agent.nagar.ibpc.execution_outbox import (
+            DurableExecutionOutboxStore,
+            ExecutionOutboxCoordinator,
+        )
+
+        self._deps = replace(self._deps, execution_coordinator=store)
+        if store is None:
+            self._outbox_coordinator = None
+        elif isinstance(store, ExecutionOutboxCoordinator):
+            self._outbox_coordinator = store
+        elif isinstance(store, DurableExecutionOutboxStore):
+            self._outbox_coordinator = ExecutionOutboxCoordinator(
+                store=store,
+                # Mirrors ``execute()``'s own validation order so a reconcile
+                # cannot consume an approval the live path would have refused.
+                consume_approval_fn=self._outbox_consume_approval,
+                enqueue_job_fn=self._outbox_enqueue_job,
+                await_completion_fn=self._outbox_await_completion,
+                verify_completion_fn=self._outbox_verify_completion,
+                confirm_consumption_fn=self._outbox_confirm_consumed,
+            )
+        else:
+            # An unknown seam: keep it as-is so a caller's own object (and its
+            # tests) keep working; we simply cannot drive it.
+            self._outbox_coordinator = store
+        return self._outbox_coordinator
+
+    @property
+    def execution_outbox(self) -> Any | None:
+        """The coordinator driving the durable outbox, or ``None`` when unwired."""
+        return self._outbox_coordinator
+
+    @property
+    def last_outbox_error(self) -> str | None:
+        """The most recent outbox seam failure, or ``None`` if the seam is clean.
+
+        Every failure that sets this also raises (or, for the enqueue-failure
+        recorder, propagates the original error), so this is never the *only*
+        signal -- it is the readable one.
+        """
+        return self._last_outbox_error
+
+    def reconcile_execution_outbox(self, *, limit: int = 100) -> tuple[dict[str, Any], ...]:
+        """Resume every in-flight intent after a crash or a restart.
+
+        Never re-consumes an approval and never enqueues a second job: each row
+        is driven from its own durable state, and the enqueue is keyed on the
+        row's reserved idempotency key so the queue's own dedupe is the backstop.
+        """
+        coordinator = self._outbox_coordinator
+        if coordinator is None or not hasattr(coordinator, "reconcile_in_flight"):
+            return ()
+        outcomes = coordinator.reconcile_in_flight(limit=limit)
+        return tuple(_outcome_dict(outcome) for outcome in outcomes)
+
+    async def reconcile_execution_outbox_async(
+        self, *, limit: int = 100
+    ) -> tuple[dict[str, Any], ...]:
+        """Off-thread reconciliation: the outbox holds SQLite locks and fsyncs."""
+        return await asyncio.to_thread(self.reconcile_execution_outbox, limit=limit)
+
+    # -- outbox callbacks (synchronous, as ExecutionOutboxCoordinator requires) #
+
+    def _reserved_job_id_for(
+        self,
+        ctx: _TurnContext,
+        approval_id: str,
+        session_id: str,
+        turn_id: str,
+        session: Any,
+    ) -> str | None:
+        """The outbox's reserved job id for this turn, or ``None`` when unwired.
+
+        Derived from the same six inputs the outbox uses, so the id reserved on
+        the ledger and the id the outbox row carries are the same string in
+        every process -- no coordination, no extra column.
+
+        FAIL-CLOSED when a store is wired: an outbox that cannot derive its key
+        cannot stage its row, and consuming the approval anyway would spend it
+        with no recovery evidence.  ``None`` therefore means only "no outbox",
+        never "the outbox broke".
+        """
+        store = self._outbox_store()
+        if store is None:
+            return None
+        return self._derive_reserved_job_id_or_raise(
+            ctx=ctx,
+            approval_id=approval_id,
+            session_id=session_id,
+            turn_id=turn_id,
+            session=session,
+        )
+
+    def _derive_reserved_job_id_or_raise(
+        self,
+        *,
+        ctx: _TurnContext,
+        approval_id: str,
+        session_id: str,
+        turn_id: str,
+        session: Any,
+    ) -> str:
+        """The deterministic reservation, or a typed fail-closed error."""
+        from nexus_ai_agent.nagar.ibpc.execution_outbox import derive_reserved_job_id
+
+        try:
+            key = self._outbox_idempotency_key(
+                ctx=ctx,
+                approval_id=approval_id,
+                session_id=session_id,
+                turn_id=turn_id,
+                session=session,
+            )
+            return derive_reserved_job_id(key)
+        except IBPCExecutionOutboxError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - converted, never swallowed
+            self._note_outbox_error("reserved_job_id_unavailable", exc)
+            raise IBPCExecutionOutboxError(
+                "reserved_job_id_unavailable", f"{type(exc).__name__}: {exc}"
+            ) from exc
+
+    def _outbox_idempotency_key(
+        self,
+        *,
+        ctx: _TurnContext,
+        approval_id: str,
+        session_id: str,
+        turn_id: str,
+        session: Any,
+    ) -> str:
+        """The deterministic intent key: one turn, one approval, one plan."""
+        from nexus_ai_agent.nagar.ibpc.execution_outbox import derive_idempotency_key
+
+        return derive_idempotency_key(
+            tenant_id=str(session.tenant_id),
+            project_id=str(ctx.project_id),
+            session_id=str(session_id),
+            turn_id=str(turn_id),
+            approval_id=str(approval_id),
+            revision_jcs_sha256=self._outbox_revision_digest(ctx),
+        )
+
+    def _outbox_revision_digest(self, ctx: _TurnContext) -> str:
+        """The plan's canonical digest, used as the revision identity in the key."""
+        for candidate in (ctx.plan.plan_digest, ctx.intent_digest):
+            if isinstance(candidate, str) and candidate.strip():
+                return candidate
+        raise _OutboxSeamUnavailable(
+            "no_plan_digest", "the turn context carries no plan digest to key the intent by"
+        )
+
+    def _outbox_store(self) -> Any | None:
+        coordinator = self._outbox_coordinator
+        return None if coordinator is None else getattr(coordinator, "store", None)
+
+    def _note_outbox_error(
+        self, reason: str, exc: BaseException, *, row: Any | None = None
+    ) -> None:
+        """Record AND log a seam failure.  Never called without one of the two."""
+        detail = f"{reason}: {type(exc).__name__}: {exc}"
+        if row is not None:
+            detail = f"{detail} (outbox_id={getattr(row, 'outbox_id', '')})"
+        self._last_outbox_error = detail
+        logger.error(
+            "ibpc.outbox.seam_failure",
+            extra={
+                "outbox_reason": reason,
+                "outbox_row": getattr(row, "outbox_id", None),
+                "session_id": getattr(self, "_last_session_id", None),
+            },
+        )
+
+    async def _stage_outbox_intent(
+        self,
+        *,
+        ctx: _TurnContext,
+        approval_id: str,
+        session_id: str,
+        turn_id: str,
+        session: Any,
+        payload: dict[str, Any],
+    ) -> Any | None:
+        """Stage ``INTENT_STAGED`` for this intent, before anything is spent.
+
+        Returns ``None`` only when no outbox is wired.  With an outbox wired this
+        either returns a durable row or raises
+        :class:`IBPCExecutionOutboxError` -- the caller must be able to rely on
+        "no exception means the intent is recorded".
+
+        The sequence, and why each step is where it is:
+
+        * staging first, because it is idempotent and reversible and records the
+          ``reserved_job_id`` the ledger will later be asked about;
+        * the ``APPROVAL_CONSUMED`` transition happens in ``execute()`` *after*
+          the ledger commits, so a crash between the two leaves a row whose
+          reservation the ledger already knows -- which is what makes recovery a
+          confirmation instead of a replay rejection.
+        """
+        store = self._outbox_store()
+        if store is None:
+            return None
+        try:
+            key = self._outbox_idempotency_key(
+                ctx=ctx,
+                approval_id=approval_id,
+                session_id=session_id,
+                turn_id=turn_id,
+                session=session,
+            )
+            revision_digest = self._outbox_revision_digest(ctx)
+        except IBPCExecutionOutboxError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - converted, never swallowed
+            self._note_outbox_error("intent_key_unavailable", exc)
+            raise IBPCExecutionOutboxError(
+                "intent_key_unavailable", f"{type(exc).__name__}: {exc}"
+            ) from exc
+
+        try:
+            # Another process may hold the outbox lock; this is I/O, so keep it
+            # off the event loop.
+            row, _created = await asyncio.to_thread(
+                store.stage_intent,
+                idempotency_key=key,
+                tenant_id=str(session.tenant_id),
+                project_id=str(ctx.project_id),
+                session_id=str(session_id),
+                turn_id=str(turn_id),
+                principal_id=str(ctx.verified_identity.principal_id),
+                approval_id=str(approval_id),
+                revision_id=str(ctx.plan.plan_digest),
+                revision_jcs_sha256=revision_digest,
+                plan_payload=_outbox_plan_payload(payload),
+            )
+        except Exception as exc:  # noqa: BLE001 - converted, never swallowed
+            self._note_outbox_error("stage_intent_failed", exc)
+            raise IBPCExecutionOutboxError(
+                "stage_intent_failed", f"{type(exc).__name__}: {exc}"
+            ) from exc
+        if row is None or not getattr(row, "outbox_id", ""):
+            error = IBPCExecutionOutboxError(
+                "stage_intent_returned_no_row", "stage_intent produced no durable row"
+            )
+            self._note_outbox_error("stage_intent_returned_no_row", error)
+            raise error
+        return row
+
+    @staticmethod
+    def _reserved_job_id_for_row(row: Any) -> str:
+        reserved = getattr(row, "reserved_job_id", "")
+        if isinstance(reserved, str) and reserved:
+            return reserved
+        raise IBPCExecutionOutboxError(
+            "reservation_missing", f"outbox row {getattr(row, 'outbox_id', '')} has no reservation"
+        )
+
+    def _fail_outbox_row(self, row: Any, reason: str) -> None:
+        """Terminalise a staged intent that can never execute as approved.
+
+        Staging happens *before* the approval is consumed, so every refusal
+        between the two leaves a live ``INTENT_STAGED``/``APPROVAL_CONSUMED``
+        row.  Leaving it in flight would make the next reconcile retry an intent
+        the live path just refused -- a job the approval does not cover -- so a
+        refusal must be recorded as terminal, with its reason.
+
+        Best-effort by design: this runs on an already-decided refusal, and a
+        bookkeeping failure must not turn "refused for reason X" into "crashed".
+        The exception is logged and recorded on ``last_outbox_error`` instead.
+        """
+        store = self._outbox_store()
+        if store is None or row is None:
+            return
+        try:
+            store.mark_failed_terminal(
+                outbox_id=row.outbox_id, error=f"execution_refused: {reason}"
+            )
+        except Exception as exc:  # noqa: BLE001 - see the docstring
+            self._note_outbox_error("mark_failed_terminal_failed", exc, row=row)
+
+    def _record_outbox_enqueued(self, row: Any, job_id: str) -> None:
+        """``APPROVAL_CONSUMED`` -> ``JOB_ENQUEUED`` recording the durable job id.
+
+        Fail-closed: if the row cannot record the enqueue, the caller must know,
+        because the job is now running with no durable pointer to it.
+        """
+        store = self._outbox_store()
+        if store is None or row is None:
+            return
+        try:
+            store.mark_job_enqueued(outbox_id=row.outbox_id, job_id=job_id)
+        except Exception as exc:  # noqa: BLE001 - converted, never swallowed
+            self._note_outbox_error("mark_job_enqueued_failed", exc, row=row)
+            raise IBPCExecutionOutboxError(
+                "mark_job_enqueued_failed", f"{type(exc).__name__}: {exc}"
+            ) from exc
+
+    def _record_outbox_enqueue_failure(self, row: Any, error: BaseException) -> None:
+        """Park the intent for retry; never terminalise a spent approval.
+
+        This one deliberately does NOT raise: it runs inside an ``except`` for an
+        enqueue that already failed, and replacing that error with a bookkeeping
+        error would hide which of the two actually went wrong.  It records and
+        logs instead, and the original failure propagates.
+        """
+        store = self._outbox_store()
+        if store is None or row is None:
+            return
+        try:
+            store.record_retryable_enqueue_failure(
+                outbox_id=row.outbox_id, error=f"enqueue_retryable: {type(error).__name__}: {error}"
+            )
+        except Exception as exc:  # noqa: BLE001 - see the docstring
+            self._note_outbox_error("record_enqueue_failure_failed", exc, row=row)
+
+    def _record_outbox_completed(self, row: Any, *, artifact_digest: str, capsule: Any) -> None:
+        """``JOB_ENQUEUED``/``AWAITING_WORKER`` -> ``COMPLETED_VERIFIED``.
+
+        Only reached after the independent verifier and the proof gate passed,
+        so the durable row never claims a completion the evidence cannot back.
+
+        Fail-closed: this is the record that says the turn actually finished.  A
+        missing transition would leave a verified, published artifact behind a
+        row that still claims to be in flight.
+        """
+        store = self._outbox_store()
+        if store is None or row is None:
+            return
+        try:
+            store.mark_completed(
+                outbox_id=row.outbox_id,
+                artifact_id=str(getattr(capsule, "capsule_id", "") or artifact_digest),
+                passport_id=str(
+                    getattr(capsule, "provenance_reference", {}).get("passport", "")
+                    or getattr(capsule, "capsule_id", "")
+                ),
+                detail="verified",
+            )
+        except Exception as exc:  # noqa: BLE001 - converted, never swallowed
+            self._note_outbox_error("mark_completed_failed", exc, row=row)
+            raise IBPCExecutionOutboxError(
+                "mark_completed_failed", f"{type(exc).__name__}: {exc}"
+            ) from exc
+
+    def _outbox_consume_approval(
+        self, approval_id: str, identity: Any, *, job_id: str = "", attempt: int = 1
+    ) -> None:
+        """Consume the approval for exactly one reserved job id."""
+        self._approvals.consume(
+            approval_id,
+            identity=identity,
+            job_id=job_id or None,
+            attempt=attempt,
+            key_provider=self._deps.approval_key_provider,
+        )
+
+    def _outbox_confirm_consumed(self, row: Any, identity: Any) -> bool:
+        """Was this approval consumed *for this very intent*?
+
+        True only when the binding is CONSUMED, the reservation names this
+        row's reserved job, the reservation is unfinalised, and the identity
+        fingerprint still matches -- i.e. the previous process died between the
+        ledger commit and the outbox commit.  Anything else is a real replay.
+        """
+        reserved = row.reserved_job_id or ""
+        if not reserved:
+            return False
+        try:
+            binding = self._approvals.get(row.approval_id)
+            read_reservation = getattr(self._approvals, "_read_reservation", None)
+            if read_reservation is None:
+                return False
+            reservation = read_reservation(row.approval_id)
+        except Exception:  # noqa: BLE001 - an unreadable ledger cannot confirm recovery
+            return False
+        if getattr(getattr(binding, "state", None), "value", None) != "CONSUMED":
+            return False
+        if reservation is None:
+            return False
+        job_id, fingerprint, finalized_at, _attempt = reservation
+        if finalized_at is not None:
+            return False
+        if not isinstance(job_id, str) or not hmac.compare_digest(job_id, reserved):
+            return False
+        return hmac.compare_digest(str(fingerprint), identity.identity_digest())
+
+    def _outbox_enqueue_job(self, *, idempotency_key: str, payload: Any, job_id: str = "") -> str:
+        """Enqueue on the job queue, honouring the reserved id where supported.
+
+        The outbox is synchronous by contract (it holds SQLite locks); the queue
+        port is async.  ``asyncio.run`` is only correct because this runs on a
+        worker thread the caller created for exactly that reason -- the async
+        entry point below is what callers inside a loop should use instead.
+        """
+        coro = self._deps.queue.enqueue(
+            job_type=JOB_TYPE,
+            idempotency_key=idempotency_key,
+            payload=dict(payload),
+        )
+        return str(_run_coroutine_blocking(coro))
+
+    def _outbox_await_completion(self, job_id: str) -> Any:
+        """Report the queue's status in the shape the coordinator parses.
+
+        The coordinator accepts a mapping or an object with a ``status``; the
+        queue port returns a bare ``JobStatus`` enum, which has neither, so the
+        projection happens here rather than in the coordinator (which must stay
+        independent of this module's ports).
+        """
+        coro = self._deps.queue.get_status(job_id)
+        raw = _run_coroutine_blocking(coro)
+        status = getattr(raw, "value", raw)
+        return {"status": str(status), "job_id": job_id}
+
+    def _outbox_verify_completion(self, row: Any, completion: Any) -> Any:
+        """Independent proof that the job's artifact really exists on disk.
+
+        Deliberately strict: an unverifiable completion is *parked*, never
+        promoted.  Returning a proof here is what allows
+        ``COMPLETED_VERIFIED``, so anything the verifier cannot check must
+        refuse rather than optimistically succeed.
+        """
+        from nexus_ai_agent.nagar.ibpc.execution_outbox import (
+            CompletionVerificationError,
+            VerifiedExecutionCompletion,
+        )
+
+        job_id = str(getattr(completion, "job_id", "") or row.job_id or "")
+        if not job_id:
+            raise CompletionVerificationError("missing_job_id", "completion names no job")
+        try:
+            result = _run_coroutine_blocking(self._deps.queue.get_result(job_id))
+        except Exception as exc:  # noqa: BLE001 - an unreadable result is unverifiable
+            raise CompletionVerificationError(
+                "result_unavailable", f"queue result unavailable: {exc}"
+            ) from exc
+        if not result or result.get("success") is not True:
+            raise CompletionVerificationError(
+                "worker_not_successful", "the queue result does not report success"
+            )
+        artifact_path = Path(str(result.get("artifact_path") or ""))
+        if not artifact_path.is_file():
+            raise CompletionVerificationError("artifact_missing", f"no artifact at {artifact_path}")
+        digest = sha256_file(artifact_path)
+        if digest.startswith("sha256:"):
+            digest = digest.split(":", 1)[1]
+        return VerifiedExecutionCompletion(
+            artifact_id=str(result.get("artifact_id") or artifact_path.name),
+            artifact_sha256=digest,
+            passport_id=str(result.get("passport_id") or ""),
+            lineage_digest=str(result.get("lineage_digest") or ""),
+            verified_at_utc=str(self._deps.now()),
+        )
+
+    _outbox_coordinator: Any | None
 
     def _hydrate_active_contexts(self) -> None:
         if self._session_store is None:
@@ -444,6 +1054,29 @@ class IBPCService:
     def privacy(self) -> PrivacyPolicy:
         return self._privacy
 
+    @property
+    def execution_coordinator(self) -> Any | None:
+        """The optional crash-safe execution seam (``None`` on the legacy path)."""
+        return self._deps.execution_coordinator
+
+    @property
+    def revision_pinning_store(self) -> Any | None:
+        """The optional durable revision-pinning store (``None`` when unwired)."""
+        return self._deps.revision_pinning_store
+
+    def durable_head_revision(self, project_id: str) -> str | None:
+        """The project's pinned head, or ``None`` when nothing is pinned yet.
+
+        This is a *read-only* projection: it never creates a head and never
+        raises for an unknown project, so the service can ask the question on
+        every turn without changing behaviour when the store is unwired.
+        """
+        store = self._deps.revision_pinning_store
+        if store is None:
+            return None
+        head = store.head_of(project_id)
+        return None if head is None else str(head)
+
     def _authorize_studio_action(
         self,
         *,
@@ -463,6 +1096,45 @@ class IBPCService:
                 action=action,
                 binding_ref=resolved_ref,
             )
+
+    def _verify_execution_authority(
+        self,
+        *,
+        principal_id: str,
+        project_id: str,
+        tenant_id: str,
+        ctx: Any,
+    ) -> str | None:
+        """Ask the durable bridge whether this actor may execute *now*.
+
+        Returns ``None`` when the turn may proceed, or a refusal string.  An
+        unwired bridge returns ``None``: a deployment without one keeps the
+        pre-Wave-4 behaviour rather than being refused for a seam it never had.
+
+        A bridge that *raises* is a refusal, never a pass.  Any other choice
+        would turn a durable-store outage into an authorization bypass.
+        """
+        bridge = self._deps.authority_bridge
+        if bridge is None:
+            return None
+        binding_ref = str(
+            getattr(ctx.verified_identity, "channel_binding_id", "")
+            or self._deps.channel_binding_ref
+            or ""
+        )
+        try:
+            bridge.verify_worker_execution_authority(
+                principal_id=principal_id,
+                project_id=project_id,
+                tenant_id=tenant_id,
+                binding_ref=binding_ref,
+                required_action=StudioAction.EXECUTE_APPROVED_PLAN,
+            )
+        except Exception as exc:  # noqa: BLE001 - every failure is a refusal
+            reason = getattr(exc, "reason", type(exc).__name__)
+            detail = getattr(exc, "detail", "") or str(exc)
+            return f"authority_refused: {reason}: {detail}"
+        return None
 
     def _validate_session_binding(
         self,
@@ -545,11 +1217,36 @@ class IBPCService:
         return src
 
     def _authoritative_revision(self, project_id: str) -> tuple[int, str]:
+        """The one revision a turn is admitted against.
+
+        Two sources exist and only one may win.  The durable pinned head is
+        authoritative when it exists: it names the exact bytes and plan a
+        revision *was*, which is what the worker re-verifies.  The project row's
+        ``active_revision_id`` is a pointer that can be advanced without pinning
+        anything, so trusting it preferentially would let a turn execute against
+        a revision that has no pin behind it.
+
+        The two are therefore compared, and a disagreement is a split brain --
+        refused as a stale revision rather than silently resolved in favour of
+        either side.  Resolving it here would mean one caller's turn executes
+        against bytes another caller was told do not exist.
+        """
         revision = int(self._deps.revision_provider())
+        resolver_rev: str | None = None
         if self._deps.project_revision_resolver is not None:
-            rev_id = str(self._deps.project_revision_resolver(project_id))
-            return revision, rev_id
-        return revision, str(revision)
+            resolver_rev = str(self._deps.project_revision_resolver(project_id))
+
+        pinned = self.durable_head_revision(project_id)
+        if pinned is None:
+            # Nothing pinned yet: the project row is the only truth there is.
+            return revision, resolver_rev if resolver_rev is not None else str(revision)
+        if resolver_rev is not None and not hmac.compare_digest(pinned, resolver_rev):
+            raise StaleRevisionError(
+                "revision_split_brain",
+                f"pinned head {pinned!r} != project active revision {resolver_rev!r} "
+                "for the same project; refusing to pick one",
+            )
+        return revision, pinned
 
     def _validate_revision_binding(
         self,
@@ -1715,7 +2412,7 @@ class IBPCService:
 
     @staticmethod
     def _seconds_str(microseconds: int) -> str:
-        return f"{microseconds / 1_000_000:.6f}".rstrip("0").rstrip(".") or "0"
+        return _format_seconds(microseconds)
 
     def _canonical_intent(self, ctx: _TurnContext) -> CanonicalCreativeIntent:
         """Build the schema-2 canonical intent with the SAME builder the worker
@@ -1785,6 +2482,23 @@ class IBPCService:
                 project_id=session.project_id,
                 action=StudioAction.EXECUTE_PLAN,
             )
+            # The worker-boundary authority gate.  `_authorize_studio_action`
+            # above answers "may this role act?" against the membership row as it
+            # is NOW; this asks the durable bridge for the full four-way snapshot
+            # and records a proof.  They are deliberately both present: the
+            # first is the cheap role check every route shares, the second is the
+            # execution-time evidence that the principal, tenant, project and
+            # binding all still agree -- a revocation between approve and execute
+            # refuses here, which is the whole point of a worker boundary.
+            bridge_refusal = await asyncio.to_thread(
+                self._verify_execution_authority,
+                principal_id=principal_id,
+                project_id=session.project_id,
+                tenant_id=session.tenant_id,
+                ctx=ctx,
+            )
+            if bridge_refusal is not None:
+                return ExecutionOutcome(status="refused", detail=bridge_refusal)
             if ctx.scope_signature is None or not hmac.compare_digest(
                 ctx.scope_signature, self._scope_signature(ctx, identity)
             ):
@@ -1802,11 +2516,76 @@ class IBPCService:
                 return ExecutionOutcome(
                     status="refused", detail="approval_mac_invalid: envelope verification failed"
                 )
+            # Fail-closed seam check, BEFORE anything is spent: with an outbox
+            # wired, an underivable reservation must refuse here rather than
+            # consume an approval it could never record.
             try:
-                self._approvals.consume(approval_id, identity=identity, key_provider=provider)
+                reserved_job_id = self._reserved_job_id_for(
+                    ctx, approval_id, session_id, turn_id, session
+                )
+            except IBPCExecutionOutboxError as exc:
+                return ExecutionOutcome(
+                    status="refused", detail=f"outbox_unavailable: {exc.reason}: {exc.detail}"
+                )
+            # STAGE, THEN CONSUME -- fail-closed, and in that order.
+            #
+            # The durable intent is written BEFORE the single-use approval is
+            # touched, so an outbox that cannot record the intent refuses
+            # without spending anything.  The reverse order would spend a
+            # cryptographic approval whose only recovery evidence was never
+            # created -- unrecoverable by construction, and the finding this
+            # wave closes.
+            #
+            # The row is staged with the SAME canonical projection that the job
+            # payload below will carry (the projection deliberately excludes
+            # paths and workspaces, so it is fully known here) -- which is what
+            # lets ``stage_intent`` stay idempotent: a retry re-derives an
+            # identical projection instead of looking like a conflicting
+            # re-stage, and a resumed row carries the real plan, not a stub.
+            try:
+                outbox_row = await self._stage_outbox_intent(
+                    ctx=ctx,
+                    approval_id=approval_id,
+                    session_id=session_id,
+                    turn_id=turn_id,
+                    session=session,
+                    payload=_outbox_reservation_payload(ctx, approval_id),
+                )
+            except IBPCExecutionOutboxError as exc:
+                return ExecutionOutcome(
+                    status="refused", detail=f"outbox_unavailable: {exc.reason}: {exc.detail}"
+                )
+            try:
+                self._approvals.consume(
+                    approval_id,
+                    identity=identity,
+                    # The reservation ties the ledger's record of the spend to
+                    # the outbox row, so recovery can ask "consumed for THIS
+                    # job?" instead of guessing.  A spent approval reserved for
+                    # this very job and unfinalised IS the crash window, and the
+                    # ledger resumes it rather than refusing a replay.
+                    job_id=reserved_job_id,
+                    key_provider=provider,
+                )
             except ApprovalError as exc:
+                self._fail_outbox_row(outbox_row, f"consume_{exc.reason}")
                 return ExecutionOutcome(status="refused", detail=f"{exc.reason}: {exc.detail}")
+            store = self._outbox_store()
+            if (
+                outbox_row is not None
+                and store is not None
+                and getattr(outbox_row, "state", "") == "INTENT_STAGED"
+            ):
+                outbox_row = await asyncio.to_thread(
+                    store.mark_approval_consumed,
+                    outbox_id=outbox_row.outbox_id,
+                    detail=str(approval_id),
+                )
             if turn.turn_state not in (TurnState.APPROVED, TurnState.EXECUTING):
+                # The approval was consumed by THIS call moments ago if the
+                # state flipped, so the spend is real: terminalise the intent
+                # rather than leaving a row for reconcile to retry.
+                self._fail_outbox_row(outbox_row, f"turn_state_{turn.turn_state.value}")
                 return ExecutionOutcome(
                     status="refused",
                     detail=f"turn state {turn.turn_state.value} cannot execute "
@@ -1817,7 +2596,14 @@ class IBPCService:
             # the state read-back below.  Without that, a cancel racing the
             # (lock-free) staging/enqueue window could terminalise the turn and a
             # later mark_failed would raise an uncaught TransitionError.
-            self._sessions.mark_executing(session_id, turn_id)
+            #
+            # A turn already EXECUTING is the crash-resume path, not a conflict:
+            # the previous attempt consumed this approval, died before the queue
+            # committed, and the retry is picking the same turn back up.  The
+            # state machine refuses a self-transition, but the *claim* is already
+            # held, and the execute lock above guarantees only one caller is here.
+            if turn.turn_state is not TurnState.EXECUTING:
+                self._sessions.mark_executing(session_id, turn_id)
             # Pure read-back under the lock: the authoritative state at reservation.
             reserved = self._sessions.get_session(session_id).turns.get(turn_id)
             if reserved is None or reserved.turn_state is not TurnState.EXECUTING:
@@ -1906,8 +2692,24 @@ class IBPCService:
                 job_type=JOB_TYPE, idempotency_key=idempotency_key, payload=payload
             )
         except Exception as exc:  # noqa: BLE001 — enqueue failure is a refusal, not a render claim
-            self._sessions.mark_failed(session_id, turn_id)
+            # The outbox row stays APPROVAL_CONSUMED, never FAILED_TERMINAL: the
+            # approval is already spent, so burning the intent for a queue hiccup
+            # would demand a fresh human approval.  Reconciliation -- or a retry
+            # through this very method -- resumes it under the same reserved job
+            # id, which is why the turn deliberately is NOT marked failed here:
+            # a FAILED turn would refuse the retry that recovers the approval.
+            self._record_outbox_enqueue_failure(outbox_row, exc)
+            logger.warning(
+                "ibpc.outbox.enqueue_parked",
+                extra={
+                    "outbox_id": getattr(outbox_row, "outbox_id", None),
+                    "reserved_job_id": getattr(outbox_row, "reserved_job_id", None),
+                    "session_id": session_id,
+                    "turn_id": turn_id,
+                },
+            )
             return ExecutionOutcome(status="refused", detail=f"enqueue_failed: {exc}")
+        self._record_outbox_enqueued(outbox_row, job_id)
 
         status = await self._drain(job_id)
         result = await self._deps.queue.get_result(job_id)
@@ -1968,6 +2770,10 @@ class IBPCService:
             created_at=self._deps.now(),
         )
         self._sessions.mark_executed(session_id, turn_id)
+        # The outbox records COMPLETED_VERIFIED only here -- after the verifier
+        # and the proof gate both passed -- so the durable row can never claim a
+        # success the evidence does not back.
+        self._record_outbox_completed(outbox_row, artifact_digest=artifact_digest, capsule=capsule)
         detail = "" if gate.proof_complete else "proof_incomplete: " + ",".join(gate.reasons)
         return ExecutionOutcome(
             status=gate.outcome_status,

@@ -15,11 +15,11 @@ from nexus_ai_agent.adapters.studio_principal_auth import (
     PrincipalAuthenticationError,
     ProjectMembershipAuthorizer,
     StudioPrincipalAuthStore,
-    build_studio_ibpc_service,
     durable_studio_auth_path,
 )
 from nexus_ai_agent.api.studio_session import require_studio_caller
 from nexus_ai_agent.creative.packs.runtime import build_runtime_registry
+from nexus_ai_agent.creative.studio.production_dr import DisasterRecoveryError
 from nexus_ai_agent.nagar.ibpc.approval import ApprovalError
 from nexus_ai_agent.nagar.ibpc.approval_mac import KeyProviderError, StaticKeyRing
 from nexus_ai_agent.nagar.ibpc.authority import (
@@ -28,9 +28,18 @@ from nexus_ai_agent.nagar.ibpc.authority import (
     StudioAuthorizationError,
     StudioRole,
 )
+from nexus_ai_agent.nagar.ibpc.composition import (
+    UnifiedStudioRuntime,
+    build_unified_studio_runtime,
+)
 from nexus_ai_agent.nagar.ibpc.models import DataCategory, PrivacyMode, ProcessingScope
 from nexus_ai_agent.nagar.ibpc.privacy import PrivacyViolation
-from nexus_ai_agent.nagar.ibpc.service import IBPCService, PipelineResult
+from nexus_ai_agent.nagar.ibpc.service import (
+    IBPCService,
+    IBPCServiceDeps,
+    PipelineResult,
+    utc_now,
+)
 from nexus_ai_agent.nagar.ibpc.session import (
     DuplicateTurnError,
     IdempotencyConflictError,
@@ -103,11 +112,26 @@ def _authorize(
         raise HTTPException(status_code=403, detail=str(exc)) from exc
 
 
-def _build_service(
-    auth_store: StudioPrincipalAuthStore,
-    *,
-    binding_ref: str | None,
-) -> IBPCService:
+def _build_runtime(
+    auth_store: StudioPrincipalAuthStore, *, binding_ref: str | None
+) -> UnifiedStudioRuntime:
+    """Assemble the ONE Studio runtime for one request.
+
+    Every Studio route resolves its service from here -- the conversational
+    ``submit``/``approve``/``execute`` routes as well as the preview/revision/DR
+    surface.  Before this existed there were two roots: a legacy
+    ``build_studio_ibpc_service`` call for the conversational routes and this
+    runtime for the readback routes.  The split was invisible to tests (each
+    root was individually correct) and wrong in production, because the routes
+    that actually execute a turn were the ones bypassing the outbox, the
+    pinning store and the authority bridge.
+
+    The runtime is built per request, exactly like the service it wraps: the
+    durable stores are the shared state on disk, and constructing them is cheap
+    because SQLite pages are already warm.  A long-lived global would leak file
+    handles across tests and across a worker reload, which is the failure mode
+    the per-request service already avoids.
+    """
     from nexus_ai_agent.api.app import get_creative_registry
 
     queue = get_creative_registry().queue
@@ -119,16 +143,101 @@ def _build_service(
             status_code=503,
             detail="approval_key_unavailable: approval key ring is not configured",
         ) from exc
-    return build_studio_ibpc_service(
+    workspace_root = _studio_workspace_root()
+    deps = IBPCServiceDeps(
         queue=queue,
         registry=build_runtime_registry(),
-        workspace_root=_studio_workspace_root(),
+        workspace_root=workspace_root,
         revision_provider=lambda: revision,
-        key_provider=key_provider,
-        auth_store=auth_store,
+        now=utc_now,
+        authority=auth_store,
+        authorizer=ProjectMembershipAuthorizer(auth_store),
         channel_binding_ref=binding_ref,
+        durable=True,
         authorized_asset_root=_studio_authorized_asset_root(),
+        # The authoritative revision is the project's row in the same auth store
+        # the rest of the router authorizes against -- one durable truth, not a
+        # second copy that can drift.
+        project_revision_resolver=auth_store.get_project_revision,
     )
+    # The bridge is built HERE, in the API layer, and injected.  ``nagar/ibpc``
+    # is forbidden from importing ``nexus_ai_agent.adapters`` (the IBPC boundary
+    # guard), so the slice receives authority as a port and this is the seam that
+    # binds it to the durable principal store -- the same store the deps already
+    # authorize against, so there is one principal truth, not two.
+    from nexus_ai_agent.adapters.studio_directory_bridge import StudioUnifiedAuthorityBridge
+
+    return build_unified_studio_runtime(
+        deps,
+        key_provider=key_provider,
+        store_filenames=_runtime_store_names(),
+        enable_execution_outbox=True,
+        # DR needs a key; when one is not configured the runtime reports dr=None
+        # with a reason instead of inventing a key that would verify nothing.
+        enable_disaster_recovery=True,
+        execution_authority_bridge=StudioUnifiedAuthorityBridge(auth_store, now=utc_now),
+    )
+
+
+def _build_service(
+    auth_store: StudioPrincipalAuthStore,
+    *,
+    binding_ref: str | None,
+) -> IBPCService:
+    """The conversational routes' service, sourced from the unified runtime.
+
+    A thin projection, not a second composition root: this is the same
+    ``IBPCService`` the readback routes use, carrying the execution outbox, the
+    revision-pinning store and the authority bridge.  The runtime's stores are
+    adopted as owned closables by the service, so the route's existing
+    ``service.close()`` still releases everything exactly once.
+    """
+    return _build_runtime(auth_store, binding_ref=binding_ref).service
+
+
+def _runtime_store_names() -> dict[str, str]:
+    """Resolve the durable store filenames, allowing an operator override.
+
+    Kept as a function (not a constant) so a test can point every store at a
+    temporary directory through the same environment the deployment uses.
+    """
+    from nexus_ai_agent.nagar.ibpc.composition import RUNTIME_STORE_FILENAMES
+
+    names = dict(RUNTIME_STORE_FILENAMES)
+    override = os.getenv("NEXUS_STUDIO_AUTHORITY_DB", "").strip()
+    if override:
+        # The authority store lives in the auth database the rest of this router
+        # already uses; keeping one path for it avoids a second copy of the same
+        # principals drifting apart.
+        names["authority"] = Path(override).name
+    return names
+
+
+def _normalise_operations(operations: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Turn a JSON operation list into what the builder actually consumes.
+
+    JSON has no tuple, so a ``(start, end)`` span arrives as a two-element
+    *list* and the builder -- which is deliberately strict about its input --
+    refuses it.  Translating at the boundary is the router's job: the builder's
+    strictness is the property that makes a float unrepresentable, and loosening
+    it so that HTTP could pass a list through would weaken every in-process
+    caller too.
+
+    ``deltas`` is normalised the same way for the same reason.  Anything else is
+    passed through untouched so the builder, not this function, decides what is
+    valid.
+    """
+    normalised: list[dict[str, Any]] = []
+    for operation in operations:
+        copy = dict(operation)
+        span = copy.get("span")
+        if isinstance(span, list) and len(span) == 2:
+            copy["span"] = (span[0], span[1])
+        deltas = copy.get("deltas")
+        if isinstance(deltas, list):
+            copy["deltas"] = tuple(deltas)
+        normalised.append(copy)
+    return normalised
 
 
 class OpenSessionRequest(BaseModel):
@@ -918,6 +1027,355 @@ async def revoke_project_principal_binding(
             "binding_ref": binding_ref,
             "status": "REVOKED",
         }
+    finally:
+        auth_store.close()
+
+
+# --------------------------------------------------------------------------- #
+# Wave 4 — preview readback, revision pinning, and disaster recovery over HTTP
+# --------------------------------------------------------------------------- #
+class PreviewReadbackRequest(BaseModel):
+    """One preview the caller wants rendered as a WYSIWYS-verifiable readback.
+
+    ``revision_number``, ``timebase`` and every operation are required: a
+    readback built from defaults would be a readback of nothing in particular,
+    and the digest it produces is what an approval later binds to.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    revision_id: str = Field(min_length=1, max_length=128)
+    revision_number: int = Field(ge=1)
+    timebase_numerator: int = Field(ge=1)
+    timebase_denominator: int = Field(ge=1)
+    operations: list[dict[str, Any]] = Field(min_length=1, max_length=256)
+    expected_digest: str = Field(default="", max_length=128)
+
+
+class VerifyBackupRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    bundle: str = Field(min_length=1, max_length=256)
+
+
+def _require_authenticated(
+    auth_store: StudioPrincipalAuthStore,
+    principal_token: str | None,
+) -> tuple[str, str]:
+    """401 first, always: an anonymous caller learns nothing about the request."""
+    return _authenticate_principal(auth_store, principal_token)
+
+
+def _require_valid_project_id(project_id: str) -> None:
+    """400 second: a malformed identifier is a caller error, not a denial.
+
+    Deliberately *after* authentication and *before* authorization.  Reporting
+    400 to an anonymous caller would let it probe which project identifiers are
+    well-formed, and reporting 403 before 400 would make a typo look like a
+    permissions problem.
+    """
+    if not _ID_RE.fullmatch(project_id):
+        raise HTTPException(status_code=400, detail="invalid project_id")
+
+
+@router.post("/projects/{project_id}/ibpc/preview-readback")
+async def preview_readback(
+    project_id: str,
+    body: PreviewReadbackRequest,
+    x_nexus_principal_token: str | None = Header(default=None, alias="X-Nexus-Principal-Token"),
+) -> dict[str, Any]:
+    """Render a structured preview readback and prove it is what it claims.
+
+    The response carries the readback's own digest and a ``wysiwys_verified``
+    flag produced by re-verifying the object that was just built.  A readback
+    that fails its own integrity check is a 500, not a 200 with ``false``: the
+    caller cannot act on a preview the server itself does not trust.
+    """
+    auth_store = get_studio_auth_store()
+    try:
+        principal_id, auth_tenant_id = _require_authenticated(auth_store, x_nexus_principal_token)
+        _require_valid_project_id(project_id)
+        binding_ref = auth_store.default_binding_for(principal_id) or ""
+        _authorize(
+            auth_store,
+            principal_id=principal_id,
+            project_id=project_id,
+            action=StudioAction.READ_SESSION,
+            binding_ref=binding_ref,
+        )
+        # ``Field(ge=1)`` on both timebase components already rejects a
+        # non-positive rate with a 422, so no runtime re-check is needed here.
+        runtime = _build_runtime(auth_store, binding_ref=binding_ref)
+        try:
+            try:
+                readback = runtime.preview_readback_for(
+                    tenant_id=auth_tenant_id,
+                    project_id=project_id,
+                    revision_id=body.revision_id,
+                    revision_number=body.revision_number,
+                    principal_id=principal_id,
+                    timebase=(body.timebase_numerator, body.timebase_denominator),
+                    operations=_normalise_operations(body.operations),
+                )
+            except (TypeError, ValueError) as exc:
+                # A malformed operation is the caller's payload, not ours.
+                raise HTTPException(status_code=400, detail=f"invalid_operation: {exc}") from exc
+            verified = runtime.verify_readback(readback, expected_digest=body.expected_digest)
+            if not verified:
+                raise HTTPException(
+                    status_code=409,
+                    detail="readback_integrity_failure: the rendered readback does not "
+                    "verify against its own digest",
+                )
+            # ``to_dict`` is the readback's own canonical projection -- the same
+            # one its digest is computed over -- so the response cannot drift
+            # from what was verified.
+            # ``dict(...)`` makes the projection's type explicit: the readback
+            # declares ``dict[str, Any]`` but mypy sees an untyped ``to_dict``
+            # through the runtime seam, and an implicit Any must not leak into
+            # this router's return type.
+            payload: dict[str, Any] = dict(readback.to_dict())
+            payload["preview_digest"] = readback.preview_digest
+            payload["wysiwys_verified"] = True
+            return payload
+        finally:
+            runtime.close()
+    finally:
+        auth_store.close()
+
+
+@router.get("/projects/{project_id}/ibpc/revisions")
+async def read_pinned_revisions(
+    project_id: str,
+    x_nexus_principal_token: str | None = Header(default=None, alias="X-Nexus-Principal-Token"),
+) -> dict[str, Any]:
+    """The project's durable revision head and the immutable chain behind it."""
+    auth_store = get_studio_auth_store()
+    try:
+        principal_id, _auth_tenant_id = _require_authenticated(auth_store, x_nexus_principal_token)
+        _require_valid_project_id(project_id)
+        binding_ref = auth_store.default_binding_for(principal_id) or ""
+        _authorize(
+            auth_store,
+            principal_id=principal_id,
+            project_id=project_id,
+            action=StudioAction.READ_JOB,
+            binding_ref=binding_ref,
+        )
+        runtime = _build_runtime(auth_store, binding_ref=binding_ref)
+        try:
+            return runtime.revision_status(project_id)
+        finally:
+            runtime.close()
+    finally:
+        auth_store.close()
+
+
+class PinAssetRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    asset_id: str = Field(min_length=1, max_length=128)
+    relative_path: str = Field(min_length=1, max_length=1024)
+    content_sha256: str = Field(pattern="^[0-9a-f]{64}$")
+    byte_size: int = Field(ge=0)
+    media_type: str = Field(default="application/octet-stream", min_length=1, max_length=128)
+
+
+class PinRevisionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    revision_id: str = Field(min_length=1, max_length=128)
+    revision_number: int = Field(ge=1)
+    parent_revision_id: str | None = Field(default=None, max_length=128)
+    tenant_id: str | None = Field(default=None, min_length=1, max_length=128)
+    session_id: str = Field(min_length=1, max_length=128)
+    turn_id: str = Field(min_length=1, max_length=128)
+    plan_id: str = Field(min_length=1, max_length=256)
+    plan_jcs_sha256: str = Field(pattern="^[0-9a-f]{64}$")
+    parameters_jcs_sha256: str = Field(pattern="^[0-9a-f]{64}$")
+    preview_digest: str = Field(min_length=1, max_length=128)
+    assets: list[PinAssetRequest] = Field(default_factory=list)
+
+
+@router.post("/projects/{project_id}/ibpc/revisions/pin", status_code=201)
+async def pin_studio_revision(
+    project_id: str,
+    body: PinRevisionRequest,
+    x_nexus_principal_token: str | None = Header(default=None, alias="X-Nexus-Principal-Token"),
+) -> dict[str, Any]:
+    """Pin a revision and advance the project head, under one compare-and-swap.
+
+    Authorization is ``OWNER``/``EDITOR`` via ``SUBMIT_INTENT``: pinning defines
+    the bytes later turns render from, so a reader must not be able to do it.
+
+    ``parent_revision_id`` is the CAS operand.  A client that read the head as
+    ``rev-7`` and pins with ``parent_revision_id="rev-7"`` is refused if another
+    turn advanced the head in the meantime -- the store raises
+    ``stale_parent`` and this route turns that into 409, never a silent
+    overwrite of somebody else's revision.
+    """
+    from nexus_ai_agent.creative.studio.revision_pinning import (
+        AssetVersionPin,
+        RevisionConcurrencyConflictError,
+        RevisionIdempotencyConflictError,
+    )
+
+    auth_store = get_studio_auth_store()
+    try:
+        principal_id, auth_tenant_id = _require_authenticated(auth_store, x_nexus_principal_token)
+        _require_valid_project_id(project_id)
+        binding_ref = auth_store.default_binding_for(principal_id) or ""
+        _authorize(
+            auth_store,
+            principal_id=principal_id,
+            project_id=project_id,
+            action=StudioAction.SUBMIT_INTENT,
+            binding_ref=binding_ref,
+        )
+        if body.tenant_id is not None and body.tenant_id != auth_tenant_id:
+            raise HTTPException(status_code=403, detail="tenant_mismatch")
+        runtime = _build_runtime(auth_store, binding_ref=binding_ref)
+        try:
+            if runtime.revision_pins is None:
+                raise HTTPException(status_code=503, detail="revision_pinning_unavailable")
+            pins = [
+                AssetVersionPin(
+                    asset_id=asset.asset_id,
+                    relative_path=asset.relative_path,
+                    content_sha256=asset.content_sha256,
+                    byte_size=asset.byte_size,
+                    media_type=asset.media_type,
+                )
+                for asset in body.assets
+            ]
+            envelope = runtime.revision_pins.pin_revision(
+                revision_id=body.revision_id,
+                project_id=project_id,
+                tenant_id=auth_tenant_id,
+                session_id=body.session_id,
+                turn_id=body.turn_id,
+                revision_number=body.revision_number,
+                parent_revision_id=body.parent_revision_id,
+                plan_id=body.plan_id,
+                plan_jcs_sha256=body.plan_jcs_sha256,
+                parameters_jcs_sha256=body.parameters_jcs_sha256,
+                preview_digest=body.preview_digest,
+                input_asset_pins=tuple(pins),
+            )
+            # Keep the project row's pointer in lockstep with the pinned head.
+            # The two must never disagree; a disagreement is refused at
+            # admission (``revision_split_brain``), so writing it would make the
+            # next turn fail rather than this one.
+            try:
+                auth_store.set_project_revision(project_id, envelope.revision_id)
+            except AuthorizationError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+            return {
+                "revision_id": envelope.revision_id,
+                "revision_number": envelope.revision_number,
+                "parent_revision_id": envelope.parent_revision_id,
+                "revision_jcs_sha256": envelope.revision_jcs_sha256,
+                "created_at_utc": envelope.created_at_utc,
+                "head": runtime.revision_pins.head_of(project_id),
+            }
+        except RevisionConcurrencyConflictError as exc:
+            # A stale parent or a genesis on an existing project: the caller lost
+            # a race and must re-read the head.
+            raise HTTPException(status_code=409, detail=f"{exc.reason}: {exc.detail}") from exc
+        except RevisionIdempotencyConflictError as exc:
+            raise HTTPException(status_code=409, detail=f"{exc.reason}: {exc.detail}") from exc
+        finally:
+            runtime.close()
+    finally:
+        auth_store.close()
+
+
+@router.get("/projects/{project_id}/ibpc/disaster-recovery")
+async def read_disaster_recovery_status(
+    project_id: str,
+    x_nexus_principal_token: str | None = Header(default=None, alias="X-Nexus-Principal-Token"),
+) -> dict[str, Any]:
+    """Whether DR is wired, where bundles live, and which bundles exist.
+
+    Reading this is an audit action: knowing which backups exist is exactly the
+    information an attacker would want before deleting them.
+    """
+    auth_store = get_studio_auth_store()
+    try:
+        principal_id, _auth_tenant_id = _require_authenticated(auth_store, x_nexus_principal_token)
+        _require_valid_project_id(project_id)
+        binding_ref = auth_store.default_binding_for(principal_id) or ""
+        _authorize(
+            auth_store,
+            principal_id=principal_id,
+            project_id=project_id,
+            action=StudioAction.READ_AUDIT,
+            binding_ref=binding_ref,
+        )
+        runtime = _build_runtime(auth_store, binding_ref=binding_ref)
+        try:
+            status = runtime.dr_status()
+            status["tenant_id"] = _auth_tenant_id
+            return status
+        finally:
+            runtime.close()
+    finally:
+        auth_store.close()
+
+
+@router.post("/projects/{project_id}/ibpc/disaster-recovery/verify")
+async def verify_disaster_recovery_bundle(
+    project_id: str,
+    body: VerifyBackupRequest,
+    x_nexus_principal_token: str | None = Header(default=None, alias="X-Nexus-Principal-Token"),
+) -> dict[str, Any]:
+    """Re-verify one bundle's HMAC, digest, size, integrity and row counts.
+
+    Verification is read-only by design, so this endpoint is safe to call on a
+    production backup: it cannot restore, delete or repair anything.
+    """
+    auth_store = get_studio_auth_store()
+    try:
+        principal_id, _auth_tenant_id = _require_authenticated(auth_store, x_nexus_principal_token)
+        _require_valid_project_id(project_id)
+        binding_ref = auth_store.default_binding_for(principal_id) or ""
+        _authorize(
+            auth_store,
+            principal_id=principal_id,
+            project_id=project_id,
+            action=StudioAction.READ_AUDIT,
+            binding_ref=binding_ref,
+        )
+        runtime = _build_runtime(auth_store, binding_ref=binding_ref)
+        try:
+            try:
+                report = runtime.verify_backup(body.bundle)
+            # Order matters: ``DisasterRecoveryError`` is a ``ValueError``, so the
+            # specific handler has to come first or every DR refusal would be
+            # flattened into the generic "bad request" answer.
+            except DisasterRecoveryError as exc:
+                # The manager refused the artifact itself: a malformed manifest, a
+                # key mismatch, a bundle signed by another deployment.
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+            except RuntimeError as exc:
+                # The runtime reports "no DR manager" as RuntimeError, which is a
+                # deployment gap (503), never the caller's fault (400).
+                raise HTTPException(
+                    status_code=503,
+                    detail="disaster_recovery_unavailable: no backup key is configured",
+                ) from exc
+            except ValueError as exc:
+                # A bundle *name* that cannot be a name (a traversal, a blank)
+                # is the caller's error and is caught before any I/O.
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            payload: dict[str, Any] = dict(report.to_dict())
+            payload["project_id"] = project_id
+            payload["bundle"] = body.bundle
+            # ``verified`` is the whole answer; the per-field report is what lets
+            # an operator see *which* check failed without opening the bundle.
+            return payload
+        finally:
+            runtime.close()
     finally:
         auth_store.close()
 
