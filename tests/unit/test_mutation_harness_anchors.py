@@ -296,3 +296,47 @@ def test_durable_preflight_passes_on_a_collecting_suite(
 
     monkeypatch.setattr(subprocess, "run", lambda *a, **k: _Green())
     assert durable["preflight"]() == 0
+
+
+def test_ci_actually_runs_the_studio_campaign_against_the_mutated_tree() -> None:
+    """The Studio campaign must be enabled, and must import the mutated tree.
+
+    Two separate defects lived here, and a green check hid both:
+
+    1. The 50-mutant suite is gated on ``NEXUS_RUN_MUTATION_CAMPAIGN=1`` and
+       nothing set it, so it was skipped on every CI run -- the campaign was
+       documented as evidence without ever having been reproduced.  The step
+       now exists; this pins that the flag is set on it.
+    2. Even once the step existed, the harness never pinned ``PYTHONPATH`` to
+       the tree under mutation.  Every mutation job runs in a detached
+       worktree while the package is installed editable, so the mutation ran
+       in one copy and pytest imported the other: 0/50 killed, all "survived".
+       ``scripts/execution_core_mutations.py`` pins it, which is why only the
+       Studio harness broke.
+
+    Both are invisible from a plain local run in the source checkout, where the
+    two trees are the same directory.  So they are asserted here instead.
+    """
+    workflow = yaml.safe_load(CI.read_text(encoding="utf-8"))
+    job = workflow["jobs"]["execution-core-mutations"]
+    runs = [step.get("run", "") for step in job["steps"]]
+    assert any("git worktree add --detach" in run for run in runs)
+
+    campaign = [
+        step
+        for step in job["steps"]
+        if "test_wave6b_studio_mutation_campaign" in step.get("run", "")
+    ]
+    assert len(campaign) == 1, "the Studio campaign must have exactly one step"
+    step = campaign[0]
+    assert step.get("env", {}).get("NEXUS_RUN_MUTATION_CAMPAIGN") == "1", (
+        "without this flag the campaign tests skip and the step passes green having mutated nothing"
+    )
+    assert "mutation-worktree" in step["working-directory"]
+
+    # The harness itself must redirect imports at the tree it is rewriting.
+    harness = (REPO / "scripts" / "run_wave4_studio_e2e_mutations.py").read_text(encoding="utf-8")
+    assert 'env["PYTHONPATH"] = str(ROOT / "src")' in harness, (
+        "the harness must pin PYTHONPATH to its own src; otherwise an isolated "
+        "worktree imports the editable install and every mutant survives"
+    )

@@ -545,9 +545,13 @@ jobs:
   execution-core-mutations:
     name: execution-core-mutations (V1 execution core 27)
     runs-on: ubuntu-latest
-    # 30 was enough for the 27 execution-core mutants alone; the Studio campaign
-    # adds a second full mutation pass (~90s locally, more on a cold runner).
-    timeout-minutes: 40
+    # 30 covers both campaigns: the whole job -- install, the 27 execution-core
+    # mutants and the 50 Studio mutants -- completes in about five minutes.  The
+    # budget was raised to 40 on the assumption that the second pass needed its
+    # own headroom; the run showed it did not, and
+    # tests/unit/test_mutation_harness_anchors.py pins the <= 30 bound for a
+    # reason, so the guess is reverted rather than the guard.
+    timeout-minutes: 30
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
