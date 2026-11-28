@@ -552,11 +552,33 @@ branch's diff — the test and the module both come from the base commit
 `54073d1f` — and it passes locally 15/15 under a saturated CPU with a 0.1 s
 timeout. `gh run rerun --failed` then passed, and the check is green.
 
-So: a pre-existing flake inherited from `main`, not evidence about this branch,
-and not something this branch fixes. It is written down rather than quietly
-re-run, because "re-run until green" is how a real failure gets ignored. The
-distinction that matters for review: the failure above (4.4) was this branch's
-and was fixed here; this one is not.
+At that point it looked like an isolated flake. It is not: it failed again on
+`python-parity (3.10)` at head `0fc54a8f` with the same message, then passed on
+rerun. That is **two independent reds out of three**, so "rare flake" is not a
+fair description and the module is not sound on the runner.
+
+What is known for certain: it is not this branch's. The module and the test both
+arrive with the base commit `54073d1f`, neither is in `git diff origin/main`, and
+the failure has nothing to do with Studio, IBPC or the outbox. It is
+`storage/resource_packs/` — a different subsystem that this PR only runs past.
+
+What is **not** known: the cause. Attempts to reproduce it here did not: 12
+file-level runs and 15 focused runs under a saturated CPU were all green, and a
+standalone loop of 60 lock acquisitions measured min 1.25 ms / median 1.39 ms /
+**max 2.43 ms** against a 100 ms budget — so the timeout is not slowness, and
+whatever holds the lock does so only under conditions this sandbox does not
+reproduce. The runner log would settle it (`pack_sync_manager.py:<line>` in the
+traceback), but the job logs are on a blob host this sandbox cannot reach, and
+the check annotation is truncated to the message only.
+
+So it is recorded with its measured frequency rather than with a guess at its
+cause, and left unfixed. Fixing a subsystem this PR does not touch, on a
+diagnosis that could not be verified, would be a worse outcome than naming it:
+a 2-in-3 red check that is written down is a known quantity; one that is
+"fixed" blind is a new defect with a plausible-looking commit message.
+
+The distinction that matters for review: the failure in §4.4 was this branch's,
+was reproducible on demand in a worktree, and is fixed here. This one is neither.
 
 ## 5. Release-lineage output (verbatim)
 
