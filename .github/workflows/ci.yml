@@ -283,11 +283,11 @@ jobs:
     runs-on: ubuntu-latest
     # 90, not 60, and the reason is measured rather than defensive: the job runs
     # the pack coverage, the snapshot verifier and the mutation campaign TWICE
-    # each (byte-identical `cmp` is the contract) and on cpython-3.10 it hit the
-    # 60-minute cap at 1h0m18s -- after its own notices had already reported
-    # accepted=True, passed=True and 80/80 killed.  A cap that kills a run whose
-    # evidence is complete converts a slow interpreter into a red gate.  Nothing
-    # is weakened: both runs and every cmp stay.
+    # each (byte-identical `cmp` is the contract).  On cpython-3.10 it has both
+    # timed out at 1h0m18s and passed at 59m15s -- a cap that kills a run whose
+    # evidence is already complete (accepted=True, passed=True, 80/80 killed)
+    # converts interpreter speed into a red gate.  Nothing is weakened: both
+    # runs and every cmp stay; only the wall-clock cap moves.
     timeout-minutes: 90
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -545,7 +545,9 @@ jobs:
   execution-core-mutations:
     name: execution-core-mutations (V1 execution core 27)
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # 30 was enough for the 27 execution-core mutants alone; the Studio campaign
+    # adds a second full mutation pass (~90s locally, more on a cold runner).
+    timeout-minutes: 40
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
@@ -561,6 +563,17 @@ jobs:
       - name: execution-core mutations (27/27 must be killed)
         working-directory: ${{ runner.temp }}/mutation-worktree
         run: python scripts/execution_core_mutations.py
+      - name: Studio Wave 4-6 E2E Mutation Campaign (50/50 must be killed)
+        # The campaign is guarded by this flag, and nothing set it: the 50-mutant
+        # suite existed, passed locally and was SKIPPED on every CI run, so the
+        # mutation evidence the waves claim was never reproduced by the pipeline.
+        # It lives in this job rather than a new one so the job topology and the
+        # required status check names stay exactly as they are.
+        working-directory: ${{ runner.temp }}/mutation-worktree
+        env:
+          NEXUS_RUN_MUTATION_CAMPAIGN: "1"
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: pytest -q tests/unit/creative/studio/test_wave6b_studio_mutation_campaign.py
       - name: the worktree and the checkout must be unchanged after mutation testing
         run: |
           git -C "$RUNNER_TEMP/mutation-worktree" diff --exit-code
