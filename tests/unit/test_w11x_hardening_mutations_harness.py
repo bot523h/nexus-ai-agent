@@ -169,3 +169,39 @@ def test_the_runner_restores_the_source_even_when_the_mutant_breaks_import(
     )
     assert harness.run_mutation(mutation) == "invalid"
     assert target.read_bytes() == before, "the source must be restored byte-for-byte"
+
+
+def test_an_import_error_inside_a_failing_test_is_a_kill() -> None:
+    """A mutant that reaches an uninstalled extra still fails a real test.
+
+    The CI job installs no optional extras, so a mutant that lets the provider
+    factory through dies with ``ModuleNotFoundError: boto3``. That traceback is
+    the mutant's consequence, not infrastructure: the suite ran and a test
+    failed. Reading it as ``invalid`` under-counted a genuine kill.
+    """
+
+    class _Completed:
+        returncode = 1
+        stdout = (
+            "tests/unit/test_x.py F                                              [100%]\n"
+            "=================================== FAILURES ===================================\n"
+            "____________________ test_the_guard_refuses ____________________\n"
+            "    with backup.forbid_remote_provider_factory():\n"
+            ">       backup.build_blob_provider(settings)\n"
+            "E       ModuleNotFoundError: No module named 'boto3'\n"
+            "=========================== short test summary info ============================\n"
+            "FAILED tests/unit/test_x.py::test_the_guard_refuses - ModuleNotFoundError\n"
+            "1 failed in 0.4s\n"
+        )
+        stderr = ""
+
+    assert harness._classify_mutant_outcome(_Completed()) == "killed"
+
+
+def test_an_import_error_without_a_failing_test_is_still_invalid() -> None:
+    class _Completed:
+        returncode = 1
+        stdout = "ImportError: cannot import name 'missing' from 'nexus_ai_agent'\n"
+        stderr = ""
+
+    assert harness._classify_mutant_outcome(_Completed()) == "invalid"

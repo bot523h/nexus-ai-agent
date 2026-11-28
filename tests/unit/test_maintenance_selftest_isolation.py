@@ -86,6 +86,23 @@ def test_the_factory_refuses_while_the_guard_is_active(
     assert "forbidden during CI local SQLite self-test" in str(excinfo.value)
 
 
+def test_the_factory_refuses_even_when_the_tier_is_local(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The refusal is unconditional; it is not a remote-tier special case.
+
+    This case also keeps the guard's kill deterministic: with the tier local the
+    factory would succeed without importing an optional extra, so a mutant that
+    drops the guard fails an assertion instead of raising an import error whose
+    classification depends on what the job happens to have installed.
+    """
+    _clean_env(monkeypatch)
+    with backup.forbid_remote_provider_factory():
+        with pytest.raises(RuntimeError) as excinfo:
+            backup.build_blob_provider(_settings())
+    assert str(excinfo.value) == backup.SELFTEST_FACTORY_FORBIDDEN
+
+
 def test_the_guard_lifts_on_exit(monkeypatch: pytest.MonkeyPatch) -> None:
     _clean_env(monkeypatch, **COMPLETE_R2)
     with backup.forbid_remote_provider_factory():

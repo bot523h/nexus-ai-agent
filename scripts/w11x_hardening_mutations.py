@@ -32,15 +32,20 @@ from pathlib import Path
 sys.dont_write_bytecode = True
 
 ROOT = Path(__file__).resolve().parents[1]
+# Unambiguous run-level failures: the suite never reached a test.
 _INFRA_TOKENS = (
     "ERROR collecting",
-    "ImportError",
-    "ModuleNotFoundError",
     "SyntaxError",
     "no tests ran",
     "collected 0 items",
     "INTERNALERROR",
 )
+# Import failures are ambiguous. At *collection* time they mean the mutant broke
+# the module (exit code 2, already invalid). Inside a *failing test* they are the
+# mutant's own consequence — a provider the mutant now reaches imports an
+# optional extra the CI job does not install — so they only condemn a run that
+# reports no failing test at all.
+_SOFT_INFRA_TOKENS = ("ImportError", "ModuleNotFoundError")
 _FAILED_PATTERN = re.compile(r"\b[1-9]\d*\s+failed\b")
 
 BACKUP = "src/nexus_ai_agent/maintenance/backup.py"
@@ -261,7 +266,9 @@ class MutationCampaignError(RuntimeError):
     """The campaign definition itself is wrong (a stale snippet, a dead test)."""
 
 
-def run_mutation(mutation: Mutation, repo_root: Path = ROOT) -> str:
+def run_mutation(
+    mutation: Mutation, repo_root: Path = ROOT, *, explain: list[str] | None = None
+) -> str:
     root = Path(repo_root)
     source = root / mutation.source
     original = source.read_bytes()
@@ -283,7 +290,15 @@ def run_mutation(mutation: Mutation, repo_root: Path = ROOT) -> str:
             )
         except subprocess.TimeoutExpired:
             return "not_run"
-        return _classify_mutant_outcome(completed)
+        verdict = _classify_mutant_outcome(completed)
+        if explain is not None and verdict != "killed":
+            explain.extend(
+                (
+                    f"exit={completed.returncode}",
+                    *((completed.stdout or "") + (completed.stderr or "")).splitlines()[-40:],
+                )
+            )
+        return verdict
     finally:
         source.write_bytes(original)
         _purge_bytecode_cache(source)
@@ -311,6 +326,8 @@ def _classify_mutant_outcome(completed: subprocess.CompletedProcess[str]) -> str
     if any(token in output for token in _INFRA_TOKENS):
         return "invalid"
     if not (_FAILED_PATTERN.search(output) or "FAILED" in output):
+        return "invalid"
+    if any(token in output for token in _SOFT_INFRA_TOKENS) and not _FAILED_PATTERN.search(output):
         return "invalid"
     return "killed"
 
@@ -379,10 +396,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     tally: dict[str, int] = {}
     survivors: list[str] = []
     for mutation in mutations:
-        outcome = run_mutation(mutation)
+        evidence: list[str] = []
+        outcome = run_mutation(mutation, explain=evidence)
         tally[outcome] = tally.get(outcome, 0) + 1
         print(f"{outcome:9} {mutation.name}", flush=True)
         if outcome != "killed":
+            # A survivor or an invalid run must be explainable from the log
+            # alone: the campaign is the evidence, so its failure has to be
+            # readable without re-running it locally.
+            for line in evidence:
+                print(f"          | {line}", flush=True)
             survivors.append(mutation.name)
 
     total = len(mutations)
