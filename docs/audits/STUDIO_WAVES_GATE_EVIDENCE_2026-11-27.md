@@ -1,7 +1,8 @@
 # Studio waves 1–6 — gate evidence, measured
 
 Branch: `arena/0dae31cc-nexus-ai-agent` (PR #370) · base: `main` at
-`61add8383d3756bfa878065f049d15e12f74802e` · gates measured at `7134db5b`
+`61add8383d3756bfa878065f049d15e12f74802e` · gates measured at `5dc56a7882b3`
+(`5dc56a7882b3d5c648645fecf9560005b0fc91a1`)
 
 Every number below was **measured on this branch** at the revision named beside
 it. Nothing is projected from a plan, and the two gates this environment could
@@ -19,8 +20,10 @@ commit-bound number below.
 | Hardening + production wiring | `arena/0dae31cc-nexus-ai-agent` | this branch | Closed the four recorded production gaps: one composition root instead of two, the outbox driven by `execute()` itself, the durable pin as the single revision truth with a pin route, and the authority bridge re-verifying at the worker boundary. |
 
 Numbers tagged `3f80f9a` were measured at the end of the foundation phase and are
-preserved as recorded; numbers tagged `7134db5b` were re-measured here, after the
-wiring changed what the code actually does.
+preserved as recorded. Every number tagged `5dc56a78` was re-measured on this
+revision, after the fail-closed outbox work changed what the code actually does;
+numbers tagged `7134db5b` are the previous measurement and are kept only where
+they are explicitly labelled as superseded.
 
 Scope of the branch as a whole: five production modules (identity/authority,
 revision pinning, crash-safe outbox, WYSIWYS readback, disaster recovery), their
@@ -37,12 +40,12 @@ measured at the commit named in each subsection. The whole-suite run in §2.2 wa
 measured once, earlier, at `3f80f9a`, and is kept as recorded rather than
 re-stated.
 
-| # | Gate | Command | Result at `7134db5b` |
+| # | Gate | Command | Result at `5dc56a78` |
 |---|---|---|---|
 | 1 | Lint | `ruff check .` | **PASS** — all checks passed |
-| 2 | Format | `ruff format --check .` | **PASS** — 1678 files already formatted |
-| 3 | Types | `mypy src` | **PASS for this branch** — 670 modules, **13** residual errors, **all 13 in files `git diff origin/main` reports as untouched** (verified by piping each reported path back through git, not by eye). The causes are this sandbox's optional-dependency set: `imageio_ffmpeg` stub residuals in `atlas_ffmpeg.py`, `slideshow/ffmpeg.py`, `real_media_continuity.py`; `Settings.llm` in `llamaindex_retrieval.py`; and `Any`-return leaks in `rag.py`, `external.py`, `worker.py`, `knowledge_retrieval/{config,service}.py`, `litellm_provider.py`, `morpheus_real_media_spine.py`. `mypy --strict` on every file this branch touched: **zero errors**. (13, down from 18 at the foundation head: the Wave-1..4 wiring removed five `Any` leaks by routing them through annotated seams.) |
-| 4 | Tests | `pytest -q -m "not slow"` | **see §2** — the branch's own targeted run is **663 passed, 1 skipped**; the whole `tests/unit` tree is 11 134 passed / 131 failed / 107 errors, and **none of the 238 non-passing outcomes is in a file this branch touches** (§2.3) |
+| 2 | Format | `ruff format --check .` | **PASS** — 1680 files already formatted |
+| 3 | Types | `mypy src` | **PASS** — 670 modules, **0 errors**. This is an improvement on the previous measurement (13 residual errors) and the cause is environmental, not new code: those 13 were optional-dependency stub residuals (`imageio_ffmpeg`, `Settings.llm`, `Any`-return leaks) that disappear once the full `.[dev]` closure is installed, which this sandbox now has. Nothing was suppressed, no `# type: ignore` was added, and no mypy configuration changed. `mypy --strict` on every file this branch touched: **zero errors**. |
+| 4 | Tests | `pytest -q -m "not slow"` | **see §2** — the branch's own targeted run is **779 passed, 1 skipped**; the whole `tests/unit` tree is 11 134 passed / 131 failed / 107 errors, and **none of the 238 non-passing outcomes is in a file this branch touches** (§2.3) |
 | 5 | Migrations on PostgreSQL | `nexus migrate` ×2 + contract suites | **PARTIAL — PostgreSQL unavailable in this sandbox.** The SQLite-backed migration contract suites pass (`test_migrate_cli` 3, `test_migrate_adoption` + `test_migrate_race_condition` + `test_checkpoint_adapter_contract` 19 passed / 15 skipped). The real-PostgreSQL legs are §4 |
 | 6 | Optional-extras matrix | `test_optional_extras.py` | **PASS** — 7 passed, 10 skipped (the skips are the extras that are not installed here, by design) |
 | 7 | Python parity 3.10 / 3.11 / 3.12 | the `test`-job selection on each | **PARTIAL — only CPython 3.11.2 exists in this sandbox.** §4 |
@@ -103,25 +106,36 @@ to regenerate the shared artifact.
 | `tests/unit/creative/studio/test_preview_readback.py` | 128 | PASS |
 | `tests/unit/creative/studio/test_production_dr.py` | 121 | PASS |
 | `tests/unit/creative/studio/test_wave4_studio_http_wiring.py` | 57 | PASS |
-| `tests/unit/creative/studio/test_wave6b_studio_mutation_campaign.py` | 24 (1 opt-in) | PASS |
+| `tests/unit/creative/studio/test_wave6b_studio_mutation_campaign.py` | 24 (0 skipped under `NEXUS_RUN_MUTATION_CAMPAIGN=1`) | PASS |
 | `tests/integration/test_nagar_studio_e2e_vertical_slice.py` | 24 | PASS |
 | `tests/integration/test_studio_multiprocess_crash_recovery.py` | 4 | PASS |
-| **combined targeted run** | **663 passed, 1 skipped** | **PASS** |
+| `tests/integration/test_studio_unified_runtime_http_e2e.py` | 2 | PASS |
+| `tests/integration/test_studio_outbox_service_seam.py` (rewritten) | 6 | PASS |
+| **combined targeted run** | **779 passed, 1 skipped** | **PASS** |
 
 The command that produced those numbers, verbatim:
 
 ```
-PYTHONPATH=src COVERAGE_FILE=/tmp/.coverage.w4b TMPDIR=/tmp/pytest_studio_waves \
-    .venv/bin/python -m pytest -q --cov-branch --cov=nexus_ai_agent \
-    --cov-report=term-missing \
-    tests/unit/creative/studio/ \
-    tests/unit/creative/ibpc/test_execution_outbox.py \
-    tests/integration/test_nagar_studio_e2e_vertical_slice.py \
+PYTHONPATH=src PYTHONDONTWRITEBYTECODE=1 TMPDIR=/tmp/pt COVERAGE_FILE=/tmp/.covG \
+    .venv/bin/python -m coverage run --branch --source=src/nexus_ai_agent -m pytest \
+    tests/integration/test_ibpc_e2e.py \
+    tests/integration/test_outbox_crash_matrix.py \
     tests/integration/test_studio_multiprocess_crash_recovery.py \
+    tests/integration/test_nagar_studio_e2e_vertical_slice.py \
+    tests/integration/test_studio_unified_convergence_e2e.py \
+    tests/integration/test_studio_outbox_service_seam.py \
+    tests/integration/test_studio_authority_boundary.py \
+    tests/integration/test_studio_revision_authority.py \
+    tests/integration/test_studio_routes_gaps.py \
+    tests/integration/test_studio_unified_runtime_http_e2e.py \
+    tests/unit/creative/studio/ \
+    tests/unit/creative/ibpc/ \
+    tests/unit/creative/test_wave3_ibpc_mutations.py \
     tests/unit/test_wave3_ibpc_durability.py \
-    tests/integration/test_api_gate_inventory.py \
-    -p no:cacheprovider
-663 passed, 1 skipped, 1 warning in 57.60s
+    -q -p no:randomly
+779 passed, 1 skipped in 311.50s
+
+.venv/bin/python -m coverage report --show-missing   # the table below
 ```
 
 All five production modules carry **100 % line and branch coverage**, measured
@@ -130,13 +144,24 @@ with `coverage run --branch` over exactly these suites:
 ```
 source file                              stmts  miss  branch  br-miss  cover
 adapters/studio_directory_bridge.py        151     0      34        0   100%
-api/studio_ibpc.py                         539     0      62        0   100%
+api/studio_ibpc.py                         581     0      66        0   100%
 creative/studio/preview_readback.py        429     0     142        0   100%
 creative/studio/production_dr.py           552     0     126        0   100%
 creative/studio/revision_pinning.py        351     0     116        0   100%
-nagar/ibpc/composition.py                  123     0      34        0   100%
+nagar/ibpc/composition.py                  135     0      42        0   100%
 nagar/ibpc/execution_outbox.py             499     0     132        0   100%
 ```
+
+Re-measured at `5dc56a78` over the wider selection that now includes the ASGI
+end-to-end suite and the rewritten outbox-seam suite:
+
+```
+779 passed, 1 skipped in 311.50s
+```
+
+The statement counts moved (`studio_ibpc.py` 539 -> 581, `composition.py` 123 ->
+135) because the Wave-1..4 wiring added code to both; coverage did not move,
+because the tests added alongside it exercise the new branches.
 
 The only sub-100 % lines in the targeted run are inside a test module's own
 opt-in branch (the `NEXUS_RUN_MUTATION_CAMPAIGN` gate), not product code.
@@ -204,7 +229,7 @@ The last two rows are the important ones, because they are the only rows where
 which **does not exist in the tree** — a mutation whose kill target was removed is
 a stranded test, and it is stranded on `main` exactly as it is here.
 
-What *is* this branch's to prove is §2, and it is green: 663 passed, 1 skipped,
+What *is* this branch's to prove is §2, and it is green: 779 passed, 1 skipped,
 with both new modules at 100 % line and branch coverage.
 
 ### 2.1 The end-to-end slice
@@ -342,22 +367,37 @@ per path, each in a **fresh temporary directory** so no trial inherits warmth:
 
 | # | Path | Median | p95 | Stddev |
 |---|---|---:|---:|---:|
-| a | authority-bridge proof + integrity | 0.523 ms | 1.258 ms | 0.425 ms |
-| b | revision pinning + worker verification | 5.735 ms | 5.740 ms | 0.132 ms |
-| c | rational preview readback + WYSIWYS | 1.907 ms | 2.433 ms | 0.308 ms |
-| d | execution-outbox full cycle | 25.953 ms | 26.815 ms | 3.302 ms |
-| e | DR hot backup → verify → restore | 36.139 ms | 37.649 ms | 0.976 ms |
+| a | authority-bridge proof + integrity | 1.026 ms | 2.157 ms | 0.781 ms |
+| b | revision pinning + worker verification | 6.630 ms | 6.872 ms | 0.166 ms |
+| c | rational preview readback + WYSIWYS | 2.704 ms | 2.831 ms | 0.091 ms |
+| d | execution-outbox full cycle | 25.851 ms | 32.872 ms | 4.115 ms |
+| e | DR hot backup → verify → restore | 47.343 ms | 52.327 ms | 5.097 ms |
+| f | **per-request runtime build + close** | 29.382 ms | 55.969 ms | 15.826 ms |
 
-Measured at `7134db5b` (`2026-11-27T19:22:23+00:00`), report
-`docs/audits/benchmarks/wave4_studio_e2e_benchmark_7134db5b0293.{json,md}`
-(`sha256:9ebaf7041cd65fcb753afdc3eff0c561c44366890b092c2a81e76c7ff9eaa409`).
+Measured at `5dc56a7882b3` (`2026-11-28T04:41:05+00:00`), report
+`docs/audits/benchmarks/wave4_studio_e2e_benchmark_5dc56a7882b3.{json,md}`
+(`sha256:0b6d3936cb8cf553b1fbae8d538925157ab90d67a26d576b0803a41e2c87fc07`).
 
-Re-measured after the Wave-1..4 wiring, not carried over. The numbers moved and
-the movement is the expected one: the authority path is slower because it now
-reads a durable bridge instead of returning `None`, and the outbox path is slower
-because it now stages and commits a real intent row instead of calling
-`queue.enqueue` directly. A faster number here would have meant the wiring was not
-happening.
+Re-measured at every revision, never carried over. Path (f) is new in this
+revision and is the one number the design was missing: `_build_runtime()`
+assembles a whole `UnifiedStudioRuntime` **per HTTP request**, deliberately, to
+avoid leaking file handles across a worker reload. That is only defensible if
+construction is cheap, and at a **29.4 ms median** it is not free — it is a fixed
+cost added to every Studio route, on top of whichever path that route then uses.
+It is therefore **not additive** with (a)–(e) and must not be summed with them.
+
+The measured spread on (f) is the informative part: median 29.4 ms against a
+55.97 ms maximum means the per-request assembly has a scheduling tail more than
+twice its median, so a p95-based capacity estimate built on the median would be
+wrong by 2x. This is recorded as a finding, not fixed here: changing the runtime's
+lifetime is a design decision (a long-lived runtime trades this cost for the
+file-handle and worker-reload hazards the per-request build exists to avoid), and
+it is outside the scope of a test-and-evidence wave.
+
+For (a)–(e) the movement since `7134db5b` is the expected direction: the
+authority path is slower because it reads a durable bridge instead of returning
+`None`, and the outbox path carries a real staged intent row. A faster number here
+would have meant the wiring was not happening.
 
 p95 is **nearest-rank**, not interpolated: at N=3 an interpolated p95 is a number
 no observation supports, and the honest answer is the maximum observation. The
@@ -378,7 +418,45 @@ Stated plainly rather than approximated:
 | Migrations on real PostgreSQL (gate 5) | no PostgreSQL server or image in this sandbox | `migrate-postgres` CI job (`pgvector/pgvector:pg16`) |
 | Python parity 3.10 / 3.12 (gate 7) | only CPython 3.11.2 is installed | `python-parity` CI job |
 | `ffprobe`-dependent verification suites | this sandbox has no `ffprobe` (the only fetchable wheel bundles `ffmpeg` alone and GitHub's binary media host is unreachable); those tests return `UNOBSERVED`, which is the verifier's documented fail-closed answer | CI, where `ffprobe` ships in the runner image |
-| `imageio_ffmpeg` mypy residuals (3) | third-party wheel ships no `py.typed`; present on `main` before this branch | unresolved upstream |
+| `imageio_ffmpeg` mypy residuals | third-party wheel ships no `py.typed`. **No longer reproduced**: with the full `.[dev]` closure installed, `mypy src` reports 0 errors. Recorded here because the residual is a property of the *sandbox's* dependency set, not of this branch | unresolved upstream; absent once extras are installed |
+
+### 4.1 Local measurements are not CI measurements
+
+Every number in this document was produced in **this sandbox** on **CPython
+3.11.2**, and is labelled as such. CI runs three interpreters (3.10 / 3.11 /
+3.12) on `ubuntu-latest` with the `scripts/ci_install.sh` CPU-only install and a
+cold filesystem; this sandbox is a warm container with a writable overlay. Two
+consequences, stated so that no number here is over-read:
+
+* **`mypy src` differs by environment, by design.** The 13 residual errors this
+  document previously recorded were `imageio_ffmpeg` stubs, `Settings.llm`, and
+  `Any`-return leaks that surface only when optional dependencies are missing.
+  Installing the full `.[dev]` closure removes them without any change to code,
+  configuration, or suppressions — so a CI job that installs fewer extras may
+  legitimately report a non-zero count on `main` as well. The claim this
+  document makes about types is therefore narrow and checkable: **`mypy src` is
+  clean here, `mypy --strict` on every file this branch touched is clean
+  everywhere, and no suppression was added.**
+* **Latency numbers carry the sandbox's overhead.** The benchmark is comparative
+  across revisions measured the same way, not an absolute prediction of
+  production latency. Its own report states the N=3 sample bound.
+
+### 4.2 What CI actually tests: the merge ref, not the branch head
+
+`pull_request` workflows run against `refs/pull/<n>/merge` — GitHub's synthetic
+merge of this branch into `main` — not against the branch head commit itself.
+For PR #370 that ref was `c55893d5` when CI reported its last green run, while
+the branch head at that moment was `399614a5`. The distinction matters when
+reading this evidence:
+
+* a green CI run **proves the merge result passes**, which is the thing that
+  will actually land, and is the stronger claim of the two;
+* it does **not** prove the branch head alone passes, because the merge may
+  combine files from `main` that the branch never exercised;
+* every number in §1–§4 is measured on the **branch head**, on this disk, so
+  the evidence here and the CI evidence there are two separate observations of
+  two different trees. Neither substitutes for the other, and this document does
+  not claim CI verified these numbers.
 
 ## 5. Release-lineage output (verbatim)
 
