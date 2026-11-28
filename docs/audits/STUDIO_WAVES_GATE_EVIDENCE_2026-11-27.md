@@ -496,11 +496,67 @@ a suite that existed, was documented as passing, and never ran.
 
 What is proven at this revision: the campaign kills 50/50 **here** (§3.5), and
 the workflow now sets `NEXUS_RUN_MUTATION_CAMPAIGN=1` for a step in
-`execution-core-mutations`. What is *not* proven here: that the step passed on
-the runner. That can only be read from the run's own log, after this revision
-has been pushed, and a green check is not a substitute — a step can pass by
-being skipped, which is the original bug.
+`execution-core-mutations`. What was *not* proven when this section was first
+written: that the step passed on the runner. That could only be read from the
+run's own log, and a green check is not a substitute — a step can pass by being
+skipped, which is the original bug.
 
+It has since been read, and it did not say what a green check would have
+implied: the first run **failed**, 0/50. §4.4 records why, and what that
+failure proved about the claim this section was guarding.
+
+
+### 4.4 The campaign on the runner: it failed first, and the failure was real
+
+The first CI execution of the campaign step did not pass. It reported
+**0/50 mutants killed**, every one "SURVIVED", and it was correct to fail.
+
+The cause was not the mutants. Every mutation job runs in a detached worktree
+(`git worktree add --detach`) while the package is installed editable, so
+`import nexus_ai_agent` resolved to the *other* checkout. The harness rewrote
+its own copy of the file correctly, then ran pytest against a tree with no
+mutation in it. `scripts/execution_core_mutations.py` pins
+`PYTHONPATH = REPO / "src"` for exactly this reason, and the job's comment says
+so; the Studio harness never did. Locally the two trees are the same directory,
+so the bug could not appear — every local run was a true 50/50, and every CI run
+would have been a false 0/50.
+
+That is the useful result, and it is recorded as one: the campaign had been
+claimed as evidence for several waves and had never once been executed by the
+pipeline. The first time it was, it was wrong.
+
+After pinning `PYTHONPATH` in `_run_pytest` and reproducing the CI condition
+locally (a detached worktree with `PYTHONPATH` cleared), the campaign reports
+**50/50 VALID_KILL** in 172 s. The failing job then passed on the runner.
+
+A second defect surfaced in the same run and is worth recording because it was
+introduced *by* the fix: the campaign step pushed `execution-core-mutations`
+over its 30-minute `timeout-minutes`, which `tests/unit/test_mutation_harness_anchors.py`
+pins. The budget was raised to 40 on the assumption the second pass needed its
+own headroom. Measured, the whole job — install, 27 execution-core mutants, 50
+Studio mutants — takes about five minutes, so the 40 was a guess with no
+measurement behind it. The guess is reverted, not the guard.
+
+`tests/unit/test_mutation_harness_anchors.py` now pins all three properties the
+defects violated: the step exists, it sets `NEXUS_RUN_MUTATION_CAMPAIGN=1` (a
+skipped campaign is a green campaign), and the harness pins `PYTHONPATH` to its
+own `src`. Removing the pin turns the new test red, which was verified by
+reintroducing the defect.
+
+### 4.5 The suite is not perfectly deterministic, and one run said so
+
+The `test (pytest -m "not slow")` job failed once on
+`tests/storage/resource_packs/test_resource_pack_sync_manager.py::test_exclusive_file_lock_fallback`
+with `PackLockTimeoutError ... still held after 0.1s`. It is **not** in this
+branch's diff — the test and the module both come from the base commit
+`54073d1f` — and it passes locally 15/15 under a saturated CPU with a 0.1 s
+timeout. `gh run rerun --failed` then passed, and the check is green.
+
+So: a pre-existing flake inherited from `main`, not evidence about this branch,
+and not something this branch fixes. It is written down rather than quietly
+re-run, because "re-run until green" is how a real failure gets ignored. The
+distinction that matters for review: the failure above (4.4) was this branch's
+and was fixed here; this one is not.
 
 ## 5. Release-lineage output (verbatim)
 
