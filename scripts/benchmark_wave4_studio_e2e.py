@@ -483,6 +483,106 @@ def bench_disaster_recovery(root: Path, iterations: int) -> Callable[[], None]:
     return run
 
 
+def bench_runtime_build_and_close(root: Path, iterations: int) -> Callable[[], None]:
+    """(f) ``_build_runtime()`` + ``runtime.close()``: the per-request overhead.
+
+    Every Studio route builds a whole ``UnifiedStudioRuntime`` per request --
+    ``_build_runtime`` says so explicitly, on purpose, to avoid leaking file
+    handles across a worker reload.  That is only a defensible design if the
+    construction cost is small, and until now it was the one number nobody had
+    measured: (a)-(e) time the modules *inside* the runtime, not the cost of
+    assembling it.
+
+    The pair is measured together because they are one unit of work: a route
+    pays for the build and the close, and a build whose close is expensive is
+    not cheap.  Each iteration closes before the next build, so the samples
+    cannot hide an unclosed-handle pileup behind a warm cache.
+    """
+    from nexus_ai_agent.adapters.studio_directory_bridge import StudioUnifiedAuthorityBridge
+    from nexus_ai_agent.adapters.studio_principal_auth import StudioPrincipalAuthStore
+    from nexus_ai_agent.application.ports.job_queue import JobStatus
+    from nexus_ai_agent.nagar.ibpc.approval_mac import StaticKeyRing
+    from nexus_ai_agent.nagar.ibpc.authority import StudioRole
+    from nexus_ai_agent.nagar.ibpc.composition import build_unified_studio_runtime
+    from nexus_ai_agent.nagar.ibpc.service import IBPCServiceDeps
+
+    auth_path = root / "studio_auth.sqlite3"
+    store = StudioPrincipalAuthStore(auth_path)
+    store.ensure_project(PROJECT, tenant_id=TENANT, active_revision_id="0")
+    store.register_principal(
+        PRINCIPAL,
+        tenant_id=TENANT,
+        raw_token="bench-token-0123456",
+        display_name="Bench Owner",
+        allow_system_bootstrap=True,
+    )
+    store.grant_membership(
+        PROJECT, PRINCIPAL, role=StudioRole.OWNER, granted_by="system", allow_system_bootstrap=True
+    )
+    store.bind_channel(
+        PRINCIPAL,
+        channel="studio",
+        external_subject=f"subject-{PRINCIPAL}",
+        user_id=1,
+        chat_id=2,
+        allow_system_bootstrap=True,
+    )
+    binding_ref = store.default_binding_for(PRINCIPAL) or ""
+
+    class _NeverDrainedQueue:
+        """The queue port, idle: this path measures construction, not rendering."""
+
+        async def enqueue(self, **_kwargs: Any) -> str:  # pragma: no cover - not reached
+            raise AssertionError("the build benchmark must not enqueue")
+
+        async def get_status(self, _job_id: str) -> JobStatus:  # pragma: no cover
+            return JobStatus.PENDING
+
+        async def get_result(self, _job_id: str) -> dict[str, Any] | None:  # pragma: no cover
+            return None
+
+    def run() -> None:
+        for _ in range(iterations):
+            deps = IBPCServiceDeps(
+                queue=_NeverDrainedQueue(),
+                registry=None,
+                workspace_root=root,
+                revision_provider=lambda: 0,
+                authority=store,
+                channel_binding_ref=binding_ref,
+                durable=True,
+                project_revision_resolver=store.get_project_revision,
+            )
+            runtime = build_unified_studio_runtime(
+                deps,
+                # A real MAC key ring: the runtime refuses to assemble an
+                # approval ledger without one, so "no key" would benchmark the
+                # refusal path rather than the build.
+                key_provider=StaticKeyRing({"bench-k1": b"k" * 32}, active_key_id="bench-k1"),
+                # The real mapping: build_unified_studio_runtime indexes these
+                # keys directly, so a made-up name is a KeyError at build time.
+                store_filenames={
+                    "authority": "bench_authority.sqlite3",
+                    "revision_pins": "bench_revision_pins.sqlite3",
+                    "execution_outbox": "bench_execution_outbox.sqlite3",
+                },
+                enable_execution_outbox=True,
+                enable_disaster_recovery=False,
+                execution_authority_bridge=StudioUnifiedAuthorityBridge(store),
+            )
+            try:
+                if runtime.service is None:
+                    raise AssertionError("the runtime built no service")
+            finally:
+                runtime.close()
+
+    def cleanup() -> None:
+        store.close()
+
+    run.cleanup = cleanup  # type: ignore[attr-defined]
+    return run
+
+
 #: ``(label, factory)`` in the order the specification names them.
 PATHS: tuple[tuple[str, str, Callable[[Path, int], Callable[[], None]]], ...] = (
     ("a", "authority_bridge_proof", bench_authority_bridge),
@@ -490,6 +590,7 @@ PATHS: tuple[tuple[str, str, Callable[[Path, int], Callable[[], None]]], ...] = 
     ("c", "preview_readback_wysiwys", bench_preview_readback),
     ("d", "execution_outbox_full_cycle", bench_execution_outbox),
     ("e", "disaster_recovery_backup_verify_restore", bench_disaster_recovery),
+    ("f", "runtime_build_and_close", bench_runtime_build_and_close),
 )
 
 
