@@ -409,6 +409,35 @@ against a tree it was not measured on.
 
 ---
 
+## 3.5 The closing gate sweep, run in one pass
+
+Every gate below was run against the tree at this revision, in the order listed,
+with the mission's path list mapped to the modules that actually exist (the
+mission names `creative/studio/execution_outbox`, `resource_governor`,
+`backup_verifier` and `adapters/studio_authority_bridge`; none of those four
+paths exist in this tree — the real homes are `nagar/ibpc/execution_outbox.py`,
+`StudioResourceGovernor` inside `creative/studio/production_dr.py`,
+`verify_backup_bundle` on `StudioDisasterRecoveryManager` in the same module, and
+`adapters/studio_directory_bridge.py`). Guessing at a path is how a gate silently
+stops checking anything, so the mapping is stated rather than assumed.
+
+| # | Gate | Command | Result |
+|---|---|---|---|
+| 1 | Lint | `ruff check .` | **PASS** — all checks passed |
+| 2 | Format | `ruff format --check .` | **PASS** — 1680 files already formatted |
+| 3 | Types | `mypy src` | **PASS** — 670 modules, 0 errors |
+| 3b | Strict types on the 7 gate modules | `mypy --strict <7 modules>` | **PASS** — 0 errors |
+| 4 | Mutation campaign | `NEXUS_RUN_MUTATION_CAMPAIGN=1 pytest test_wave6b_...` then `scripts/run_wave4_studio_e2e_mutations.py` | **PASS** — 24 passed; **50/50 mutants killed (VALID_KILL)** |
+| 5 | Release lineage | `scripts/release_lineage.py --sha <head>` | **PASS** — `"red": []` |
+| 6 | Truth gate | `python -m nexus_ai_agent.nagar --check` | **PASS** — TRUTH GATE: GREEN |
+| 7 | Version lockstep + board | `VERSION` / `pyproject.toml` / board suites | **PASS** — 3.13.0 everywhere; 134 board tests; board diff vs `main` = 0 bytes |
+
+The mutation campaign is the one gate that was previously never executed by CI
+and is now a step of `execution-core-mutations` (§4.3 records what that does and
+does not prove).
+
+---
+
 ## 4. What this environment could not measure
 
 Stated plainly rather than approximated:
@@ -457,6 +486,21 @@ reading this evidence:
   the evidence here and the CI evidence there are two separate observations of
   two different trees. Neither substitutes for the other, and this document does
   not claim CI verified these numbers.
+
+### 4.3 The campaign is wired, which is not the same as the campaign having run
+
+Adding the step is a claim about the workflow file; it is not evidence that the
+50 mutants were killed in CI. The distinction is recorded here on purpose,
+because the original finding was exactly this confusion in the other direction —
+a suite that existed, was documented as passing, and never ran.
+
+What is proven at this revision: the campaign kills 50/50 **here** (§3.5), and
+the workflow now sets `NEXUS_RUN_MUTATION_CAMPAIGN=1` for a step in
+`execution-core-mutations`. What is *not* proven here: that the step passed on
+the runner. That can only be read from the run's own log, after this revision
+has been pushed, and a green check is not a substitute — a step can pass by
+being skipped, which is the original bug.
+
 
 ## 5. Release-lineage output (verbatim)
 
