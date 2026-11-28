@@ -21,6 +21,7 @@ from starlette.datastructures import UploadFile as StarletteUploadFile
 from nexus_ai_agent.api.dashboard import router as dashboard_router
 from nexus_ai_agent.api.studio import router as studio_router
 from nexus_ai_agent.api.studio_ibpc import router as studio_ibpc_router
+from nexus_ai_agent.api.studio_surface import install_studio_surface
 from nexus_ai_agent.api.studio_web import install_studio_web
 from nexus_ai_agent.config.settings import get_settings
 from nexus_ai_agent.core.ssrf_guard import SafeAsyncTransport, SSRFBlockError, validate_url
@@ -236,6 +237,7 @@ app.include_router(studio_ibpc_router)
 # an additive surface over the existing verified read API. The shell is an
 # allow-list of literal paths; no route can reach the filesystem.
 install_studio_web(app)
+install_studio_surface(app)
 
 
 @app.get("/", response_class=HTMLResponse)

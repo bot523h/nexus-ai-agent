@@ -795,24 +795,38 @@ def test_flock_contention_times_out_without_deleting(mirror: PackMirror, tmp_pat
 def test_exclusive_file_lock_fallback(mirror: PackMirror, tmp_path: Path) -> None:
     v1, _ = _std_versions(mirror)
     root = tmp_path / "dev"
-    manager, _ = _manager(
-        root, [v1], mirror, lock_backend="exclusive_file", lock_timeout_seconds=0.1
+    # Two managers, two budgets. The contention budget only has to answer "is
+    # the lock free?"; the stale-break budget has to cover real filesystem work
+    # (exclusive create + fsync + hardlink + inode verification + atomic
+    # rename), which is tens of milliseconds on an idle box and much more on a
+    # loaded runner. One 0.1 s budget for both was a wall-clock assumption
+    # about I/O latency — it flaked exactly that way on the 3.12 CI job.
+    contender, _ = _manager(
+        root, [v1], mirror, lock_backend="exclusive_file", lock_timeout_seconds=0.05
     )
-    manager.sync_pack("standard")
+    contender.sync_pack("standard")
     lock_file = root / ".sync_gc.lock.excl"
     assert not lock_file.exists()  # released after every critical section
-    orphan = _orphan(manager, "orphan")
+    orphan = _orphan(contender, "orphan")
 
     lock_file.write_text(
         '{"pid": 1, "expires_at": 0}'
     )  # incomplete/legacy record: waits for mtime grace
     with pytest.raises(PackLockTimeoutError):
-        manager.collect_garbage(min_age_seconds=0.0)
+        contender.collect_garbage(min_age_seconds=0.0)
+
+    breaker, _ = _manager(
+        root,
+        [v1],
+        mirror,
+        lock_backend="exclusive_file",
+        lock_timeout_seconds=30.0,  # the production default: ~300x the break path
+    )
     stale = time.time() - 3600
     os.utime(lock_file, (stale, stale))  # owner crashed long ago: break the lock
-    assert manager.collect_garbage(min_age_seconds=0.0) == (orphan,)
+    assert breaker.collect_garbage(min_age_seconds=0.0) == (orphan,)
     assert not lock_file.exists()
-    lock = manager._storage_lock()
+    lock = breaker._storage_lock()
     lock._break_if_stale()  # nothing to break: a no-op, not an error
 
 

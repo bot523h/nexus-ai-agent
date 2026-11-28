@@ -1468,6 +1468,27 @@
         "tests/architecture/",
         "tests/unit/"
       ]
+    },
+    {
+      "id": "maintenance-studio-hardening",
+      "description": "CI maintenance self-test containment, the authenticated Studio app surface and the PR-convergence tooling (PR #371)",
+      "paths": [
+        ".github/workflows/ci.yml",
+        "docs/DECISION_LOG.md",
+        "scripts/w11x_hardening_mutations.py",
+        "src/nexus_ai_agent/api/studio_surface.py",
+        "src/nexus_ai_agent/maintenance/backup.py",
+        "src/nexus_ai_agent/maintenance/ci_selftest.py",
+        "src/nexus_ai_agent/maintenance/housekeeping.py",
+        "tests/integration/test_api_gate_inventory.py",
+        "tests/unit/test_maintenance_selftest_isolation.py",
+        "tests/unit/test_maintenance_selftest_residuals.py",
+        "tests/unit/test_pr_convergence_recovery.py",
+        "tests/unit/test_studio_surface.py",
+        "tests/unit/test_studio_surface_security.py",
+        "tests/unit/test_w11x_hardening_mutations_harness.py"
+      ],
+      "note": "Zone declared 2026-11-28 with the claim that needed it: no existing zone covered both the maintenance lane and src/nexus_ai_agent/api/studio_surface.py."
     }
   ],
   "claims": [
@@ -9275,6 +9296,47 @@
         "The latest required CI conclusions and unresolved review threads on the exact HEAD."
       ],
       "exclusive_paths": []
+    },
+    {
+      "task": "pr-371-maintenance-studio-hardening-2026-11-28",
+      "title": "PR #371: contain the CI maintenance self-test and authenticate the Studio app surface",
+      "zone": "maintenance-studio-hardening",
+      "priority": "P1",
+      "status": "active",
+      "scope": "Session 3 of PR #371. (1) The CI maintenance self-test must never select a cloud blob tier: the provider is injected, the factory is forbidden process-wide for the duration of a run (context variable + inherited environment flag), the scratch database is a real WAL SQLite schema, and every leg fails closed (unverified artifact, non-WAL file, prune that did not happen, reconciler divergence). (2) /studio/app must be a real authenticated product surface: CSRF marker enforced before session resolution, principal token exchange with a failed-login limiter, a bounded expiring session registry, and per-principal session quota. (3) The PR-convergence tooling must be resumable and safe by default (dry run unless --apply, a journal state machine that cannot skip a transition, idempotent comment posting, zone-aware ownership prefixes).",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "No cloud blob tier can be selected inside the maintenance self-test, and no leg can pass on an unverified artifact, a non-WAL database, a prune that did not happen or a reconciler divergence.",
+        "/studio/app rejects unauthenticated, marker-less and over-quota requests fail closed, and every forwarding route sends the session's own principal token.",
+        "The convergence tooling is a no-op without --apply, never double-posts a closure comment, and cannot skip a journal transition.",
+        "Every touched module keeps >= 98% line and branch coverage; the durable mutation campaign kills 19/19 mutants.",
+        "make lint, make types and make test pass on the exact HEAD; the ownership referee (agent_board.py check) exits 0 on the changed files."
+      ],
+      "evidence_required": [
+        "Exact head/base SHAs and the changed-file inventory.",
+        "Gate output (ruff, mypy --strict, coverage per module, architecture suite, mutation campaign) with the command, the observed result and the SHA it ran against.",
+        "The open review threads and required CI conclusions on the exact HEAD."
+      ],
+      "exclusive_paths": [
+        ".github/workflows/ci.yml",
+        "docs/DECISION_LOG.md",
+        "scripts/w11x_hardening_mutations.py",
+        "src/nexus_ai_agent/api/studio_surface.py",
+        "src/nexus_ai_agent/maintenance/backup.py",
+        "src/nexus_ai_agent/maintenance/ci_selftest.py",
+        "src/nexus_ai_agent/maintenance/housekeeping.py",
+        "tests/integration/test_api_gate_inventory.py",
+        "tests/unit/test_maintenance_selftest_isolation.py",
+        "tests/unit/test_maintenance_selftest_residuals.py",
+        "tests/unit/test_pr_convergence_recovery.py",
+        "tests/unit/test_studio_surface.py",
+        "tests/unit/test_studio_surface_security.py",
+        "tests/unit/test_w11x_hardening_mutations_harness.py"
+      ],
+      "agent_branch": "openhands/stage3-studio-product-and-audit-closure",
+      "claimed_at": "2026-11-28T05:19:09Z",
+      "ttl_hours": 24,
+      "delivered_as": "PR #371 (base main 61add83); session 3 continues on this branch"
     }
   ],
   "deferred_log": [

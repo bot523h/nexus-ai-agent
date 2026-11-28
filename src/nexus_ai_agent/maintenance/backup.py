@@ -24,6 +24,8 @@ success only when ALL of these hold:
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import contextvars
 import datetime as dt
 import hashlib
 import json
@@ -32,6 +34,7 @@ import shutil
 import sqlite3
 import subprocess
 import tempfile
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -46,13 +49,59 @@ from nexus_ai_agent.storage.db import enforce_postgres_policy
 from nexus_ai_agent.storage.encrypted_backup_drill import verify_production_backup_preflight
 from nexus_ai_agent.storage.providers.b2 import B2Provider
 from nexus_ai_agent.storage.providers.base import ProviderUnavailable, StorageError
+from nexus_ai_agent.storage.providers.local_cache import LocalCacheProvider
 from nexus_ai_agent.storage.providers.r2 import R2Provider
 
 log = get_logger(__name__)
 
 #: The two interchangeable S3-compatible maintenance tiers. Both implement the
 #: same ``StorageProvider`` surface, so the maintenance lane is provider-neutral.
-BlobProvider = R2Provider | B2Provider
+BlobProvider = R2Provider | B2Provider | LocalCacheProvider
+
+#: Environment flag that forbids remote provider selection process-wide (the CI
+#: self-test sets it for the duration of a run, including any child process).
+SELFTEST_FLAG_ENV = "NEXUS_MAINTENANCE_SELFTEST_ACTIVE"
+
+#: Message raised when the factory is consulted during the CI self-test. Pinned
+#: verbatim by ``tests/unit/test_ci_selftest.py``: the lane's whole guarantee is
+#: that no cloud tier is ever *selected*, so this must be impossible to satisfy
+#: accidentally.
+SELFTEST_FACTORY_FORBIDDEN = (
+    "Remote blob provider factory is forbidden during CI local SQLite self-test"
+)
+
+_SELFTEST_ACTIVE: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "nexus_maintenance_selftest_active", default=False
+)
+
+
+def selftest_active() -> bool:
+    """True while a CI local self-test owns this process (or a child of it)."""
+    return _SELFTEST_ACTIVE.get() or os.environ.get(SELFTEST_FLAG_ENV) == "1"
+
+
+@contextlib.contextmanager
+def forbid_remote_provider_factory() -> Iterator[None]:
+    """Make :func:`build_blob_provider` fail closed for the duration of a block.
+
+    Two mechanisms on purpose: a context variable (correct under threads and
+    asyncio tasks) and an environment flag (inherited by subprocesses the
+    self-test spawns). The guard is what turns "we pass a local provider" into
+    "a cloud tier cannot be selected even if a future refactor stops passing
+    one" — the difference between a convention and an invariant.
+    """
+    token = _SELFTEST_ACTIVE.set(True)
+    previous = os.environ.get(SELFTEST_FLAG_ENV)
+    os.environ[SELFTEST_FLAG_ENV] = "1"
+    try:
+        yield
+    finally:
+        if previous is None:
+            os.environ.pop(SELFTEST_FLAG_ENV, None)
+        else:
+            os.environ[SELFTEST_FLAG_ENV] = previous
+        _SELFTEST_ACTIVE.reset(token)
+
 
 # Blob-tier prefix — recognized by AIStorageManager.is_blob_key.
 BLOB_BACKUP_PREFIX = "backups/db"
@@ -263,6 +312,19 @@ def _verify_round_trip(
     return {"roundtrip": "byte-identical"}
 
 
+def local_maintenance_tier(settings: Settings) -> Path | None:
+    """The CI self-test blob directory, or ``None`` when the lane is production.
+
+    Only an explicit ``NEXUS_MAINTENANCE_LOCAL_TIER`` activates it, and a
+    complete B2/R2 tier always wins (see :func:`build_blob_provider`), so a
+    stray value can never redirect production backups to local disk.
+    """
+    raw = (getattr(settings, "maintenance_local_tier", None) or "").strip()
+    if not raw:
+        return None
+    return Path(raw).expanduser()
+
+
 def build_blob_provider(settings: Settings) -> BlobProvider:
     """Select the maintenance blob tier: Backblaze B2 when configured, else R2.
 
@@ -277,7 +339,13 @@ def build_blob_provider(settings: Settings) -> BlobProvider:
     migration is loud rather than silently writing backups to the wrong bucket.
     When a *complete* R2 tier is present the fallback is explicit and is used —
     this mirrors the workflow preflight, which accepts either complete tier.
+
+    Raises :class:`RuntimeError` while a CI local self-test is active: that lane
+    must never be able to select a cloud tier, so the refusal is unconditional
+    and happens before any settings are inspected.
     """
+    if selftest_active():
+        raise RuntimeError(SELFTEST_FACTORY_FORBIDDEN)
     b2 = B2Provider.from_settings(settings)
     if b2.is_configured():
         return b2
@@ -294,12 +362,22 @@ def build_blob_provider(settings: Settings) -> BlobProvider:
         if not r2.is_configured():
             raise ProviderUnavailable(b2.configuration_error() or "B2 configuration is incomplete")
         return r2
-    return R2Provider.from_settings(settings)
+    r2 = R2Provider.from_settings(settings)
+    if r2.is_configured():
+        return r2
+    local_tier = local_maintenance_tier(settings)
+    if local_tier is not None:
+        return LocalCacheProvider(local_tier)
+    return r2
 
 
 #: Backwards-compatible alias — the maintenance lane has always called this
 #: ``_build_provider``; the rename documents that it now selects between tiers.
-_build_provider = build_blob_provider
+#: It *delegates* instead of being a second binding, so a monkeypatched or
+#: guarded :func:`build_blob_provider` is honoured on every call path.
+def _build_provider(settings: Settings) -> BlobProvider:
+    """Deprecated alias for :func:`build_blob_provider`."""
+    return build_blob_provider(settings)
 
 
 def _upload_actionable(
@@ -360,11 +438,22 @@ def _build_sidecar(*, key: str, summary: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def create_backup(*, settings: Settings, dry_run: bool = False) -> dict[str, Any]:
+def create_backup(
+    *,
+    settings: Settings,
+    dry_run: bool = False,
+    provider: BlobProvider | None = None,
+) -> dict[str, Any]:
     """Dump the active database, verify the artifact, upload, re-verify.
 
     See the module docstring for the full success contract. In ``dry_run``
     mode nothing is written or uploaded and the summary says so explicitly.
+
+    ``provider`` is an explicit override for callers that must not consult the
+    environment at all — the CI self-test passes a ``LocalCacheProvider`` so a
+    complete B2/R2 tier in ``os.environ`` can never receive a synthetic
+    artifact. When it is supplied the remote-tier preflight is relaxed, because
+    the caller has already decided where the bytes go.
     """
     now = dt.datetime.now(dt.timezone.utc)
     stamp = now.strftime(STAMP_FORMAT)
@@ -387,6 +476,7 @@ def create_backup(*, settings: Settings, dry_run: bool = False) -> dict[str, Any
         "key": key,
         "uploaded": False,
         "verified": False,
+        "local_tier": str(local_maintenance_tier(settings) or "") or None,
     }
 
     if dry_run:
@@ -396,12 +486,20 @@ def create_backup(*, settings: Settings, dry_run: bool = False) -> dict[str, Any
 
     # Validate both the supplied settings and the database URL actually selected
     # by the canonical backend policy, before provider creation or dumping.
-    verify_production_backup_preflight(settings, allow_local_database=database_url is None)
+    local_tier = local_maintenance_tier(settings)
+    require_remote_tier = local_tier is None and provider is None
+    verify_production_backup_preflight(
+        settings,
+        allow_local_database=database_url is None,
+        require_remote_tier=require_remote_tier,
+    )
     if database_url is not None:
         verify_production_backup_preflight(
-            settings.model_copy(update={"database_url": database_url})
+            settings.model_copy(update={"database_url": database_url}),
+            require_remote_tier=require_remote_tier,
         )
-    provider = _build_provider(settings)
+    provider = provider or _build_provider(settings)
+    summary["tier"] = getattr(provider, "name", type(provider).__name__)
     if not provider.is_configured():
         # Fail loudly: a silently skipped backup is worse than a red job.
         raise ProviderUnavailable(

@@ -149,3 +149,24 @@ def test_cache_root_symlink_is_pinned_to_its_canonical_directory(tmp_path: Path)
     provider = LocalCacheProvider(link)
     assert provider.cache_dir == target.resolve()
     assert provider.path_for_key("file.txt") == target / "file.txt"
+
+
+@pytest.mark.asyncio
+async def test_delete_objects_removes_keys_and_ignores_missing(tmp_path: Path) -> None:
+    provider = LocalCacheProvider(tmp_path / "cache")
+    source = tmp_path / "artifact.bin"
+    source.write_bytes(b"payload")
+    await provider.upload(local_path=source, remote_key="backups/db/one.sqlite3")
+    assert (provider.cache_dir / "backups/db/one.sqlite3").is_file()
+
+    await provider.delete_objects(keys=["backups/db/one.sqlite3", "backups/db/absent.sqlite3"])
+
+    assert not (provider.cache_dir / "backups/db/one.sqlite3").exists()
+    assert await provider.list_files(prefix="backups/db/") == []
+
+
+@pytest.mark.asyncio
+async def test_delete_objects_refuses_an_escaping_key(tmp_path: Path) -> None:
+    provider = LocalCacheProvider(tmp_path / "cache")
+    with pytest.raises(StorageError):
+        await provider.delete_objects(keys=["../outside.txt"])

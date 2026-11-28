@@ -110,7 +110,8 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 "nexus_ai_agent.creative.packs.caption" = ["fonts/*.ttf", "fonts/OFL.txt"]
-"nexus_ai_agent.web" = ["static/*"]  # Studio PWA shell (Wave 4 / PR #328)
+# Studio PWA shell (Wave 4 / PR #328) + the standalone /studio/app bundle.
+"nexus_ai_agent.web" = ["static/*", "studio_surface/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -130,7 +131,6 @@ quote-style = "double"
 
 [tool.ruff.lint.per-file-ignores]
 "scripts/task255_mutation_probes.py" = ["E501"]
-".agents/evidence/pr-convergence-2026-11-27/tools/*.py" = ["E501"]
 
 [tool.mypy]
 python_version = "3.12"

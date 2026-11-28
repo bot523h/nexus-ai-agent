@@ -537,6 +537,18 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("NEXUS_B2_REGION", "B2_REGION"),
     )
 
+    # ── CI-only local maintenance tier (never a production substitute) ──
+    # The scheduled maintenance workflow is fail-closed when the repository has
+    # no B2/R2 secrets. A CI self-test still needs a *real* end-to-end backup
+    # (dump -> verify -> upload -> re-verify), so this points the maintenance
+    # lane at a scratch directory and enables the LocalCacheProvider for it.
+    # A complete B2/R2 tier always wins, so this can never silently replace
+    # production storage; leaving it unset keeps the production contract.
+    maintenance_local_tier: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("NEXUS_MAINTENANCE_LOCAL_TIER"),
+    )
+
     # ── task-274: opt-in LangSmith tracing ────────────────────────────
     # Default OFF: enabling tracing exports prompts to a third party, so it is
     # never on unless an operator explicitly asks for it.  When on but

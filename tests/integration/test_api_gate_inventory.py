@@ -66,6 +66,7 @@ from fastapi.testclient import TestClient
 from starlette.staticfiles import StaticFiles
 
 from nexus_ai_agent.api import studio_session
+from nexus_ai_agent.api.studio_surface import PUBLIC_SURFACE_PATHS
 from nexus_ai_agent.api.studio_web import PUBLIC_SHELL_PATHS
 from nexus_ai_agent.config import settings as settings_module
 from nexus_ai_agent.storage import db as db_module
@@ -88,6 +89,12 @@ from nexus_ai_agent.storage import db as db_module
 #: contain no user data — the app authenticates itself through the session
 #: lane below, not through its own delivery.
 #:
+#: The standalone ``/studio/app`` reference bundle follows the same rule via
+#: ``studio_surface.PUBLIC_SURFACE_PATHS``: literal routes over a fixed asset
+#: allow-list, no directory serving, no request-derived path, and the bytes are
+#: identical for every caller (the bundle authenticates through the session lane
+#: like the shell, never through its own delivery).
+#:
 #: ``GET /studio/session`` is a *status probe*, not a state read: it answers
 #: ``{"configured": …, "authenticated": …}`` and deliberately reports "no
 #: session" as a value instead of an error, so a browser can decide whether to
@@ -99,6 +106,7 @@ PUBLIC_OPERATIONS: frozenset[tuple[str, str]] = frozenset(
         ("GET", "/healthz"),
         ("GET", "/readyz"),
         *(("GET", path) for path in PUBLIC_SHELL_PATHS),
+        *(("GET", path) for path in PUBLIC_SURFACE_PATHS),
         ("GET", "/studio/session"),
     }
 )
@@ -186,6 +194,14 @@ class Surface:
     #: Studio session lane refuses a request that lacks its CSRF marker
     #: *before* it looks at the credential).
     probe_headers: Mapping[str, str] = field(default_factory=dict)
+    #: Additional statuses that are still *a refusal*, never a bypass. Only a
+    #: rate-limited operation may declare one: the principal token exchange
+    #: answers ``429`` (with ``Retry-After``) once the failed-login budget is
+    #: spent, and the sweep's repeated wrong credentials legitimately spend it.
+    #: This is deliberately not a general "acceptable codes" set — every other
+    #: operation must still answer exactly its one expected status, because a
+    #: set lets a 404/405/422 pass as a gate that ran.
+    also_refusal_statuses: frozenset[int] = frozenset()
 
     def owns(self, operation: tuple[str, str]) -> bool:
         method, path = operation
@@ -200,6 +216,12 @@ class Surface:
         if state == "unconfigured":
             return self.unconfigured_status
         return self.unauthenticated_status
+
+    def is_refusal(self, state: str, status_code: int) -> bool:
+        """Whether *status_code* is a refusal this surface may answer with."""
+        return status_code == self.expected_status(state) or (
+            status_code in self.also_refusal_statuses
+        )
 
 
 #: Every security boundary of the HTTP surface, in the order they are
@@ -268,6 +290,27 @@ SURFACES: tuple[Surface, ...] = (
         unconfigured_status=403,
         unauthenticated_status=403,
         configuration="x-nagar-studio request marker",
+    ),
+    Surface(
+        # The /studio/app lane: the bundle is public bytes, but every operation
+        # behind it needs a principal session. The lane fails closed the same
+        # way whether or not the deployment has principals registered — a
+        # caller with no session is refused, never redirected to a login page
+        # that the probe would read as success. ``/login`` is the
+        # pre-authentication endpoint, so the probe presents the CSRF marker and
+        # a *wrong* principal token in the body: the only way to reach the
+        # credential comparison instead of FastAPI's validation layer.
+        name="studio-app-principal",
+        path_prefix="/studio/app/api/",
+        unconfigured_status=401,
+        unauthenticated_status=401,
+        configuration="principal token exchange (NEXUS_STUDIO_AUTH_DB)",
+        probe_body={"principal_token": "not-the-principal-token"},
+        probe_headers={studio_session.CSRF_HEADER: studio_session.CSRF_VALUE},
+        # The token exchange is the one operation with a failed-login limiter:
+        # repeated wrong credentials spend the budget and it answers 429 with
+        # Retry-After. That is a refusal, not a gate that failed to run.
+        also_refusal_statuses=frozenset({429}),
     ),
 )
 
@@ -619,7 +662,7 @@ def _sweep(
             )
             continue
         expected = surface.expected_status(state)
-        if response.status_code != expected:
+        if not surface.is_refusal(state, response.status_code):
             deviations[operation] = (
                 f"{method} {path}: expected {expected} for surface {surface.name!r} "
                 f"in state {state!r}, got {response.status_code}: {response.text[:160]!r}"

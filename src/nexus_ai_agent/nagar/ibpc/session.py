@@ -754,6 +754,40 @@ class DurableLiveSessionStore:
                 out.append((str(aid), loaded))
         return tuple(out)
 
+    def list_sessions(
+        self, *, tenant_id: str, project_id: str, limit: int = 50
+    ) -> tuple[dict[str, Any], ...]:
+        """Read-only projection of the durable sessions of one tenant/project.
+
+        The Studio surface lists the sessions that actually exist in the WAL
+        store — not an in-process cache — so a restarted process still shows
+        them. Ordered newest-first and bounded: a listing is a UI affordance,
+        never an unbounded export.
+        """
+        if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 500:
+            raise ValueError("limit must be an integer within [1, 500]")
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT session_id, status, session_epoch, current_revision, "
+                "active_revision_id, max_sequence, created_at, updated_at "
+                "FROM nexus_ibpc_sessions WHERE tenant_id=? AND project_id=? "
+                "ORDER BY updated_at DESC, rowid DESC LIMIT ?",
+                (tenant_id, project_id, limit),
+            ).fetchall()
+        return tuple(
+            {
+                "session_id": row[0],
+                "status": row[1],
+                "session_epoch": row[2],
+                "current_revision": row[3],
+                "active_revision_id": row[4],
+                "max_sequence": row[5],
+                "created_at": row[6],
+                "updated_at": row[7],
+            }
+            for row in rows
+        )
+
     def delete_session_contexts(self, session_id: str) -> None:
         with self._transaction():
             self._conn.execute(
@@ -1130,6 +1164,14 @@ class LiveSessionManager:
         with self._lock:
             session = self.get_session(session_id)
             return tuple(sorted(session.turns.values(), key=lambda t: t.turn_index))
+
+    def list_sessions(
+        self, *, tenant_id: str, project_id: str, limit: int = 50
+    ) -> tuple[dict[str, Any], ...]:
+        """Durable sessions of one tenant/project (empty when the store is memory-only)."""
+        if self._store is None:
+            return ()
+        return self._store.list_sessions(tenant_id=tenant_id, project_id=project_id, limit=limit)
 
     def _guard_not_stale(self, session: LiveSession, turn: VoiceTurn) -> None:
         """A turn older than the session head is STALE; any use is refused and

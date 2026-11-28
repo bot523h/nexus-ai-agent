@@ -30,13 +30,15 @@ SUPERSEDED = {
     ),
     205: (
         "Asset Library V1",
-        "main ships the canonical library at creative/assets/{service,blob_store,ingestion,admission,mime}.py "
-        "plus migration e575469d90b9 and six integration suites; 164/214 added symbols already exist.",
+        "main ships the canonical library at "
+        "creative/assets/{service,blob_store,ingestion,admission,mime}.py plus migration "
+        "e575469d90b9 and six integration suites; 164/214 added symbols already exist.",
     ),
     295: (
         "content-addressed asset library extraction",
-        "would add execution/asset_library.py as a *second* storage authority next to the canonical "
-        "creative/assets/ service (forbidden by the constitution); capability already on main.",
+        "would add execution/asset_library.py as a *second* storage authority next to the "
+        "canonical creative/assets/ service (forbidden by the constitution); capability "
+        "already on main.",
     ),
     301: (
         "engineering-debt watchdog reports",
@@ -85,11 +87,13 @@ SUPERSEDED_EVIDENCE = {
 EXTRACTED = {
     285: (
         "board sync for task-278",
-        "board snapshot is 751 commits stale; the added record is preserved as extracted/board-285.diff.",
+        "board snapshot is 751 commits stale; the added record is preserved as "
+        "extracted/board-285.diff.",
     ),
     297: (
         "M16 convergence evidence",
-        "the four M16 evidence files do not exist on main and were cherry-picked onto the convergence branch.",
+        "the four M16 evidence files do not exist on main and were cherry-picked onto the "
+        "convergence branch.",
     ),
     313: (
         "board registration task-nagar-preservation-media-profiles-01",
@@ -183,12 +187,13 @@ def main() -> int:
             disposition = "MERGED" if merge_result.get("number") == 367 else "BLOCKED_ACTIVE_OWNER"
             family = None
             why = (
-                "The only genuine merge candidate: closes the two authorization gaps left by #365, "
-                "0 merge-tree conflicts, 0 unresolved threads, base updated onto main 54073d1f. "
-                "Left OPEN because its owner (task-w35-ibpc-security-closure) is actively pushing "
-                "(head a8a06eee -> 31895925, 10 commits / 10 files during this campaign); merging an "
-                "in-flight branch would violate the ownership contract. Resume: owner finishes CI on "
-                "the exact head and merges, or the convergence owner merges after a stable green head."
+                "The only genuine merge candidate: closes the two authorization gaps left by "
+                "#365, 0 merge-tree conflicts, 0 unresolved threads, base updated onto main "
+                "54073d1f. Left OPEN because its owner (task-w35-ibpc-security-closure) is "
+                "actively pushing (head a8a06eee -> 31895925, 10 commits / 10 files during "
+                "this campaign); merging an in-flight branch would violate the ownership "
+                "contract. Resume: owner finishes CI on the exact head and merges, or the "
+                "convergence owner merges after a stable green head."
             )
             evidence = [
                 "docs/engineering/NAGAR_IBPC.md",
@@ -212,14 +217,16 @@ def main() -> int:
             family = FAMILY[number]
             why = (
                 f"{pr['ahead']} commits / {pr['changed_files']} files ahead of main, "
-                f"{pr['behind']} commits behind, {pr['merge_tree_conflicts']} merge-tree conflicts, "
+                f"{pr['behind']} commits behind, "
+                f"{pr['merge_tree_conflicts']} merge-tree conflicts, "
                 f"{pr['unresolved_threads']} unresolved threads, "
                 f"symbol coverage {stats['symbols_on_main']}/{stats['added_symbols']}."
             )
             evidence = sorted({entry["path"] for entry in pr["files"]})[:8]
             resume = (
                 "Rebase onto main (>= 54073d1f), re-derive the delta against the canonical "
-                "implementation, run make lint/types/test, reopen the PR or open a successor branch."
+                "implementation, run make lint/types/test, reopen the PR or open a successor "
+                "branch."
             )
             if number in ARCH_DECISION:
                 why += " " + ARCH_DECISION[number]
@@ -325,7 +332,8 @@ def main() -> int:
     report = [
         "# NEXUS PR backlog convergence — final report",
         "",
-        f"campaign `{CAMPAIGN}` · main `{MAIN_SHA[:12]}` · inventory `{forensics['open_total']}` open PRs",
+        f"campaign `{CAMPAIGN}` · main `{MAIN_SHA[:12]}` · "
+        f"inventory `{forensics['open_total']}` open PRs",
         "",
         "## Dispositions",
         "",
@@ -344,22 +352,28 @@ def main() -> int:
     for row in matrix:
         report.append(
             f"| #{row['number']} | `{row['head_sha'][:8]}` | `{row['disposition']}` | "
-            f"{row['family'] or '—'} | {row['ahead']}/{row['behind']} | {row['merge_tree_conflicts']} | {row['unresolved_threads']} |"
+            f"{row['family'] or '—'} | {row['ahead']}/{row['behind']} | "
+            f"{row['merge_tree_conflicts']} | {row['unresolved_threads']} |"
         )
     report += [
         "",
         "## Blocked / active owner",
         "",
-        f"#367 is the only PR left open. Its snapshot head was `{next(r['head_sha'] for r in matrix if r['number'] == 367)}`; "
-        f"the live head at report time is `{LIVE_367_HEAD}` (10 commits, 10 files, base `54073d1f`), pushed by the "
-        "`task-w35-ibpc-security-closure` owner while this campaign ran. Merging an in-flight branch would violate "
-        "the ownership contract, so the convergence records it as `BLOCKED_ACTIVE_OWNER` and does not close or merge it.",
+        "#367 is the only PR left open. Its snapshot head was "
+        f"`{next(r['head_sha'] for r in matrix if r['number'] == 367)}`; the live head at report "
+        f"time is `{LIVE_367_HEAD}` (10 commits, 10 files, base `54073d1f`), pushed by the "
+        "`task-w35-ibpc-security-closure` owner while this campaign ran. Merging an in-flight "
+        "branch would violate the ownership contract, so the convergence records it as "
+        "`BLOCKED_ACTIVE_OWNER` and does not close or merge it.",
         "",
         "## Merge evidence",
         "",
         f"```json\n{json.dumps(merge_result, indent=2)}\n```"
         if merge_result
-        else "_(none performed by this campaign: the single merge candidate #367 remains with its active owner)_",
+        else (
+            "_(none performed by this campaign: the single merge candidate #367 remains with "
+            "its active owner)_"
+        ),
         "",
         "## Closures",
         "",

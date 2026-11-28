@@ -18,7 +18,7 @@ from nexus_ai_agent.config.settings import Settings
 from nexus_ai_agent.observability.logging import get_logger
 from nexus_ai_agent.tools.filesystem_policy import WorkspaceFilesystem
 
-from .backup import BLOB_BACKUP_PREFIX, STAMP_FORMAT, build_blob_provider
+from .backup import BLOB_BACKUP_PREFIX, STAMP_FORMAT, BlobProvider, build_blob_provider
 
 log = get_logger(__name__)
 
@@ -41,7 +41,9 @@ def _clean_temp_dir(
     candidates: list[tuple[Path, str]] = []
     for candidate in workspace.iter_files():
         try:
-            if candidate.is_symlink():
+            # ``iter_files`` already skips symlinks; this is defence in depth
+            # against that changing, and is unreachable while it holds.
+            if candidate.is_symlink():  # pragma: no cover
                 continue
             mtime = dt.datetime.fromtimestamp(candidate.stat().st_mtime, dt.timezone.utc)
         except OSError:
@@ -87,12 +89,17 @@ def run_housekeeping(
     dry_run: bool = False,
     temp_max_age_hours: int = 48,
     backup_retention_days: int = 30,
+    provider: BlobProvider | None = None,
 ) -> dict[str, Any]:
-    """Clean stale local files and prune old R2 database backups.
+    """Clean stale local files and prune old database backups.
 
     ``*_planned`` contains the read-only selection. ``*_removed``/
     ``*_deleted`` contains only mutations that actually completed; therefore a
     dry run cannot be misreported as successful deletion.
+
+    ``provider`` pins the blob tier for callers that must not consult the
+    environment (the CI self-test passes a local one); without it the factory
+    selects the tier from ``settings`` exactly as before.
     """
     if temp_max_age_hours < 0:
         raise ValueError("temp_max_age_hours must be non-negative")
@@ -118,7 +125,7 @@ def run_housekeeping(
     if not dry_run:
         summary["temp_files_removed"] = temp_files
 
-    provider = build_blob_provider(settings)
+    provider = provider or build_blob_provider(settings)
     if not provider.is_configured():
         summary["r2_skipped_reason"] = "blob tier not configured — local cleanup only"
         log.info("maintenance_housekeeping_no_blob_tier", dry_run=dry_run)

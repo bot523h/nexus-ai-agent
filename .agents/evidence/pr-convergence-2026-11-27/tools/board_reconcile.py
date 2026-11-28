@@ -21,6 +21,44 @@ import agent_board  # noqa: E402
 
 FORENSICS = Path(__file__).resolve().parents[1] / "PR_FORENSICS.json"
 
+#: Repository roots that are too coarse to describe *what a family may touch*.
+#: A zone claiming ``src/nexus_ai_agent/`` collides with every other zone, so the
+#: exact files that sit directly in such a root are named instead.
+BROAD_ROOT_PREFIXES = frozenset(
+    {"src/nexus_ai_agent", "tests", "docs", "scripts", ".github", "src"}
+)
+
+
+def _parent_dir(path: str) -> str:
+    """The POSIX directory of *path* without a trailing slash (``"."`` at top level)."""
+    parent = str(PurePosixPath(path).parent)
+    return parent.rstrip("/") or "."
+
+
+def zone_prefixes(paths: list[str]) -> list[str]:
+    """Complete, non-blocking path metadata for a family zone.
+
+    Two properties matter and both are asserted by
+    ``tests/unit/test_pr_convergence_tools.py``:
+
+    * **complete** — no silent truncation. The previous ``[:24]`` cut dropped the
+      tail of the list for the larger families, so a resumer could not see every
+      directory its PRs touched. There is no limit now.
+    * **specific** — a broad repository root (``src/nexus_ai_agent``, ``tests``,
+      …) is not emitted as a directory prefix, because it would overlap every
+      other zone. The files that live directly in that root are listed by exact
+      path instead, so nothing is lost.
+    """
+    parents = {_parent_dir(path) for path in paths if path}
+    prefixes: set[str] = set()
+    for parent in parents:
+        if parent in BROAD_ROOT_PREFIXES:
+            prefixes.update(path for path in paths if path and _parent_dir(path) == parent)
+        else:
+            prefixes.add(f"{parent}/")
+    return sorted(prefixes)
+
+
 FAMILIES = {
     "pr-backlog-security-2026-11-27": {
         "title": "PR backlog convergence 2026-11-27: security, authorization and command wiring",
@@ -104,13 +142,9 @@ def main() -> int:
             zone = spec["zone"]
             if zone in zone_ids:
                 continue
-            prefixes = sorted(
-                {
-                    str(PurePosixPath(path).parent) + "/"
-                    for number in spec["prs"]
-                    for path in files_by_pr.get(number, [])
-                }
-            )[:24]
+            prefixes = zone_prefixes(
+                [path for number in spec["prs"] for path in files_by_pr.get(number, [])]
+            )
             board["zones"].append(
                 {
                     "id": zone,
@@ -142,15 +176,23 @@ def main() -> int:
                     ),
                     "prerequisites": [],
                     "acceptance_criteria": [
-                        "The selected PR is rebased onto current main (or replaced by a successor branch) with its published history preserved.",
-                        "The delta is re-derived against the canonical implementation; no second parallel runtime/queue/storage/authority/transaction path is introduced.",
-                        "make lint, make types and make test pass on the exact new HEAD; adversarial regression coverage is added for the repaired defect.",
-                        "The ownership referee (agent_board.py check) exits 0 on the actual changed files before every push, and the PR is handed off for independent review.",
+                        "The selected PR is rebased onto current main (or replaced by a "
+                        "successor branch) with its published history preserved.",
+                        "The delta is re-derived against the canonical implementation; no second "
+                        "parallel runtime/queue/storage/authority/transaction path is introduced.",
+                        "make lint, make types and make test pass on the exact new HEAD; "
+                        "adversarial regression coverage is added for the repaired defect.",
+                        "The ownership referee (agent_board.py check) exits 0 on the actual "
+                        "changed files before every push, and the PR is handed off for "
+                        "independent review.",
                     ],
                     "evidence_required": [
-                        "Exact head/base/main SHAs, the rebase or successor branch, and the changed-file inventory.",
-                        "Gate output (lint/types/test) with commands, results and the SHA they ran against.",
-                        "The latest required CI conclusions and unresolved review threads on the exact HEAD.",
+                        "Exact head/base/main SHAs, the rebase or successor branch, and the "
+                        "changed-file inventory.",
+                        "Gate output (lint/types/test) with commands, results and the SHA they "
+                        "ran against.",
+                        "The latest required CI conclusions and unresolved review threads on the "
+                        "exact HEAD.",
                     ],
                     "exclusive_paths": [],
                 }
@@ -161,7 +203,8 @@ def main() -> int:
             if claim.get("task") == "task-w35-ibpc-security-closure":
                 note = (
                     " Reconciled 2026-11-27 by the PR backlog convergence: PR #366 is merged into "
-                    "main at b8dee44c5f430e65acb28e80356fd502f17cfefa (completion_records evidence), "
+                    "main at b8dee44c5f430e65acb28e80356fd502f17cfefa "
+                    "(completion_records evidence), "
                     "and the live successor is PR #367 (head a8a06eee) which closes the two "
                     "authorization gaps left by #365."
                 )
@@ -185,8 +228,10 @@ def main() -> int:
                     "date": "2026-11-27",
                     "note": (
                         "PR backlog convergence 2026-11-27: live inventory of 44 open PRs at main "
-                        "54073d1f; #368 and #366 merge evidence recorded; pr-repair-247-phase3 completed; "
-                        "6 family resume anchors registered for the PRs closed as deferred; evidence in "
+                        "54073d1f; #368 and #366 merge evidence recorded; "
+                        "pr-repair-247-phase3 completed; "
+                        "6 family resume anchors registered for the PRs closed as deferred; "
+                        "evidence in "
                         ".agents/evidence/pr-convergence-2026-11-27/."
                     ),
                 }

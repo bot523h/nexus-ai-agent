@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NAGAR Studio — استودیوی محصول</title>
+<link rel="stylesheet" href="studio.css">
+</head>
+<body>
+<a class="skip" href="#composer">پرش به نوشتن درخواست</a>
+<header class="top">
+  <h1>NAGAR Studio</h1>
+  <p class="status" id="status" role="status" aria-live="polite">در حال بررسی نشست…</p>
+  <button type="button" id="logout" class="ghost" hidden>خروج</button>
+</header>
+
+<section class="panel" id="login" aria-labelledby="login-title" hidden>
+  <h2 id="login-title">ورود</h2>
+  <p class="hint">
+    توکن اصلی فقط یک بار به سرور فرستاده می‌شود؛ مرورگر فقط یک شناسهٔ مبهم در
+    کوکی HttpOnly نگه می‌دارد. توکن در localStorage و در آدرس صفحه ذخیره نمی‌شود.
+  </p>
+  <form id="login-form">
+    <label>توکن اصلی
+      <input name="principal_token" id="principal-token" type="password" required
+             minlength="8" maxlength="512" autocomplete="off" spellcheck="false">
+    </label>
+    <div class="actions">
+      <button type="submit" id="login-submit">ورود</button>
+    </div>
+    <p class="hint" id="login-hint"></p>
+  </form>
+</section>
+
+<main class="grid" id="workspace" hidden>
+  <section class="panel" id="sessions" aria-labelledby="sessions-title">
+    <h2 id="sessions-title">نشست‌ها</h2>
+    <form id="sessions-form" class="inline">
+      <label>پروژه <input name="project_id" id="project-id" required autocomplete="off" placeholder="project-id"></label>
+      <div class="actions">
+        <button type="submit" id="load-sessions">فهرست</button>
+        <button type="button" id="open-session" class="ghost">نشست تازه</button>
+      </div>
+    </form>
+    <ul class="list" id="session-list"></ul>
+    <p class="empty" id="sessions-empty">هنوز نشستی برای این پروژه ثبت نشده است.</p>
+  </section>
+
+  <section class="panel" id="composer" aria-labelledby="composer-title">
+    <h2 id="composer-title">درخواست جدید</h2>
+    <p class="hint" id="session-state">نشستی انتخاب نشده است.</p>
+    <form id="composer-form">
+      <label>دارایی <input name="asset_id" required autocomplete="off" placeholder="asset-id"></label>
+      <label>مسیر منبع <input name="source_path" required autocomplete="off" placeholder="published/…"></label>
+      <label>قصد (intent)
+        <textarea name="text" required maxlength="2048" rows="4" placeholder="چه چیزی می‌خواهید بسازید؟"></textarea>
+      </label>
+      <div class="actions">
+        <button type="submit" id="submit-turn">ارسال برای تأیید</button>
+      </div>
+      <p class="hint" id="composer-hint"></p>
+    </form>
+  </section>
+
+  <section class="panel" id="turns" aria-labelledby="turns-title">
+    <h2 id="turns-title">نوبت‌ها و نتیجه</h2>
+    <ol class="turns" id="turn-list"></ol>
+    <p class="empty" id="turns-empty">نتیجه‌ای برای نمایش نیست.</p>
+    <div class="actions" id="approval-actions" hidden>
+      <button type="button" id="approve-turn">تأیید طرح</button>
+      <button type="button" id="execute-turn" class="ghost">اجرا</button>
+    </div>
+    <dl class="digests" id="digests" hidden>
+      <dt>intent</dt><dd id="digest-intent">—</dd>
+      <dt>plan</dt><dd id="digest-plan">—</dd>
+      <dt>preview</dt><dd id="digest-preview">—</dd>
+      <dt>approval</dt><dd id="digest-approval">—</dd>
+      <dt>اجرا</dt><dd id="execute-state">—</dd>
+    </dl>
+  </section>
+</main>
+
+<script src="studio.js"></script>
+</body>
+</html>
